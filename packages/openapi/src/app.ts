@@ -23,6 +23,9 @@ app.use('*', workspaceAuthMiddleware);
 // Error handling middleware
 app.onError((error: Error, c) => {
   console.error('Hono Error:', error);
+  // Middleware-thrown HTTPExceptions (e.g. auth 401) must keep their status
+  // instead of being flattened to 500, while staying in the same ApiResponse
+  // envelope that BaseController.handleError produces for controller errors.
   const status = error instanceof HTTPException ? error.status : 500;
   return c.json(
     { error: error.message, success: false, timestamp: new Date().toISOString() },

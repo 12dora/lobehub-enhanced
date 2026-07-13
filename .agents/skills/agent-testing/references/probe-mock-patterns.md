@@ -909,3 +909,22 @@ agents. Set` `agentRules: false` `in next.config to disable.` and leaves the wor
 - **Works**: `agent-browser fill '<selector>' 'query'` (real CDP input) — the dropdown opened
   and rendered the same data. Rule: before calling a fetch-then-no-render a product bug,
   re-drive the input with real CDP typing; only report a bug if BOTH paths fail to render.
+
+### E18. Fresh-worktree `seed-user` dies on `Cannot find module 'bcryptjs'` — NODE\_PATH into .pnpm fixes it
+
+- **Situation**: in a fresh git-worktree install, `init-dev-env.sh seed-user`
+  (which runs `node <<'NODE'` from the repo root) throws MODULE\_NOT\_FOUND for
+  `bcryptjs`, even though `pnpm install` succeeded.
+- **Cause not fully established**: `bcryptjs` exists in `node_modules/.pnpm/`
+  but is not linked at the repo-root `node_modules` top level in that install
+  (`pg` was linked, `bcryptjs` wasn't), so a root-cwd stdin script can't
+  resolve it.
+- **Works**: prefix the call with
+  `NODE_PATH="$PWD/node_modules/.pnpm/bcryptjs@<ver>/node_modules"` (check the
+  exact version dir first). CJS stdin scripts honor NODE\_PATH; seeding then
+  completes normally.
+- Same run also (re)confirmed: `init-dev-env.sh dev` ports are DYNAMIC (e.g.
+  next on 33803, vite on 32459) — never hardcode 3010; re-run
+  `scripts/test-env.sh` after the server is up, it reads the ports-file. And
+  the `os error 35` agent-browser daemon wedge (D8) recovers with
+  `agent-browser close --all` + re-running `setup-auth.sh web-seed`.

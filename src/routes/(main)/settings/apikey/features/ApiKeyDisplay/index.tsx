@@ -29,6 +29,8 @@ const ApiKeyDisplay: FC<ApiKeyDisplayProps> = ({ apiKey }) => {
     }
   };
 
+  // Mask with the key's real prefix (e.g. `sk-lh-`) so the hidden state
+  // doesn't misrepresent the key format.
   const maskPrefixLength = apiKey ? apiKey.lastIndexOf('-') + 1 : 0;
   const displayValue =
     apiKey &&
