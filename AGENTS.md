@@ -106,6 +106,7 @@ Open this URL to develop locally against the production backend (app.lobehub.com
 bun run check [changed-files...]
 ```
 
+- Every bug fix must include a corresponding regression test that fails before the fix and passes after it.
 - No selector = **lint + test in a single pass** — run it once; don't fire a separate pass per selector. `--lint` / `--test` / `--type` narrow scope and are composable within one run. Default files = all working-tree changes (staged + unstaged + untracked); explicit paths override.
 - `--lint` auto-fixes the given files and prints the applied fixes as a diff, so you can review what changed.
 - `--test` auto-discovers the related tests for the given source files and runs them under the nearest owning vitest config (e.g. `packages/database`) — no need to `cd` into packages.

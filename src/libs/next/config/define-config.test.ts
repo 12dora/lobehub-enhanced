@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { defineConfig } from './define-config';
 import { dockerCanvasTracingIncludes } from './dockerCanvasTracingIncludes';
 import { dockerKoffiTracingIncludes } from './dockerKoffiTracingIncludes';
 
@@ -27,6 +28,12 @@ describe('defineConfig docker tracing includes', () => {
   it('keeps koffi on the server-external list so the native addon is not bundled', async () => {
     const { defineConfig } = await import('./define-config');
     expect(defineConfig({}).serverExternalPackages).toContain('koffi');
+  });
+});
+
+describe('defineConfig', () => {
+  it('disables Next.js agent rule injection', () => {
+    expect(defineConfig({}).agentRules).toBe(false);
   });
 });
 
