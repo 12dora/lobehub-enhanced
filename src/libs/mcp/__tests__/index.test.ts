@@ -114,11 +114,15 @@ describe('MCPClient', () => {
           env: { [ALLOWED_KEY]: ALLOWED_VALUE },
         } as any);
 
+        // The SDK stores the env we hand it verbatim on the transport's server
+        // params (default inherited vars are only merged later, at spawn time).
         const transportEnv: Record<string, string> = (mcpClient as any).transport?._serverParams
           ?.env;
 
         expect(transportEnv).toBeDefined();
+        // server secret from process.env must NOT be handed to the transport
         expect(transportEnv[SECRET_KEY]).toBeUndefined();
+        // user-configured env vars are still forwarded
         expect(transportEnv[ALLOWED_KEY]).toBe(ALLOWED_VALUE);
       } finally {
         delete process.env[SECRET_KEY];
@@ -135,6 +139,10 @@ describe('MCPClient', () => {
 
         process.env[SECRET_KEY] = SECRET_VALUE;
         try {
+          // Print ONLY the two probed keys to stderr (never the whole env), then
+          // exit non-zero so the main transport connect fails and the pre-check
+          // path we are guarding runs. Keeping the dump narrow avoids writing
+          // unrelated CI/server secrets into errorLog if this test ever fails.
           const childScript = `console.error('${SECRET_KEY}=' + (process.env.${SECRET_KEY} ?? '') + '\\n${ALLOWED_KEY}=' + (process.env.${ALLOWED_KEY} ?? '')); process.exit(1);`;
           const mcpClient = new MCPClient({
             id: 'env-leak-test',
@@ -154,7 +162,9 @@ describe('MCPClient', () => {
 
           expect(thrown).toBeDefined();
           const errorLog: string = thrown?.data?.metadata?.errorLog ?? '';
+          // the child env dumped to stderr must not contain the server secret
           expect(errorLog).not.toContain(SECRET_VALUE);
+          // sanity: user-configured env vars are still forwarded to the subprocess
           expect(errorLog).toContain(ALLOWED_VALUE);
         } finally {
           delete process.env[SECRET_KEY];
