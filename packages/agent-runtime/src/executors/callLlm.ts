@@ -74,7 +74,7 @@ const buildAssistantMessageSeed = (
  */
 export const callLlm =
   (host: AgentRuntimeHost): InstructionExecutor =>
-  async (instruction, state) => {
+  async (instruction, state, runtimeContext) => {
     const { operation, transports } = host;
     const llm = requireLLMCallTransport(host);
     const { payload } = instruction as Extract<AgentInstruction, { type: 'call_llm' }>;
@@ -106,17 +106,28 @@ export const callLlm =
     const existingAssistantMessageId = llmPayload.assistantMessageId;
     const assistantMessage = existingAssistantMessageId
       ? { id: existingAssistantMessageId }
-      : await transports.messages.createAssistantMessage({
-          agentId: state.metadata!.agentId!,
-          content: '',
-          groupId: state.metadata?.groupId ?? undefined,
-          model,
-          parentId,
-          provider,
-          role: 'assistant',
-          threadId: state.metadata?.threadId,
-          topicId: state.metadata?.topicId,
-        });
+      : await transports.messages.createAssistantMessage(
+          {
+            agentId: state.metadata!.agentId!,
+            content: '',
+            groupId: state.metadata?.groupId ?? undefined,
+            model,
+            parentId,
+            provider,
+            role: 'assistant',
+            threadId: state.metadata?.threadId,
+            topicId: state.metadata?.topicId,
+          },
+          {
+            /**
+             * Step retries must reuse the same assistant message, while multiple LLM
+             * instructions in one step must keep independent messages.
+             */
+            idempotencyKey:
+              `agent-runtime:${operation.operationId}:step:${operation.stepIndex}:` +
+              `instruction:${runtimeContext?.instructionIndex ?? 0}:assistant`,
+          },
+        );
 
     const assistantMessageSeed = existingAssistantMessageId
       ? ((await transports.messages.findById(existingAssistantMessageId)) ?? assistantMessage)

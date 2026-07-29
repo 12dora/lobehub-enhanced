@@ -109,7 +109,12 @@ describe('callLlm executor', () => {
       type: 'call_llm',
     };
 
-    await expect(callLlm(host)(instructionWithParent, state)).resolves.toBe(expected);
+    await expect(
+      callLlm(host)(instructionWithParent, state, {
+        instructionIndex: 1,
+        phase: 'user_input',
+      }),
+    ).resolves.toBe(expected);
     expect(messages.findById).toHaveBeenCalledWith('parent-1');
     expect(messages.createAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -122,6 +127,9 @@ describe('callLlm executor', () => {
         threadId: 'thread-1',
         topicId: 'topic-1',
       }),
+      {
+        idempotencyKey: 'agent-runtime:op-1:step:0:instruction:1:assistant',
+      },
     );
     expect(stream.publishEvent).toHaveBeenCalledWith({
       data: {

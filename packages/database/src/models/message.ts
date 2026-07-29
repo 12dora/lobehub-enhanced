@@ -1570,6 +1570,12 @@ export class MessageModel {
     });
   };
 
+  findByClientId = async (clientId: string) => {
+    return this.db.query.messages.findFirst({
+      where: and(eq(messages.clientId, clientId), this.ownership()),
+    });
+  };
+
   /**
    * Resolve the `role='verify'` delivery-checker card for an Agent Run (created
    * with `metadata.verifyOperationId = operationId`). Used by auto-repair to
