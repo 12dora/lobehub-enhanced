@@ -8,6 +8,7 @@ import {
   type UIChatMessage,
 } from '@lobechat/types';
 
+import { type ChatInputEditor } from '@/features/ChatInput';
 import { lambdaClient } from '@/libs/trpc/client';
 import { getAgentStoreState } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
@@ -221,12 +222,26 @@ export class ConversationControlActionImpl {
     );
   };
 
-  cancelSendMessageInServer = (topicId?: string): void => {
-    const { activeAgentId, activeTopicId } = this.#get();
+  cancelSendMessageInServer = (
+    target?: string | ConversationContext,
+    editor?: ChatInputEditor | null,
+  ): void => {
+    const { activeAgentId, activeGroupId, activeThreadId, activeTopicId } = this.#get();
 
-    // Determine which operation to cancel
-    const targetTopicId = topicId ?? activeTopicId;
-    const contextKey = messageMapKey({ agentId: activeAgentId, topicId: targetTopicId });
+    const activeContext: ConversationContext = {
+      agentId: activeAgentId,
+      groupId: activeGroupId,
+      threadId: activeThreadId,
+      topicId: activeTopicId,
+    };
+    const targetContext =
+      typeof target === 'object'
+        ? target
+        : {
+            ...activeContext,
+            topicId: target ?? activeTopicId,
+          };
+    const contextKey = messageMapKey(targetContext);
 
     // Cancel operations in the operation system
     const operationIds = this.#get().operationsByContext[contextKey] || [];
@@ -238,13 +253,18 @@ export class ConversationControlActionImpl {
       }
     });
 
-    // Restore editor state if it's the active session
-    if (contextKey === messageMapKey({ agentId: activeAgentId, topicId: activeTopicId })) {
+    // An embedded conversation (for example the create-thread portal) owns a
+    // separate editor even though ChatStore only tracks the most recently
+    // mounted editor globally. Prefer the explicitly supplied editor. The
+    // active-conversation fallback preserves the legacy call sites.
+    const targetEditor =
+      editor ?? (contextKey === messageMapKey(activeContext) ? this.#get().mainInputEditor : null);
+    if (targetEditor) {
       // Find the latest sendMessage operation with editor state
       for (const opId of [...operationIds].reverse()) {
         const op = this.#get().operations[opId];
         if (op && op.type === 'sendMessage' && op.metadata.inputEditorTempState) {
-          this.#get().mainInputEditor?.setJSONState(op.metadata.inputEditorTempState);
+          targetEditor.setJSONState(op.metadata.inputEditorTempState);
           break;
         }
       }
