@@ -1,3 +1,4 @@
+import { registerPendingHotkeyCard } from '@lobechat/shared-tool-ui/pending-hotkeys';
 import { Button, Flexbox } from '@lobehub/ui';
 import { createStaticStyles, cx } from 'antd-style';
 import { CornerDownLeft } from 'lucide-react';
@@ -190,11 +191,17 @@ const ApprovalActions = memo<ApprovalActionsProps>(
       }
     }, [choice]);
 
-    // Window-level keyboard: 1/2/↑/↓ to switch, Enter to submit. Skip while
+    // Page-level keyboard: 1/2/↑/↓ to switch, Enter to submit. Skip while
     // typing anywhere on the page so we never hijack the main chat composer.
     // The reject input has its own onKeyDown for Enter / ↑.
+    //
+    // Kept fresh in a ref so the shared-arbiter registration below stays
+    // mount-stable while the handler always sees current state.
+    const containerRef = useRef<HTMLDivElement>(null);
+    const onKeyDownRef = useRef<(e: KeyboardEvent) => void>(() => {});
     useEffect(() => {
-      const handler = (e: KeyboardEvent) => {
+      onKeyDownRef.current = (e: KeyboardEvent) => {
+        if (e.defaultPrevented) return;
         const target = e.target as HTMLElement | null;
         if (target) {
           const tag = target.tagName;
@@ -231,11 +238,26 @@ const ApprovalActions = memo<ApprovalActionsProps>(
           // No default
         }
       };
-      window.addEventListener('keydown', handler);
-      return () => {
-        window.removeEventListener('keydown', handler);
-      };
     }, [choices, handleSubmit]);
+
+    // One registration per mount: the shared arbiter dispatches each keypress
+    // to exactly one pending card (containment first, then newest
+    // registration), so this card and a coexisting AskUserQuestion card (e.g.
+    // in the global approval notification) never race on the same keystroke.
+    useEffect(() => {
+      return registerPendingHotkeyCard({
+        // The footer may be portaled away from the intervention body, so
+        // containment covers the whole owning surface (marked with
+        // `data-pending-hotkey-scope`: InterventionBar / global approval
+        // card), falling back to the footer itself when rendered inline.
+        contains: (node) => {
+          const el = containerRef.current;
+          if (!el) return false;
+          return (el.closest('[data-pending-hotkey-scope]') ?? el).contains(node);
+        },
+        onKeyDown: (e) => onKeyDownRef.current(e),
+      });
+    }, []);
 
     const handleRejectInputKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -259,7 +281,7 @@ const ApprovalActions = memo<ApprovalActionsProps>(
     };
 
     return (
-      <Flexbox className={styles.container}>
+      <Flexbox className={styles.container} ref={containerRef}>
         <div className={styles.optionList} role="radiogroup">
           {choices.map((c, index) => {
             if (c === 'reject') {
