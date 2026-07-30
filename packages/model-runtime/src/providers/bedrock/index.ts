@@ -39,7 +39,7 @@ import { debugStream } from '../../utils/debugStream';
 import { createFetchRequestHandler } from '../../utils/fetchRequestHandler';
 import { getModelPricing } from '../../utils/getModelPricing';
 import { StreamingResponse } from '../../utils/response';
-import { shouldDropUnsupportedClaudeAssistantPrefill } from '../anthropic/claudeModelId';
+import { stripUnsupportedClaudeAssistantPrefill } from '../anthropic/claudePrefill';
 import { normalizeClaudeThinkingHistoryMessages } from '../anthropic/claudeThinkingHistory';
 
 /**
@@ -194,7 +194,9 @@ export class LobeBedrockAI implements LobeRuntimeAI {
     ) as GenerateObjectPayload['messages'];
     const { requestParams, schemaToolName } = await buildAnthropicGenerateObjectRequest(
       { ...payload, messages: [...systemMessages, ...normalizedMessages] },
-      { maxTokens: resolvedMaxTokens },
+      // requestModel keys the prefill guard on the Bedrock id actually sent
+      // below, so channel modelIdMapping aliases still get the strip.
+      { maxTokens: resolvedMaxTokens, requestModel: this.resolveModelId(payload.model) },
     );
     const bedrockRequestParams: Omit<Anthropic.MessageCreateParams, 'model'> & {
       model?: Anthropic.MessageCreateParams['model'];
@@ -321,14 +323,13 @@ export class LobeBedrockAI implements LobeRuntimeAI {
       enabledContextCaching,
     });
 
-    const postMessages = await buildAnthropicMessages(user_messages, { enabledContextCaching });
-
-    if (
-      shouldDropUnsupportedClaudeAssistantPrefill(model) &&
-      postMessages.at(-1)?.role === 'assistant'
-    ) {
-      postMessages.pop();
-    }
+    // Key the prefill guard on the resolved Bedrock model id: a custom logical
+    // id can map to a Claude 4.6+/5 Bedrock id via the channel modelIdMapping,
+    // which would otherwise skip the strip and 400 on a trailing assistant turn.
+    const postMessages = stripUnsupportedClaudeAssistantPrefill(
+      this.resolveModelId(model),
+      await buildAnthropicMessages(user_messages, { enabledContextCaching }),
+    );
 
     const anthropicBase = {
       anthropic_version: 'bedrock-2023-05-31',

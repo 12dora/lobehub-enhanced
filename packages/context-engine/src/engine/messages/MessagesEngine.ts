@@ -14,6 +14,7 @@ import {
   InputTemplateProcessor,
   MessageCleanupProcessor,
   MessageContentProcessor,
+  PlaceholderMessageFilterProcessor,
   PlaceholderVariablesProcessor,
   ReactionFeedbackProcessor,
   SupervisorRoleRestoreProcessor,
@@ -226,6 +227,15 @@ export class MessagesEngine {
 
     return [
       // =============================================
+      // Phase 0: Placeholder Residue Filtering
+      // Drop failed/abandoned assistant placeholders ("..." rows) BEFORE
+      // truncation so residue never consumes history slots and never lands
+      // at the payload tail (Claude 4.6+ rejects trailing assistant turns)
+      // =============================================
+
+      new PlaceholderMessageFilterProcessor(),
+
+      // =============================================
       // Phase 1: History Truncation
       // MUST run first — all subsequent processors work on truncated messages only
       // =============================================
@@ -419,6 +429,13 @@ export class MessagesEngine {
       new TasksFlattenProcessor(),
       // Task message processing
       new TaskMessageProcessor(),
+      // Second placeholder pass: the flatten steps above can expand "..."
+      // residue hidden inside group/council/tasks children (invisible to the
+      // Phase 0 pass, which only sees top-level messages), and
+      // TaskMessageProcessor converts flattened `task` rows into assistant
+      // messages — so this pass must run AFTER that conversion to catch
+      // task-shaped residue too.
+      new PlaceholderMessageFilterProcessor(),
       // Verify (delivery-checker) cards: drop empty UI-only ones; surface
       // auto-repair failure feedback as a user turn for the repair run
       new VerifyMessageProcessor(),
