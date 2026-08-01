@@ -1,5 +1,7 @@
 import { isParkedStatus } from '@lobechat/agent-runtime';
 import type { PlatformOperationMetadata, ResumeToolProvenance } from '@lobechat/types';
+import { deserializeParts } from '@lobechat/utils';
+import { isRecord } from '@lobechat/utils/object';
 import debug from 'debug';
 
 import {
@@ -705,13 +707,8 @@ export class CompletionLifecycle {
     // the turn has any text — so an image-only or tool-output final turn
     // doesn't fall through to an earlier assistant message and ship stale
     // text alongside the current attachments.
-    const lastAssistantMessage = messages
-      .slice()
-      .reverse()
-      .find((m: { content?: unknown; id?: string; role: string }) => m.role === 'assistant');
-    const lastAssistantContent = lastAssistantMessage
-      ? extractTextFromMessageContent(lastAssistantMessage.content)
-      : undefined;
+    const lastAssistantMessage = findLastAssistantMessage(normalizeCompletionMessages(messages));
+    const lastAssistantContent = extractTextFromMessage(lastAssistantMessage);
 
     // Operation-level metadata only carries `assistantMessageId` on the client
     // runtime path; a server `execAgent` turn leaves it unset (`{}` in DB). Fall
@@ -816,7 +813,7 @@ const buildAttachmentFromUrl = (
  * Pull text out of a message's `content` field. Accepts both string and
  * OpenAI-style multimodal arrays `[{ type: 'text', text }, { type: 'image_url', image_url: { url } }]`.
  */
-const extractTextFromMessageContent = (content: unknown): string | undefined => {
+export const extractTextFromMessageContent = (content: unknown): string | undefined => {
   if (typeof content === 'string') return content || undefined;
   if (!Array.isArray(content)) return undefined;
   const parts: string[] = [];
@@ -831,6 +828,96 @@ const extractTextFromMessageContent = (content: unknown): string | undefined => 
   const joined = parts.join('');
   return joined || undefined;
 };
+
+/**
+ * Extract text from either an in-memory message or a DB-rehydrated row.
+ * Persisted multimodal content is serialized, so only deserialize when the
+ * row's explicit metadata flag identifies that storage representation.
+ */
+export const extractTextFromMessage = (message: unknown): string | undefined => {
+  if (!isRecord(message)) return undefined;
+
+  const metadata = isRecord(message.metadata) ? message.metadata : undefined;
+  const content =
+    typeof message.content === 'string' && metadata?.isMultimodal === true
+      ? (deserializeParts(message.content) ?? message.content)
+      : message.content;
+
+  return extractTextFromMessageContent(content);
+};
+
+/**
+ * Expand display-only assistant groups back into the assistant/tool sequence
+ * expected by terminal lifecycle consumers.
+ *
+ * DB rehydration runs conversation-flow parsing, which folds an entire tool
+ * chain — including its final toolless assistant turn — into one
+ * `assistantGroup` whose own content is empty. Completion hooks must inspect
+ * the persisted leaf turns rather than that virtual wrapper, otherwise they
+ * lose both the final text and the message id used by DB recovery.
+ */
+export const normalizeCompletionMessages = (
+  messages: unknown[],
+): Record<PropertyKey, unknown>[] => {
+  const normalized: Record<PropertyKey, unknown>[] = [];
+
+  for (const message of messages) {
+    if (!isRecord(message)) continue;
+
+    const isAssistantGroup = message.role === 'assistantGroup' || message.role === 'supervisor';
+    if (!isAssistantGroup) {
+      normalized.push(message);
+      continue;
+    }
+
+    if (!Array.isArray(message.children) || message.children.length === 0) {
+      normalized.push({ ...message, role: 'assistant' });
+      continue;
+    }
+
+    const groupStartIndex = normalized.length;
+    for (const child of message.children) {
+      if (!isRecord(child) || child.council) continue;
+
+      normalized.push({ ...child, role: 'assistant' });
+
+      if (!Array.isArray(child.tools)) continue;
+      for (const tool of child.tools) {
+        if (!isRecord(tool) || !isRecord(tool.result)) continue;
+
+        normalized.push({
+          content: tool.result.content,
+          id: tool.result.id,
+          role: 'tool',
+          tool_call_id: tool.id,
+        });
+      }
+    }
+
+    // A virtual group containing only non-message blocks (for example a
+    // council block) still marks the latest assistant boundary. Preserve an
+    // empty leaf so completion never falls back to stale text from an older
+    // turn.
+    if (normalized.length === groupStartIndex) {
+      normalized.push({ ...message, role: 'assistant' });
+    }
+  }
+
+  return normalized;
+};
+
+/**
+ * Find the final assistant boundary after display-only groups have been
+ * normalized. Match by role rather than content so an empty/image-only final
+ * turn never falls through to stale text from an earlier assistant message.
+ */
+export const findLastAssistantMessage = (
+  messages: Record<PropertyKey, unknown>[],
+): Record<PropertyKey, unknown> | undefined =>
+  messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === 'assistant');
 
 /**
  * Extract image/file parts from a message's `content` array. Each entry is
