@@ -1,3 +1,8 @@
+import { LobeAgentApiName, LobeAgentIdentifier } from '@lobechat/builtin-tool-lobe-agent';
+import {
+  UserInteractionApiName,
+  UserInteractionIdentifier,
+} from '@lobechat/builtin-tool-user-interaction';
 import {
   WebOnboardingApiName,
   WebOnboardingIdentifier,
@@ -76,6 +81,26 @@ describe('customInteractionHandlers', () => {
       skippedAgentIds: ['template-existing'],
     });
     expect(result.options?.createUserMessage).toBe(false);
+  });
+
+  it.each([
+    [LobeAgentIdentifier, LobeAgentApiName.askUserQuestion],
+    [UserInteractionIdentifier, UserInteractionApiName.askUserQuestion],
+  ])('persists structured ask-user answers for %s', async (identifier, apiName) => {
+    const payload = {
+      'How broad should this pass be?': 'Focused',
+      'Which surfaces?': ['Chat', 'Settings'],
+    };
+
+    const result = await prepareCustomInteractionSubmit(identifier, payload, { apiName });
+
+    expect(result).toEqual({
+      // createUserMessage must stay false: the completed tool card already
+      // renders the answers, so a synthetic user message would duplicate them
+      // in the client runtime (LOBE-12835).
+      options: { createUserMessage: false, pluginState: { askUserAnswers: payload } },
+      payload,
+    });
   });
 
   it('persists skipped marketplace picks from the original tool arguments', async () => {

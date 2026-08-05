@@ -1,6 +1,9 @@
 import { ClaudeCodeIdentifier } from '@lobechat/builtin-tool-claude-code';
 import { LobeAgentApiName, LobeAgentIdentifier } from '@lobechat/builtin-tool-lobe-agent';
-import { UserInteractionIdentifier } from '@lobechat/builtin-tool-user-interaction';
+import {
+  UserInteractionApiName,
+  UserInteractionIdentifier,
+} from '@lobechat/builtin-tool-user-interaction';
 import {
   WebOnboardingApiName,
   WebOnboardingIdentifier,
@@ -37,6 +40,11 @@ type CustomInteractionSubmitHandler = (
 
 const isAgentMarketplaceCall = (identifier: string, apiName?: string) =>
   identifier === WebOnboardingIdentifier && apiName === WebOnboardingApiName.showAgentMarketplace;
+
+const isAskUserQuestionCall = (identifier: string, apiName?: string) =>
+  (identifier === UserInteractionIdentifier &&
+    apiName === UserInteractionApiName.askUserQuestion) ||
+  (identifier === LobeAgentIdentifier && apiName === LobeAgentApiName.askUserQuestion);
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
@@ -122,6 +130,18 @@ const customInteractionSubmitHandlers: Array<{
   handler: CustomInteractionSubmitHandler;
   match: (identifier: string, apiName?: string) => boolean;
 }> = [
+  {
+    // `createUserMessage: false` — the completed tool card already renders the
+    // answers from `pluginState.askUserAnswers`, so the client runtime must
+    // resume from the tool result instead of synthesizing a `role: 'user'`
+    // message (which duplicated the answer as a user bubble). This also aligns
+    // with the Gateway resume path, which never creates a user turn here.
+    handler: async (payload) => ({
+      options: { createUserMessage: false, pluginState: { askUserAnswers: payload } },
+      payload,
+    }),
+    match: isAskUserQuestionCall,
+  },
   {
     handler: handleAgentMarketplaceSubmit,
     match: isAgentMarketplaceCall,
