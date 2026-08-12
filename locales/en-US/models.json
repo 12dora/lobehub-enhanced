@@ -1367,5 +1367,6 @@
   "zai/glm-4.5.description": "The GLM-4.5 series is designed for agents. The flagship GLM-4.5 combines reasoning, coding, and agent skills with 355B total params (32B active) and offers dual operation modes as a hybrid reasoning system.",
   "zai/glm-4.5v.description": "GLM-4.5V builds on GLM-4.5-Air, inheriting proven GLM-4.1V-Thinking techniques and scaling with a strong 106B-parameter MoE architecture.",
   "zenmux/auto.description": "ZenMux auto-routing selects the best-value, best-performing model from supported options based on your request.",
-  "MiniMax-H3.description": "A unified text-to-video, image-to-video, and reference-to-video model with enhanced motion, consistency, and native audio capabilities."
+  "MiniMax-H3.description": "A unified text-to-video, image-to-video, and reference-to-video model with enhanced motion, consistency, and native audio capabilities.",
+  "lobehub.grok-4.6.description": "Grok 4.6 builds on Grok 4.5 with a particular focus on long-running agents and more ambitious interactive and visual work."
 }

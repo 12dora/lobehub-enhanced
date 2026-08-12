@@ -435,5 +435,6 @@
   "vertexai.region.placeholder": "选择区域",
   "vertexai.region.title": "Vertex AI 区域",
   "zeroone.title": "01.AI 零一万物",
-  "zhipu.title": "智谱"
+  "zhipu.title": "智谱",
+  "providerModels.item.modelConfig.extendParams.options.grok4_6ReasoningEffort.hint": "适用于 Grok 4.6 系列；控制推理强度（低/中/高/xhigh，默认高）。推理无法关闭。"
 }
