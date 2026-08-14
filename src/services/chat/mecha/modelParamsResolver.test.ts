@@ -692,6 +692,29 @@ describe('thinking configuration', () => {
       expect(result.thinkingLevel).toBe('medium');
     });
 
+    it.each(['minimal', 'low', 'medium', 'high'] as const)(
+      'should forward the %s thinkingLevel for Gemini 3.6 Flash',
+      (thinkingLevel) => {
+        const result = resolveModelExtendParams({
+          chatConfig: { thinkingLevel } as any,
+          model: 'gemini-3.6-flash',
+          provider: 'google',
+        });
+
+        expect(result.thinkingLevel).toBe(thinkingLevel);
+      },
+    );
+
+    it('should use the Gemini 3.6 Flash default thinkingLevel when not configured', () => {
+      const result = resolveModelExtendParams({
+        chatConfig: {} as any,
+        model: 'gemini-3.6-flash',
+        provider: 'google',
+      });
+
+      expect(result.thinkingLevel).toBe('medium');
+    });
+
     it('should reuse thinkingLevel for Gemini 3.1 Flash-Lite models', () => {
       const result = resolveModelExtendParams({
         chatConfig: {

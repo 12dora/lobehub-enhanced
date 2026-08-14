@@ -125,6 +125,7 @@ const ControlsForm = memo<ControlsFormProps>(
     const isNarrow = !screens.sm;
     const gpt52ReasoningEffortDefaultValue = model === 'gpt-5.5' ? 'medium' : 'none';
     const thinkingLevelDefaultValue = resolveDefaultThinkingLevelForModel(model);
+    const thinkingLevel3DefaultValue = resolveDefaultThinkingLevelForModel(model, 'thinkingLevel3');
 
     const descWide = { display: 'inline-block', width: 300 } as const;
     const descNarrow = {
@@ -545,7 +546,7 @@ const ControlsForm = memo<ControlsFormProps>(
         desc: 'thinkingLevel',
       },
       {
-        children: <ThinkingLevel3Slider />,
+        children: <ThinkingLevel3Slider defaultValue={thinkingLevel3DefaultValue} />,
         label: t('extendParams.thinkingLevel.title'),
         layout: 'vertical',
         minWidth: undefined,
