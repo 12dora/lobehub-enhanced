@@ -190,10 +190,11 @@ describe('compressContext executor', () => {
         topicId: 'topic-123',
       }),
     );
-    expect((result.nextContext?.payload as any).compressedMessages).toEqual([
+    expect(result.newState.messages).toEqual([
       { content: 'summary', id: 'group-123', role: 'compressedGroup' },
       preservedMessage,
     ]);
+    expect((result.nextContext?.payload as any).compressedMessages).toBeUndefined();
     expect((result.nextContext?.payload as any).parentMessageId).toBe('assistant-existing');
     expect(result.events).toContainEqual({
       groupId: 'group-123',

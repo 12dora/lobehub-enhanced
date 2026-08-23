@@ -72,16 +72,12 @@ export const compressContext =
       preservedMessages.map((message) => message.id).filter((id): id is string => Boolean(id)),
     );
     const messagesToCompress = preservedMessages.length > 0 ? messages.slice(0, -1) : messages;
-    const compressedMessagesFallback = [...messagesToCompress, ...preservedMessages];
-
     const createNextContext = ({
-      compressedMessages,
       groupId,
       parentMessageId,
       skipped,
     }: GeneralAgentCompressionResultPayload) => ({
       payload: {
-        compressedMessages,
         groupId,
         parentMessageId,
         skipped,
@@ -99,7 +95,6 @@ export const compressContext =
       events,
       newState,
       nextContext: createNextContext({
-        compressedMessages: compressedMessagesFallback,
         groupId: '',
         parentMessageId,
         skipped: true,
@@ -248,7 +243,6 @@ export const compressContext =
         newState,
         nextContext: {
           ...createNextContext({
-            compressedMessages,
             groupId: compressionResult.messageGroupId,
             parentMessageId: latestAssistantMessage?.id,
           }),
