@@ -42,6 +42,7 @@ export default {
   'brief.viewRun': 'View run',
   'homePromoBanner.cta': 'Try now',
   'homePromoBanner.dismiss': 'Dismiss',
+  'homePromoBanner.glm53FlashReveal': 'Ox Alpha unmasked: GLM-5.3-Flash',
   'homePromoBanner.label': '{{model}} is now available',
   'project.create': 'New project',
   'project.deleteConfirm':
