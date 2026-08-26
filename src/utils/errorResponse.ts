@@ -1,6 +1,5 @@
 import { AUTH_REQUIRED_HEADER } from '@lobechat/desktop-bridge';
-import { type ILobeAgentRuntimeErrorType } from '@lobechat/model-runtime';
-import { AgentRuntimeErrorType } from '@lobechat/model-runtime';
+import { getErrorCodeSpec, type ILobeAgentRuntimeErrorType } from '@lobechat/model-runtime';
 import { type ErrorResponse, type ErrorType } from '@lobechat/types';
 import { ChatErrorType } from '@lobechat/types';
 
@@ -35,11 +34,22 @@ const isValidHttpStatus = (status: unknown): status is number =>
  */
 const AUTH_REQUIRED_ERROR_TYPES = new Set<ErrorType>([ChatErrorType.Unauthorized]);
 
+/**
+ * Resolves canonical runtime specs before app-only fallbacks so codes such as
+ * InvalidRequestFormat keep their declared 400 instead of the legacy Invalid* 401.
+ */
 const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
+  const spec = getErrorCodeSpec(typeof errorType === 'string' ? errorType : undefined);
+  if (spec) return spec.httpStatus;
+
   // InvalidAccessCode / InvalidAzureAPIKey / InvalidOpenAIAPIKey / InvalidZhipuAPIKey ....
   if (errorType.toString().includes('Invalid')) return 401;
 
   switch (errorType) {
+    case ChatErrorType.NoOpenAIAPIKey: {
+      return 401;
+    }
+
     case ChatErrorType.SubscriptionPlanLimit:
     case ChatErrorType.FreePlanLimit:
     case ChatErrorType.InsufficientBudgetForModel:
@@ -49,53 +59,10 @@ const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
       return 403;
     }
 
-    // TODO: Need to refactor to Invalid OpenAI API Key
-    case AgentRuntimeErrorType.InvalidProviderAPIKey:
-    case AgentRuntimeErrorType.OAuthAuthorizationExpired:
-    case AgentRuntimeErrorType.NoOpenAIAPIKey: {
-      return 401;
-    }
-
-    case AgentRuntimeErrorType.ExceededContextWindow:
-    case AgentRuntimeErrorType.ExceededToolLimit:
     case ChatErrorType.SubscriptionKeyMismatch:
     case ChatErrorType.SystemTimeNotMatchError:
     case ChatErrorType.LobeHubModelDeprecated: {
       return 400;
-    }
-
-    case AgentRuntimeErrorType.LocationNotSupportError: {
-      return 403;
-    }
-
-    case AgentRuntimeErrorType.ModelNotFound: {
-      return 404;
-    }
-
-    case AgentRuntimeErrorType.AccountDeactivated: {
-      return 403;
-    }
-
-    case AgentRuntimeErrorType.InsufficientQuota:
-    case AgentRuntimeErrorType.QuotaLimitReached: {
-      return 429;
-    }
-
-    // define the 471~480 as provider error
-    case AgentRuntimeErrorType.AgentRuntimeError: {
-      return 470;
-    }
-
-    case AgentRuntimeErrorType.ProviderBizError:
-    case AgentRuntimeErrorType.ProviderContentPolicyViolation: {
-      return 471;
-    }
-
-    // all local provider connection error
-    case AgentRuntimeErrorType.OllamaServiceUnavailable:
-    case ChatErrorType.OllamaServiceUnavailable:
-    case AgentRuntimeErrorType.OllamaBizError: {
-      return 472;
     }
   }
 
@@ -108,7 +75,7 @@ const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
   if (PLATFORM_FORBIDDEN_ERROR_CODES.has(errorType as string)) return 403;
   if (PLATFORM_UNAVAILABLE_ERROR_CODES.has(errorType as string)) return 503;
 
-  return errorType as number;
+  return typeof errorType === 'number' ? errorType : undefined;
 };
 
 export const createErrorResponse = (
@@ -121,8 +88,8 @@ export const createErrorResponse = (
 
   if (!isValidHttpStatus(mappedStatus)) {
     console.error(
-      `current StatusCode: \`${mappedStatus}\` .`,
-      'Please go to `./src/app/api/errorResponse.ts` to defined the statusCode.',
+      `Unknown error type: \`${errorType}\`.`,
+      'Falling back to HTTP 500. Define the status in the shared error code specs or app mapping.',
     );
   }
 
