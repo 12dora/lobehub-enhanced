@@ -8,7 +8,7 @@ import { computeChatCost } from './computeChatCost';
 
 const DEFAULT_IMAGE_INPUT_TOKEN_ESTIMATE = 1000;
 const DEFAULT_VIDEO_INPUT_TOKEN_ESTIMATE = 1000;
-const OUTPUT_INPUT_RATIO = 0.5;
+const OUTPUT_INPUT_RATIO = 0.1;
 const OUTPUT_TOKEN_CAP = 8192;
 
 export interface ChatInputTokenEstimate {
@@ -93,7 +93,7 @@ const hasPricingUnit = (pricing: Pricing | undefined, unitName: PricingUnitName)
 /**
  * Estimates output tokens for budget pre-checks and UI hints.
  *
- * The default heuristic assumes output is half of total input tokens. A request/model limit caps
+ * The default heuristic assumes output is one tenth of total input tokens. A request/model limit caps
  * the estimate when provided; otherwise 8192 tokens is used as a fallback cap.
  */
 export function estimateChatOutputTokens(
