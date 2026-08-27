@@ -332,6 +332,11 @@ export default {
   'input.inputCompletionError.retry': 'Retry',
   'input.inputCompletionError.settings': 'Settings',
   'input.inputCompletionError.title': 'Input suggestions paused',
+  'input.modelDisabled': 'The current model is disabled',
+  'input.modelDisabled.action': 'Enable',
+  'input.modelDisabled.actionFailed': 'Failed to enable the model. Please try again.',
+  'input.modelDisabled.selectionFailed':
+    'The model was enabled, but switching providers failed. Select it again to continue.',
   'input.modelUnavailable':
     'The current model is no longer available. Choose another model to continue.',
   'input.more': 'More',
