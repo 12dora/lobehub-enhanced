@@ -74,7 +74,8 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     }
   `,
   listContainer: css`
-    overflow: hidden;
+    overflow: hidden auto;
+    overscroll-behavior-y: contain;
 
     margin-block-start: 8px;
     padding-block: 4px;
