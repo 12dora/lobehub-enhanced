@@ -1371,5 +1371,6 @@
   "lobehub.grok-4.6.description": "Grok 4.6 在 Grok 4.5 基础上强化长程 Agent 能力，并更擅长交互式与视觉类工作。",
   "lobehub.gemini-3.7-flash.description": "Gemini 3.7 Flash 是 Google 最强的 Flash 模型，面向复杂编程、智能体工作流和可靠的多步执行。",
   "lobehub.deepseek-v4-flash-vision-exp.description": "DeepSeek V4 Flash Vision Exp 是一款实验性多模态模型，文本能力与 V4 Flash 相当，并增加图像理解能力，适用于视觉智能代理工作流。",
-  "lobehub.glm-5.3-flash.description": "GLM-5 系列第一款能看图的模型。比 GLM-5.2 更强，编码逼近 Opus 4.8，价格却只有旗舰的十分之一。"
+  "lobehub.glm-5.3-flash.description": "GLM-5 系列第一款能看图的模型。比 GLM-5.2 更强，编码逼近 Opus 4.8，价格却只有旗舰的十分之一。",
+  "lobehub.claude-fable-5-1.description": "在长时间编码与研究任务上强于 Fable 5——Terminal-Bench 4.0 得分 55.8%（Fable 5 为 42.0%），价格同为 $10/$50，缓存读取成本仅为四分之一。"
 }

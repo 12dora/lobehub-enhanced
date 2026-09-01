@@ -1371,5 +1371,6 @@
   "lobehub.grok-4.6.description": "Grok 4.6 builds on Grok 4.5 with a particular focus on long-running agents and more ambitious interactive and visual work.",
   "lobehub.gemini-3.7-flash.description": "Gemini 3.7 Flash is Google's most capable Flash model, built for complex coding, agentic workflows, and reliable multi-step execution.",
   "lobehub.deepseek-v4-flash-vision-exp.description": "DeepSeek V4 Flash Vision Exp is an experimental multimodal model that matches V4 Flash on text capabilities and adds image understanding for visual agent workflows.",
-  "lobehub.glm-5.3-flash.description": "The first GLM-5 that can see — stronger than GLM-5.2, coding that approaches Opus 4.8, at about one-tenth the flagship price."
+  "lobehub.glm-5.3-flash.description": "The first GLM-5 that can see — stronger than GLM-5.2, coding that approaches Opus 4.8, at about one-tenth the flagship price.",
+  "lobehub.claude-fable-5-1.description": "Stronger than Fable 5 on long-running coding and research — 55.8% on Terminal-Bench 4.0 versus 42.0%, at the same $10/$50 with cache reads at a quarter of the cost."
 }

@@ -5,6 +5,7 @@ import {
   isContextCachingModel,
   isThinkingWithToolClaudeModel,
   parseClaudeModelId,
+  rejectsForcedToolChoice,
   shouldDropUnsupportedClaudeAssistantPrefill,
   shouldOmitSamplingParams,
 } from './claudeModelId';
@@ -70,6 +71,14 @@ describe('parseClaudeModelId', () => {
       normalizedModelId: 'claude-mythos-5-preview',
       source: 'anthropic',
     });
+    expect(parseClaudeModelId('claude-fable-5-1')).toEqual({
+      family: 'fable',
+      majorVersion: 5,
+      minorSeparator: '-',
+      minorVersion: 1,
+      normalizedModelId: 'claude-fable-5-1',
+      source: 'anthropic',
+    });
   });
 
   it('should return undefined for non-Claude ids', () => {
@@ -114,6 +123,24 @@ describe('isThinkingWithToolClaudeModel', () => {
   it('should preserve existing false cases', () => {
     expect(isThinkingWithToolClaudeModel('claude-3-5-sonnet-20240620')).toBe(false);
     expect(isThinkingWithToolClaudeModel('gpt-4o')).toBe(false);
+  });
+});
+
+describe('rejectsForcedToolChoice', () => {
+  it('should reject forced tool_choice on Fable 5.1 / Mythos 5.1 and later', () => {
+    expect(rejectsForcedToolChoice('claude-fable-5-1')).toBe(true);
+    expect(rejectsForcedToolChoice('claude-mythos-5-1')).toBe(true);
+    expect(rejectsForcedToolChoice('global.anthropic.claude-fable-5-1')).toBe(true);
+    expect(rejectsForcedToolChoice('anthropic/claude-fable-5-1')).toBe(true);
+  });
+
+  it('should keep forced tool_choice valid on Fable 5 / Mythos 5 and other families', () => {
+    expect(rejectsForcedToolChoice('claude-fable-5')).toBe(false);
+    expect(rejectsForcedToolChoice('claude-mythos-5')).toBe(false);
+    expect(rejectsForcedToolChoice('claude-opus-5')).toBe(false);
+    expect(rejectsForcedToolChoice('claude-sonnet-5')).toBe(false);
+    expect(rejectsForcedToolChoice('claude-opus-4-8')).toBe(false);
+    expect(rejectsForcedToolChoice('gpt-5')).toBe(false);
   });
 });
 
