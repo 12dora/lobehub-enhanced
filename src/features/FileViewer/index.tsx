@@ -14,6 +14,7 @@ import ImageViewer from './Renderer/Image';
 import MSDocViewer from './Renderer/MSDoc';
 import PDFViewer from './Renderer/PDF';
 import VideoViewer from './Renderer/Video';
+import { VERILOG_FILE_EXTENSIONS, VERILOG_FILE_MIME_TYPES } from './verilogSupport';
 
 // File type definitions
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
@@ -54,6 +55,8 @@ const CODE_EXTENSIONS = [
   '.cc',
   '.hpp',
   '.hxx',
+  // Hardware description languages (canonical entries in ./verilogSupport)
+  ...VERILOG_FILE_EXTENSIONS,
   // Other compiled languages
   '.cs',
   '.go',
@@ -129,6 +132,8 @@ const CODE_MIME_TYPES = new Set([
   'csharp',
   'go',
   'rust',
+  // Hardware description languages (canonical entries in ./verilogSupport)
+  ...VERILOG_FILE_MIME_TYPES,
   'ruby',
   'php',
   'text/x-php',

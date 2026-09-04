@@ -86,6 +86,16 @@ describe('getMimeType', () => {
     it('should return correct MIME type for Vue files', () => {
       expect(getMimeType('App.vue')).toBe('text/x-vue');
     });
+
+    it('should return correct MIME type for Verilog files', () => {
+      expect(getMimeType('adder.v')).toBe('text/x-verilog');
+      expect(getMimeType('/rtl/top.v')).toBe('text/x-verilog');
+    });
+
+    it('should return correct MIME type for SystemVerilog files', () => {
+      expect(getMimeType('alu_top.sv')).toBe('text/x-systemverilog');
+      expect(getMimeType('/rtl/tb.sv')).toBe('text/x-systemverilog');
+    });
   });
 
   describe('case insensitivity for extensions', () => {
