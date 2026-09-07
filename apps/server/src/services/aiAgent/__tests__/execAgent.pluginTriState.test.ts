@@ -18,6 +18,7 @@ const {
   mockGetLobehubSkillManifests,
   mockGetAgentSkills,
   mockGetManagedSkillRuntimeModeSnapshot,
+  mockGetUserSettings,
   mockMessageCreate,
   mockPluginQuery,
   mockResolvePlatformSkillRuntimeSnapshot,
@@ -35,6 +36,7 @@ const {
   mockGetLobehubSkillManifests: vi.fn().mockResolvedValue([]),
   mockGetAgentSkills: vi.fn().mockResolvedValue([]),
   mockGetManagedSkillRuntimeModeSnapshot: vi.fn().mockReturnValue('unmanaged'),
+  mockGetUserSettings: vi.fn().mockResolvedValue(undefined),
   mockMessageCreate: vi.fn(),
   mockPluginQuery: vi.fn().mockResolvedValue([]),
   mockResolvePlatformSkillRuntimeSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -97,6 +99,15 @@ vi.mock('@/server/services/agent', () => ({
 
 vi.mock('@/database/models/plugin', () => ({
   PluginModel: vi.fn().mockImplementation(() => ({ query: mockPluginQuery })),
+}));
+
+vi.mock('@/database/models/user', () => ({
+  UserModel: Object.assign(
+    vi.fn().mockImplementation(() => ({
+      getUserSettings: mockGetUserSettings,
+    })),
+    { getInfoForAIGeneration: vi.fn().mockResolvedValue({}) },
+  ),
 }));
 
 vi.mock('@/database/models/connector', () => ({
@@ -209,6 +220,7 @@ describe('AiAgentService.execAgent - three-state plugin config (pinned/auto/disa
     mockResolvePlatformSkillRuntimeSnapshot.mockResolvedValue(undefined);
     mockGetManagedSkillRuntimeModeSnapshot.mockReturnValue('unmanaged');
     mockGetAgentSkills.mockResolvedValue([]);
+    mockGetUserSettings.mockResolvedValue(undefined);
     mockSkillFindAll.mockResolvedValue({ data: [], total: 0 });
     service = new AiAgentService({} as any, 'test-user-id');
   });
@@ -355,5 +367,107 @@ describe('AiAgentService.execAgent - three-state plugin config (pinned/auto/disa
     expect(discovery?.availableTools.map((tool) => tool.identifier)).not.toContain(
       WebBrowsingManifest.identifier,
     );
+  });
+
+  const skillIdentifiers = () =>
+    (
+      mockCreateOperation.mock.calls[0][0].operationSkillSet.skills as {
+        identifier: string;
+      }[]
+    ).map((skill) => skill.identifier);
+
+  it('drops a user-disabled installed skill from the operation skill pool', async () => {
+    mockGetUserSettings.mockResolvedValue({
+      tool: { disabledSkillIdentifiers: ['market-skill'] },
+    });
+    mockSkillFindAll.mockResolvedValue({
+      data: [{ description: 'Market', identifier: 'market-skill', name: 'market-skill' }],
+      total: 1,
+    });
+    mockGetAgentConfig.mockResolvedValue({
+      chatConfig: {},
+      id: 'agent-1',
+      model: 'gpt-4',
+      plugins: [],
+      provider: 'openai',
+      systemRole: 'You are a helper',
+    });
+
+    await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' } as any);
+
+    expect(skillIdentifiers()).not.toContain('market-skill');
+  });
+
+  it('drops an uninstalled builtin skill from the operation skill pool', async () => {
+    mockGetUserSettings.mockResolvedValue({
+      tool: { uninstalledBuiltinTools: ['lobe-artifacts'] },
+    });
+    mockGetAgentConfig.mockResolvedValue({
+      chatConfig: {},
+      id: 'agent-1',
+      model: 'gpt-4',
+      plugins: [],
+      provider: 'openai',
+      systemRole: 'You are a helper',
+    });
+
+    await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' } as any);
+
+    expect(skillIdentifiers()).not.toContain('lobe-artifacts');
+  });
+
+  it('does not inherit the personal disable list when a workspace is active', async () => {
+    const workspaceService = new AiAgentService({} as any, 'test-user-id', {
+      workspaceId: 'ws-1',
+    });
+    mockGetUserSettings.mockResolvedValue({
+      tool: { disabledSkillIdentifiers: ['market-skill'] },
+    });
+    mockSkillFindAll.mockResolvedValue({
+      data: [{ description: 'Market', identifier: 'market-skill', name: 'market-skill' }],
+      total: 1,
+    });
+    mockGetAgentConfig.mockResolvedValue({
+      chatConfig: {},
+      id: 'agent-1',
+      model: 'gpt-4',
+      plugins: [],
+      provider: 'openai',
+      systemRole: 'You are a helper',
+    });
+
+    await workspaceService.execAgent({ agentId: 'agent-1', prompt: 'Hello' } as any);
+
+    expect(skillIdentifiers()).toContain('market-skill');
+  });
+
+  it('forwards the user-disabled set into the managed catalog snapshot', async () => {
+    mockGetUserSettings.mockResolvedValue({
+      tool: { disabledSkillIdentifiers: ['user.disabled'] },
+    });
+    mockGetManagedSkillRuntimeModeSnapshot.mockReturnValue('enforced');
+    mockResolvePlatformSkillRuntimeSnapshot.mockResolvedValue({
+      catalog: { refs: [], revision: 'catalog-r1' },
+      skills: [],
+    });
+    mockGetAgentConfig.mockResolvedValue({
+      chatConfig: {},
+      id: 'agent-1',
+      model: 'gpt-4',
+      plugins: [],
+      provider: 'openai',
+      systemRole: 'You are a helper',
+    });
+
+    await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' } as any);
+
+    expect(mockResolvePlatformSkillRuntimeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userDisabledSkillIds: expect.any(Set),
+      }),
+    );
+    const forwarded = mockResolvePlatformSkillRuntimeSnapshot.mock.calls[0][0]
+      .userDisabledSkillIds as Set<string>;
+    expect(forwarded.has('user.disabled')).toBe(true);
   });
 });

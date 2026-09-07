@@ -194,6 +194,41 @@ describe('resolvePlatformSkillRuntimeSnapshot', () => {
     });
   });
 
+  it('drops user-disabled catalog keys but keeps a mandatory skill with a stale disable entry', async () => {
+    const makeSkill = (skillKey: string, distribution: 'mandatory' | 'default') => ({
+      checksum: 'a'.repeat(64),
+      description: skillKey,
+      displayName: skillKey,
+      distribution,
+      skillKey,
+      source: 'uploaded' as const,
+      version: '1.0.0',
+    });
+    const skills = [makeSkill('org.required', 'mandatory'), makeSkill('user.disabled', 'default')];
+    const result = await resolvePlatformSkillRuntimeSnapshot({
+      db: {} as never,
+      effectiveMode: 'enforced',
+      flags: flags(true),
+      identity,
+      options: {
+        catalogService: {
+          getPublishedCatalog: vi.fn().mockResolvedValue({ revision: 'r1', skills }),
+          resolvePinnedForExecution: vi.fn(async (ref) => ({
+            ...ref,
+            content: '# inline',
+            contentRef: null,
+            resources: [],
+          })),
+        },
+        signProof,
+      },
+      userDisabledSkillIds: ['org.required', 'user.disabled'],
+    });
+
+    expect(result?.catalog.refs.map((item) => item.skillKey)).toEqual(['org.required']);
+    expect(result?.catalog.mandatorySkillIds).toEqual(['org.required']);
+  });
+
   it('bounds the aggregate expanded payload of an enforced catalog operation', async () => {
     const heavyContent = 'x'.repeat(4_300_000);
     const heavySigner = vi.fn().mockResolvedValue('heavy-proof');

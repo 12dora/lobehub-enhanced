@@ -345,11 +345,18 @@ export const loadCurrentSkillCatalogSnapshot = async (
   const items: PlatformPublishedSkillView[] = [];
   const tokenEntries: SkillCatalogTokenEntry[] = [];
   for (const { revision, skillId, snapshot, version } of validated) {
-    const tombstone =
+    const archivedBuiltinTombstone =
       revision.status === 'archived' &&
       snapshot.skill.enabled &&
       snapshot.skill.allowBuiltinOverride &&
       snapshot.builtinOverrideTombstone === true;
+    // Published + enabled:false must still tombstone a bundled builtin. `active`
+    // would otherwise drop the override and mergePublishedSkills would re-add it.
+    const disabledBuiltinOverride =
+      revision.status === 'published' &&
+      !snapshot.skill.enabled &&
+      (snapshot.skill.allowBuiltinOverride || snapshot.skill.source === 'builtin');
+    const tombstone = archivedBuiltinTombstone || disabledBuiltinOverride;
     const active = revision.status === 'published' && snapshot.skill.enabled;
     if (!active && !tombstone) continue;
     tokenEntries.push({

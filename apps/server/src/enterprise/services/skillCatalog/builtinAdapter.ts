@@ -66,5 +66,11 @@ export const adaptBuiltinSkillDefinitions = (
   return builtinSkillDefinitionsSchema.parse(definitions) as BuiltinSkillDefinition[];
 };
 
+/**
+ * Every bundled builtin Skill from the package. Org-wide disable is applied in
+ * `loadPublishedSkillProjection` via `builtinOverrideTombstones` — this loader
+ * stays a pure package adapter so a disabled override cannot "fall off" and
+ * let the bundled skill re-enter the user-facing catalog.
+ */
 export const getBuiltinSkillDefinitions = (): BuiltinSkillDefinition[] =>
   adaptBuiltinSkillDefinitions(builtinSkills);

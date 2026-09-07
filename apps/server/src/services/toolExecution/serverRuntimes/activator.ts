@@ -6,10 +6,12 @@ import {
   type ToolManifestInfo,
 } from '@lobechat/builtin-tool-activator/executionRuntime';
 import { SkillsExecutionRuntime } from '@lobechat/builtin-tool-skills/executionRuntime';
-import { getDisabledPluginIds } from '@lobechat/types';
+import type { AgentPluginEntry, UserToolConfig } from '@lobechat/types';
+import { resolveDisabledSkillIds } from '@lobechat/types';
 
 import { AgentModel } from '@/database/models/agent';
 import { AgentSkillModel } from '@/database/models/agentSkill';
+import { UserModel } from '@/database/models/user';
 import { filterBuiltinSkills } from '@/helpers/skillFilters';
 import { createPlatformSkillOperationResolver } from '@/server/enterprise/services/skillCatalog';
 import {
@@ -84,15 +86,40 @@ export const activatorRuntime: ServerRuntimeRegistration = {
         );
 
         // `activateSkill` resolves independently of `<available_skills>` in
-        // legacy operations. Re-derive the disabled set for that path. A
-        // managed operation never reaches these user-owned lookups: it uses
-        // only the immutable platformCatalog operation snapshot above.
-        let disabledSkillIds = new Set<string>();
+        // legacy operations. Re-derive the disabled set (user-scope uninstall
+        // / disabledSkillIdentifiers ∪ per-agent plugin tri-state) for that
+        // path. Disabled skills are dropped from the pool AND
+        // findById/findByName return undefined. A managed operation never
+        // reaches these user-owned lookups: it uses only the immutable
+        // platformCatalog operation snapshot above.
+        let toolConfig: UserToolConfig | undefined;
+        try {
+          const userSettings = await new UserModel(
+            context.serverDB,
+            context.userId,
+          ).getUserSettings();
+          toolConfig = (userSettings as { tool?: UserToolConfig } | undefined)?.tool;
+        } catch (error) {
+          console.error('[activator] Failed to load user skill-disable settings:', error);
+        }
+
+        let agentPlugins: AgentPluginEntry[] | undefined;
         if (context.agentId) {
           const agentModel = new AgentModel(context.serverDB, context.userId, context.workspaceId);
           const agentConfig = await agentModel.getAgentConfigById(context.agentId);
-          disabledSkillIds = new Set(getDisabledPluginIds(agentConfig?.plugins ?? undefined));
+          agentPlugins = agentConfig?.plugins ?? undefined;
         }
+        const disabledSkillIds = resolveDisabledSkillIds({
+          agentPlugins,
+          toolConfig,
+          workspaceId: context.workspaceId,
+        });
+
+        const skillIsDisabled = (skill: { identifier?: string; name?: string }) =>
+          Boolean(
+            (skill.identifier && disabledSkillIds.has(skill.identifier)) ||
+            (skill.name && disabledSkillIds.has(skill.name)),
+          );
 
         skillsRuntime = new SkillsExecutionRuntime({
           // Same device gate as the skills runtime: device-only skills are
@@ -100,16 +127,17 @@ export const activatorRuntime: ServerRuntimeRegistration = {
           // with `activeDeviceId` as the fallback for callers without a plan.
           builtinSkills: filterBuiltinSkills(builtinSkills, {
             canExecuteOnDevice: context.deviceCapable ?? !!context.activeDeviceId,
-          }).filter((skill) => !disabledSkillIds.has(skill.identifier)),
+          }).filter((skill) => !skillIsDisabled(skill)),
           service: {
             findAll: () => skillModel.findAll(),
             findById: async (id) => {
               const skill = await skillModel.findById(id);
-              return skill && disabledSkillIds.has(skill.identifier) ? undefined : skill;
+              return skill && !skillIsDisabled(skill) ? skill : undefined;
             },
             findByName: async (name) => {
+              if (disabledSkillIds.has(name)) return undefined;
               const skill = await skillModel.findByName(name);
-              return skill && disabledSkillIds.has(skill.identifier) ? undefined : skill;
+              return skill && !skillIsDisabled(skill) ? skill : undefined;
             },
             readResource: async () => {
               throw new Error('readResource not available in tools runtime');

@@ -28,6 +28,8 @@ import {
   adminSkillPublishInputSchema,
   adminSkillPublishNowInputSchema,
   adminSkillRollbackInputSchema,
+  adminSkillSetEnabledInputSchema,
+  adminSkillSetEnabledOutputSchema,
   adminSkillUpdateDraftInputSchema,
   adminSkillValidateInputSchema,
   adminSkillValidateOutputSchema,
@@ -43,6 +45,7 @@ import {
   assertSkillDangerousReauth,
   assertSkillFeatureEnabled,
   createSkillService,
+  isBundledBuiltinSkillKey,
   mapSkillServiceError,
 } from './skillsSupport';
 
@@ -292,6 +295,43 @@ export const adminSkillsRouter = router({
       });
       try {
         return await createSkillService(ctx.serverDB).rollback(ctx.userId!, input);
+      } catch (error) {
+        return mapSkillServiceError(error);
+      }
+    }),
+
+  /**
+   * Org-wide enable/disable. Existing rows: identity patch + immediate publish.
+   * Bundled builtin with no row: materialize an override and publish.
+   * CREATE when the key is a bundled builtin (first write / override); UPDATE otherwise.
+   */
+  setEnabled: adminBase
+    .use(
+      withCompoundPlatformPermission({
+        fixed: [PLATFORM_PERMISSIONS.SKILL_PUBLISH],
+        select: (raw) => {
+          const skillKey = (raw as { skillKey?: string } | null)?.skillKey;
+          return skillKey && isBundledBuiltinSkillKey(skillKey)
+            ? PLATFORM_PERMISSIONS.SKILL_CREATE
+            : PLATFORM_PERMISSIONS.SKILL_UPDATE;
+        },
+        selectable: [PLATFORM_PERMISSIONS.SKILL_CREATE, PLATFORM_PERMISSIONS.SKILL_UPDATE],
+      }),
+    )
+    .input(adminSkillSetEnabledInputSchema)
+    .output(adminSkillSetEnabledOutputSchema)
+    .mutation(async ({ ctx, input }) => {
+      assertSkillFeatureEnabled();
+      await assertSkillDangerousReauth({
+        action: 'admin.skills.applyImmediate',
+        actorUserId: ctx.userId!,
+        authenticatedAt: ctx.authenticatedAt,
+        authMethod: ctx.authMethod,
+        serverDB: ctx.serverDB,
+        targetId: input.skillKey,
+      });
+      try {
+        return await createSkillService(ctx.serverDB).setEnabled(ctx.userId!, input);
       } catch (error) {
         return mapSkillServiceError(error);
       }

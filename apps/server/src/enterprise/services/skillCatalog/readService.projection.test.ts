@@ -77,6 +77,51 @@ describe('SkillCatalogReadService projection / merge', () => {
     expect(afterOverride.revision).not.toBe(beforeOverride.revision);
   });
 
+  it('hides a bundled skill when a published builtin override is disabled, and restores it when enabled', async () => {
+    const builtin: BuiltinSkillDefinition = {
+      checksum: 'b'.repeat(64),
+      content: '# builtin',
+      description: 'Builtin',
+      displayName: 'Builtin',
+      distribution: 'default',
+      manifest,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '1.0.0',
+    };
+    const disabled = await publish({
+      allowBuiltinOverride: true,
+      enabled: false,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '2.0.0',
+    });
+    const snapshot = await loadCurrentSkillCatalogSnapshot(db);
+    expect(snapshot.items.map((item) => item.skillKey)).not.toContain('builtin.search');
+    expect(snapshot.builtinOverrideTombstones).toEqual(['builtin.search']);
+
+    let service = new SkillCatalogReadService(db, { builtinSkills: [builtin] });
+    expect((await service.getPublishedCatalog()).skills.map((skill) => skill.skillKey)).toEqual([]);
+    await expect(service.resolveForExecution('builtin.search')).resolves.toBeUndefined();
+
+    await publish({
+      allowBuiltinOverride: true,
+      enabled: true,
+      revision: 2,
+      skillId: disabled.skill.id,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '3.0.0',
+    });
+    invalidatePublishedSkillCatalogReadCache();
+    service = new SkillCatalogReadService(db, { builtinSkills: [builtin] });
+    expect(await service.getPublishedCatalog()).toEqual(
+      expect.objectContaining({
+        skills: [expect.objectContaining({ skillKey: 'builtin.search', version: '3.0.0' })],
+      }),
+    );
+  });
+
   it('loads the complete strict authority set and preserves global codepoint ordering', async () => {
     for (let index = 100; index >= 0; index -= 1) {
       await publish({ skillKey: `paged-${String(index).padStart(3, '0')}`, version: '1.0.0' });

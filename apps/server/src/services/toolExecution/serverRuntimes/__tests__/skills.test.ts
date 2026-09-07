@@ -43,7 +43,15 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('@lobechat/builtin-skills', () => ({
-  builtinSkills: [],
+  builtinSkills: [
+    {
+      content: '# Artifacts',
+      description: 'Generate artifacts',
+      identifier: 'lobe-artifacts',
+      name: 'artifacts',
+      source: 'builtin',
+    },
+  ],
 }));
 
 vi.mock('@/database/models/agent', () => ({
@@ -529,6 +537,86 @@ describe('skillsRuntime', () => {
       const result = await runtime.activateSkill({ name: 'user-skill' });
 
       expect(result.success).toBe(false);
+    });
+
+    it('refuses a user-disabled installed skill when activated by name', async () => {
+      mocks.getUserSettings.mockResolvedValue({
+        market: { accessToken: 'market-token' },
+        tool: { disabledSkillIdentifiers: ['user-skill-identifier'] },
+      });
+      mocks.findByName.mockImplementation(async (name: string) =>
+        name === 'user-skill'
+          ? {
+              content: '# User skill',
+              id: 'user-skill-id',
+              identifier: 'user-skill-identifier',
+              name: 'user-skill',
+            }
+          : undefined,
+      );
+
+      const { skillsRuntime } = await import('../skills');
+      const runtime = await skillsRuntime.factory({
+        agentId: 'agent-1',
+        serverDB: {} as never,
+        toolManifestMap: {},
+        topicId: 'topic-1',
+        userId: 'user-1',
+      });
+
+      const result = await runtime.activateSkill({ name: 'user-skill' });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('refuses an uninstalled builtin skill when activated by name', async () => {
+      mocks.getUserSettings.mockResolvedValue({
+        market: { accessToken: 'market-token' },
+        tool: { uninstalledBuiltinTools: ['lobe-artifacts'] },
+      });
+
+      const { skillsRuntime } = await import('../skills');
+      const runtime = await skillsRuntime.factory({
+        serverDB: {} as never,
+        toolManifestMap: {},
+        topicId: 'topic-1',
+        userId: 'user-1',
+      });
+
+      const result = await runtime.activateSkill({ name: 'artifacts' });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('does not inherit the personal disable list in a workspace with no stored entry', async () => {
+      mocks.getUserSettings.mockResolvedValue({
+        market: { accessToken: 'market-token' },
+        tool: { disabledSkillIdentifiers: ['user-skill-identifier'] },
+      });
+      mocks.findByName.mockImplementation(async (name: string) =>
+        name === 'user-skill'
+          ? {
+              content: '# User skill',
+              id: 'user-skill-id',
+              identifier: 'user-skill-identifier',
+              name: 'user-skill',
+            }
+          : undefined,
+      );
+
+      const { skillsRuntime } = await import('../skills');
+      const runtime = await skillsRuntime.factory({
+        agentId: 'agent-1',
+        serverDB: {} as never,
+        toolManifestMap: {},
+        topicId: 'topic-1',
+        userId: 'user-1',
+        workspaceId: 'ws-1',
+      });
+
+      const result = await runtime.activateSkill({ name: 'user-skill' });
+
+      expect(result.success).toBe(true);
     });
 
     it('still activates the skill when it is not disabled', async () => {

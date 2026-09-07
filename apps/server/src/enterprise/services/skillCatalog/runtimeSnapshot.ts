@@ -84,6 +84,11 @@ export const resolvePlatformSkillRuntimeSnapshot = async (params: {
   flags: EnterpriseFeatureFlags;
   identity: { agentId: string; operationId: string; userId: string };
   options?: ResolvePlatformSkillRuntimeSnapshotOptions;
+  /**
+   * User-scope disabled catalog keys (installed identifiers / builtin
+   * uninstall ids / skillKeys). Mandatory published skills ignore this set.
+   */
+  userDisabledSkillIds?: Iterable<string>;
 }): Promise<PlatformSkillRuntimeSnapshot | undefined> => {
   if (!params.flags.ENABLE_PLATFORM_MANAGED_SKILLS || params.effectiveMode !== 'enforced')
     return undefined;
@@ -103,7 +108,9 @@ export const resolvePlatformSkillRuntimeSnapshot = async (params: {
   ) {
     throw new Error('Published Skill catalog is not execution-ready');
   }
-  const selected = selectPlatformOperationSkills(published.skills, params.agentPlugins);
+  const selected = selectPlatformOperationSkills(published.skills, params.agentPlugins, {
+    userDisabledKeys: params.userDisabledSkillIds,
+  });
   const accumulatePayload = createOperationPayloadAccumulator();
   const skills: SkillMeta[] = [];
   for (const { selection, skill } of selected) {

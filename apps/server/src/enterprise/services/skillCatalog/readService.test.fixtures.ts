@@ -80,9 +80,11 @@ export const publishReadServiceSkill = async (params: {
   allowBuiltinOverride?: boolean;
   contentRef?: string | null;
   distribution?: 'default' | 'mandatory' | 'optional';
+  enabled?: boolean;
   revision?: number;
   skillId?: string;
   skillKey: string;
+  source?: 'builtin' | 'uploaded';
   version: string;
 }) => {
   const repository = new PlatformSkillCatalogRepository(db);
@@ -93,6 +95,7 @@ export const publishReadServiceSkill = async (params: {
         enabled: false,
         name: 'Mutable draft name',
         skillKey: params.skillKey,
+        source: params.source,
       });
   const content = `# ${params.version}`;
   const contentRef = params.contentRef === undefined ? 'opaque:skill-content-1' : params.contentRef;
@@ -121,15 +124,16 @@ export const publishReadServiceSkill = async (params: {
     version: params.version,
   });
   const revision = params.revision ?? 1;
+  const enabled = params.enabled ?? true;
   const payload = {
     skill: {
       allowBuiltinOverride: params.allowBuiltinOverride ?? false,
       description: 'Immutable published description',
       displayName: 'Immutable published name',
       distribution: params.distribution ?? 'default',
-      enabled: true,
+      enabled,
       skillKey: params.skillKey,
-      source: 'uploaded',
+      source: params.source ?? 'uploaded',
     },
     versionId: version.id,
   } as const;
@@ -142,10 +146,10 @@ export const publishReadServiceSkill = async (params: {
     status: 'published',
   });
   await repository.updateSkill(skill.id, {
-    // Align pointer columns with the published snapshot (payload.enabled is always true).
+    // Align pointer columns with the published snapshot.
     // Lightweight domain-target tokens read `platform_skills.enabled`, not the payload.
     currentVersionId: version.id,
-    enabled: true,
+    enabled,
     revision,
     status: 'published',
   });

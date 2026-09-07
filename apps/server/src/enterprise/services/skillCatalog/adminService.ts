@@ -15,6 +15,7 @@ import type {
   adminSkillGetDependentsInputSchema,
   adminSkillPublishNowInputSchema,
   adminSkillRollbackInputSchema,
+  adminSkillSetEnabledInputSchema,
   adminSkillUpdateDraftInputSchema,
   adminSkillValidateInputSchema,
 } from '../../contracts/skillCatalog';
@@ -23,6 +24,7 @@ import type { PlatformConfigInvalidationPublisher } from '../platformConfigInval
 import { encodeCursor, parseDependentCursor, parseVersionCursor } from './adminCursors';
 import { assertSkillDraft, runSkillCatalogAtomicMutation } from './adminMutations';
 import { detailOutput, toStoredValidation, versionSummary, versionView } from './adminViews';
+import { getBuiltinSkillDefinitions } from './builtinAdapter';
 import { SkillCatalogNotFoundError, SkillCatalogValidationError } from './errors';
 import {
   type PublishSkillInput,
@@ -41,6 +43,7 @@ type RollbackInput = z.infer<typeof adminSkillRollbackInputSchema>;
 type DependentsInput = z.infer<typeof adminSkillGetDependentsInputSchema>;
 type ApplyImmediateInput = z.infer<typeof adminSkillApplyImmediateInputSchema>;
 type PublishNowInput = z.infer<typeof adminSkillPublishNowInputSchema>;
+type SetEnabledInput = z.infer<typeof adminSkillSetEnabledInputSchema>;
 
 export interface SkillCatalogAdminServiceOptions {
   allowBuiltinOverride?: boolean;
@@ -54,6 +57,7 @@ export interface SkillCatalogAdminServiceOptions {
 }
 
 export class SkillCatalogAdminService {
+  private readonly builtinSkills: BuiltinSkillDefinition[];
   private readonly modelOptions: ConstructorParameters<typeof PlatformSkillCatalogModel>[1];
   private readonly lifecycle: NonNullable<SkillCatalogAdminServiceOptions['lifecycle']>;
   private readonly publication: SkillCatalogPublicationService;
@@ -74,6 +78,7 @@ export class SkillCatalogAdminService {
       builtinSkills: options.builtinSkills,
       knownToolKeys: options.knownToolKeys,
     };
+    this.builtinSkills = options.builtinSkills ?? [];
     this.modelOptions = {
       allowBuiltinOverride: options.allowBuiltinOverride,
       builtinSkillKeys,
@@ -435,6 +440,84 @@ export class SkillCatalogAdminService {
     return this.tryPublishImmediate(actorUserId, skillId, input.reason, versionId, {
       softFail: true,
     });
+  };
+
+  private requirePublishedImmediate = (
+    result: Awaited<ReturnType<SkillCatalogAdminService['tryPublishImmediate']>>,
+  ) => {
+    if (result.published) return result;
+    throw new SkillCatalogValidationError([
+      {
+        code: 'manifest_invalid',
+        message: result.publishError ?? 'publish_failed',
+        path: ['enabled'],
+        severity: 'error',
+      },
+    ]);
+  };
+
+  private resolveBundledBuiltin = (skillKey: string): BuiltinSkillDefinition | undefined =>
+    this.builtinSkills.find((skill) => skill.skillKey === skillKey) ??
+    getBuiltinSkillDefinitions().find((skill) => skill.skillKey === skillKey);
+
+  /**
+   * Org-wide enable/disable. Uploaded rows patch identity `enabled` and publish immediately
+   * (same path as applyImmediate mode:update). Bundled keys with no row materialize a
+   * builtin override (`source: 'builtin'`) and publish it. Idempotent on success.
+   */
+  setEnabled = async (actorUserId: string, input: SetEnabledInput) => {
+    const existing = await new PlatformSkillCatalogRepository(this.db).getSkillByKey(
+      input.skillKey,
+    );
+
+    if (existing) {
+      if (existing.status === 'archived') throw new SkillCatalogNotFoundError();
+      const detail = await this.getDetail(existing.id);
+      const result = this.requirePublishedImmediate(
+        await this.applyImmediate(actorUserId, {
+          enabled: input.enabled,
+          expectedDraftToken: detail.draftToken,
+          expectedRevision: detail.baseRevision,
+          id: existing.id,
+          mode: 'update',
+        }),
+      );
+      return { enabled: result.draft.enabled, skillKey: result.draft.skillKey };
+    }
+
+    const bundled = this.resolveBundledBuiltin(input.skillKey);
+    if (!bundled) throw new SkillCatalogNotFoundError();
+
+    const created = await this.create(actorUserId, {
+      allowBuiltinOverride: true,
+      description: bundled.description,
+      displayName: bundled.displayName,
+      distribution: 'default',
+      enabled: input.enabled,
+      skillKey: input.skillKey,
+    });
+    // createSkill always writes source:'uploaded'; the published snapshot must say builtin.
+    await new PlatformSkillCatalogRepository(this.db).updateSkill(created.draft.id, {
+      source: 'builtin',
+      updatedBy: actorUserId,
+    });
+    const afterSource = await this.getDetail(created.draft.id);
+    const version = await this.createVersion(actorUserId, {
+      content: bundled.content,
+      contentRef: bundled.contentRef ?? null,
+      expectedDraftToken: afterSource.draftToken,
+      expectedRevision: afterSource.baseRevision,
+      manifest: bundled.manifest,
+      resources: bundled.resources ?? [],
+      skillId: created.draft.id,
+      version: '1.0.0',
+    });
+    const published = this.requirePublishedImmediate(
+      await this.tryPublishImmediate(actorUserId, created.draft.id, null, version.id, {
+        softFail: true,
+      }),
+    );
+    return { enabled: published.draft.enabled, skillKey: published.draft.skillKey };
   };
 
   /**

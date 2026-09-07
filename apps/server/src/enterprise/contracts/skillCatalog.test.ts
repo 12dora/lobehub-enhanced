@@ -17,6 +17,8 @@ import {
   adminSkillPublishInputSchema,
   adminSkillPublishNowInputSchema,
   adminSkillRollbackInputSchema,
+  adminSkillSetEnabledInputSchema,
+  adminSkillSetEnabledOutputSchema,
   adminSkillUpdateDraftInputSchema,
   adminSkillValidateInputSchema,
   adminSkillValidateOutputSchema,
@@ -71,6 +73,22 @@ describe('Skill catalog contracts', () => {
         revision: 'catalog-empty',
       }).refs,
     ).toEqual([]);
+  });
+
+  it('accepts the setEnabled toggle contract and rejects extra fields', () => {
+    expect(
+      adminSkillSetEnabledInputSchema.parse({ enabled: false, skillKey: 'org.search' }),
+    ).toEqual({ enabled: false, skillKey: 'org.search' });
+    expect(
+      adminSkillSetEnabledOutputSchema.parse({ enabled: true, skillKey: 'org.search' }),
+    ).toEqual({ enabled: true, skillKey: 'org.search' });
+    expect(
+      adminSkillSetEnabledInputSchema.safeParse({
+        enabled: false,
+        reason: 'not in contract',
+        skillKey: 'org.search',
+      }).success,
+    ).toBe(false);
   });
 
   it('keeps identity draft edits separate from immutable versions', () => {

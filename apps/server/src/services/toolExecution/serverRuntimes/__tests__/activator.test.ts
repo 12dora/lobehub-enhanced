@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
   findByName: vi.fn(),
   getAgentConfigById: vi.fn(),
+  getUserSettings: vi.fn(),
   platformFindByName: vi.fn(),
 }));
 
@@ -23,6 +24,12 @@ vi.mock('@/database/models/agentSkill', () => ({
     findAll: mocks.findAll,
     findById: mocks.findById,
     findByName: mocks.findByName,
+  })),
+}));
+
+vi.mock('@/database/models/user', () => ({
+  UserModel: vi.fn(() => ({
+    getUserSettings: mocks.getUserSettings,
   })),
 }));
 
@@ -52,6 +59,7 @@ describe('activatorRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getAgentConfigById.mockResolvedValue({ plugins: [] });
+    mocks.getUserSettings.mockResolvedValue(undefined);
     mocks.findAll.mockResolvedValue({ data: [], total: 0 });
     mocks.findById.mockResolvedValue(undefined);
     mocks.findByName.mockResolvedValue(undefined);
@@ -89,6 +97,34 @@ describe('activatorRuntime', () => {
 
       expect(result.success).toBe(false);
     }, 20_000);
+
+    it('refuses a user-disabled installed skill when activated by name', async () => {
+      mocks.getUserSettings.mockResolvedValue({
+        tool: { disabledSkillIdentifiers: ['user-skill-identifier'] },
+      });
+      mocks.findByName.mockImplementation(async (name: string) =>
+        name === 'user-skill'
+          ? {
+              content: '# User skill',
+              id: 'user-skill-id',
+              identifier: 'user-skill-identifier',
+              name: 'user-skill',
+            }
+          : undefined,
+      );
+
+      const { activatorRuntime } = await import('../activator');
+      const runtime = await activatorRuntime.factory({
+        agentId: 'agent-1',
+        serverDB: {} as never,
+        toolManifestMap: {},
+        userId: 'user-1',
+      });
+
+      const result = await runtime.activateSkill({ name: 'user-skill' });
+
+      expect(result.success).toBe(false);
+    });
 
     it('still activates the skill when it is not disabled', async () => {
       mocks.getAgentConfigById.mockResolvedValue({ plugins: [] });

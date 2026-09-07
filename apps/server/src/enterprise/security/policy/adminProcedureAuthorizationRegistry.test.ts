@@ -106,14 +106,15 @@ describe('admin procedure authorization registry', () => {
     // status, queue, and artifact GC).
     // +1 query since: admin.system.getSandboxPackageStats (sandbox pip/npm/apt ledger).
     // +1 mutation since: admin.agents.provisionDefaultInbox (bootstrap the default inbox).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(243);
+    // +1 mutation since: admin.skills.setEnabled (org-wide catalog enable/disable).
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(244);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
     ).toHaveLength(109);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
-    ).toHaveLength(134);
-    expect(mutationPaths).toHaveLength(134);
+    ).toHaveLength(135);
+    expect(mutationPaths).toHaveLength(135);
     expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter((entry) => 'selfAccess' in entry)).toEqual(
       [{ kind: 'query', path: 'admin.auth.getMyAccess', selfAccess: true }],
     );

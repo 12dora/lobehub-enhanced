@@ -24,6 +24,7 @@ import { seedWorkspaceRoles } from '@/database/utils/seedWorkspaceRoles';
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
 
+import { ADMIN_REAUTH_MAX_AGE_MS } from '../../contracts/adminUsers';
 import type { SkillManifest } from '../../contracts/skillCatalog';
 import { getEnterpriseErrorBody } from '../../guards/enterpriseErrors';
 import {
@@ -678,5 +679,94 @@ describe('admin.skills.applyImmediate', () => {
     expect(result.draft.displayName).toBe('Hard Fail Renamed');
     const after = await caller.get({ id: created.draft.id });
     expect(after.draft.displayName).toBe('Hard Fail Renamed');
+  });
+});
+
+describe('admin.skills.setEnabled', () => {
+  it('disables an uploaded published skill immediately and keeps it on the admin list', async () => {
+    const caller = await callerFor({ authenticatedAt: new Date(), userId: ids.superAdmin });
+    const skillKey = `uploaded.enabled.${Date.now()}`;
+    const created = await caller.applyImmediate({
+      displayName: 'Uploaded Toggle',
+      distribution: 'default',
+      enabled: true,
+      mode: 'create',
+      reason: 'seed uploaded',
+      skillKey,
+      version: {
+        content: '# uploaded toggle',
+        contentRef: null,
+        manifest,
+        resources: [],
+        version: '1.0.0',
+      },
+    });
+    expect(created.published).toBe(true);
+
+    const disabled = await caller.setEnabled({ enabled: false, skillKey });
+    expect(disabled).toEqual({ enabled: false, skillKey });
+    const again = await caller.setEnabled({ enabled: false, skillKey });
+    expect(again).toEqual({ enabled: false, skillKey });
+
+    const listed = await caller.list({ limit: 100, query: skillKey });
+    expect(listed.items).toEqual([
+      expect.objectContaining({ enabled: false, skillKey, status: 'published' }),
+    ]);
+  });
+
+  it('materialises a builtin override, hides it from the published catalog, and re-enables it', async () => {
+    const caller = await callerFor({ authenticatedAt: new Date(), userId: ids.superAdmin });
+    const skillKey = getBuiltinSkillDefinitions()[0]!.skillKey;
+
+    const disabled = await caller.setEnabled({ enabled: false, skillKey });
+    expect(disabled).toEqual({ enabled: false, skillKey });
+    const listed = await caller.list({ limit: 100, query: skillKey });
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        allowBuiltinOverride: true,
+        enabled: false,
+        skillKey,
+        source: 'builtin',
+      }),
+    ]);
+
+    const enabled = await caller.setEnabled({ enabled: true, skillKey });
+    expect(enabled).toEqual({ enabled: true, skillKey });
+    const after = await caller.list({ limit: 100, query: skillKey });
+    expect(after.items[0]).toMatchObject({ enabled: true, skillKey, source: 'builtin' });
+  });
+
+  it('denies callers without publish permission', async () => {
+    const updater = await callerFor({ authenticatedAt: new Date(), userId: ids.updater });
+    await expect(
+      updater.setEnabled({ enabled: false, skillKey: `nope.${Date.now()}` }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('rejects stale reauth before mutating', async () => {
+    const caller = await callerFor({ authenticatedAt: new Date(), userId: ids.superAdmin });
+    const skillKey = `reauth.enabled.${Date.now()}`;
+    await caller.applyImmediate({
+      displayName: 'Reauth Toggle',
+      distribution: 'default',
+      enabled: true,
+      mode: 'create',
+      reason: 'seed',
+      skillKey,
+      version: {
+        content: '# reauth toggle',
+        contentRef: null,
+        manifest,
+        resources: [],
+        version: '1.0.0',
+      },
+    });
+    const stale = await callerFor({
+      authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
+      userId: ids.superAdmin,
+    });
+    await expect(stale.setEnabled({ enabled: false, skillKey })).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
   });
 });

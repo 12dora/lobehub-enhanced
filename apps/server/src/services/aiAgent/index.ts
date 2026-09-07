@@ -54,16 +54,19 @@ import type {
   RuntimeMentionedAgent,
   TopicApprovalMode,
   UserInterventionConfig,
+  UserToolConfig,
   WorkspaceInitResult,
 } from '@lobechat/types';
 import {
   buildHeteroExecArgs,
+  collectUserDisabledSkillIds,
   getActivePluginIds,
   getDisabledPluginIds,
   getWorkingDirEffectivePath,
   isTopicApprovalMode,
   ReasoningGraphSchema,
   RequestTrigger,
+  resolveDisabledSkillIds,
   ThreadStatus,
   ThreadType,
 } from '@lobechat/types';
@@ -2498,11 +2501,14 @@ export class AiAgentService {
     const agentMemoryEnabled = agentConfig.chatConfig?.memory?.enabled;
     let globalMemoryEnabled = agentMemoryEnabled ?? false;
     let userTimezone: string | undefined;
+    // Captured from the same getUserSettings() as timezone so skill disable
+    // does not issue a second user_settings read.
+    let userToolConfig: UserToolConfig | undefined;
     // Resolved once below (alongside the group-tool authorization fetch) and
     // forwarded into op metadata for the per-step context engine.
     let operationAgentGroup: AgentGroupConfig | undefined;
     try {
-      // One-message memo: memory + timezone share a single getUserSettings().
+      // One-message memo: memory + timezone + tool config share a single getUserSettings().
       const settingsMemo: UserSettingsReadMemo = {};
       // M05: memory.enabled through effective resolver (platform lock/default honored)
       const memorySettings = await getEffectiveMemorySettings({
@@ -2522,6 +2528,7 @@ export class AiAgentService {
       });
       const generalSettings = settings?.general as { timezone?: string } | undefined;
       userTimezone = generalSettings?.timezone;
+      userToolConfig = settings?.tool as UserToolConfig | undefined;
     } catch (error) {
       log('execAgent: failed to fetch user settings: %O', error);
     }
@@ -3946,6 +3953,15 @@ export class AiAgentService {
     // Platform Agent (SKILL-EXACT): resolve the operation's Skill pool from its immutable pinned
     // Skill refs — exact historical version/checksum — not the moving catalog head. Ordinary /
     // builtin operations keep the existing latest-catalog managed-Skill path unchanged.
+    const userDisabledSkillIds = collectUserDisabledSkillIds({
+      toolConfig: userToolConfig,
+      workspaceId: this.workspaceId,
+    });
+    const disabledSkillIds = resolveDisabledSkillIds({
+      agentPlugins: persistedAgentPluginEntries,
+      toolConfig: userToolConfig,
+      workspaceId: this.workspaceId,
+    });
     const platformSkillSnapshot = platformSkillRefs
       ? await resolvePinnedPlatformSkillRuntimeSnapshot({
           db: this.db,
@@ -3959,6 +3975,7 @@ export class AiAgentService {
           effectiveMode: managedSkillEffectiveMode,
           flags: enterpriseFlags,
           identity: { agentId: resolvedAgentId, operationId, userId: this.userId },
+          userDisabledSkillIds,
         });
 
     // Project discovery also supplies operation-wide instructions and working
@@ -4047,16 +4064,18 @@ export class AiAgentService {
         // can only collide with each other — but we still dedupe by name to keep
         // a single shape for the SkillEngine input.
         //
-        // Disabled skills are dropped here, not just rule-gated later: this
-        // `skills` array is the sole candidate pool SkillEngine/SkillResolver
-        // build `<available_skills>` from AND the pool `activateSkill` resolves
-        // against, so a disabled identifier absent here is neither listed nor
-        // activatable — mirrors the tool-manifest treatment above (installedPlugins/
-        // additionalManifests), which this array had never received.
+        // Disabled skills are dropped from the pool AND findById/findByName
+        // return undefined: this `skills` array is the sole candidate pool
+        // SkillEngine/SkillResolver build `<available_skills>` from AND the pool
+        // `activateSkill` resolves against, so a disabled identifier absent here
+        // is neither listed nor activatable. The set is user-scope disable ∪
+        // builtin uninstall ∪ per-agent plugin tri-state.
         const seenNames = new Set<string>();
         const skills = [...projectMetas, ...dbMetas, ...agentSkillMetas, ...builtinMetas].filter(
           (skill) => {
-            if (disabledPluginIds.includes(skill.identifier)) return false;
+            if (disabledSkillIds.has(skill.identifier) || disabledSkillIds.has(skill.name)) {
+              return false;
+            }
             if (seenNames.has(skill.name)) return false;
             seenNames.add(skill.name);
             return true;

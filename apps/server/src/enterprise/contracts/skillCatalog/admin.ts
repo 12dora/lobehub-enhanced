@@ -247,9 +247,26 @@ export const adminSkillApplyImmediateInputSchema = z.discriminatedUnion('mode', 
     .strict(),
 ]);
 
+/** Org-wide catalog enable/disable (Contract 4). No reason field; publish is implied. */
+export const adminSkillSetEnabledInputSchema = z
+  .object({
+    enabled: z.boolean(),
+    skillKey: skillKeySchema,
+  })
+  .strict();
+
+export const adminSkillSetEnabledOutputSchema = z
+  .object({
+    enabled: z.boolean(),
+    skillKey: skillKeySchema,
+  })
+  .strict();
+
 export type AdminSkillApplyImmediateInput = z.infer<typeof adminSkillApplyImmediateInputSchema>;
 export type AdminSkillApplyImmediateOutput = z.infer<typeof adminSkillApplyImmediateOutputSchema>;
 export type AdminSkillCreateInput = z.infer<typeof adminSkillCreateInputSchema>;
 export type AdminSkillCreateVersionInput = z.infer<typeof adminSkillCreateVersionInputSchema>;
 export type AdminSkillPublishNowInput = z.infer<typeof adminSkillPublishNowInputSchema>;
+export type AdminSkillSetEnabledInput = z.infer<typeof adminSkillSetEnabledInputSchema>;
+export type AdminSkillSetEnabledOutput = z.infer<typeof adminSkillSetEnabledOutputSchema>;
 export type AdminSkillUpdateDraftInput = z.infer<typeof adminSkillUpdateDraftInputSchema>;

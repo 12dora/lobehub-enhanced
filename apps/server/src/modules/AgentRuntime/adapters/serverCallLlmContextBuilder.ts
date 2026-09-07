@@ -24,7 +24,8 @@ import {
   CONTEXT_ENGINEERING_SPAN_NAME,
   tracer as agentRuntimeTracer,
 } from '@lobechat/observability-otel/modules/agent-runtime';
-import { getActivePluginIds, getDisabledPluginIds } from '@lobechat/types';
+import type { AgentPluginEntry, UserToolConfig } from '@lobechat/types';
+import { getActivePluginIds, resolveDisabledSkillIds } from '@lobechat/types';
 
 import { composioEnv } from '@/config/composio';
 import { AgentModel } from '@/database/models/agent';
@@ -32,6 +33,7 @@ import { FileModel } from '@/database/models/file';
 import { MessageModel as MessageModelClass } from '@/database/models/message';
 import { PluginModel } from '@/database/models/plugin';
 import { TopicModel } from '@/database/models/topic';
+import { UserModel } from '@/database/models/user';
 import { UserPersonaModel } from '@/database/models/userMemory/persona';
 import { serverMessagesEngine } from '@/server/modules/Mecha/ContextEngineering';
 import type { PlatformAiExecutionConfig } from '@/server/modules/ModelRuntime/platformAiRuntimeBridge';
@@ -423,13 +425,28 @@ export const buildServerCallLlmContext = async ({
           .map((plugin) => plugin.identifier),
       );
       // Disabled services are dropped from both lists — not surfaced as
-      // "connected, use directly" nor as "available to connect".
-      let disabledIdSet = new Set<string>();
+      // "connected, use directly" nor as "available to connect". The set is
+      // the same user-scope ∪ plugin-tri-state helper used for skills so a
+      // user-disabled identifier cannot leak back through this substitution.
+      let toolConfig: UserToolConfig | undefined;
+      try {
+        const userSettings = await new UserModel(ctx.serverDB, ctx.userId).getUserSettings();
+        toolConfig = (userSettings as { tool?: UserToolConfig } | undefined)?.tool;
+      } catch (error) {
+        log('Failed to load user skill-disable settings for Composio list: %O', error);
+      }
+
+      let agentPlugins: AgentPluginEntry[] | undefined;
       if (agentId) {
         const agentModel = new AgentModel(ctx.serverDB, ctx.userId, ctx.workspaceId);
         const agentConfig = await agentModel.getAgentConfigById(agentId);
-        disabledIdSet = new Set(getDisabledPluginIds(agentConfig?.plugins ?? undefined));
+        agentPlugins = agentConfig?.plugins ?? undefined;
       }
+      const disabledIdSet = resolveDisabledSkillIds({
+        agentPlugins,
+        toolConfig,
+        workspaceId: ctx.workspaceId,
+      });
       const connected: ComposioServiceSummary[] = excludeDisabledComposioServices(
         COMPOSIO_APP_TYPES.filter((tool) => connectedIds.has(tool.identifier)),
         disabledIdSet,

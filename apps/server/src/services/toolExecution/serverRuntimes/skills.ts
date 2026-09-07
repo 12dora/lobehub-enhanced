@@ -14,13 +14,15 @@ import {
   type SkillRuntimeService,
   SkillsExecutionRuntime,
 } from '@lobechat/builtin-tool-skills/executionRuntime';
-import {
-  type BuiltinSkill,
-  getDisabledPluginIds,
-  type SkillItem,
-  type SkillListItem,
-  type SkillResourceContent,
+import type {
+  AgentPluginEntry,
+  BuiltinSkill,
+  SkillItem,
+  SkillListItem,
+  SkillResourceContent,
+  UserToolConfig,
 } from '@lobechat/types';
+import { resolveDisabledSkillIds } from '@lobechat/types';
 import debug from 'debug';
 
 import { AgentModel } from '@/database/models/agent';
@@ -73,6 +75,15 @@ const LH_COMMAND_PATTERN = /(?:^|&&|\|\||;)\s*lh(?:\s|$)/;
 
 const isLhCommand = (command: string) => LH_COMMAND_PATTERN.test(command);
 
+const skillIsDisabled = (
+  skill: { identifier?: string; name?: string },
+  disabledSkillIds: Set<string>,
+): boolean =>
+  Boolean(
+    (skill.identifier && disabledSkillIds.has(skill.identifier)) ||
+    (skill.name && disabledSkillIds.has(skill.name)),
+  );
+
 class SkillServerRuntimeService implements SkillRuntimeService {
   private agentId?: string;
   private resourceService: SkillResourceService;
@@ -91,10 +102,10 @@ class SkillServerRuntimeService implements SkillRuntimeService {
     agentId?: string;
     device?: SkillDeviceExecution;
     /**
-     * Identifiers the agent has explicitly disabled (`agents.plugins` tri-state)
-     * — findById/findByName resolve to `undefined` for these, so a disabled
-     * DB/market skill can't be activated even by a model that already knows
-     * its name, independent of whatever's listed in `<available_skills>`.
+     * Identifiers the user or agent has disabled (user-scope uninstall /
+     * `disabledSkillIdentifiers` ∪ `agents.plugins` tri-state). Disabled
+     * skills are dropped from the pool AND findById/findByName return
+     * undefined so a model that already knows the name cannot activate it.
      */
     disabledSkillIds?: Set<string>;
     fileModel: FileModel;
@@ -127,12 +138,13 @@ class SkillServerRuntimeService implements SkillRuntimeService {
 
   findById = async (id: string): Promise<SkillItem | undefined> => {
     const skill = await this.skillModel.findById(id);
-    return skill && this.disabledSkillIds.has(skill.identifier) ? undefined : skill;
+    return skill && !skillIsDisabled(skill, this.disabledSkillIds) ? skill : undefined;
   };
 
   findByName = async (name: string): Promise<SkillItem | undefined> => {
+    if (this.disabledSkillIds.has(name)) return undefined;
     const skill = await this.skillModel.findByName(name);
-    return skill && this.disabledSkillIds.has(skill.identifier) ? undefined : skill;
+    return skill && !skillIsDisabled(skill, this.disabledSkillIds) ? skill : undefined;
   };
 
   private resolveWorkspaceId = async (): Promise<string | undefined> => {
@@ -607,13 +619,15 @@ export const skillsRuntime: ServerRuntimeRegistration = {
       });
     }
 
-    // Fetch market access token from user settings
+    // Fetch market access token + user skill-disable lists from user settings
     let marketAccessToken: string | undefined;
+    let toolConfig: UserToolConfig | undefined;
     try {
       const userModel = new UserModel(context.serverDB, context.userId);
       const userSettings = await userModel.getUserSettings();
       marketAccessToken = (userSettings as UserSettingsWithMarketToken | undefined)?.market
         ?.accessToken;
+      toolConfig = (userSettings as { tool?: UserToolConfig } | undefined)?.tool;
       log(
         'Fetched market accessToken for user %s: %s',
         context.userId,
@@ -627,13 +641,20 @@ export const skillsRuntime: ServerRuntimeRegistration = {
     // aiAgent/index.ts) — this runtime resolves skills fresh by name/id, so a
     // model that already knows a disabled skill's name (prior turn, or a
     // guess) could otherwise still activate/run it. Re-derive the disabled
-    // set here so this path enforces the same tri-state.
-    let disabledSkillIds = new Set<string>();
+    // set here so this path enforces the same user-scope + tri-state set.
+    // Disabled skills are dropped from the pool AND findById/findByName
+    // return undefined.
+    let agentPlugins: AgentPluginEntry[] | undefined;
     if (context.agentId) {
       const agentModel = new AgentModel(context.serverDB, context.userId, context.workspaceId);
       const agentConfig = await agentModel.getAgentConfigById(context.agentId);
-      disabledSkillIds = new Set(getDisabledPluginIds(agentConfig?.plugins ?? undefined));
+      agentPlugins = agentConfig?.plugins ?? undefined;
     }
+    const disabledSkillIds = resolveDisabledSkillIds({
+      agentPlugins,
+      toolConfig,
+      workspaceId: context.workspaceId,
+    });
 
     const skillModel = new AgentSkillModel(context.serverDB, context.userId, context.workspaceId);
     const resourceService = new SkillResourceService(
@@ -699,7 +720,7 @@ export const skillsRuntime: ServerRuntimeRegistration = {
           .getAgentSkills(context.agentId)
           .then((skills) =>
             skills
-              .filter((skill) => !disabledSkillIds.has(skill.identifier))
+              .filter((skill) => !skillIsDisabled(skill, disabledSkillIds))
               .map((skill) => ({
                 content: skill.content,
                 description: skill.description,
@@ -788,7 +809,7 @@ export const skillsRuntime: ServerRuntimeRegistration = {
         // execution plan.
         ...filterBuiltinSkills(builtinSkills, {
           canExecuteOnDevice: context.deviceCapable ?? !!activeDeviceId,
-        }).filter((skill) => !disabledSkillIds.has(skill.identifier)),
+        }).filter((skill) => !skillIsDisabled(skill, disabledSkillIds)),
         ...agentSkillBuiltins,
       ],
       deviceFileAccess,

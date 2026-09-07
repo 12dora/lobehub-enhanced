@@ -119,6 +119,8 @@ export const loadPublishedSkillProjection = async (params: {
     throw new Error('Published Skill item limit was exceeded');
   }
   const builtins = new Map(params.builtinSkills.map((skill) => [skill.skillKey, skill] as const));
+  // Tombstones cover archived builtin overrides and published enabled:false overrides.
+  // Deleting here is what keeps getBuiltinSkillDefinitions() from resurfacing a disabled key.
   for (const skillKey of snapshot.builtinOverrideTombstones) builtins.delete(skillKey);
   const { platformResolvedByKey, platformSkills, projectionContainsInvalidItems } =
     projectPlatformItems(snapshot.items, builtins);

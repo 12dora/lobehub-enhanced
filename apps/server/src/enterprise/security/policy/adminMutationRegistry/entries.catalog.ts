@@ -292,6 +292,17 @@ export const ADMIN_MUTATION_ENTRIES_CATALOG = {
     'Restore an earlier platform skill version.',
     { reason: optionalReasonInput, reauth: recentReauth },
   ),
+  'admin.skills.setEnabled': dangerousMutation(
+    'admin.skills.setEnabled',
+    'high',
+    'Enable or disable a platform skill in the published catalog (no outbound).',
+    {
+      reason: notApplicable(
+        'The toggle DTO is skillKey plus enabled; sibling create/update/publish audits record the write.',
+      ),
+      reauth: recentReauth,
+    },
+  ),
   'admin.skills.updateDraft': regularMutation(
     'admin.skills.updateDraft',
     'medium',

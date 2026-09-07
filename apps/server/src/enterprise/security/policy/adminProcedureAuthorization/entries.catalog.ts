@@ -331,6 +331,16 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_CATALOG = [
   },
   {
     kind: 'mutation',
+    path: 'admin.skills.setEnabled',
+    // PUBLISH always required; CREATE for bundled keys (materialize), UPDATE otherwise.
+    permission: {
+      mode: 'compound',
+      permissions: [PLATFORM_PERMISSIONS.SKILL_PUBLISH],
+      selectable: [PLATFORM_PERMISSIONS.SKILL_CREATE, PLATFORM_PERMISSIONS.SKILL_UPDATE],
+    },
+  },
+  {
+    kind: 'mutation',
     path: 'admin.skills.updateDraft',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SKILL_UPDATE] },
   },

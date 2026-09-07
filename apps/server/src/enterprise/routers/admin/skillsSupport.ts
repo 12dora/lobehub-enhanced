@@ -41,6 +41,9 @@ export const createSkillService = (db: LobeChatDatabase) => {
   });
 };
 
+export const isBundledBuiltinSkillKey = (skillKey: string): boolean =>
+  getBuiltinSkillDefinitions().some((skill) => skill.skillKey === skillKey);
+
 export const mapSkillServiceError = (error: unknown): never => {
   if (error instanceof SkillCatalogNotFoundError) {
     return throwEnterpriseError({

@@ -187,3 +187,5 @@ export interface SkillImportResult {
   skill: SkillItem;
   status: SkillImportStatus;
 }
+
+export { collectUserDisabledSkillIds, resolveDisabledSkillIds } from './disabledSkills';

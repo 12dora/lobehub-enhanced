@@ -158,6 +158,7 @@ describe('enterprise admin mutation policy registry', () => {
         procedure === 'admin.networkProxy.updateSubscription' ||
         procedure === 'admin.networkProxy.installArtifact' ||
         procedure === 'admin.networkProxy.installGeodata' ||
+        procedure === 'admin.skills.setEnabled' ||
         procedure === 'admin.users.disableTwoFactor' ||
         procedure === 'admin.users.setPassword';
       if (dtoHasNoReason) {

@@ -1,15 +1,30 @@
 // @vitest-environment node
+import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ADMIN_ERROR_CODES } from '@/const/platform/errorCodes';
 import { getTestDB } from '@/database/core/getTestDB';
 import { AgentOperationModel } from '@/database/models/agentOperation';
+import {
+  checksumPayload,
+  PlatformCatalogAuthorityModel,
+  platformSkillVersionChecksum,
+} from '@/database/models/platform';
+import { PlatformSkillCatalogRepository } from '@/database/repositories/platformSkillCatalog';
 import { agentOperations, agents, users } from '@/database/schemas';
+import {
+  platformResourceRevisions,
+  platformSkills,
+  platformSkillVersions,
+} from '@/database/schemas/platform';
 import type { LobeChatDatabase } from '@/database/type';
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
 
+import { skillResourceContentChecksum } from '../contracts/skillCatalog';
 import { getEnterpriseErrorBody } from '../guards/enterpriseErrors';
+import { invalidateSkillCatalogAuthorityToken } from '../services/platformInstance/catalogTokens';
+import { invalidatePublishedSkillCatalogReadCache } from '../services/skillCatalog/readService';
 import { platformRouter } from './platform';
 
 const db: LobeChatDatabase = await getTestDB();
@@ -226,6 +241,99 @@ describe('platformSkillsRouter', () => {
       }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(operationMocks.signProof).not.toHaveBeenCalled();
+  });
+
+  it('omits a disabled builtin override from getPublishedCatalog', async () => {
+    vi.stubEnv('ENABLE_PLATFORM_MANAGED_SKILLS', '1');
+    try {
+      const repository = new PlatformSkillCatalogRepository(db);
+      const skill = await repository.createSkill({
+        allowBuiltinOverride: true,
+        enabled: false,
+        name: 'Mock builtin',
+        skillKey: 'mock-builtin',
+        source: 'builtin',
+      });
+      const content = '# Mock builtin Skill';
+      const manifest = {
+        description: 'Mock builtin Skill',
+        displayName: 'Mock builtin',
+        localizedDescriptions: {},
+        localizedDisplayNames: {},
+        permissions: {
+          filesystem: 'read',
+          network: { allowedHosts: [], enabled: false },
+          tools: { allow: [] },
+        },
+        skillDependencies: [],
+        toolDependencies: [],
+      } satisfies PlatformSkillManifest;
+      const resources = [
+        {
+          checksum: skillResourceContentChecksum('guide'),
+          content: 'guide',
+          mediaType: 'text/plain',
+          path: 'references/guide.md',
+          sizeBytes: 5,
+        },
+      ];
+      const version = await repository.createVersion({
+        checksum: platformSkillVersionChecksum({
+          content,
+          contentRef: null,
+          manifest,
+          resources,
+        }),
+        content,
+        contentRef: null,
+        manifest,
+        resources,
+        skillId: skill.id,
+        version: '1.0.0',
+      });
+      const payload = {
+        skill: {
+          allowBuiltinOverride: true,
+          description: 'Mock builtin Skill',
+          displayName: 'Mock builtin',
+          distribution: 'default' as const,
+          enabled: false,
+          skillKey: 'mock-builtin',
+          source: 'builtin' as const,
+        },
+        versionId: version.id,
+      };
+      await db.insert(platformResourceRevisions).values({
+        checksum: checksumPayload(payload),
+        payload,
+        resourceId: skill.id,
+        resourceType: 'skill',
+        revision: 1,
+        status: 'published',
+      });
+      await repository.updateSkill(skill.id, {
+        currentVersionId: version.id,
+        enabled: false,
+        revision: 1,
+        status: 'published',
+      });
+      await new PlatformCatalogAuthorityModel(db).bumpGeneration('skill_catalog');
+      invalidateSkillCatalogAuthorityToken();
+      invalidatePublishedSkillCatalogReadCache();
+
+      const caller = createCaller({
+        ...(await createContextInner({ userId })),
+        serverDB: db,
+      } as never);
+      const catalog = await caller.getPublishedCatalog();
+      expect(catalog.skills.map((item) => item.skillKey)).not.toContain('mock-builtin');
+    } finally {
+      await db.execute(
+        sql`TRUNCATE TABLE ${platformResourceRevisions}, ${platformSkillVersions}, ${platformSkills} CASCADE`,
+      );
+      invalidatePublishedSkillCatalogReadCache();
+      invalidateSkillCatalogAuthorityToken();
+    }
   });
 });
 
