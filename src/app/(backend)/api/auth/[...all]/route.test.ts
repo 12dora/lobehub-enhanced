@@ -121,6 +121,17 @@ describe('/api/auth/[...all] route', () => {
     expect(mocks.get).toHaveBeenCalledWith(request);
   });
 
+  it('preserves Better Auth sign-out delegation', async () => {
+    const request = new Request('https://localhost/api/auth/sign-out', {
+      body: '{}',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    }) as NextRequest;
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(mocks.post).toHaveBeenCalledWith(request);
+  });
+
   it('blocks Better Auth admin mutations when platform admin is on', async () => {
     vi.stubEnv('ENABLE_PLATFORM_ADMIN', '1');
     for (const path of [

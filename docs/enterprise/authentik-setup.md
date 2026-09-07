@@ -84,6 +84,16 @@ return {"email": email, "email_verified": True}
 3. **发布** → **重启并激活**(`PLATFORM_OIDC_RESTART_MODE=supervisor` 下按钮全链路可用；等旧实例心跳过期约 90 秒收敛)。
 4. 登录页出现「使用工作账号登录」即生效。
 
+### 2.1 Authentik 后通道登出
+
+AIHub 提供 `POST /api/auth/oidc/backchannel-logout`，接收表单字段 `logout_token`，无需浏览器会话或 CSRF token。支持已激活的数据库 Authentik / 通用 OIDC 提供方，以及通过 `AUTH_SSO_PROVIDERS=authentik` 和 `AUTH_AUTHENTIK_*` 配置的环境变量提供方；数据库接入无需额外配置环境变量。
+
+在 Authentik 管理界面编辑 AIHub 的 OAuth2/OpenID Provider，将 **Logout method** 设为 **Back-channel**（`backchannel`），**Logout URI** 填为 `https://chat.jiefakj.com/api/auth/oidc/backchannel-logout`，保存。对应 Issuer 为 `https://auth.jiefakj.com/application/o/aihub/`，Client ID 为 `aihub`；Authentik 服务端须能访问该地址。
+
+端点校验签名、issuer、audience、时间与登出事件，并用共享 Redis 原子记录 `jti` 防止重放（Redis 不可用时返回 400）。验证成功后，按提供方 key 与 `sub` 匹配账号，删除这些用户的全部 Better Auth 会话、清理 Redis 会话缓存并失效存活检查缓存。当前未保存 `sid`，因此仅含 `sid` 的令牌返回 400；包含 `sub` 时会撤销该账号所有设备的会话。其他实例的存活检查缓存最多保留 5 秒。
+
+成功（包括没有匹配会话）返回 `200 {}`；失败返回 `400 {"error":"invalid_request","error_description":"..."}`，均带 `Cache-Control: no-store`。其他 HTTP 方法返回 405。验证时先登录 AIHub，再退出 Authentik，确认后续 AIHub 请求失去原会话，并检查 `oidc.backchannel_logout` 日志中的提供方、subject 和撤销数。
+
 ## 3. 验证清单
 
 - [ ] 钉钉扫码 (或 Authentik 本地测试账号) 登录成功，首登自动建号；

@@ -79,6 +79,19 @@ describe('defineConfig session gating', () => {
 });
 
 describe('defineConfig public routes', () => {
+  it.each(['/api/auth/oidc/backchannel-logout', '/api/auth/sign-out'])(
+    'lets unauthenticated POST %s reach its handler without session lookup',
+    async (path) => {
+      getSessionMock.mockClear();
+      const response = await middleware(
+        new NextRequest(`http://localhost:3010${path}`, { method: 'POST' }),
+      );
+      expect(response?.headers.get('location')).toBeNull();
+      expect(response?.headers.get('x-middleware-rewrite')).toBeNull();
+      expect(getSessionMock).not.toHaveBeenCalled();
+    },
+  );
+
   /**
    * The DingTalk callback shim is the sign-in itself: it arrives from DingTalk before the user
    * has any session. Session-gating it would redirect the callback to /signin and production
