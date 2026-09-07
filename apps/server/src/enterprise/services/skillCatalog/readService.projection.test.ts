@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { platformSkillVersionChecksum } from '@/database/models/platform';
 import { platformSkillVersions } from '@/database/schemas/platform';
 
-import { loadCurrentSkillCatalogSnapshot } from '../platformInstance/catalogAuthority';
+import {
+  loadCurrentSkillCatalogSnapshot,
+  loadCurrentSkillCatalogTargetToken,
+} from '../platformInstance/catalogAuthority';
+import { buildSkillCatalogRevisionToken } from '../platformInstance/catalogTokens';
 import {
   type BuiltinSkillDefinition,
   invalidatePublishedSkillCatalogReadCache,
@@ -122,6 +126,73 @@ describe('SkillCatalogReadService projection / merge', () => {
     );
   });
 
+  it('refuses bundled builtin content for an explicit version when a published override disables the key', async () => {
+    const builtin: BuiltinSkillDefinition = {
+      checksum: 'b'.repeat(64),
+      content: '# builtin',
+      description: 'Builtin',
+      displayName: 'Builtin',
+      distribution: 'default',
+      manifest,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '0.0.0',
+    };
+    await publish({
+      allowBuiltinOverride: true,
+      enabled: false,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '1.0.0',
+    });
+    const service = new SkillCatalogReadService(db, { builtinSkills: [builtin] });
+    await expect(service.resolveForExecution('builtin.search')).resolves.toBeUndefined();
+    await expect(service.resolveForExecution('builtin.search', '0.0.0')).resolves.toBeUndefined();
+    await expect(
+      service.resolvePinnedForExecution({
+        checksum: builtin.checksum,
+        skillKey: 'builtin.search',
+        version: '0.0.0',
+      }),
+    ).resolves.toBeUndefined();
+    const batch = await service.resolveForExecutionBatch([
+      { skillKey: 'builtin.search', version: '0.0.0' },
+    ]);
+    expect([...batch.values()]).toEqual([undefined]);
+  });
+
+  it('keeps runtime and target catalog tokens equal after disabling a builtin', async () => {
+    const builtin: BuiltinSkillDefinition = {
+      checksum: 'b'.repeat(64),
+      content: '# builtin',
+      description: 'Builtin',
+      displayName: 'Builtin',
+      distribution: 'default',
+      manifest,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '0.0.0',
+    };
+    await publish({
+      allowBuiltinOverride: true,
+      enabled: false,
+      skillKey: 'builtin.search',
+      source: 'builtin',
+      version: '1.0.0',
+    });
+    const snapshot = await loadCurrentSkillCatalogSnapshot(db);
+    expect(snapshot.publishedDisabledBuiltinKeys).toEqual(['builtin.search']);
+    const builtins = [
+      { checksum: builtin.checksum, skillKey: builtin.skillKey, version: builtin.version },
+    ];
+    const runtime = buildSkillCatalogRevisionToken({
+      builtins,
+      platform: snapshot.tokenEntries,
+    });
+    const target = await loadCurrentSkillCatalogTargetToken(db, () => builtins);
+    expect(target).toEqual(runtime);
+  });
+
   it('loads the complete strict authority set and preserves global codepoint ordering', async () => {
     for (let index = 100; index >= 0; index -= 1) {
       await publish({ skillKey: `paged-${String(index).padStart(3, '0')}`, version: '1.0.0' });
@@ -231,6 +302,7 @@ describe('SkillCatalogReadService projection / merge', () => {
     const loadCurrentSnapshot = vi.fn(async () => ({
       builtinOverrideTombstones: [],
       items: Array.from({ length: 10_001 }, () => ({}) as never),
+      publishedDisabledBuiltinKeys: [],
       tokenEntries: [],
     }));
     await expect(
@@ -249,6 +321,7 @@ describe('SkillCatalogReadService projection / merge', () => {
         ...seed,
         skillKey: `uploaded-${String(index).padStart(5, '0')}`,
       })),
+      publishedDisabledBuiltinKeys: [],
       tokenEntries: snapshot.tokenEntries,
     }));
     const builtin: BuiltinSkillDefinition = {

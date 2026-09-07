@@ -104,8 +104,9 @@ class SkillServerRuntimeService implements SkillRuntimeService {
     /**
      * Identifiers the user or agent has disabled (user-scope uninstall /
      * `disabledSkillIdentifiers` ∪ `agents.plugins` tri-state). Disabled
-     * skills are dropped from the pool AND findById/findByName return
-     * undefined so a model that already knows the name cannot activate it.
+     * skills are dropped from the pool, omitted from findAll, and
+     * findById/findByName return undefined so a model that already knows
+     * the name cannot activate it.
      */
     disabledSkillIds?: Set<string>;
     fileModel: FileModel;
@@ -132,8 +133,10 @@ class SkillServerRuntimeService implements SkillRuntimeService {
     this.disabledSkillIds = options.disabledSkillIds ?? new Set();
   }
 
-  findAll = (): Promise<{ data: SkillListItem[]; total: number }> => {
-    return this.skillModel.findAll();
+  findAll = async (): Promise<{ data: SkillListItem[]; total: number }> => {
+    const result = await this.skillModel.findAll();
+    const data = result.data.filter((skill) => !skillIsDisabled(skill, this.disabledSkillIds));
+    return { data, total: data.length };
   };
 
   findById = async (id: string): Promise<SkillItem | undefined> => {
@@ -619,6 +622,12 @@ export const skillsRuntime: ServerRuntimeRegistration = {
       });
     }
 
+    // Dispatch/resume tool contexts can lose `workspaceId` while still
+    // carrying `agentId`. Recover the operation's workspace before reading
+    // user settings so workspace-scoped disables apply and personal disables
+    // are not used inside a workspace.
+    const workspaceId = await resolveRunWorkspaceId(context);
+
     // Fetch market access token + user skill-disable lists from user settings
     let marketAccessToken: string | undefined;
     let toolConfig: UserToolConfig | undefined;
@@ -642,32 +651,28 @@ export const skillsRuntime: ServerRuntimeRegistration = {
     // model that already knows a disabled skill's name (prior turn, or a
     // guess) could otherwise still activate/run it. Re-derive the disabled
     // set here so this path enforces the same user-scope + tri-state set.
-    // Disabled skills are dropped from the pool AND findById/findByName
-    // return undefined.
+    // Disabled skills are dropped from the pool, omitted from findAll, and
+    // findById/findByName return undefined.
     let agentPlugins: AgentPluginEntry[] | undefined;
     if (context.agentId) {
-      const agentModel = new AgentModel(context.serverDB, context.userId, context.workspaceId);
+      const agentModel = new AgentModel(context.serverDB, context.userId, workspaceId);
       const agentConfig = await agentModel.getAgentConfigById(context.agentId);
       agentPlugins = agentConfig?.plugins ?? undefined;
     }
     const disabledSkillIds = resolveDisabledSkillIds({
       agentPlugins,
       toolConfig,
-      workspaceId: context.workspaceId,
+      workspaceId,
     });
 
-    const skillModel = new AgentSkillModel(context.serverDB, context.userId, context.workspaceId);
-    const resourceService = new SkillResourceService(
-      context.serverDB,
-      context.userId,
-      context.workspaceId,
-    );
+    const skillModel = new AgentSkillModel(context.serverDB, context.userId, workspaceId);
+    const resourceService = new SkillResourceService(context.serverDB, context.userId, workspaceId);
     const marketService = new MarketService({
       accessToken: marketAccessToken,
       userInfo: { userId: context.userId },
     });
-    const fileService = new FileService(context.serverDB, context.userId, context.workspaceId);
-    const fileModel = new FileModel(context.serverDB, context.userId, context.workspaceId);
+    const fileService = new FileService(context.serverDB, context.userId, workspaceId);
+    const fileModel = new FileModel(context.serverDB, context.userId, workspaceId);
 
     // `activeDeviceId` presence is the device-branch switch: execScript then
     // runs on the device instead of the cloud sandbox. The executors filter
@@ -676,16 +681,15 @@ export const skillsRuntime: ServerRuntimeRegistration = {
     // route execution onto a device the resolved plan didn't authorize;
     // `device-unrouted` runs keep the sandbox path (with the unrouted
     // disclosure in the manifest).
-    let workspaceIdPromise: Promise<string | undefined> | undefined;
     const device: SkillDeviceExecution | undefined = context.activeDeviceId
       ? {
           deviceId: context.activeDeviceId,
           executionTimeoutMs: context.executionTimeoutMs,
           operationId: context.operationId,
           projectSkills: context.projectSkills,
-          // Same lazy workspace-principal recovery as the local-system runtime,
-          // so workspace devices are addressed under the right gateway pool.
-          resolveWorkspaceId: () => (workspaceIdPromise ??= resolveRunWorkspaceId(context)),
+          // Reuse the factory-resolved scope so workspace devices stay on the
+          // same gateway pool as the disable-list lookup above.
+          resolveWorkspaceId: async () => workspaceId,
           workingDirectory: context.workingDirectory,
         }
       : undefined;
@@ -702,7 +706,7 @@ export const skillsRuntime: ServerRuntimeRegistration = {
       skillModel,
       topicId: context.topicId,
       userId: context.userId,
-      workspaceId: context.workspaceId,
+      workspaceId,
     });
 
     // Surface this agent's skill-bundle documents as `BuiltinSkill`-shaped
@@ -716,7 +720,7 @@ export const skillsRuntime: ServerRuntimeRegistration = {
     // result based on the identifier prefix so the inspector can show
     // "Activate Agent Skill" + the friendly `title`.
     const agentSkillBuiltins: BuiltinSkill[] = context.agentId
-      ? await new AgentDocumentsService(context.serverDB, context.userId, context.workspaceId)
+      ? await new AgentDocumentsService(context.serverDB, context.userId, workspaceId)
           .getAgentSkills(context.agentId)
           .then((skills) =>
             skills

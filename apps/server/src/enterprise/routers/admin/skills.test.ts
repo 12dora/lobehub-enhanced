@@ -32,7 +32,7 @@ import {
   resetSharedAdminMutationRateLimiter,
   setSharedAdminMutationRateLimiter,
 } from '../../security/rateLimit/adminMutationRateLimiter';
-import { getBuiltinSkillDefinitions } from '../../services/skillCatalog';
+import { getBuiltinSkillDefinitions, SkillCatalogReadService } from '../../services/skillCatalog';
 import { adminRouter } from '../admin';
 
 const db: LobeChatDatabase = await getTestDB();
@@ -344,7 +344,7 @@ describe('adminSkillsRouter reauthentication', () => {
     const detail = await createVersionDetail(draft.draft.id);
     for (const context of [
       { authenticatedAt: null },
-      { authenticatedAt: new Date(Date.now() - 60 * 60 * 1000) },
+      { authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000) },
       { authenticatedAt: new Date(), authMethod: 'api-key' as const },
     ]) {
       const caller = await callerFor({ ...context, userId: ids.superAdmin });
@@ -542,7 +542,7 @@ describe('admin.skills.applyImmediate', () => {
     });
     const ready = await createVersionDetail(draft.draft.id);
     const stale = await callerFor({
-      authenticatedAt: new Date(Date.now() - 60 * 60 * 1000),
+      authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
       userId: ids.superAdmin,
     });
     await expect(
@@ -768,5 +768,81 @@ describe('admin.skills.setEnabled', () => {
     await expect(stale.setEnabled({ enabled: false, skillKey })).rejects.toMatchObject({
       code: 'UNAUTHORIZED',
     });
+  });
+
+  it('denies a creator without update on an existing builtin override', async () => {
+    const admin = await callerFor({ authenticatedAt: new Date(), userId: ids.superAdmin });
+    const skillKey = getBuiltinSkillDefinitions()[0]!.skillKey;
+    await admin.setEnabled({ enabled: false, skillKey });
+    await grantPermissions(ids.creator, 'm08_set_enabled_creator_pub', [
+      PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+    ]);
+    const creator = await callerFor({ authenticatedAt: new Date(), userId: ids.creator });
+    await expect(creator.setEnabled({ enabled: true, skillKey })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('lets an updater without create re-enable an existing override and denies materialising a new one', async () => {
+    await grantPermissions(ids.updater, 'm08_set_enabled_updater_pub', [
+      PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+    ]);
+    const skillKey = getBuiltinSkillDefinitions()[0]!.skillKey;
+    const updater = await callerFor({ authenticatedAt: new Date(), userId: ids.updater });
+    await expect(updater.setEnabled({ enabled: false, skillKey })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+
+    const admin = await callerFor({ authenticatedAt: new Date(), userId: ids.superAdmin });
+    await admin.setEnabled({ enabled: false, skillKey });
+    await expect(updater.setEnabled({ enabled: true, skillKey })).resolves.toEqual({
+      enabled: true,
+      skillKey,
+    });
+  });
+
+  it('republishes the current version when a newer unpublished draft exists', async () => {
+    const caller = await callerFor({ authenticatedAt: new Date(), userId: ids.superAdmin });
+    const skillKey = `toggle.keep.v1.${Date.now()}`;
+    const created = await caller.applyImmediate({
+      displayName: 'Keep V1',
+      distribution: 'default',
+      enabled: true,
+      mode: 'create',
+      reason: 'seed v1',
+      skillKey,
+      version: {
+        content: '# keep v1',
+        contentRef: null,
+        manifest,
+        resources: [],
+        version: '1.0.0',
+      },
+    });
+    expect(created.published).toBe(true);
+    const afterV1 = await caller.get({ id: created.draft.id });
+    await caller.createVersion({
+      content: '# unpublished v2',
+      contentRef: null,
+      expectedDraftToken: afterV1.draftToken,
+      expectedRevision: afterV1.baseRevision,
+      manifest,
+      reason: 'draft v2 must stay unpublished',
+      resources: [],
+      skillId: created.draft.id,
+      version: '2.0.0',
+    });
+
+    await caller.setEnabled({ enabled: false, skillKey });
+
+    const after = await caller.get({ id: created.draft.id });
+    expect(after.draft.enabled).toBe(false);
+    expect(after.publishedVersion?.version).toBe('1.0.0');
+    expect(after.latestVersion?.version).toBe('2.0.0');
+    expect(after.latestVersion?.lastPublishedRevision).toBeNull();
+    expect(after.draft.currentVersionId).toBe(after.publishedVersion?.id);
+
+    const catalog = await new SkillCatalogReadService(db).getPublishedCatalog();
+    expect(catalog.skills.map((skill) => skill.skillKey)).not.toContain(skillKey);
   });
 });

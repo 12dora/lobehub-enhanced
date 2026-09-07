@@ -183,6 +183,17 @@ export class SkillCatalogReadService {
   isPublishedCatalogExecutionReady = (catalog: { revision: string; skills: PublishedSkill[] }) =>
     readinessByRevision.get(catalog.revision) ?? false;
 
+  /**
+   * Published `enabled: false` builtin overrides (not archived tombstones).
+   * Exact-version resolution must not fall back to bundled content for these keys:
+   * a running operation signed against bundled `0.0.0` would otherwise keep executing
+   * after the org disabled the skill (override materialises as `1.0.0`).
+   */
+  private loadPublishedDisabledBuiltinKeys = async (): Promise<ReadonlySet<string>> => {
+    const snapshot = await this.loadCurrentSnapshot();
+    return new Set(snapshot.publishedDisabledBuiltinKeys ?? []);
+  };
+
   resolveForExecution = async (skillKey: string, version?: string) => {
     const builtin = this.builtinSkills.find((item) => item.skillKey === skillKey);
     if (!version) {
@@ -193,6 +204,7 @@ export class SkillCatalogReadService {
       return parseResolvedPlatformSkill(platform);
     }
     if (builtin?.version === version) {
+      if ((await this.loadPublishedDisabledBuiltinKeys()).has(skillKey)) return undefined;
       return parseResolvedBuiltinSkill(builtin);
     }
     return undefined;
@@ -249,6 +261,7 @@ export class SkillCatalogReadService {
       unique.set(`${ref.skillKey}\0${ref.version}`, ref);
     }
     const platformBatch = await this.loadExactPlatformBatch([...unique.values()]);
+    const publishedDisabledBuiltinKeys = await this.loadPublishedDisabledBuiltinKeys();
 
     for (const [key, ref] of unique) {
       const builtin = this.builtinSkills.find((item) => item.skillKey === ref.skillKey);
@@ -258,6 +271,10 @@ export class SkillCatalogReadService {
         continue;
       }
       if (builtin?.version === ref.version) {
+        if (publishedDisabledBuiltinKeys.has(ref.skillKey)) {
+          out.set(key, undefined);
+          continue;
+        }
         out.set(key, parseResolvedBuiltinSkill(builtin));
         continue;
       }

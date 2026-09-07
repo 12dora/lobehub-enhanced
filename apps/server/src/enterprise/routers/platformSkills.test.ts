@@ -17,6 +17,7 @@ import {
   platformSkills,
   platformSkillVersions,
 } from '@/database/schemas/platform';
+import type { PlatformSkillManifest } from '@/database/schemas/platform/skills';
 import type { LobeChatDatabase } from '@/database/type';
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';

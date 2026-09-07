@@ -7,10 +7,19 @@ const mocks = vi.hoisted(() => ({
   getAgentConfigById: vi.fn(),
   getUserSettings: vi.fn(),
   platformFindByName: vi.fn(),
+  resolveRunWorkspaceId: vi.fn(async (context: { workspaceId?: string }) => context.workspaceId),
 }));
 
 vi.mock('@lobechat/builtin-skills', () => ({
-  builtinSkills: [],
+  builtinSkills: [
+    {
+      content: '# Artifacts',
+      description: 'Generate artifacts',
+      identifier: 'lobe-artifacts',
+      name: 'artifacts',
+      source: 'builtin',
+    },
+  ],
 }));
 
 vi.mock('@/database/models/agent', () => ({
@@ -55,6 +64,10 @@ vi.mock('@/server/services/agentSignal/store/adapters/redis/policyStateStore', (
   redisPolicyStateStore: {},
 }));
 
+vi.mock('../resolveWorkspaceScope', () => ({
+  resolveRunWorkspaceId: mocks.resolveRunWorkspaceId,
+}));
+
 describe('activatorRuntime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -64,6 +77,9 @@ describe('activatorRuntime', () => {
     mocks.findById.mockResolvedValue(undefined);
     mocks.findByName.mockResolvedValue(undefined);
     mocks.platformFindByName.mockResolvedValue(undefined);
+    mocks.resolveRunWorkspaceId.mockImplementation(
+      async (context: { workspaceId?: string }) => context.workspaceId,
+    );
   });
 
   describe('activateSkill — disabled skill enforcement', () => {
@@ -150,6 +166,68 @@ describe('activatorRuntime', () => {
       const result = await runtime.activateSkill({ name: 'user-skill' });
 
       expect(result.success).toBe(true);
+    });
+
+    it('omits disabled skills from the activation-failure available list', async () => {
+      mocks.getUserSettings.mockResolvedValue({
+        tool: { disabledSkillIdentifiers: ['disabled-skill-identifier'] },
+      });
+      mocks.findAll.mockResolvedValue({
+        data: [
+          {
+            description: 'Should not be advertised',
+            id: 'disabled-id',
+            identifier: 'disabled-skill-identifier',
+            name: 'disabled-skill',
+          },
+          {
+            description: 'Still available',
+            id: 'enabled-id',
+            identifier: 'enabled-skill-identifier',
+            name: 'enabled-skill',
+          },
+        ],
+        total: 2,
+      });
+
+      const { activatorRuntime } = await import('../activator');
+      const runtime = await activatorRuntime.factory({
+        serverDB: {} as never,
+        toolManifestMap: {},
+        userId: 'user-1',
+      });
+
+      const result = await runtime.activateSkill({ name: 'missing-skill' });
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('enabled-skill');
+      expect(result.content).not.toContain('disabled-skill');
+      expect(result.content).not.toContain('Should not be advertised');
+    });
+
+    it('recovers workspace scope so workspace disables apply when context lost workspaceId', async () => {
+      mocks.resolveRunWorkspaceId.mockResolvedValue('ws-1');
+      mocks.getUserSettings.mockResolvedValue({
+        tool: {
+          uninstalledBuiltinTools: [],
+          uninstalledBuiltinToolsByWorkspace: { 'ws-1': ['lobe-artifacts'] },
+        },
+      });
+
+      const { activatorRuntime } = await import('../activator');
+      const runtime = await activatorRuntime.factory({
+        agentId: 'agent-1',
+        serverDB: {} as never,
+        toolManifestMap: {},
+        userId: 'user-1',
+      });
+
+      const result = await runtime.activateSkill({ name: 'artifacts' });
+
+      expect(result.success).toBe(false);
+      expect(mocks.resolveRunWorkspaceId).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1' }),
+      );
     });
   });
 

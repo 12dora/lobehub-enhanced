@@ -2,11 +2,14 @@ import { builtinTools } from '@lobechat/builtin-tools';
 import { ZodError } from 'zod';
 
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
+import type { PlatformPermission } from '@/const/platform/permissions';
+import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import {
   PlatformRevisionConflictError,
   PlatformSkillBuiltinOverrideError,
   PlatformSkillChecksumMismatchError,
 } from '@/database/models/platform';
+import { PlatformSkillCatalogRepository } from '@/database/repositories/platformSkillCatalog';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { parseEnterpriseFeatureFlags } from '../../featureFlags';
@@ -43,6 +46,21 @@ export const createSkillService = (db: LobeChatDatabase) => {
 
 export const isBundledBuiltinSkillKey = (skillKey: string): boolean =>
   getBuiltinSkillDefinitions().some((skill) => skill.skillKey === skillKey);
+
+/**
+ * setEnabled permission by the actual write: materialising a bundled override is CREATE;
+ * any existing identity row (including a previously materialised builtin) is UPDATE.
+ */
+export const resolveSetEnabledPermission = async (
+  db: LobeChatDatabase,
+  skillKey: string | undefined,
+): Promise<PlatformPermission> => {
+  if (!skillKey) return PLATFORM_PERMISSIONS.SKILL_UPDATE;
+  const existing = await new PlatformSkillCatalogRepository(db).getSkillByKey(skillKey);
+  if (existing) return PLATFORM_PERMISSIONS.SKILL_UPDATE;
+  if (isBundledBuiltinSkillKey(skillKey)) return PLATFORM_PERMISSIONS.SKILL_CREATE;
+  return PLATFORM_PERMISSIONS.SKILL_UPDATE;
+};
 
 export const mapSkillServiceError = (error: unknown): never => {
   if (error instanceof SkillCatalogNotFoundError) {

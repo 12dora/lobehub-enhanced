@@ -263,7 +263,9 @@ describe('catalog authority persisted generation reconcile', () => {
         checksum: checksum('b'),
         currentVersionId: 'v1',
         pointerRevision: 2,
+        publishedAllowBuiltinOverride: true,
         publishedEnabled: true,
+        publishedSource: 'builtin',
         publishedTombstone: true,
         publishedVersionId: 'v1',
         revisionNumber: 2,
@@ -319,5 +321,47 @@ describe('catalog authority persisted generation reconcile', () => {
       PlatformCatalogTokenInvariantError,
     );
     expect(mock.selectCount).toBe(1);
+  });
+
+  it('includes a published disabled builtin override in the target token', async () => {
+    peekGeneration.mockResolvedValue({
+      generation: 14,
+      tokenKind: 'immutable_id',
+      tokenValue: checksum('e'),
+    });
+    const mock = createCatalogDb([
+      {
+        checksum: checksum('b'),
+        currentVersionId: 'v1',
+        pointerRevision: 1,
+        publishedAllowBuiltinOverride: true,
+        publishedEnabled: false,
+        publishedSource: 'builtin',
+        publishedTombstone: false,
+        publishedVersionId: 'v1',
+        revisionNumber: 1,
+        skillId: 'skill-1',
+        skillKey: 'builtin.core',
+        status: 'published' as const,
+        versionId: 'v1',
+      },
+    ]);
+
+    const token = await loadCurrentSkillCatalogTargetToken(mock.db, () => []);
+    expect(token).toEqual(
+      buildSkillCatalogRevisionToken({
+        builtins: [],
+        platform: [
+          {
+            checksum: checksum('b'),
+            currentVersionId: 'v1',
+            revision: 1,
+            skillId: 'skill-1',
+            skillKey: 'builtin.core',
+            tombstone: true,
+          },
+        ],
+      }),
+    );
   });
 });

@@ -1,7 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { z } from 'zod';
 
+import type { PlatformPermission } from '@/const/platform/permissions';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
+import type { LobeChatDatabase } from '@/database/type';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
+import { trpc } from '@/libs/trpc/lambda/init';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 
 import {
@@ -45,8 +50,8 @@ import {
   assertSkillDangerousReauth,
   assertSkillFeatureEnabled,
   createSkillService,
-  isBundledBuiltinSkillKey,
   mapSkillServiceError,
+  resolveSetEnabledPermission,
 } from './skillsSupport';
 
 /**
@@ -61,6 +66,22 @@ const adminBase = authedProcedure
   .use(serverDatabase)
   .use(withActiveUser())
   .use(withAdminMutationRateLimit());
+
+/**
+ * Compound `select` is sync and has no ctx. Look the row up first and stash the
+ * resulting CREATE/UPDATE code so the gate matches the actual write.
+ */
+const setEnabledPermissionStore = new AsyncLocalStorage<PlatformPermission>();
+
+const withSetEnabledPermissionLookup = trpc.middleware(async ({ ctx, getRawInput, next }) => {
+  const raw = await getRawInput();
+  const skillKey = (raw as { skillKey?: string } | null)?.skillKey;
+  const permission = await resolveSetEnabledPermission(
+    (ctx as { serverDB: LobeChatDatabase }).serverDB,
+    skillKey,
+  );
+  return setEnabledPermissionStore.run(permission, () => next());
+});
 
 export const adminSkillsRouter = router({
   /**
@@ -303,18 +324,14 @@ export const adminSkillsRouter = router({
   /**
    * Org-wide enable/disable. Existing rows: identity patch + immediate publish.
    * Bundled builtin with no row: materialize an override and publish.
-   * CREATE when the key is a bundled builtin (first write / override); UPDATE otherwise.
+   * CREATE when materialising a bundled key with no row; UPDATE for any existing row.
    */
   setEnabled: adminBase
+    .use(withSetEnabledPermissionLookup)
     .use(
       withCompoundPlatformPermission({
         fixed: [PLATFORM_PERMISSIONS.SKILL_PUBLISH],
-        select: (raw) => {
-          const skillKey = (raw as { skillKey?: string } | null)?.skillKey;
-          return skillKey && isBundledBuiltinSkillKey(skillKey)
-            ? PLATFORM_PERMISSIONS.SKILL_CREATE
-            : PLATFORM_PERMISSIONS.SKILL_UPDATE;
-        },
+        select: () => setEnabledPermissionStore.getStore() ?? PLATFORM_PERMISSIONS.SKILL_UPDATE,
         selectable: [PLATFORM_PERMISSIONS.SKILL_CREATE, PLATFORM_PERMISSIONS.SKILL_UPDATE],
       }),
     )

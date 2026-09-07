@@ -20,6 +20,7 @@ import {
 } from '@/server/services/agentSignal/procedure';
 import { redisPolicyStateStore } from '@/server/services/agentSignal/store/adapters/redis/policyStateStore';
 
+import { resolveRunWorkspaceId } from './resolveWorkspaceScope';
 import { type ServerRuntimeRegistration } from './types';
 
 /**
@@ -79,19 +80,21 @@ export const activatorRuntime: ServerRuntimeRegistration = {
           service: createPlatformSkillOperationResolver(context.serverDB, platformCatalog),
         });
       } else {
-        const skillModel = new AgentSkillModel(
-          context.serverDB,
-          context.userId,
-          context.workspaceId,
-        );
+        // Dispatch/resume tool contexts can lose `workspaceId` while still
+        // carrying `agentId`. Recover the operation's workspace before reading
+        // user settings so workspace-scoped disables apply and personal
+        // disables are not used inside a workspace.
+        const workspaceId = await resolveRunWorkspaceId(context);
+
+        const skillModel = new AgentSkillModel(context.serverDB, context.userId, workspaceId);
 
         // `activateSkill` resolves independently of `<available_skills>` in
         // legacy operations. Re-derive the disabled set (user-scope uninstall
         // / disabledSkillIdentifiers ∪ per-agent plugin tri-state) for that
-        // path. Disabled skills are dropped from the pool AND
-        // findById/findByName return undefined. A managed operation never
-        // reaches these user-owned lookups: it uses only the immutable
-        // platformCatalog operation snapshot above.
+        // path. Disabled skills are dropped from the pool, omitted from
+        // findAll, and findById/findByName return undefined. A managed
+        // operation never reaches these user-owned lookups: it uses only the
+        // immutable platformCatalog operation snapshot above.
         let toolConfig: UserToolConfig | undefined;
         try {
           const userSettings = await new UserModel(
@@ -105,14 +108,14 @@ export const activatorRuntime: ServerRuntimeRegistration = {
 
         let agentPlugins: AgentPluginEntry[] | undefined;
         if (context.agentId) {
-          const agentModel = new AgentModel(context.serverDB, context.userId, context.workspaceId);
+          const agentModel = new AgentModel(context.serverDB, context.userId, workspaceId);
           const agentConfig = await agentModel.getAgentConfigById(context.agentId);
           agentPlugins = agentConfig?.plugins ?? undefined;
         }
         const disabledSkillIds = resolveDisabledSkillIds({
           agentPlugins,
           toolConfig,
-          workspaceId: context.workspaceId,
+          workspaceId,
         });
 
         const skillIsDisabled = (skill: { identifier?: string; name?: string }) =>
@@ -129,7 +132,11 @@ export const activatorRuntime: ServerRuntimeRegistration = {
             canExecuteOnDevice: context.deviceCapable ?? !!context.activeDeviceId,
           }).filter((skill) => !skillIsDisabled(skill)),
           service: {
-            findAll: () => skillModel.findAll(),
+            findAll: async () => {
+              const result = await skillModel.findAll();
+              const data = result.data.filter((skill) => !skillIsDisabled(skill));
+              return { data, total: data.length };
+            },
             findById: async (id) => {
               const skill = await skillModel.findById(id);
               return skill && !skillIsDisabled(skill) ? skill : undefined;

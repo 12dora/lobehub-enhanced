@@ -480,6 +480,10 @@ export class SkillCatalogAdminService {
           expectedRevision: detail.baseRevision,
           id: existing.id,
           mode: 'update',
+          // Republish the currently published content. Omitting versionId would pick
+          // latest (an unpublished draft), which can publish unrelated work or fail
+          // validation while the identity already says enabled:false.
+          ...(detail.draft.currentVersionId ? { versionId: detail.draft.currentVersionId } : {}),
         }),
       );
       return { enabled: result.draft.enabled, skillKey: result.draft.skillKey };

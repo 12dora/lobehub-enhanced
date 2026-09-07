@@ -273,8 +273,48 @@ const loadCurrentAiCatalogSnapshotUncached = async (
 export interface CurrentSkillCatalogSnapshot {
   builtinOverrideTombstones: string[];
   items: PlatformPublishedSkillView[];
+  /**
+   * Published (`status: 'published'`) builtin overrides with `enabled: false`.
+   * Distinct from archived tombstones so historical exact-version resolution can
+   * still serve previously signed platform versions without falling back to the
+   * bundled definition of a currently-disabled key.
+   */
+  publishedDisabledBuiltinKeys: string[];
   tokenEntries: SkillCatalogTokenEntry[];
 }
+
+/**
+ * Effective catalog membership for one published/archived skill pointer.
+ * Full snapshot and lightweight token readers must use this same rule so a
+ * disabled builtin override cannot make runtime and target tokens diverge.
+ */
+export interface SkillCatalogEffectivePublicationInput {
+  allowBuiltinOverride: boolean;
+  builtinOverrideTombstone?: boolean | null;
+  enabled: boolean;
+  source: string;
+  status: string;
+}
+
+export const skillCatalogEffectivePublication = (
+  input: SkillCatalogEffectivePublicationInput,
+): { active: boolean; tombstone: boolean } => {
+  const archivedBuiltinTombstone =
+    input.status === 'archived' &&
+    input.enabled &&
+    input.allowBuiltinOverride &&
+    input.builtinOverrideTombstone === true;
+  // Published + enabled:false must still tombstone a bundled builtin.
+  // `active` would otherwise drop the override and mergePublishedSkills would re-add it.
+  const disabledBuiltinOverride =
+    input.status === 'published' &&
+    !input.enabled &&
+    (input.allowBuiltinOverride || input.source === 'builtin');
+  return {
+    active: input.status === 'published' && input.enabled,
+    tombstone: archivedBuiltinTombstone || disabledBuiltinOverride,
+  };
+};
 
 /**
  * Loads every non-zero Skill current pointer without pagination or inner joins. Validation happens
@@ -343,21 +383,16 @@ export const loadCurrentSkillCatalogSnapshot = async (
 
   const builtinOverrideTombstones: string[] = [];
   const items: PlatformPublishedSkillView[] = [];
+  const publishedDisabledBuiltinKeys: string[] = [];
   const tokenEntries: SkillCatalogTokenEntry[] = [];
   for (const { revision, skillId, snapshot, version } of validated) {
-    const archivedBuiltinTombstone =
-      revision.status === 'archived' &&
-      snapshot.skill.enabled &&
-      snapshot.skill.allowBuiltinOverride &&
-      snapshot.builtinOverrideTombstone === true;
-    // Published + enabled:false must still tombstone a bundled builtin. `active`
-    // would otherwise drop the override and mergePublishedSkills would re-add it.
-    const disabledBuiltinOverride =
-      revision.status === 'published' &&
-      !snapshot.skill.enabled &&
-      (snapshot.skill.allowBuiltinOverride || snapshot.skill.source === 'builtin');
-    const tombstone = archivedBuiltinTombstone || disabledBuiltinOverride;
-    const active = revision.status === 'published' && snapshot.skill.enabled;
+    const { active, tombstone } = skillCatalogEffectivePublication({
+      allowBuiltinOverride: snapshot.skill.allowBuiltinOverride,
+      builtinOverrideTombstone: snapshot.builtinOverrideTombstone,
+      enabled: snapshot.skill.enabled,
+      source: snapshot.skill.source,
+      status: revision.status,
+    });
     if (!active && !tombstone) continue;
     tokenEntries.push({
       checksum: version.checksum,
@@ -369,6 +404,9 @@ export const loadCurrentSkillCatalogSnapshot = async (
     });
     if (tombstone) {
       builtinOverrideTombstones.push(snapshot.skill.skillKey);
+      if (revision.status === 'published') {
+        publishedDisabledBuiltinKeys.push(snapshot.skill.skillKey);
+      }
       continue;
     }
     items.push({
@@ -395,7 +433,7 @@ export const loadCurrentSkillCatalogSnapshot = async (
       },
     });
   }
-  return { builtinOverrideTombstones, items, tokenEntries };
+  return { builtinOverrideTombstones, items, publishedDisabledBuiltinKeys, tokenEntries };
 };
 
 /**
@@ -516,9 +554,15 @@ export const loadCurrentSkillCatalogTargetTokenEntries = async (
       checksum: platformSkillVersions.checksum,
       currentVersionId: platformSkills.currentVersionId,
       pointerRevision: platformSkills.revision,
+      publishedAllowBuiltinOverride: sql<
+        boolean | null
+      >`(${platformResourceRevisions.payload}->'skill'->>'allowBuiltinOverride')::boolean`,
       publishedEnabled: sql<
         boolean | null
       >`(${platformResourceRevisions.payload}->'skill'->>'enabled')::boolean`,
+      publishedSource: sql<
+        string | null
+      >`(${platformResourceRevisions.payload}->'skill'->>'source')`,
       publishedTombstone: sql<
         boolean | null
       >`(${platformResourceRevisions.payload}->>'builtinOverrideTombstone')::boolean`,
@@ -568,9 +612,13 @@ export const loadCurrentSkillCatalogTargetTokenEntries = async (
     }
     // Effective state belongs to the immutable publication. A disabled mutable
     // pointer can still publish an enabled builtin-override tombstone.
-    const tombstone =
-      row.status === 'archived' && row.publishedTombstone === true && row.publishedEnabled === true;
-    const active = row.status === 'published' && row.publishedEnabled === true;
+    const { active, tombstone } = skillCatalogEffectivePublication({
+      allowBuiltinOverride: row.publishedAllowBuiltinOverride === true,
+      builtinOverrideTombstone: row.publishedTombstone === true,
+      enabled: row.publishedEnabled === true,
+      source: row.publishedSource ?? '',
+      status: row.status ?? '',
+    });
     if (!active && !tombstone) continue;
     tokenEntries.push({
       checksum: row.checksum,
