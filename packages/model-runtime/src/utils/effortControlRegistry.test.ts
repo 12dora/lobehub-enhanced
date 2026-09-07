@@ -1,13 +1,17 @@
 import type { LobeAgentChatConfig } from '@lobechat/types';
+import { AgentChatConfigSchema, GenerateObjectEffortParamsSchema } from '@lobechat/types';
 import { merge } from '@lobechat/utils/merge';
 import { describe, expect, it } from 'vitest';
 
+import { matchEffortControlForLevels } from '../providers/chatGPT';
 import {
   buildChatConfigEffortReplacement,
+  clampEffortLevel,
   EFFORT_CONFIG_KEYS,
   EFFORT_CONTROL_KEYS,
   EFFORT_CONTROL_REGISTRY,
 } from './effortControlRegistry';
+import { applyModelExtendParams } from './modelExtendParams';
 
 /**
  * Chat config fields that look effort-adjacent but must never be touched by the
@@ -159,5 +163,38 @@ describe('replacement patch under the agent-config merge', () => {
 
     // merge() skips undefined — the stale level survives, which is the bug this guards.
     expect(merged.chatConfig.reasoningEffort).toBe('high');
+  });
+});
+
+describe('live Codex effort levels', () => {
+  it('retains ultra and serializes it as reasoning_effort', () => {
+    const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    const key = matchEffortControlForLevels(levels);
+    expect(key).toBe('gpt5_6ReasoningEffort');
+    expect(clampEffortLevel(EFFORT_CONTROL_REGISTRY.gpt5_6ReasoningEffort, 'ultra')).toBe('ultra');
+    const params = applyModelExtendParams({
+      chatConfig: { gpt5_6ReasoningEffort: 'ultra' },
+      extendParams: [key!],
+      model: 'gpt-6-astra',
+    });
+    expect(params.reasoning_effort).toBe('ultra');
+    expect(AgentChatConfigSchema.parse({ gpt5_6ReasoningEffort: 'ultra' })).toHaveProperty(
+      'gpt5_6ReasoningEffort',
+      'ultra',
+    );
+    expect(GenerateObjectEffortParamsSchema.parse(params)).toHaveProperty(
+      'reasoning_effort',
+      'ultra',
+    );
+  });
+
+  it('maximizes supported coverage even when future levels are unknown', () => {
+    expect(
+      matchEffortControlForLevels(['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'future']),
+    ).toBe('gpt5_6ReasoningEffort');
+    expect(matchEffortControlForLevels(['low', 'medium', 'high', 'future'])).toBe(
+      'reasoningEffort',
+    );
+    expect(matchEffortControlForLevels(['future'])).toBeUndefined();
   });
 });

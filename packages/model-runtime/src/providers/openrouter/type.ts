@@ -1,3 +1,5 @@
+import type { ChatStreamPayload } from '../../types';
+
 interface ModelPricing {
   completion: string;
   image?: string;
@@ -40,7 +42,8 @@ export interface OpenRouterModelCard {
 }
 
 export interface OpenRouterReasoning {
-  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  // The adapter forwards runtime effort tiers, except no_think (mapped to enabled: false).
+  effort?: Exclude<ChatStreamPayload['reasoning_effort'], 'no_think'>;
   enabled?: boolean;
   exclude?: boolean;
   max_tokens?: number;

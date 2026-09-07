@@ -389,6 +389,8 @@ export type ExtendParamsType =
 export type DisabledParamType = 'temperature' | 'top_p' | 'frequency_penalty' | 'presence_penalty';
 
 export interface AiModelSettings {
+  /** Live Codex catalog protocol flag; runtime discovery remains authoritative. */
+  chatgptResponsesLite?: boolean;
   /**
    * Chat params that should be hidden from the agent config UI and stripped from
    * outbound requests. Use this for models whose API rejects specific sampling
@@ -462,6 +464,7 @@ export const DisabledParamTypeSchema = z.enum([
 ]);
 
 export const AiModelSettingsSchema = z.object({
+  chatgptResponsesLite: z.boolean().optional(),
   disabledParams: z.array(DisabledParamTypeSchema).optional(),
   extendParams: z.array(ExtendParamsTypeSchema).optional(),
   searchImpl: ModelSearchImplementTypeSchema.optional(),

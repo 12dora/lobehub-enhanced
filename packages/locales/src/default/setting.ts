@@ -946,6 +946,7 @@ export default {
   'serviceModel.reasoningEffort.options.no_think': "Don't think",
   'serviceModel.reasoningEffort.options.none': 'None',
   'serviceModel.reasoningEffort.options.standard': 'Standard',
+  'serviceModel.reasoningEffort.options.ultra': 'Ultra',
   'serviceModel.reasoningEffort.options.xhigh': 'Extra high',
   'settingSystemTools.appEnvironment.chromium.desc': 'Chromium browser engine version',
   'settingSystemTools.appEnvironment.desc': 'Built-in runtime versions in the desktop app',

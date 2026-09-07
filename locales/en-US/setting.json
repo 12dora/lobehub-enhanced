@@ -701,6 +701,7 @@
   "serviceModel.reasoningEffort.options.no_think": "Don't think",
   "serviceModel.reasoningEffort.options.none": "None",
   "serviceModel.reasoningEffort.options.standard": "Standard",
+  "serviceModel.reasoningEffort.options.ultra": "Ultra",
   "serviceModel.reasoningEffort.options.xhigh": "Extra high",
   "settingAgent.avatar.sizeExceeded": "Image size exceeds 1MB limit, please choose a smaller image",
   "settingAgent.avatar.title": "Avatar",

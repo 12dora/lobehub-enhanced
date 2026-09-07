@@ -2597,6 +2597,7 @@
   "settingsPolicy.options.systemAgent.reasoningEffort.no_think": "不思考",
   "settingsPolicy.options.systemAgent.reasoningEffort.none": "无",
   "settingsPolicy.options.systemAgent.reasoningEffort.standard": "标准",
+  "settingsPolicy.options.systemAgent.reasoningEffort.ultra": "极致",
   "settingsPolicy.options.systemAgent.reasoningEffort.xhigh": "极高",
   "settingsPolicy.options.transition.fadeIn": "淡入",
   "settingsPolicy.options.transition.none": "无",

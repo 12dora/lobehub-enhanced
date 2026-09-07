@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { BRANDING_NAME } from '@lobechat/business-const';
+import { loadModels } from '@lobechat/business-model-bank/model-config';
 import { CURRENT_VERSION } from '@lobechat/const';
 import {
   DEFAULT_FILE_INLINE_MAX_BYTES,
@@ -8,10 +9,11 @@ import {
 } from '@lobechat/utils';
 import OpenAI from 'openai';
 import type { Mock } from 'vitest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as openaiHelpers from '../../core/contextBuilders/openai';
 import { applyModelExtendParams } from '../../utils/modelExtendParams';
+import * as clientVersion from './clientVersion';
 import {
   CODEX_CLIENT_VERSION,
   LobeChatGPTAI,
@@ -34,7 +36,15 @@ vi.mock('@lobechat/utils', async (importOriginal) => {
 describe('LobeChatGPTAI', () => {
   let instance: InstanceType<typeof LobeChatGPTAI>;
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
+    vi.mocked(loadModels).mockResolvedValue([]);
+    vi.spyOn(clientVersion, 'resolveCodexClientVersion').mockResolvedValue(CODEX_CLIENT_VERSION);
+    vi.spyOn(OpenAI.prototype, 'get').mockRejectedValue(new Error('catalog offline'));
     vi.mocked(imageUrlToBase64).mockReset();
     instance = new LobeChatGPTAI({ apiKey: 'access-token', chatgptAccountId: 'account-id' });
     vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue(
@@ -279,7 +289,7 @@ describe('LobeChatGPTAI', () => {
     expect(request.safety_identifier).toBeUndefined();
   });
 
-  it.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
+  it.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra'])(
     'uses the Responses Lite request contract for %s',
     async (model) => {
       await instance.chat(
@@ -335,7 +345,11 @@ describe('LobeChatGPTAI', () => {
           { content: 'Check the weather', role: 'user' },
         ],
         parallel_tool_calls: false,
-        reasoning: { context: 'all_turns', effort: 'high', summary: 'auto' },
+        reasoning: {
+          context: 'all_turns',
+          effort: 'high',
+          ...(model === 'gpt-6-astra' ? {} : { summary: 'auto' }),
+        },
         tool_choice: 'auto',
       });
       expect(request.instructions).toBeUndefined();
@@ -541,9 +555,9 @@ describe('LobeChatGPTAI', () => {
     });
 
     it('returns undefined when no ChatGPT candidate covers the live levels', () => {
-      expect(matchEffortControlForLevels(['ultra'])).toBeUndefined();
+      expect(matchEffortControlForLevels(['future-effort'])).toBeUndefined();
       expect(matchEffortControlForLevels([])).toBeUndefined();
-      expect(matchEffortControlForLevels(['none', 'ultra'])).toBeUndefined();
+      expect(matchEffortControlForLevels(['none', 'future-effort'])).toBe('gpt5_1ReasoningEffort');
     });
 
     it('maps the matched tag to reasoning_effort and never to Anthropic effort', () => {
@@ -593,7 +607,9 @@ describe('LobeChatGPTAI', () => {
       const models = await instance.models();
 
       expect(instance['client'].get).toHaveBeenCalledWith('/models', {
+        maxRetries: 0,
         query: { client_version: CODEX_CLIENT_VERSION },
+        timeout: 10_000,
       });
       expect(models.map((model) => model.id)).toEqual([
         'codex-only-model',
@@ -668,7 +684,7 @@ describe('LobeChatGPTAI', () => {
         models: [
           {
             slug: 'gpt-5.5',
-            supported_reasoning_levels: [{ effort: 'ultra' }],
+            supported_reasoning_levels: [{ effort: 'future-effort' }],
           },
         ],
       });
@@ -719,6 +735,7 @@ describe('LobeChatGPTAI', () => {
         models: [
           { slug: 'gpt-5.5', visibility: 'list' },
           { slug: 'codex-auto-review', visibility: 'hide' },
+          { slug: 'gpt-5.3-codex-spark', supported_in_api: false, visibility: 'list' },
         ],
       });
 
@@ -731,7 +748,9 @@ describe('LobeChatGPTAI', () => {
       expect(gated.map((model) => model.id)).toEqual(['gpt-image-2']);
       expect(gated[0]).toMatchObject({ id: 'gpt-image-2', type: 'image' });
       expect(instance['client'].get).toHaveBeenLastCalledWith('/models', {
+        maxRetries: 0,
         query: { client_version: CODEX_CLIENT_VERSION },
+        timeout: 10_000,
       });
     });
 

@@ -352,10 +352,13 @@ export interface OpenAICompatibleFactoryOptions<T extends Record<string, any> = 
     prepareRequest?: (
       payload: ResponseCreateParamsWithPromptCacheKey,
       options: ConstructorOptions<T>,
-    ) => {
-      headers?: Record<string, string>;
-      payload: ResponseCreateParamsWithPromptCacheKey;
-    };
+      client: OpenAI,
+    ) =>
+      | { headers?: Record<string, string>; payload: ResponseCreateParamsWithPromptCacheKey }
+      | Promise<{
+          headers?: Record<string, string>;
+          payload: ResponseCreateParamsWithPromptCacheKey;
+        }>;
   };
 }
 
@@ -511,13 +514,13 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
       return { ...requestPayload, model: mappedModel };
     }
 
-    private prepareResponsesRequest(
+    private async prepareResponsesRequest(
       requestPayload: ResponseCreateParamsWithPromptCacheKey,
       logicalModel: string,
     ) {
       const mappedRequestPayload = this.withMappedRequestModel(requestPayload, logicalModel);
       return (
-        responses?.prepareRequest?.(mappedRequestPayload, this._options) || {
+        (await responses?.prepareRequest?.(mappedRequestPayload, this._options, this.client)) || {
           payload: mappedRequestPayload,
         }
       );
@@ -1197,7 +1200,7 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
 
         if (shouldUseResponses) {
           log('calling responses.create for structured output');
-          const preparedRequest = this.prepareResponsesRequest(
+          const preparedRequest = await this.prepareResponsesRequest(
             {
               input: messages,
               model,
@@ -1652,7 +1655,7 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
           preferTemperature: true,
         }),
       } as ResponseCreateParamsWithPromptCacheKey;
-      const preparedRequest = this.prepareResponsesRequest(postPayload, usageModel);
+      const preparedRequest = await this.prepareResponsesRequest(postPayload, usageModel);
       const requestPayload = preparedRequest.payload;
 
       if (debugParams?.responses?.()) {
@@ -1782,7 +1785,7 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
           uploadFile: this.bindChatUploadFile(options?.signal),
         });
 
-        const preparedRequest = this.prepareResponsesRequest(
+        const preparedRequest = await this.prepareResponsesRequest(
           {
             input,
             model,

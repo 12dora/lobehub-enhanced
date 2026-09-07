@@ -18,6 +18,7 @@ export type EffortLevel =
   | 'high'
   | 'xhigh'
   | 'max'
+  | 'ultra'
   | 'enabled';
 
 export interface EffortControlDefinition {
@@ -89,7 +90,7 @@ export const EFFORT_CONTROL_REGISTRY = {
   gpt5_6ReasoningEffort: {
     configKey: 'gpt5_6ReasoningEffort',
     defaultLevel: 'medium',
-    levels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    levels: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   },
   chatgptWebThinkingEffort: {
     configKey: 'chatgptWebThinkingEffort',

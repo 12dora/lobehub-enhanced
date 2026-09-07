@@ -3,6 +3,7 @@ import { CURRENT_VERSION } from '@lobechat/const';
 import type { OwnDeploymentOrigins } from '@lobechat/utils';
 import { DEFAULT_FILE_INLINE_MAX_BYTES, DEFAULT_IMAGE_INLINE_MAX_BYTES } from '@lobechat/utils';
 import { isRecord } from '@lobechat/utils/object';
+import debug from 'debug';
 import type { ChatModelCard } from 'model-bank';
 import { ModelProvider } from 'model-bank';
 import OpenAI from 'openai';
@@ -13,11 +14,17 @@ import { EFFORT_CONTROL_REGISTRY, isEffortControlKey } from '../../utils/effortC
 import type { ProcessableModelCard } from '../../utils/modelParse';
 import { MODEL_LIST_CONFIGS, processModelList } from '../../utils/modelParse';
 import { params as openAIParams } from '../openai';
+import { resolveCodexClientVersion } from './clientVersion';
 import { createChatGPTImage } from './createImage';
 
 const CHATGPT_CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 const CHATGPT_RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite';
-const CHATGPT_RESPONSES_LITE_MODEL_IDS = new Set(['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra']);
+const CHATGPT_RESPONSES_LITE_MODEL_IDS = new Set([
+  'gpt-5.6-luna',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-6-astra',
+]);
 const USER_AGENT = `${BRANDING_NAME}/${CURRENT_VERSION}`;
 
 interface ChatGPTClientOptions {
@@ -31,15 +38,7 @@ interface ChatGPTAdditionalToolsInput {
   type: 'additional_tools';
 }
 
-const isResponsesLiteModel = (model: string | undefined) =>
-  !!model && CHATGPT_RESPONSES_LITE_MODEL_IDS.has(model);
-
-/**
- * Codex `/models` is gated by `client_version`: older values (e.g. `0.50.0`) return
- * `{ models: [] }`. Bump this when Codex CLI ships newer models gated by
- * `minimal_client_version`.
- */
-export const CODEX_CLIENT_VERSION = '0.146.0';
+export { CODEX_CLIENT_VERSION } from './clientVersion';
 
 /** Codex `/models` is undocumented — only "this route is not there" is a catalog fallback. */
 const CODEX_MODELS_MISSING_STATUSES = new Set([404, 405, 501]);
@@ -107,8 +106,8 @@ export const CHATGPT_REASONING_EFFORT_CANDIDATES = [
 /**
  * Map a live `supported_reasoning_levels` set onto the best candidate
  * effort-control tag. Exact set match wins (candidate order breaks ties).
- * Otherwise pick the smallest candidate level-set that is a superset of the
- * live set. No match → leave the card untouched.
+ * Otherwise maximize coverage of live levels, preferring the smallest control
+ * on ties. Future unknown levels must not remove the supported effort slider.
  */
 export const matchEffortControlForLevels = (
   levels: readonly string[],
@@ -125,14 +124,15 @@ export const matchEffortControlForLevels = (
   }
 
   let bestKey: EffortControlKey | undefined;
+  let bestCoverage = 0;
   let bestSize = Number.POSITIVE_INFINITY;
   for (const key of candidates) {
     const registryLevels = EFFORT_CONTROL_REGISTRY[key].levels;
-    if (registryLevels.length >= bestSize) continue;
-    if (![...live].every((level) => (registryLevels as readonly string[]).includes(level))) {
-      continue;
-    }
+    const coverage = registryLevels.filter((level) => live.has(level)).length;
+    if (coverage === 0 || coverage < bestCoverage) continue;
+    if (coverage === bestCoverage && registryLevels.length >= bestSize) continue;
     bestKey = key;
+    bestCoverage = coverage;
     bestSize = registryLevels.length;
   }
   return bestKey;
@@ -150,6 +150,86 @@ const extractSupportedReasoningLevels = (raw: unknown): string[] | undefined => 
     }
     return [];
   });
+};
+
+const CATALOG_TTL = 60 * 60 * 1000;
+const catalogLog = debug('lobe-model-runtime:chatgpt:catalog');
+interface CatalogEntry {
+  reasoningLevels?: string[];
+  supportedInApi?: boolean;
+  useResponsesLite?: boolean;
+}
+interface CatalogCache {
+  entries: Map<string, CatalogEntry>;
+  expiresAt: number;
+  inFlight?: Promise<unknown>;
+}
+// The SDK client belongs to one runtime/account. Weak keys avoid retaining credentials.
+const catalogs = new WeakMap<OpenAI, CatalogCache>();
+const getCatalog = (client: OpenAI): CatalogCache => {
+  let cache = catalogs.get(client);
+  if (!cache) {
+    cache = { entries: new Map(), expiresAt: 0 };
+    catalogs.set(client, cache);
+  }
+  return cache;
+};
+
+const fetchCodexCatalog = (client: OpenAI): Promise<unknown> => {
+  const cache = getCatalog(client);
+  cache.inFlight ??= (async () => {
+    try {
+      const version = await resolveCodexClientVersion();
+      const payload: unknown = await client.get('/models', {
+        maxRetries: 0,
+        query: { client_version: version },
+        timeout: 10_000,
+      });
+      if (!isRecord(payload) || (!Array.isArray(payload.models) && !Array.isArray(payload.data))) {
+        throw new TypeError('ChatGPT Codex models payload was not a list');
+      }
+      const entries = new Map<string, CatalogEntry>();
+      for (const raw of Array.isArray(payload.models)
+        ? payload.models
+        : (payload.data as unknown[])) {
+        if (!isRecord(raw)) continue;
+        const id = asNonEmptyString(raw.slug) ?? asNonEmptyString(raw.id);
+        if (!id) continue;
+        entries.set(id, {
+          reasoningLevels: extractSupportedReasoningLevels(raw.supported_reasoning_levels),
+          supportedInApi:
+            typeof raw.supported_in_api === 'boolean' ? raw.supported_in_api : undefined,
+          useResponsesLite:
+            typeof raw.use_responses_lite === 'boolean' ? raw.use_responses_lite : undefined,
+        });
+      }
+      cache.entries = entries;
+      return payload;
+    } finally {
+      // Also back off after failures: chat must not retry a broken catalog on every turn.
+      // Explicit admin models() calls can still retry immediately.
+      cache.expiresAt = Date.now() + CATALOG_TTL;
+      cache.inFlight = undefined;
+    }
+  })();
+  return cache.inFlight;
+};
+
+const isResponsesLiteModel = async (
+  client: OpenAI,
+  model: string | undefined,
+): Promise<boolean> => {
+  if (!model) return false;
+  const cache = getCatalog(client);
+  if (cache.expiresAt <= Date.now()) {
+    try {
+      await fetchCodexCatalog(client);
+    } catch {
+      // Do not log SDK errors: they can contain account/request details.
+      catalogLog('Catalog unavailable; using cached flags or static protocol fallback');
+    }
+  }
+  return cache.entries.get(model)?.useResponsesLite ?? CHATGPT_RESPONSES_LITE_MODEL_IDS.has(model);
 };
 
 /**
@@ -189,6 +269,8 @@ const mapCodexCatalog = (
 
   for (const raw of rawModels) {
     if (!isRecord(raw) || raw.visibility === 'hide') continue;
+    // CLI-only models (e.g. Codex Spark) cannot be served by this API runtime.
+    if (raw.supported_in_api === false) continue;
     const id = asNonEmptyString(raw.slug);
     if (!id) continue;
 
@@ -215,7 +297,12 @@ const mapCodexCatalog = (
       ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
       ...(inputModalities ? { vision: inputModalities.includes('image') } : {}),
       ...(reasoningLevels ? { reasoning: reasoningLevels.length > 0 } : {}),
-      ...(liveEffort ? { settings: { extendParams: [liveEffort] } } : {}),
+      settings: {
+        ...(typeof raw.use_responses_lite === 'boolean'
+          ? { chatgptResponsesLite: raw.use_responses_lite }
+          : {}),
+        ...(liveEffort ? { extendParams: [liveEffort] } : {}),
+      },
     });
   }
 
@@ -300,9 +387,7 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
   // transport failures must surface — those are the errors an operator can act on.
   models: async ({ client }) => {
     try {
-      const payload: unknown = await client.get('/models', {
-        query: { client_version: CODEX_CLIENT_VERSION },
-      });
+      const payload = await fetchCodexCatalog(client);
       if (!isRecord(payload)) {
         throw new TypeError('ChatGPT Codex models payload was not a list');
       }
@@ -360,14 +445,14 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
         max_tokens: undefined,
       };
     },
-    prepareRequest: (payload) => {
+    prepareRequest: async (payload, _options, client) => {
       const { safety_identifier: _safetyIdentifier, ...subscriptionPayload } = payload;
 
-      if (!isResponsesLiteModel(payload.model)) {
+      if (!(await isResponsesLiteModel(client, payload.model))) {
         return { payload: subscriptionPayload };
       }
 
-      // Codex GPT-5.6 models use Responses Lite: tools move into the input
+      // Catalog-selected models use Responses Lite: tools move into the input
       // sequence, reasoning spans all turns, and the protocol header is required.
       const {
         input,

@@ -1415,6 +1415,7 @@ export default {
   'settingsPolicy.options.systemAgent.reasoningEffort.extended': 'Extended',
   'settingsPolicy.options.systemAgent.reasoningEffort.high': 'High',
   'settingsPolicy.options.systemAgent.reasoningEffort.xhigh': 'Extra high',
+  'settingsPolicy.options.systemAgent.reasoningEffort.ultra': 'Ultra',
   'settingsPolicy.options.systemAgent.reasoningEffort.max': 'Max',
   'settingsPolicy.options.systemAgent.reasoningEffort.enabled': 'Enabled',
   'settingsPolicy.options.animation.disabled': 'Disabled',

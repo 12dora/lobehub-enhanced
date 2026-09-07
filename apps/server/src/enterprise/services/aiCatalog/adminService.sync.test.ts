@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { LobeChatGPTAI } from '@lobechat/model-runtime';
 import { eq, sql } from 'drizzle-orm';
+import { AiModelSettingsSchema } from 'model-bank';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '@/database/core/getTestDB';
@@ -100,6 +101,7 @@ const draftModel = (
 beforeEach(async () => {
   vi.unstubAllEnvs();
   vi.stubEnv('ENABLE_PLATFORM_ADMIN', '1');
+  vi.stubEnv('CHATGPT_CODEX_CLIENT_VERSION', '0.153.4');
   mockModels.mockReset();
   vi.mocked(ModelRuntime.initModelRuntimeWithUserPayload).mockReset();
   vi.mocked(ModelRuntime.initModelRuntimeWithUserPayload).mockReturnValue({
@@ -143,6 +145,42 @@ const listThroughChatGPT = async (data: Array<Record<string, unknown>>) => {
 };
 
 describe('mapCardsToBatchUpdate', () => {
+  it('retains live Codex protocol settings through sync and keeps new Astra disabled', async () => {
+    const runtime = new LobeChatGPTAI({ apiKey: 'catalog-fixture' });
+    vi.spyOn(runtime.client, 'get').mockResolvedValue({
+      models: [
+        {
+          slug: 'gpt-6-astra',
+          supported_in_api: true,
+          use_responses_lite: true,
+          supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(
+            (effort) => ({ effort }),
+          ),
+        },
+      ],
+    } as never);
+    const cards = (await runtime.models()).filter((card) => card.id === 'gpt-6-astra');
+    const result = mapCardsToBatchUpdate(cards, []);
+    expect(result.items[0]).toMatchObject({
+      enabled: false,
+      id: 'gpt-6-astra',
+      settings: { chatgptResponsesLite: true, extendParams: ['gpt5_6ReasoningEffort'] },
+    });
+    expect(AiModelSettingsSchema.parse(result.items[0].settings)).toHaveProperty(
+      'chatgptResponsesLite',
+      true,
+    );
+    const existing = draftModel({
+      enabled: true,
+      id: 'astra-id',
+      modelKey: 'gpt-6-astra',
+      settings: { chatgptResponsesLite: false },
+    });
+    const updated = mapCardsToBatchUpdate(cards, [existing]);
+    expect(updated.items[0]).not.toHaveProperty('enabled');
+    expect(updated.items[0].settings).toHaveProperty('chatgptResponsesLite', true);
+  });
+
   it('clears stored abilities when the live Codex payload reports every capability as false', async () => {
     const cards = await listThroughChatGPT([
       {

@@ -16,6 +16,7 @@ export type SystemAgentReasoningEffort =
   | 'high'
   | 'xhigh'
   | 'max'
+  | 'ultra'
   | 'enabled';
 
 export interface SystemAgentItem {

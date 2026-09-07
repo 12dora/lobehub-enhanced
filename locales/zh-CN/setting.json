@@ -701,6 +701,7 @@
   "serviceModel.reasoningEffort.options.no_think": "不思考",
   "serviceModel.reasoningEffort.options.none": "无",
   "serviceModel.reasoningEffort.options.standard": "标准",
+  "serviceModel.reasoningEffort.options.ultra": "极致",
   "serviceModel.reasoningEffort.options.xhigh": "极高",
   "settingAgent.avatar.sizeExceeded": "图片大小超过 1MB 限制，请选择更小的图片",
   "settingAgent.avatar.title": "助理头像",

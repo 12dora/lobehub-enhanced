@@ -205,7 +205,7 @@ export const GenerateObjectEffortParamsSchema = z.object({
   chatgptWebThinkingEffort: z.enum(['standard', 'extended', 'max']).optional(),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
   reasoning_effort: z
-    .enum(['none', 'no_think', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+    .enum(['none', 'no_think', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     .optional(),
   thinking: z
     .object({
@@ -220,7 +220,8 @@ export interface GenerateObjectEffortParams {
   chatgptWebProThinkingEffort?: 'standard';
   chatgptWebThinkingEffort?: 'standard' | 'extended' | 'max';
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-  reasoning_effort?: 'none' | 'no_think' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  reasoning_effort?:
+    'none' | 'no_think' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   thinking?: {
     budget_tokens?: number;
     type?: 'enabled' | 'disabled' | 'adaptive';

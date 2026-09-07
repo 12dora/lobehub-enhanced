@@ -31,6 +31,7 @@ export const SYSTEM_AGENT_REASONING_EFFORT_LEVELS = [
   'high',
   'xhigh',
   'max',
+  'ultra',
   'enabled',
 ] as const satisfies readonly SystemAgentReasoningEffort[];
 

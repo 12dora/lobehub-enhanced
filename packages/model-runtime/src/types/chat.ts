@@ -235,7 +235,8 @@ export interface ChatStreamPayload {
     mode?: 'standard' | 'pro';
     summary?: string;
   };
-  reasoning_effort?: 'none' | 'no_think' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  reasoning_effort?:
+    'none' | 'no_think' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   response_format?: ChatResponseFormat;
   responseMode?: 'stream' | 'json';
   /**
