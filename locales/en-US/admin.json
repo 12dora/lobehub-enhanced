@@ -2844,6 +2844,7 @@
   "skillCatalog.editor.unsaved.leave": "Leave without saving",
   "skillCatalog.editor.unsaved.stay": "Keep editing",
   "skillCatalog.editor.unsaved.title": "Unsaved skill changes",
+  "skillCatalog.enabledSwitch.tooltip": "Disabled skills are removed from the catalog for every user",
   "skillCatalog.errors.generic": "The skill action failed. Your input has been kept.",
   "skillCatalog.form.allowBuiltinOverride": "Allow explicit built-in key override",
   "skillCatalog.form.builtinOverrideWarning": "Overriding a built-in key is high risk and requires administrator re-authentication.",

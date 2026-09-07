@@ -1,5 +1,9 @@
 import { withAdminReauthRetry } from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
 import { lambdaClient } from '@/libs/trpc/client';
+import type {
+  AdminSkillSetEnabledInput,
+  AdminSkillSetEnabledOutput,
+} from '@/server/enterprise/contracts/skillCatalog';
 
 import type {
   AdminSkillApplyImmediateInput,
@@ -81,6 +85,14 @@ class AdminSkillsService {
 
   rollback = async (input: AdminSkillRollbackInput): Promise<AdminSkillPublicationOutput> =>
     lambdaClient.admin.skills.rollback.mutate(input);
+
+  /**
+   * Org-wide enable/disable for one catalog skill, keyed by `skillKey` so a
+   * code-bundled builtin can be toggled before it has a row (the server
+   * materializes the override). Idempotent; distribution is left untouched.
+   */
+  setEnabled = async (input: AdminSkillSetEnabledInput): Promise<AdminSkillSetEnabledOutput> =>
+    withToastAndReauth(() => lambdaClient.admin.skills.setEnabled.mutate(input));
 
   updateDraft = async (input: AdminSkillUpdateDraftInput): Promise<AdminSkillMutationOutput> =>
     lambdaClient.admin.skills.updateDraft.mutate(input);

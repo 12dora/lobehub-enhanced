@@ -19,18 +19,34 @@ import { ActivatorExecutor } from '@lobechat/builtin-tool-activator/executor';
 import { SkillsExecutionRuntime } from '@lobechat/builtin-tool-skills/executionRuntime';
 import type { BuiltinToolContext } from '@lobechat/types';
 
-import { filterBuiltinSkills } from '@/helpers/skillFilters';
+import { filterBuiltinSkills, withDisabledSkillGuard } from '@/helpers/skillFilters';
 import { createClientSkillRuntimeService } from '@/services/platformSkillRuntime';
 import { getToolStoreState } from '@/store/tool';
+import { builtinToolSelectors } from '@/store/tool/selectors';
 import { toolSelectors } from '@/store/tool/selectors/tool';
 import { LobehubSkillStatus } from '@/store/tool/slices/lobehubSkillStore';
 
 const createService = (ctx: BuiltinToolContext): ActivatorRuntimeService => ({
-  activateSkill: (args) =>
-    new SkillsExecutionRuntime({
-      builtinSkills: ctx.platformSkillSnapshot ? [] : filterBuiltinSkills(builtinSkills),
-      service: createClientSkillRuntimeService(ctx.platformSkillSnapshot),
-    }).activateSkill(args),
+  activateSkill: (args) => {
+    // The activator shares the skills runtime, so it must apply the same
+    // user-scope disable set — otherwise activateSkill by name would bypass it.
+    const disabledSkillIds = builtinToolSelectors.userDisabledSkillIds(
+      getToolStoreState(),
+      ctx.platformSkillSnapshot?.mandatorySkillIds,
+    );
+
+    return new SkillsExecutionRuntime({
+      builtinSkills: ctx.platformSkillSnapshot
+        ? []
+        : filterBuiltinSkills(builtinSkills).filter(
+            (skill) => !disabledSkillIds.has(skill.identifier),
+          ),
+      service: withDisabledSkillGuard(
+        createClientSkillRuntimeService(ctx.platformSkillSnapshot),
+        disabledSkillIds,
+      ),
+    }).activateSkill(args);
+  },
   getActivatedToolIds: () => [],
   getToolManifests: async (identifiers: string[]): Promise<ToolManifestInfo[]> => {
     const s = getToolStoreState();

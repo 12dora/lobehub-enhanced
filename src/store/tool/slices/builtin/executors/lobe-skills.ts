@@ -9,17 +9,33 @@ import { SkillsExecutionRuntime } from '@lobechat/builtin-tool-skills/executionR
 import { SkillsExecutor } from '@lobechat/builtin-tool-skills/executor';
 import type { BuiltinToolContext } from '@lobechat/types';
 
-import { filterBuiltinSkills } from '@/helpers/skillFilters';
+import { filterBuiltinSkills, withDisabledSkillGuard } from '@/helpers/skillFilters';
 import { cloudSandboxService } from '@/services/cloudSandbox';
 import { createClientSkillRuntimeService } from '@/services/platformSkillRuntime';
 import { useChatStore } from '@/store/chat';
+import { getToolStoreState } from '@/store/tool';
+import { builtinToolSelectors } from '@/store/tool/selectors';
 
 // Create runtime with client-side service
-const createRuntime = (ctx: BuiltinToolContext) =>
-  new SkillsExecutionRuntime({
-    builtinSkills: ctx.platformSkillSnapshot ? [] : filterBuiltinSkills(builtinSkills),
+const createRuntime = (ctx: BuiltinToolContext) => {
+  // Skills the user disabled must be invisible to the activate pool AND to the
+  // by-name lookup, so a model that already knows the name cannot activate them.
+  const disabledSkillIds = builtinToolSelectors.userDisabledSkillIds(
+    getToolStoreState(),
+    ctx.platformSkillSnapshot?.mandatorySkillIds,
+  );
+
+  return new SkillsExecutionRuntime({
+    builtinSkills: ctx.platformSkillSnapshot
+      ? []
+      : filterBuiltinSkills(builtinSkills).filter(
+          (skill) => !disabledSkillIds.has(skill.identifier),
+        ),
     service: {
-      ...createClientSkillRuntimeService(ctx.platformSkillSnapshot),
+      ...withDisabledSkillGuard(
+        createClientSkillRuntimeService(ctx.platformSkillSnapshot),
+        disabledSkillIds,
+      ),
       execScript: async (command, options) => {
         const { activatedSkills, description } = options;
 
@@ -159,6 +175,7 @@ const createRuntime = (ctx: BuiltinToolContext) =>
       },
     },
   });
+};
 
 // Create executor instance with the runtime
 export const skillsExecutor = new SkillsExecutor(createRuntime);

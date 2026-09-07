@@ -18,7 +18,14 @@ vi.mock('zod', async (importOriginal) => {
 
 const mocks = vi.hoisted(() => {
   const toolState = {
-    builtinSkills: [],
+    agentSkills: [] as Array<{ id: string; identifier: string; name: string }>,
+    builtinSkills: [] as Array<{
+      content?: string;
+      description?: string;
+      identifier: string;
+      name: string;
+    }>,
+    disabledSkillIdentifiers: [] as string[],
     checkLobehubSkillStatus: vi.fn(),
     composioServers: [] as Array<{ identifier: string; status: string }>,
     connectors: [] as Array<{ id: string; identifier: string }>,
@@ -145,6 +152,12 @@ vi.mock('@/features/AgentSkillDetail', () => ({
   default: () => <div data-testid="agent-skill-detail" />,
 }));
 
+vi.mock('@/features/SkillEnabledSwitch', () => ({
+  default: ({ identifier, kind }: { identifier: string; kind: 'builtin' | 'skill' }) => (
+    <div data-identifier={identifier} data-kind={kind} data-testid="skill-enabled-switch" />
+  ),
+}));
+
 vi.mock('@/features/Connectors', () => ({
   ConnectorDetail: ({
     connectorId,
@@ -179,6 +192,12 @@ vi.mock('@/store/tool/selectors', () => ({
       (identifier: string) =>
       (state: typeof mocks.toolState): boolean =>
         state.installedBuiltinIds.includes(identifier),
+    isSkillEnabled:
+      (identifier: string, kind: 'builtin' | 'skill') =>
+      (state: typeof mocks.toolState): boolean =>
+        kind === 'builtin'
+          ? state.installedBuiltinIds.includes(identifier)
+          : !state.disabledSkillIdentifiers.includes(identifier),
   },
   composioStoreSelectors: {
     getServerByIdentifier:
@@ -231,10 +250,46 @@ describe('SkillDetail', () => {
     vi.clearAllMocks();
     mocks.permissions.create_content = true;
     mocks.permissions.edit_own_content = true;
+    mocks.toolState.agentSkills = [];
+    mocks.toolState.builtinSkills = [];
     mocks.toolState.composioServers = [];
     mocks.toolState.connectors = [];
+    mocks.toolState.disabledSkillIdentifiers = [];
     mocks.toolState.installedBuiltinIds = [];
     mocks.toolState.lobehubSkillServers = [];
+  });
+
+  it('renders the enable switch instead of install/uninstall for a builtin skill', () => {
+    mocks.toolState.builtinSkills = [
+      {
+        content: '# Artifacts',
+        description: 'Build UI',
+        identifier: 'lobe-artifacts',
+        name: 'Artifacts',
+      },
+    ];
+
+    render(<SkillDetail identifier="lobe-artifacts" type="builtin-skill" />);
+
+    const toggle = screen.getByTestId('skill-enabled-switch');
+    expect(toggle).toHaveAttribute('data-identifier', 'lobe-artifacts');
+    expect(toggle).toHaveAttribute('data-kind', 'builtin');
+    expect(screen.queryByRole('button', { name: 'store.actions.install' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'store.actions.uninstall' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the uninstall action and adds the enable switch for an agent skill', () => {
+    mocks.toolState.agentSkills = [{ id: 'db-1', identifier: 'my-skill', name: 'My Skill' }];
+
+    render(<SkillDetail identifier="db-1" type="agent-skill" />);
+
+    // The row is addressed by id; the switch must bind to the skill identifier.
+    const toggle = screen.getByTestId('skill-enabled-switch');
+    expect(toggle).toHaveAttribute('data-identifier', 'my-skill');
+    expect(toggle).toHaveAttribute('data-kind', 'skill');
+    expect(screen.getByRole('button', { name: 'store.actions.uninstall' })).toBeInTheDocument();
   });
 
   it('shows a disconnect action for a connected LobeHub connector without configurable tools', async () => {

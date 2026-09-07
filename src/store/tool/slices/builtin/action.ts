@@ -21,14 +21,26 @@ const n = setNamespace('builtinTool');
 const log = debug('lobe-store:builtin-tool');
 
 /**
- * Minimal view of `settings.tool` covering just the builtin-tool install slots.
- * Typed locally so the helpers accept the loosened shape returned by
- * `getUserState()` while still spreading the rest of `tool` through at runtime.
+ * Minimal view of `settings.tool` covering the two skill disable slots: the
+ * builtin-tool install lists and the disabled-skill identifier lists. Typed
+ * locally so the helpers accept the loosened shape returned by `getUserState()`
+ * while still spreading the rest of `tool` through at runtime.
  */
 interface UninstalledBuiltinToolsScope {
+  disabledSkillIdentifiers?: string[];
+  disabledSkillIdentifiersByWorkspace?: Record<string, string[] | undefined>;
   uninstalledBuiltinTools?: string[];
   uninstalledBuiltinToolsByWorkspace?: Record<string, string[] | undefined>;
 }
+
+/**
+ * Which persistence slot a skill toggle writes to.
+ *
+ * - `builtin`: bundled builtin skills and builtin tools → `uninstalledBuiltinTools`
+ * - `skill`: installed market/user skills and platform catalog skills →
+ *   `disabledSkillIdentifiers`
+ */
+export type SkillEnabledKind = 'builtin' | 'skill';
 
 /**
  * Resolve the uninstalled-builtin-tools list for the active scope.
@@ -71,6 +83,35 @@ const buildUninstalledToolsUpdate = <T extends UninstalledBuiltinToolsScope>(
         },
       }
     : { ...tool, uninstalledBuiltinTools: nextUninstalled };
+
+/**
+ * Resolve the disabled-skill identifier list for the active scope. Mirrors
+ * {@link resolveUninstalledBuiltinTools}, except that "never configured" means
+ * an empty list in both scopes (no default seed exists for skills).
+ */
+const resolveDisabledSkillIdentifiers = (
+  tool: UninstalledBuiltinToolsScope | undefined,
+  workspaceId: string | null,
+): string[] =>
+  (workspaceId
+    ? tool?.disabledSkillIdentifiersByWorkspace?.[workspaceId]
+    : tool?.disabledSkillIdentifiers) ?? [];
+
+/** Counterpart of {@link buildUninstalledToolsUpdate} for the disabled-skill list. */
+const buildDisabledSkillsUpdate = <T extends UninstalledBuiltinToolsScope>(
+  tool: T | undefined,
+  workspaceId: string | null,
+  nextDisabled: string[],
+) =>
+  workspaceId
+    ? {
+        ...tool,
+        disabledSkillIdentifiersByWorkspace: {
+          ...tool?.disabledSkillIdentifiersByWorkspace,
+          [workspaceId]: nextDisabled,
+        },
+      }
+    : { ...tool, disabledSkillIdentifiers: nextDisabled };
 
 /**
  * Builtin Tool Action Interface
@@ -210,6 +251,63 @@ export class BuiltinToolActionImpl {
   };
 
   /**
+   * Toggle a skill's disabled state for the active scope (personal or
+   * workspace) by writing `disabledSkillIdentifiers` in user settings.
+   *
+   * Same read-then-write discipline as the builtin list: the stored value is
+   * read fresh from the server and the whole `tool` object is written back,
+   * because the server replaces the column wholesale.
+   */
+  #toggleSkillDisabled = async (identifier: string, enabled: boolean): Promise<void> => {
+    const workspaceId = getActiveWorkspaceId();
+
+    const userState = await userService.getUserState();
+    const tool = userState?.settings?.tool;
+    const currentDisabled = resolveDisabledSkillIdentifiers(tool, workspaceId);
+
+    const alreadyDisabled = currentDisabled.includes(identifier);
+    // No-op if the skill is already in the desired state.
+    if (enabled ? !alreadyDisabled : alreadyDisabled) return;
+
+    const nextDisabled = enabled
+      ? currentDisabled.filter((id) => id !== identifier)
+      : [...currentDisabled, identifier];
+
+    // Optimistic update
+    this.#set({ disabledSkillIdentifiers: nextDisabled }, false, n('setSkillEnabled'));
+
+    await userService.updateUserSettings({
+      tool: buildDisabledSkillsUpdate(tool, workspaceId, nextDisabled),
+    });
+
+    // Refresh to ensure consistency
+    await this.refreshUninstalledBuiltinTools();
+  };
+
+  /**
+   * Enable or disable a skill for the signed-in user across every assistant.
+   *
+   * A disabled skill is dropped from the skill pool and cannot be activated by
+   * name — the same runtime effect as uninstalling — but nothing is deleted.
+   */
+  setSkillEnabled = async ({
+    enabled,
+    identifier,
+    kind,
+  }: {
+    enabled: boolean;
+    identifier: string;
+    kind: SkillEnabledKind;
+  }): Promise<void> => {
+    if (kind === 'builtin') {
+      await this.#toggleBuiltinToolInstalled(identifier, enabled);
+      return;
+    }
+
+    await this.#toggleSkillDisabled(identifier, enabled);
+  };
+
+  /**
    * Refresh uninstalled builtin tools from server (active scope)
    */
   refreshUninstalledBuiltinTools = async (): Promise<void> => {
@@ -230,7 +328,15 @@ export class BuiltinToolActionImpl {
       enabled ? toolKeys.uninstalledBuiltins(workspaceId) : null,
       async () => {
         const userState = await userService.getUserState();
-        return resolveUninstalledBuiltinTools(userState?.settings?.tool, workspaceId);
+        const tool = userState?.settings?.tool;
+        // Both disable lists come from the same `settings.tool` payload, so the
+        // sibling skill list is synced here instead of paying for a second read.
+        this.#set(
+          { disabledSkillIdentifiers: resolveDisabledSkillIdentifiers(tool, workspaceId) },
+          false,
+          n('useFetchDisabledSkillIdentifiers'),
+        );
+        return resolveUninstalledBuiltinTools(tool, workspaceId);
       },
       {
         fallbackData: defaultUninstalledBuiltinTools,

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { filterBuiltinSkills, shouldEnableBuiltinSkill } from './skillFilters';
+import {
+  collectDisabledSkillIds,
+  filterBuiltinSkills,
+  shouldEnableBuiltinSkill,
+  withDisabledSkillGuard,
+} from './skillFilters';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -65,5 +70,61 @@ describe('skillFilters', () => {
 
     expect(filtered).toHaveLength(1);
     expect(filtered[0].identifier).toBe('lobe-artifacts');
+  });
+
+  describe('collectDisabledSkillIds', () => {
+    it('unions both user lists', () => {
+      expect([
+        ...collectDisabledSkillIds({
+          disabledSkillIdentifiers: ['my-skill'],
+          uninstalledBuiltinTools: ['lobe-artifacts'],
+        }),
+      ]).toEqual(['lobe-artifacts', 'my-skill']);
+    });
+
+    it('drops mandatory catalog keys, even when a stale entry exists', () => {
+      expect([
+        ...collectDisabledSkillIds({
+          disabledSkillIdentifiers: ['org-skill', 'my-skill'],
+          mandatorySkillIds: ['org-skill'],
+        }),
+      ]).toEqual(['my-skill']);
+    });
+
+    it('returns an empty set when nothing is configured', () => {
+      expect(collectDisabledSkillIds({}).size).toBe(0);
+    });
+  });
+
+  describe('withDisabledSkillGuard', () => {
+    const service = {
+      findAll: async () => ({
+        data: [{ identifier: 'blocked' }, { identifier: 'allowed' }] as any,
+        total: 2,
+      }),
+      findById: async (id: string) =>
+        ({ id, identifier: id === 'x' ? 'blocked' : 'allowed' }) as any,
+      findByName: async (name: string) => ({ identifier: name }) as any,
+      readResource: async () => ({}) as any,
+    };
+
+    it('returns the original service when nothing is disabled', () => {
+      expect(withDisabledSkillGuard(service, new Set())).toBe(service);
+    });
+
+    it('hides disabled skills from every lookup', async () => {
+      const guarded = withDisabledSkillGuard(service, new Set(['blocked']));
+
+      expect(await guarded.findById('x')).toBeUndefined();
+      expect(await guarded.findByName('blocked')).toBeUndefined();
+      expect(await guarded.findById('y')).toMatchObject({ identifier: 'allowed' });
+      expect(await guarded.findAll()).toEqual({ data: [{ identifier: 'allowed' }], total: 1 });
+    });
+
+    it('keeps the extra members of the wrapped service', () => {
+      const guarded = withDisabledSkillGuard(service, new Set(['blocked']));
+
+      expect(typeof guarded.readResource).toBe('function');
+    });
   });
 });

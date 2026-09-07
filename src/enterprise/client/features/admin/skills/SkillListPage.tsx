@@ -4,7 +4,7 @@ import { Alert, Flexbox, Input, Tag, Text } from '@lobehub/ui';
 import { Button, toast } from '@lobehub/ui/base-ui';
 import type { TableColumnsType } from 'antd';
 import { createStaticStyles } from 'antd-style';
-import { memo, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 
@@ -19,6 +19,7 @@ import { deriveSkillPermissions } from './controller';
 import { refreshAdminSkillLists, useFetchAdminSkills } from './hooks/useAdminSkills';
 import { useSkillListQuery } from './hooks/useSkillListQuery';
 import { openCreateSkillModal } from './openCreateSkillModal';
+import { canSetSkillAvailability, SkillAvailabilitySwitch } from './SkillDetailActions';
 import type { AdminSkillListItem } from './types';
 
 const styles = createStaticStyles(({ css }) => ({
@@ -43,7 +44,8 @@ const SkillListPage = memo(() => {
   const { t } = useTranslation('admin');
   const navigate = useNavigate();
   const { authMethod, permissions } = useAdminAccess();
-  const { canCreate, canRead } = deriveSkillPermissions(permissions);
+  const skillPermissions = deriveSkillPermissions(permissions);
+  const { canCreate, canRead } = skillPermissions;
   const {
     cursorStack,
     distribution,
@@ -62,9 +64,31 @@ const SkillListPage = memo(() => {
     status,
   } = useSkillListQuery();
   const [committedCreateId, setCommittedCreateId] = useState<string | null>(null);
+  /** Skill key whose availability write is in flight — only that row's switch locks. */
+  const [enabledPendingKey, setEnabledPendingKey] = useState<string | null>(null);
   const [createRefreshFailed, setCreateRefreshFailed] = useState(false);
   const [createRefreshRetrying, setCreateRefreshRetrying] = useState(false);
   const { data, error, isLoading, mutate } = useFetchAdminSkills(input, canRead);
+
+  /**
+   * Inline org-wide availability write. `setEnabled` publishes on its own, so the
+   * only follow-up is refetching this page plus the shared catalog caches.
+   */
+  const setRowEnabled = useCallback(
+    async (item: AdminSkillListItem, enabled: boolean) => {
+      setEnabledPendingKey(item.skillKey);
+      try {
+        await adminSkillsService.setEnabled({ enabled, skillKey: item.skillKey });
+        await mutate();
+        await refreshAdminSkillLists();
+      } catch {
+        // adminSkillsService.setEnabled toasts the failure; the row is left untouched.
+      } finally {
+        setEnabledPendingKey(null);
+      }
+    },
+    [mutate],
+  );
 
   const columns = useMemo<TableColumnsType<AdminSkillListItem>>(
     () => [
@@ -120,10 +144,19 @@ const SkillListPage = memo(() => {
         dataIndex: 'enabled',
         key: 'enabled',
         title: t('skillCatalog.list.columns.enabled'),
-        render: (value: boolean) => (
-          <Tag color={value ? 'success' : 'default'}>
-            {t(`skillCatalog.boolean.${value}` as never)}
-          </Tag>
+        // Archived skills are already out of the catalog; their switch reads off
+        // and stays locked so re-enabling goes through restore, not this column.
+        render: (value: boolean, item) => (
+          <SkillAvailabilitySwitch
+            checked={item.status !== 'archived' && value !== false}
+            loading={enabledPendingKey === item.skillKey}
+            disabled={
+              !canSetSkillAvailability(item.skillKey, skillPermissions) ||
+              item.status === 'archived' ||
+              enabledPendingKey === item.skillKey
+            }
+            onChange={(next) => void setRowEnabled(item, next)}
+          />
         ),
         ...enumColumnFilter({
           options: [
@@ -139,7 +172,7 @@ const SkillListPage = memo(() => {
         title: t('skillCatalog.list.columns.revision'),
       },
     ],
-    [distribution, enabledParam, status, t],
+    [distribution, enabledPendingKey, enabledParam, setRowEnabled, skillPermissions, status, t],
   );
 
   const retryCreatedRefresh = async () => {

@@ -1,22 +1,27 @@
 'use client';
 
 import { Flexbox, Text } from '@lobehub/ui';
-import { memo, type ReactNode } from 'react';
+import { memo, type ReactNode, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useSearchParams } from 'react-router';
 
 import AsyncBoundary from '@/components/AsyncBoundary';
 import { useAdminAccess } from '@/enterprise/client/providers/AdminAccessProvider';
+import { adminSkillsService } from '@/enterprise/client/services/adminSkills';
 
 import AdminPageTemplate from '../primitives/AdminPageTemplate';
 import RevisionBanner from '../primitives/RevisionBanner';
 import StatusBadge from '../primitives/StatusBadge';
 import { deriveSkillPermissions, isSkillIdentityDirty } from './controller';
 import { DependentsSection } from './DependentsSection';
-import { useFetchAdminSkill, useFetchAdminSkillVersion } from './hooks/useAdminSkills';
+import {
+  refreshAdminSkillLists,
+  useFetchAdminSkill,
+  useFetchAdminSkillVersion,
+} from './hooks/useAdminSkills';
 import { useSkillActions } from './hooks/useSkillActions';
 import { useSkillEditor } from './hooks/useSkillEditor';
-import SkillDetailActions from './SkillDetailActions';
+import SkillDetailActions, { canSetSkillAvailability } from './SkillDetailActions';
 import SkillEditorBanners from './SkillEditorBanners';
 import SkillIdentityEditor from './SkillIdentityEditor';
 import type { AdminSkillGetOutput } from './types';
@@ -61,6 +66,27 @@ const DetailContent = memo<{
     selectedVersionId,
   });
   const identityDirty = isSkillIdentityDirty(editor.draft, editor.baseDraft);
+  const [enabledPending, setEnabledPending] = useState(false);
+  const isArchived = data.draft.status === 'archived';
+  const canSetAvailability = canSetSkillAvailability(data.draft.skillKey, permission);
+
+  /**
+   * Org-wide availability is a property of the published row, not of the draft
+   * form, so it writes through `setEnabled` and then refetches — the identity
+   * editor rehydrates from the fresh snapshot instead of racing it.
+   */
+  const setEnabled = async (enabled: boolean) => {
+    setEnabledPending(true);
+    try {
+      await adminSkillsService.setEnabled({ enabled, skillKey: data.draft.skillKey });
+      await mutate();
+      await refreshAdminSkillLists();
+    } catch {
+      // adminSkillsService.setEnabled toasts the failure; the row is left untouched.
+    } finally {
+      setEnabledPending(false);
+    }
+  };
 
   const selectVersion = (versionId: string) => {
     const next = new URLSearchParams(searchParams);
@@ -84,14 +110,20 @@ const DetailContent = memo<{
           canPublishSelected={actions.canPublishSelected}
           canUpdate={permission.canUpdate}
           dirty={editor.dirty}
+          enabled={!isArchived && data.draft.enabled}
+          enabledPending={enabledPending}
           identityDirty={identityDirty}
-          isArchived={data.draft.status === 'archived'}
+          isArchived={isArchived}
           saveFailed={editor.saveState === 'failed'}
           selectedVersionId={selectedVersionId}
+          enabledDisabled={
+            !canSetAvailability || isArchived || actionsDisabled || editor.dirty || enabledPending
+          }
           onArchive={actions.openArchive}
           onCreateVersion={actions.openCreateVersion}
           onPublish={actions.openPublish}
           onSaveIdentity={actions.openSaveIdentity}
+          onSetEnabled={(next) => void setEnabled(next)}
           onValidate={actions.openValidate}
         />
       }

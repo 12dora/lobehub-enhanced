@@ -1,7 +1,7 @@
 'use client';
 
 import { builtinSkills as bundledBuiltinSkills } from '@lobechat/builtin-skills';
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { adminSkillsService } from '@/enterprise/client/services/adminSkills';
 import type { AdminSkillDistribution, AdminToolScopeCapabilities } from '@/features/AdminToolScope';
@@ -20,9 +20,9 @@ interface UseBuiltinSkillDistributionParams {
 }
 
 /**
- * Builtin skill org distribution: a code-bundled builtin has no row until the
- * org makes its first decision about it, so reads fall back to the bundled
- * default and the first write materializes an override row.
+ * Org-wide skill availability + builtin distribution. A code-bundled builtin has
+ * no row until the org makes its first decision about it, so reads fall back to
+ * the bundled default and the first write materializes an override row.
  */
 export const useBuiltinSkillDistribution = ({
   capabilities,
@@ -32,15 +32,30 @@ export const useBuiltinSkillDistribution = ({
 }: UseBuiltinSkillDistributionParams) => {
   const { notifyApplyOutcome, notifySkillFailure, notifyUnlessAlreadyToasted } = notifications;
 
-  const isBuiltinSkillEnabled = useCallback(
-    (identifier: string) => {
-      const row = skillRowsByKey.get(identifier);
+  const bundledBuiltinKeys = useMemo(
+    () => new Set(bundledBuiltinSkills.map((skill) => skill.identifier)),
+    [],
+  );
+
+  /**
+   * Org-wide availability of a catalog skill. Availability and distribution are
+   * separate axes: `distribution: 'optional'` still ships the skill, it just is
+   * not pinned onto every assistant, so it must not read as disabled.
+   */
+  const isSkillKeyEnabled = useCallback(
+    (skillKey: string) => {
+      const row = skillRowsByKey.get(skillKey);
       if (!row) return true;
-      if (row.status === 'archived') return false;
-      return row.enabled !== false && row.distribution !== 'optional';
+      return row.enabled !== false && row.status !== 'archived';
     },
     [skillRowsByKey],
   );
+
+  /** Bundled builtin skills have no row until the org disables them. */
+  const isBuiltinSkillEnabled = isSkillKeyEnabled;
+
+  /** Uploaded org catalog skills always have a row; the fallback never fires. */
+  const isOrgSkillEnabled = isSkillKeyEnabled;
 
   const getBuiltinSkillDistribution = useCallback(
     (identifier: string): AdminSkillDistribution => {
@@ -115,24 +130,64 @@ export const useBuiltinSkillDistribution = ({
     ],
   );
 
-  const toggleBuiltinSkill = useCallback(
-    async (identifier: string, enabled: boolean) => {
+  /**
+   * Org-wide availability write. Materializing a builtin override row is the
+   * server's job (setEnabled is keyed by skillKey), so the only client-side
+   * gate is the permission the write will require — and the server selects that
+   * permission from the key alone (bundled builtin ⇒ CREATE, otherwise UPDATE),
+   * so mirroring row presence here would disagree with it.
+   */
+  const setSkillKeyEnabled = useCallback(
+    async (skillKey: string, enabled: boolean) => {
+      const permitted = bundledBuiltinKeys.has(skillKey)
+        ? capabilities.canCreateSkill
+        : capabilities.canUpdateSkill;
+      if (!permitted) throw new Error(LOCAL_ERROR.PERMISSION);
+      await adminSkillsService.setEnabled({ enabled, skillKey });
+      notifyApplyOutcome({ publishError: null, published: true });
+      retry();
+    },
+    [
+      bundledBuiltinKeys,
+      capabilities.canCreateSkill,
+      capabilities.canUpdateSkill,
+      notifyApplyOutcome,
+      retry,
+    ],
+  );
+
+  const withSkillFailureToast = useCallback(
+    async (run: () => Promise<void>) => {
       try {
-        await setBuiltinSkillDistribution(identifier, enabled ? 'default' : 'optional');
+        await run();
       } catch (err) {
-        // applyImmediate already toasts hard failures; cover pre-read + local denials.
+        // setEnabled already toasts hard failures; cover local denials.
         notifyUnlessAlreadyToasted(notifySkillFailure, err);
         throw err;
       }
     },
-    [notifySkillFailure, notifyUnlessAlreadyToasted, setBuiltinSkillDistribution],
+    [notifySkillFailure, notifyUnlessAlreadyToasted],
+  );
+
+  const toggleBuiltinSkill = useCallback(
+    (identifier: string, enabled: boolean) =>
+      withSkillFailureToast(() => setSkillKeyEnabled(identifier, enabled)),
+    [setSkillKeyEnabled, withSkillFailureToast],
+  );
+
+  const setOrgSkillEnabled = useCallback(
+    (skillKey: string, enabled: boolean) =>
+      withSkillFailureToast(() => setSkillKeyEnabled(skillKey, enabled)),
+    [setSkillKeyEnabled, withSkillFailureToast],
   );
 
   return {
     canSetBuiltinSkillDistribution,
     getBuiltinSkillDistribution,
     isBuiltinSkillEnabled,
+    isOrgSkillEnabled,
     setBuiltinSkillDistribution,
+    setOrgSkillEnabled,
     toggleBuiltinSkill,
   };
 };

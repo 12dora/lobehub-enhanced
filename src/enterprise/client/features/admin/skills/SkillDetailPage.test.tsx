@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   detailMutate: vi.fn(),
   editor: vi.fn(),
   permissions: [] as string[],
+  refreshLists: vi.fn(),
+  setEnabled: vi.fn(),
   skillActions: vi.fn(),
   versionDetailData: undefined as any,
   versionDetailError: new Error('version offline') as unknown,
@@ -55,7 +57,7 @@ const detail = {
     revision: 2,
     skillKey: 'skill.one',
     source: 'uploaded' as const,
-    status: 'published' as const,
+    status: 'published' as 'archived' | 'draft' | 'published',
   },
   draftToken: 'b'.repeat(64),
   latestVersion: summary,
@@ -92,7 +94,12 @@ vi.mock('@/features/NavPanel/components/SkeletonList', () => ({
   default: () => <div>skeleton-list</div>,
 }));
 
+vi.mock('@/enterprise/client/services/adminSkills', () => ({
+  adminSkillsService: { setEnabled: mocks.setEnabled },
+}));
+
 vi.mock('./hooks/useAdminSkills', () => ({
+  refreshAdminSkillLists: mocks.refreshLists,
   useFetchAdminSkill: () => ({
     data: detail,
     error: undefined,
@@ -154,6 +161,16 @@ vi.mock('@lobehub/ui', () => ({
 
 vi.mock('@lobehub/ui/base-ui', () => ({
   Button: ({ children, type: _type, ...props }: any) => <button {...props}>{children}</button>,
+  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Switch: ({ checked, disabled, loading: _loading, onChange, size: _size, title }: any) => (
+    <button
+      aria-checked={Boolean(checked)}
+      aria-label={title}
+      disabled={disabled}
+      role="switch"
+      onClick={() => onChange?.(!checked)}
+    />
+  ),
 }));
 
 vi.mock('../primitives/AdminPageTemplate', () => ({
@@ -203,6 +220,12 @@ describe('SkillDetailPage independent async states', () => {
       retryRefresh: vi.fn(),
     });
     mocks.permissions = [PLATFORM_PERMISSIONS.SKILL_READ];
+    mocks.refreshLists.mockReset();
+    mocks.refreshLists.mockResolvedValue(undefined);
+    mocks.setEnabled.mockReset();
+    mocks.setEnabled.mockResolvedValue({ enabled: false, skillKey: 'skill.one' });
+    detail.draft.enabled = true;
+    detail.draft.status = 'published';
     mocks.versionDetailMutate.mockReset();
     mocks.versionDetailData = undefined;
     mocks.versionDetailError = new Error('version offline');
@@ -546,5 +569,80 @@ describe('SkillDetailPage independent async states', () => {
       </MemoryRouter>,
     );
     expect(screen.getByText('skillCatalog.actions.save.retry')).toHaveProperty('disabled', true);
+  });
+
+  describe('org-wide availability switch', () => {
+    const renderPage = () =>
+      render(
+        <MemoryRouter initialEntries={['/admin/skills/s1']}>
+          <Routes>
+            <Route element={<SkillDetailPage />} path="/admin/skills/:id" />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+    it('writes setEnabled and refetches the row instead of touching the draft form', async () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      renderPage();
+
+      const availability = screen.getByRole('switch');
+      expect(availability.getAttribute('aria-checked')).toBe('true');
+
+      fireEvent.click(availability);
+
+      await waitFor(() =>
+        expect(mocks.setEnabled).toHaveBeenCalledWith({ enabled: false, skillKey: 'skill.one' }),
+      );
+      await waitFor(() => expect(mocks.detailMutate).toHaveBeenCalled());
+      expect(mocks.refreshLists).toHaveBeenCalled();
+    });
+
+    it('locks the switch while the identity draft is dirty so the two do not fight', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      mocks.editor.mockReturnValue({
+        actionError: null,
+        baseDraft: null,
+        conflict: false,
+        dirty: true,
+        draft: null,
+        persistenceStatus: 'saved',
+        rebaseConflicts: [],
+        saveState: 'idle',
+      });
+      renderPage();
+
+      expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+    });
+
+    it('renders read-only without both the update and publish permissions', () => {
+      mocks.permissions = [PLATFORM_PERMISSIONS.SKILL_READ, PLATFORM_PERMISSIONS.SKILL_UPDATE];
+      renderPage();
+
+      // setEnabled always publishes, so UPDATE alone is not enough.
+      expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+      expect(mocks.setEnabled).not.toHaveBeenCalled();
+    });
+
+    it('shows archived skills as off and locked', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      detail.draft.status = 'archived';
+      renderPage();
+
+      const availability = screen.getByRole('switch');
+      expect(availability.getAttribute('aria-checked')).toBe('false');
+      expect(availability).toHaveProperty('disabled', true);
+    });
   });
 });

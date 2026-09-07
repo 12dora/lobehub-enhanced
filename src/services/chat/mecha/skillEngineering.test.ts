@@ -232,6 +232,27 @@ describe('resolveClientSkills', () => {
       expect(findSkill(result.skills, 'disabled-skill')).toBeUndefined();
       expect(findSkill(result.skills, 'enabled-skill')).toBeDefined();
     });
+
+    it('drops skills the user disabled in settings, with no per-agent disable', async () => {
+      setToolState({
+        agentSkills: [
+          { description: '', id: 'db-1', identifier: 'user-disabled', name: 'User Disabled' },
+          { description: '', id: 'db-2', identifier: 'enabled-skill', name: 'Enabled' },
+        ],
+        builtinSkills: [
+          { content: 'legacy', description: '', identifier: 'artifacts', name: 'Artifacts' },
+        ],
+        disabledSkillIdentifiers: ['user-disabled'],
+        // Bundled builtin skills keep using the uninstalled list.
+        uninstalledBuiltinTools: ['artifacts'],
+      });
+
+      const result = await resolveClientSkills(['artifacts', 'user-disabled']);
+
+      expect(findSkill(result.skills, 'user-disabled')).toBeUndefined();
+      expect(findSkill(result.skills, 'artifacts')).toBeUndefined();
+      expect(findSkill(result.skills, 'enabled-skill')).toBeDefined();
+    });
   });
 
   describe('managed Published Catalog', () => {
@@ -336,6 +357,35 @@ describe('resolveClientSkills', () => {
         content: 'mandatory body',
       });
       expect(result.platformCatalog?.mandatorySkillIds).toEqual(['mandatory']);
+    });
+
+    it('ignores a user disable entry for a mandatory catalog skill', async () => {
+      setToolState({
+        disabledSkillIdentifiers: ['mandatory', 'default'],
+        platformSkillCatalog: {
+          revision: 'catalog-1',
+          skills: [catalogSkill('mandatory', 'mandatory'), catalogSkill('default', 'default')],
+        },
+        platformSkillRuntimeStatus: 'ready',
+      });
+      mockedResolvePlatformPinned.mockImplementation(
+        async (ref) =>
+          ({
+            checksum: ref.checksum,
+            content: `${ref.skillKey} body`,
+            description: `${ref.skillKey} description`,
+            identifier: ref.skillKey,
+            name: ref.skillKey,
+            resources: [],
+            version: ref.version,
+          }) as any,
+      );
+
+      const result = await resolveClientSkills([]);
+
+      // Mandatory distribution wins over the stale user entry; 'default' is
+      // disabled by the user and drops out of the pool.
+      expect(result.skills.map((skill) => skill.identifier)).toEqual(['mandatory']);
     });
 
     it('bounds concurrent resolvePlatformPinned calls and stays linear on a large catalog', async () => {

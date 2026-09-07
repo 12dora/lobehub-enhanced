@@ -77,6 +77,8 @@ export interface AdminToolScope {
    * editor renders read-only in the admin scope.
    */
   isConnectorReadOnly: (connector: ConnectorWithTools) => boolean;
+  /** Uploaded org catalog skill org-wide availability, keyed by skill key. */
+  isOrgSkillEnabled: (skillKey: string) => boolean;
   listError?: unknown;
   listLoading: boolean;
   /** Org catalog skills mapped into the user SkillListItem shape (custom skills section). */
@@ -87,6 +89,11 @@ export interface AdminToolScope {
     identifier: string,
     distribution: AdminSkillDistribution,
   ) => Promise<void>;
+  /**
+   * Enable/disable an uploaded org catalog skill org-wide. Distribution is a
+   * separate axis and is left untouched.
+   */
+  setOrgSkillEnabled: (skillKey: string, enabled: boolean) => Promise<void>;
   /** CustomConnectorModal submit → platform connector applyImmediate. */
   submitCustomConnector: (values: {
     auth?: { clientId?: string; clientSecret?: string; token?: string; type?: string };
@@ -94,6 +101,7 @@ export interface AdminToolScope {
     serverUrl?: string;
     transport: 'http' | 'stdio';
   }) => Promise<void>;
+  /** Enable/disable a bundled builtin skill org-wide (catalog availability). */
   toggleBuiltinSkill: (identifier: string, enabled: boolean) => Promise<void>;
   updateToolPermission: (toolId: string, permission: ConnectorToolPermission) => Promise<void>;
   /**

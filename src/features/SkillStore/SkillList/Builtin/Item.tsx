@@ -1,19 +1,12 @@
 'use client';
 
-import {
-  ActionIcon,
-  Avatar,
-  Block,
-  DropdownMenu,
-  Flexbox,
-  Icon,
-  stopPropagation,
-} from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
-import { MoreVerticalIcon, Plus, Trash2 } from 'lucide-react';
+import { Avatar, Block, Flexbox, stopPropagation } from '@lobehub/ui';
+import { Tag } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useAdminToolScope } from '@/features/AdminToolScope';
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { usePermission } from '@/hooks/usePermission';
 import { useToolStore } from '@/store/tool';
 import { builtinToolSelectors } from '@/store/tool/selectors';
@@ -34,61 +27,30 @@ const Item = memo<ItemProps>(({ avatar, description, identifier, onOpenDetail, t
   const { allowed: canCreate } = usePermission('create_content');
   const { allowed: canEdit } = usePermission('edit_own_content');
 
-  const [installBuiltinTool, uninstallBuiltinTool, isInstalled] = useToolStore((s) => [
-    s.installBuiltinTool,
-    s.uninstallBuiltinTool,
-    builtinToolSelectors.isBuiltinToolInstalled(identifier)(s),
+  // Admin org scope: the switch writes org-wide availability instead of the
+  // signed-in user's settings.
+  const adminScope = useAdminToolScope();
+
+  const [setSkillEnabled, isUserEnabled] = useToolStore((s) => [
+    s.setSkillEnabled,
+    builtinToolSelectors.isSkillEnabled(identifier, 'builtin')(s),
   ]);
 
-  const handleInstall = async () => {
-    if (!canCreate) return;
-    await installBuiltinTool(identifier);
-  };
+  const enabled = adminScope ? adminScope.isBuiltinSkillEnabled(identifier) : isUserEnabled;
+  // Enabling matches install (create), disabling matches uninstall (edit).
+  const canToggle = adminScope
+    ? adminScope.canSetBuiltinSkillDistribution(identifier)
+    : enabled
+      ? canEdit
+      : canCreate;
 
-  const handleUninstall = () => {
-    if (!canEdit) return;
-    confirmModal({
-      cancelText: t('cancel', { ns: 'common' }),
-      content: t('store.actions.confirmUninstall', { ns: 'plugin' }),
-      okButtonProps: { danger: true },
-      okText: t('store.actions.uninstall', { ns: 'plugin' }),
-      onOk: async () => {
-        await uninstallBuiltinTool(identifier);
-      },
-      title: t('store.actions.uninstall', { ns: 'plugin' }),
-    });
-  };
-
-  const renderAction = () => {
-    if (isInstalled) {
-      return (
-        <DropdownMenu
-          nativeButton={false}
-          placement="bottomRight"
-          items={[
-            {
-              danger: true,
-              disabled: !canEdit,
-              icon: <Icon icon={Trash2} />,
-              key: 'uninstall',
-              label: t('store.actions.uninstall', { ns: 'plugin' }),
-              onClick: handleUninstall,
-            },
-          ]}
-        >
-          <ActionIcon disabled={!canEdit} icon={MoreVerticalIcon} />
-        </DropdownMenu>
-      );
+  const handleToggle = async (next: boolean) => {
+    if (!canToggle) return;
+    if (adminScope) {
+      await adminScope.toggleBuiltinSkill(identifier, next);
+      return;
     }
-
-    return (
-      <ActionIcon
-        disabled={!canCreate}
-        icon={Plus}
-        title={t('tools.builtins.install')}
-        onClick={handleInstall}
-      />
-    );
+    await setSkillEnabled({ enabled: next, identifier, kind: 'builtin' });
   };
 
   return (
@@ -105,10 +67,21 @@ const Item = memo<ItemProps>(({ avatar, description, identifier, onOpenDetail, t
     >
       <Avatar avatar={avatar} size={40} style={{ marginInlineEnd: 0 }} />
       <Flexbox flex={1} gap={4} style={{ minWidth: 0, overflow: 'hidden' }}>
-        <span className={styles.title}>{title || identifier}</span>
+        <Flexbox horizontal align={'center'} gap={8} style={{ minWidth: 0 }}>
+          <span className={styles.title}>{title || identifier}</span>
+          {!enabled && <Tag size={'small'}>{t('tools.skillEnabled.off')}</Tag>}
+        </Flexbox>
         {description && <span className={styles.description}>{description}</span>}
       </Flexbox>
-      <div onClick={stopPropagation}>{renderAction()}</div>
+      <div onClick={stopPropagation}>
+        <SkillEnabledSwitch
+          checked={enabled}
+          disabled={!canToggle}
+          identifier={identifier}
+          kind={'builtin'}
+          onToggle={handleToggle}
+        />
+      </div>
     </Block>
   );
 });

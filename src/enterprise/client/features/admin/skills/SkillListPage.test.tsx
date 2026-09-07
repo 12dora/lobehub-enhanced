@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   pageErrorOnCursor: false,
   permissions: [] as string[],
   refreshLists: vi.fn(),
+  setEnabled: vi.fn(),
 }));
 
 vi.mock('antd-style', () => ({
@@ -35,7 +36,7 @@ vi.mock('@/enterprise/client/providers/AdminAccessProvider', () => ({
 }));
 
 vi.mock('@/enterprise/client/services/adminSkills', () => ({
-  adminSkillsService: { create: mocks.create },
+  adminSkillsService: { create: mocks.create, setEnabled: mocks.setEnabled },
 }));
 
 vi.mock('./openCreateSkillModal', () => ({ openCreateSkillModal: mocks.openCreate }));
@@ -75,6 +76,17 @@ vi.mock('@lobehub/ui', () => ({
 
 vi.mock('@lobehub/ui/base-ui', () => ({
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Switch: ({ checked, disabled, loading, onChange, size: _size, title }: any) => (
+    <button
+      aria-busy={Boolean(loading)}
+      aria-checked={Boolean(checked)}
+      aria-label={title}
+      disabled={disabled}
+      role="switch"
+      onClick={() => onChange?.(!checked)}
+    />
+  ),
   Select: ({ 'aria-label': ariaLabel, onChange, options, value }: any) => (
     <select
       aria-label={ariaLabel}
@@ -169,10 +181,18 @@ vi.mock('../primitives/DataTable', () => ({
           {emptyDescription}
         </div>
       );
+    const availability = (columns ?? []).find(
+      (column: { key: string }) => column.key === 'enabled',
+    );
     return (
       <div>
         {toolbar}
         {filters}
+        {dataSource.map((item: any, index: number) => (
+          <div data-testid={`row-${item.id}`} key={item.id}>
+            {availability?.render?.(item.enabled, item, index)}
+          </div>
+        ))}
         <button disabled={!cursorPagination.hasNext} onClick={cursorPagination.onNext}>
           next
         </button>
@@ -191,7 +211,10 @@ const ExternalFilterLink = () => {
 
 describe('SkillListPage', () => {
   beforeEach(() => {
-    mocks.data = { items: [{ id: 's1' }], nextCursor: 'next-cursor' };
+    mocks.data = {
+      items: [{ enabled: true, id: 's1', skillKey: 'skill.one', status: 'published' }],
+      nextCursor: 'next-cursor',
+    };
     mocks.create.mockReset();
     mocks.error = undefined;
     mocks.filterResultMode = null;
@@ -202,6 +225,9 @@ describe('SkillListPage', () => {
     mocks.pageErrorOnCursor = false;
     mocks.permissions = [PLATFORM_PERMISSIONS.SKILL_READ];
     mocks.refreshLists.mockReset();
+    mocks.refreshLists.mockResolvedValue(undefined);
+    mocks.setEnabled.mockReset();
+    mocks.setEnabled.mockResolvedValue({ enabled: false, skillKey: 'skill.one' });
   });
 
   it('invalidates an old cursor before an external URL filter navigation can fetch', async () => {
@@ -396,5 +422,60 @@ describe('SkillListPage', () => {
     fireEvent.click(screen.getByText('skillCatalog.actions.retry'));
     await waitFor(() => expect(mocks.refreshLists).toHaveBeenCalledTimes(2));
     expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+
+  describe('availability column', () => {
+    const renderList = () =>
+      render(
+        <MemoryRouter>
+          <SkillListPage />
+        </MemoryRouter>,
+      );
+
+    it('writes setEnabled inline and refreshes the page plus the shared catalog', async () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      renderList();
+
+      const availability = screen.getByRole('switch');
+      expect(availability.getAttribute('aria-checked')).toBe('true');
+
+      fireEvent.click(availability);
+
+      await waitFor(() =>
+        expect(mocks.setEnabled).toHaveBeenCalledWith({ enabled: false, skillKey: 'skill.one' }),
+      );
+      await waitFor(() => expect(mocks.mutate).toHaveBeenCalled());
+      expect(mocks.refreshLists).toHaveBeenCalled();
+    });
+
+    it('renders read-only without both the update and publish permissions', () => {
+      mocks.permissions = [PLATFORM_PERMISSIONS.SKILL_READ, PLATFORM_PERMISSIONS.SKILL_UPDATE];
+      renderList();
+
+      expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('switch'));
+      expect(mocks.setEnabled).not.toHaveBeenCalled();
+    });
+
+    it('shows archived rows as off and locked even when the row says enabled', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      mocks.data = {
+        items: [{ enabled: true, id: 's1', skillKey: 'skill.one', status: 'archived' }],
+        nextCursor: null,
+      };
+      renderList();
+
+      const availability = screen.getByRole('switch');
+      expect(availability.getAttribute('aria-checked')).toBe('false');
+      expect(availability).toHaveProperty('disabled', true);
+    });
   });
 });

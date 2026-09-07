@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     getVersion: vi.fn(),
     list: vi.fn(),
     parseImportSource: vi.fn(),
+    setEnabled: vi.fn(),
   },
 }));
 
@@ -178,6 +179,7 @@ beforeEach(() => {
   vi.spyOn(toast, 'warning').mockImplementation(() => '' as never);
   vi.spyOn(toast, 'error').mockImplementation(() => '' as never);
   mocks.skills.list.mockResolvedValue({ items: [], nextCursor: null });
+  mocks.skills.setEnabled.mockResolvedValue({ enabled: false, skillKey: 'lobe-artifacts' });
   mocks.connectors.list.mockResolvedValue({ items: [], nextCursor: null });
   mocks.connectors.getBatch.mockResolvedValue({ failedIds: [], items: [] });
   mocks.connectors.getGovernance.mockResolvedValue({
@@ -434,15 +436,114 @@ describe('useAdminGlobalToolScope', () => {
         expect(result.current.getBuiltinSkillDistribution('lobe-artifacts')).toBe('optional'),
       );
 
-      expect(result.current.isBuiltinSkillEnabled('lobe-artifacts')).toBe(false);
+      // `distribution: 'optional'` is not a disable — availability is its own axis.
+      expect(result.current.isBuiltinSkillEnabled('lobe-artifacts')).toBe(true);
       expect(result.current.isBuiltinSkillEnabled('skill.archived')).toBe(false);
       expect(result.current.getBuiltinSkillDistribution('skill.archived')).toBe('optional');
       expect(result.current.isBuiltinSkillEnabled('skill.mandatory')).toBe(true);
       expect(result.current.getBuiltinSkillDistribution('skill.mandatory')).toBe('mandatory');
     });
+
+    it('reports a disabled catalog row as unavailable regardless of distribution', async () => {
+      mocks.skills.list.mockResolvedValue({
+        items: [
+          skillRow({
+            enabled: false,
+            id: 'row-off',
+            skillKey: 'lobe-artifacts',
+            source: 'builtin',
+          }),
+          skillRow({ enabled: false, id: 'row-org-off', skillKey: 'org.skill' }),
+        ],
+        nextCursor: null,
+      });
+
+      const { result } = renderScope('skill');
+      await waitFor(() =>
+        expect(result.current.isBuiltinSkillEnabled('lobe-artifacts')).toBe(false),
+      );
+
+      expect(result.current.getBuiltinSkillDistribution('lobe-artifacts')).toBe('default');
+      expect(result.current.isOrgSkillEnabled('org.skill')).toBe(false);
+    });
   });
 
-  describe('toggleBuiltinSkill', () => {
+  describe('org-wide availability writes', () => {
+    it('toggleBuiltinSkill writes catalog availability, never distribution', async () => {
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalled());
+
+      await act(async () => {
+        await result.current.toggleBuiltinSkill('lobe-artifacts', false);
+      });
+
+      expect(mocks.skills.setEnabled).toHaveBeenCalledWith({
+        enabled: false,
+        skillKey: 'lobe-artifacts',
+      });
+      // Materializing the override row is the server's job — no applyImmediate hop.
+      expect(mocks.skills.applyImmediate).not.toHaveBeenCalled();
+      expect(mocks.skills.get).not.toHaveBeenCalled();
+      // The catalog is refetched so isBuiltinSkillEnabled reflects the write.
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalledTimes(2));
+    });
+
+    it('setOrgSkillEnabled writes the uploaded skill key and refreshes the catalog', async () => {
+      mocks.skills.list.mockResolvedValue({ items: [skillRow()], nextCursor: null });
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(result.current.orgSkills).toHaveLength(1));
+
+      await act(async () => {
+        await result.current.setOrgSkillEnabled('org.skill', false);
+      });
+
+      expect(mocks.skills.setEnabled).toHaveBeenCalledWith({
+        enabled: false,
+        skillKey: 'org.skill',
+      });
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalledTimes(2));
+    });
+
+    it('requires create permission to disable a builtin that has no row yet', async () => {
+      accessMocks.permissions = [
+        'platform_skill:read:all',
+        'platform_skill:update:all',
+        'platform_skill:publish:all',
+      ];
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalled());
+
+      await act(async () => {
+        await expect(result.current.toggleBuiltinSkill('lobe-artifacts', false)).rejects.toThrow(
+          'PLATFORM_PERMISSION_DENIED',
+        );
+      });
+
+      expect(mocks.skills.setEnabled).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith('skillCatalog.errors.generic');
+    });
+
+    it('requires update permission for a skill that already has a row', async () => {
+      accessMocks.permissions = [
+        'platform_skill:read:all',
+        'platform_skill:create:all',
+        'platform_skill:publish:all',
+      ];
+      mocks.skills.list.mockResolvedValue({ items: [skillRow()], nextCursor: null });
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(result.current.orgSkills).toHaveLength(1));
+
+      await act(async () => {
+        await expect(result.current.setOrgSkillEnabled('org.skill', false)).rejects.toThrow(
+          'PLATFORM_PERMISSION_DENIED',
+        );
+      });
+
+      expect(mocks.skills.setEnabled).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setBuiltinSkillDistribution', () => {
     it('materializes a builtin override row (mode create) when no catalog row exists', async () => {
       mocks.skills.applyImmediate.mockResolvedValue({
         draft: { id: 'created-row' },
@@ -454,7 +555,7 @@ describe('useAdminGlobalToolScope', () => {
       await waitFor(() => expect(mocks.skills.list).toHaveBeenCalled());
 
       await act(async () => {
-        await result.current.toggleBuiltinSkill('lobe-artifacts', false);
+        await result.current.setBuiltinSkillDistribution('lobe-artifacts', 'mandatory');
       });
 
       expect(mocks.skills.get).not.toHaveBeenCalled();
@@ -462,7 +563,7 @@ describe('useAdminGlobalToolScope', () => {
       const input = mocks.skills.applyImmediate.mock.calls[0][0];
       expect(input).toMatchObject({
         allowBuiltinOverride: true,
-        distribution: 'optional',
+        distribution: 'mandatory',
         enabled: true,
         mode: 'create',
         skillKey: 'lobe-artifacts',
@@ -505,7 +606,7 @@ describe('useAdminGlobalToolScope', () => {
       );
 
       await act(async () => {
-        await result.current.toggleBuiltinSkill('lobe-artifacts', true);
+        await result.current.setBuiltinSkillDistribution('lobe-artifacts', 'default');
       });
 
       expect(mocks.skills.get).toHaveBeenCalledWith({ id: 'row-artifacts' });

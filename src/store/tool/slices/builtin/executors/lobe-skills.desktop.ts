@@ -10,10 +10,12 @@ import { SkillsExecutor } from '@lobechat/builtin-tool-skills/executor';
 import type { BuiltinToolContext } from '@lobechat/types';
 import debug from 'debug';
 
-import { filterBuiltinSkills } from '@/helpers/skillFilters';
+import { filterBuiltinSkills, withDisabledSkillGuard } from '@/helpers/skillFilters';
 import { desktopSkillRuntimeService } from '@/services/electron/desktopSkillRuntime';
 import { localFileService } from '@/services/electron/localFileService';
 import { createClientSkillRuntimeService } from '@/services/platformSkillRuntime';
+import { getToolStoreState } from '@/store/tool';
+import { builtinToolSelectors } from '@/store/tool/selectors';
 
 const log = debug('lobe-desktop:skills-executor');
 
@@ -48,11 +50,25 @@ export const withDesktopSkillWorkspaceCleanup = async <T>(
   return result as T;
 };
 
-const createRuntime = (ctx: BuiltinToolContext) =>
-  new SkillsExecutionRuntime({
-    builtinSkills: ctx.platformSkillSnapshot ? [] : filterBuiltinSkills(builtinSkills),
+const createRuntime = (ctx: BuiltinToolContext) => {
+  // Same user-scope disable set as the web executor: dropped from the pool and
+  // unresolvable by name.
+  const disabledSkillIds = builtinToolSelectors.userDisabledSkillIds(
+    getToolStoreState(),
+    ctx.platformSkillSnapshot?.mandatorySkillIds,
+  );
+
+  return new SkillsExecutionRuntime({
+    builtinSkills: ctx.platformSkillSnapshot
+      ? []
+      : filterBuiltinSkills(builtinSkills).filter(
+          (skill) => !disabledSkillIds.has(skill.identifier),
+        ),
     service: {
-      ...createClientSkillRuntimeService(ctx.platformSkillSnapshot),
+      ...withDisabledSkillGuard(
+        createClientSkillRuntimeService(ctx.platformSkillSnapshot),
+        disabledSkillIds,
+      ),
       execScript: async (command, options) => {
         const workspace = await desktopSkillRuntimeService.prepareExecutionWorkspace(
           options.activatedSkills,
@@ -95,5 +111,6 @@ const createRuntime = (ctx: BuiltinToolContext) =>
       },
     },
   });
+};
 
 export const skillsExecutor = new SkillsExecutor(createRuntime);

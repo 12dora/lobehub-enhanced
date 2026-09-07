@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import PublishedTime from '@/components/PublishedTime';
 import SkillAvatar from '@/components/SkillAvatar';
 import FileTree, { FileTreeSkeleton } from '@/features/FileTree';
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { useToolStore } from '@/store/tool';
 
 import ContentViewer from './ContentViewer';
@@ -94,6 +95,9 @@ const AgentSkillDetail = memo<AgentSkillDetailProps>(({ skillId, useFetchDetail 
   const { data, isLoading } = (useFetchDetail ?? useFetchAgentSkillDetail)(skillId);
 
   const skillDetail = data?.skillDetail;
+  const identifier: string | undefined = skillDetail?.identifier;
+  // The org catalog datasource (admin panel) has no per-user enabled state.
+  const showEnabledSwitch = !useFetchDetail && Boolean(identifier);
   const resourceTree = data?.resourceTree;
   const contentMap = useMemo(() => buildContentMap(resourceTree), [resourceTree]);
 
@@ -144,7 +148,7 @@ const AgentSkillDetail = memo<AgentSkillDetailProps>(({ skillId, useFetchDetail 
                     template={'MMM DD, YYYY'}
                   />
                 </Flexbox>
-                {(repository || sourceUrl) && (
+                {(showEnabledSwitch || repository || sourceUrl) && (
                   <Flexbox horizontal align={'center'} gap={2} style={{ flexShrink: 0 }}>
                     {repository && (
                       <a href={repository} rel="noreferrer" target={'_blank'}>
@@ -162,6 +166,11 @@ const AgentSkillDetail = memo<AgentSkillDetailProps>(({ skillId, useFetchDetail 
                           title={t('agentSkillDetail.sourceUrl')}
                         />
                       </a>
+                    )}
+                    {showEnabledSwitch && identifier && (
+                      <div style={{ marginInlineStart: 4 }}>
+                        <SkillEnabledSwitch identifier={identifier} kind={'skill'} />
+                      </div>
                     )}
                   </Flexbox>
                 )}

@@ -209,4 +209,56 @@ describe('builtinToolSelectors', () => {
       expect(result.map((item) => item.identifier)).toEqual(['lobe-task', 'tool-1']);
     });
   });
+
+  describe('skill enable/disable', () => {
+    const disabledState = {
+      ...initialState,
+      agentSkills: [
+        {
+          description: 'A user skill',
+          id: 'db-1',
+          identifier: 'my-skill',
+          name: 'My Skill',
+          source: 'user',
+        },
+      ],
+      builtinSkills: [mockBuiltinSkill],
+      builtinTools: [],
+      disabledSkillIdentifiers: ['my-skill'],
+      uninstalledBuiltinTools: ['test-skill'],
+    } as unknown as ToolStoreState;
+
+    it('reads the matching list per kind', () => {
+      expect(builtinToolSelectors.isSkillEnabled('test-skill', 'builtin')(disabledState)).toBe(
+        false,
+      );
+      expect(builtinToolSelectors.isSkillEnabled('my-skill', 'skill')(disabledState)).toBe(false);
+      // Cross-list lookups must not leak: same id, other kind.
+      expect(builtinToolSelectors.isSkillEnabled('test-skill', 'skill')(disabledState)).toBe(true);
+      expect(builtinToolSelectors.isSkillEnabled('my-skill', 'builtin')(disabledState)).toBe(true);
+    });
+
+    it('exposes the disabled identifiers of the active context', () => {
+      expect(builtinToolSelectors.disabledSkillIdentifiers(disabledState)).toEqual(['my-skill']);
+    });
+
+    it('unions both lists and keeps mandatory catalog skills enabled', () => {
+      expect([...builtinToolSelectors.userDisabledSkillIds(disabledState)].sort()).toEqual([
+        'my-skill',
+        'test-skill',
+      ]);
+      expect([...builtinToolSelectors.userDisabledSkillIds(disabledState, ['my-skill'])]).toEqual([
+        'test-skill',
+      ]);
+    });
+
+    it('hides disabled agent skills from the chat-input meta lists', () => {
+      expect(
+        builtinToolSelectors.metaList(disabledState).map((item) => item.identifier),
+      ).not.toContain('my-skill');
+      expect(
+        builtinToolSelectors.discoverableMetaList(disabledState).map((item) => item.identifier),
+      ).not.toContain('my-skill');
+    });
+  });
 });

@@ -691,6 +691,8 @@ export default {
   'skillCatalog.editor.unsaved.leave': 'Leave without saving',
   'skillCatalog.editor.unsaved.stay': 'Keep editing',
   'skillCatalog.editor.unsaved.title': 'Unsaved skill changes',
+  'skillCatalog.enabledSwitch.tooltip':
+    'Disabled skills are removed from the catalog for every user',
   'skillCatalog.actions.retry': 'Retry',
   'skillCatalog.actions.archive.impact':
     'Existing references pinned to a published historical version continue to work.',

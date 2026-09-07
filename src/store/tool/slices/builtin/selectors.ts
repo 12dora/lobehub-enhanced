@@ -5,6 +5,7 @@ import {
 } from '@lobechat/builtin-tools';
 import { type BuiltinSkill, type LobeToolMeta } from '@lobechat/types';
 
+import { collectDisabledSkillIds } from '@/helpers/skillFilters';
 import {
   isBuiltinSkillAvailableInCurrentEnv,
   isBuiltinToolAvailableInCurrentEnv,
@@ -126,7 +127,10 @@ const buildVisibleMetaList = (
       return true;
     })
     .map(toSkillMeta);
-  const agentSkillMetas = agentSkillsSelectors.agentSkillMetaList(s);
+  // Disabled skills are unavailable to the assistant, so never offer them here.
+  const agentSkillMetas = agentSkillsSelectors
+    .agentSkillMetaList(s)
+    .filter((meta) => !(s.disabledSkillIdentifiers || []).includes(meta.identifier));
 
   return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getComposioMetas(s)];
 };
@@ -179,7 +183,12 @@ const allMetaList = (s: ToolStoreState): LobeToolMetaWithAvailability[] => {
     .agentSkillMetaList(s)
     .map((meta) => ({ ...meta, availableInWeb: true }));
 
-  return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getComposioMetasWithAvailability(s)];
+  return [
+    ...skillMetas,
+    ...agentSkillMetas,
+    ...builtinMetas,
+    ...getComposioMetasWithAvailability(s),
+  ];
 };
 
 /**
@@ -198,7 +207,9 @@ const discoverableMetaList = (s: ToolStoreState): LobeToolMeta[] => {
     })
     .map(toSkillMeta);
 
-  const agentSkillMetas = agentSkillsSelectors.agentSkillMetaList(s);
+  const agentSkillMetas = agentSkillsSelectors
+    .agentSkillMetaList(s)
+    .filter((meta) => !(s.disabledSkillIdentifiers || []).includes(meta.identifier));
 
   const builtinMetas = s.builtinTools
     .filter((item) => {
@@ -279,14 +290,53 @@ const uninstalledBuiltinTools = (s: ToolStoreState): string[] => s.uninstalledBu
 const isBuiltinToolInstalled = (identifier: string) => (s: ToolStoreState) =>
   !s.uninstalledBuiltinTools.includes(identifier);
 
+/**
+ * Identifiers of installed / catalog skills the user disabled in the active
+ * context (personal or workspace).
+ */
+const disabledSkillIdentifiers = (s: ToolStoreState): string[] => s.disabledSkillIdentifiers || [];
+
+/**
+ * Whether a skill is enabled for the signed-in user.
+ *
+ * `builtin` reads the uninstalled builtin list (identifier listed ⇔ disabled),
+ * `skill` reads the disabled identifier list.
+ */
+const isSkillEnabled =
+  (identifier: string, kind: 'builtin' | 'skill') =>
+  (s: ToolStoreState): boolean =>
+    kind === 'builtin'
+      ? !s.uninstalledBuiltinTools.includes(identifier)
+      : !(s.disabledSkillIdentifiers || []).includes(identifier);
+
+/**
+ * Every identifier the user disabled, in one set, for the client runtime choke
+ * points (skill pool assembly and the activateSkill lookup).
+ *
+ * Builds a new Set on each call — read it with `getToolStoreState()`, never as
+ * a React store subscription.
+ */
+const userDisabledSkillIds = (
+  s: ToolStoreState,
+  mandatorySkillIds?: Iterable<string>,
+): Set<string> =>
+  collectDisabledSkillIds({
+    disabledSkillIdentifiers: s.disabledSkillIdentifiers,
+    mandatorySkillIds,
+    uninstalledBuiltinTools: s.uninstalledBuiltinTools,
+  });
+
 export const builtinToolSelectors = {
   allMetaList,
+  disabledSkillIdentifiers,
   discoverableMetaList,
   fixedDisplayMetaList,
   installedAllMetaList,
   installedBuiltinSkills,
   isBuiltinToolInstalled,
+  isSkillEnabled,
   metaList,
   metaListIncludingHidden,
   uninstalledBuiltinTools,
+  userDisabledSkillIds,
 };

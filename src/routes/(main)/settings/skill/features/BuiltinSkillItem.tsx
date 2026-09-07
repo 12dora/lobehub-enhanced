@@ -1,13 +1,12 @@
 'use client';
 
-import { Avatar, Button, DropdownMenu, Flexbox, Icon, stopPropagation } from '@lobehub/ui';
-import { confirmModal } from '@lobehub/ui/base-ui';
+import { Avatar, Flexbox, stopPropagation } from '@lobehub/ui';
 import { cssVar } from 'antd-style';
-import { MoreHorizontalIcon, Plus, Trash2 } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import NavItem from '@/features/NavPanel/components/NavItem';
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { createBuiltinSkillDetailModal } from '@/features/SkillStore/SkillDetail';
 import { usePermission } from '@/hooks/usePermission';
 import { useToolStore } from '@/store/tool';
@@ -25,78 +24,16 @@ interface BuiltinSkillItemProps {
 
 const BuiltinSkillItem = memo<BuiltinSkillItemProps>(
   ({ identifier, title, avatar, isSelected, onSelect }) => {
-    const { t } = useTranslation(['setting', 'plugin', 'common']);
+    const { t } = useTranslation('setting');
     const { allowed: canCreate } = usePermission('create_content');
     const { allowed: canEdit } = usePermission('edit_own_content');
 
-    const [installBuiltinTool, uninstallBuiltinTool, isInstalled] = useToolStore((s) => [
-      s.installBuiltinTool,
-      s.uninstallBuiltinTool,
-      builtinToolSelectors.isBuiltinToolInstalled(identifier)(s),
-    ]);
+    const isEnabled = useToolStore(builtinToolSelectors.isSkillEnabled(identifier, 'builtin'));
 
-    const handleInstall = async () => {
-      if (!canCreate) return;
-      await installBuiltinTool(identifier);
-    };
-
-    const handleUninstall = () => {
-      if (!canEdit) return;
-
-      confirmModal({
-        cancelText: t('cancel', { ns: 'common' }),
-        content: t('store.actions.confirmUninstall', { ns: 'plugin' }),
-        okButtonProps: { danger: true },
-        okText: t('store.actions.uninstall', { ns: 'plugin' }),
-        onOk: async () => {
-          await uninstallBuiltinTool(identifier);
-        },
-        title: t('store.actions.uninstall', { ns: 'plugin' }),
-      });
-    };
-
-    const renderStatus = () => {
-      if (isInstalled) {
-        return (
-          <span className={styles.connected}>
-            {t('tools.builtins.installed', { ns: 'setting' })}
-          </span>
-        );
-      }
-      return (
-        <span className={styles.disconnected}>
-          {t('tools.builtins.uninstalled', { ns: 'setting' })}
-        </span>
-      );
-    };
-
-    const renderActions = () => {
-      if (isInstalled) {
-        return (
-          <DropdownMenu
-            placement="bottomRight"
-            items={[
-              {
-                danger: true,
-                disabled: !canEdit,
-                icon: <Icon icon={Trash2} />,
-                key: 'uninstall',
-                label: t('store.actions.uninstall', { ns: 'plugin' }),
-                onClick: handleUninstall,
-              },
-            ]}
-          >
-            <Button disabled={!canEdit} icon={MoreHorizontalIcon} />
-          </DropdownMenu>
-        );
-      }
-
-      return (
-        <Button disabled={!canCreate} icon={Plus} onClick={handleInstall}>
-          {t('store.actions.install', { ns: 'plugin' })}
-        </Button>
-      );
-    };
+    // Disabled rows stay selectable so the tool can be found and switched back
+    // on; a subtle tag is the only signal.
+    const renderStatus = () =>
+      isEnabled ? null : <span className={styles.disconnected}>{t('tools.skillEnabled.off')}</span>;
 
     if (onSelect) {
       return (
@@ -104,7 +41,7 @@ const BuiltinSkillItem = memo<BuiltinSkillItemProps>(
           active={isSelected}
           icon={() => <Avatar avatar={avatar} size={18} />}
           title={title}
-          titleColor={!isInstalled ? cssVar.colorTextDescription : undefined}
+          titleColor={!isEnabled ? cssVar.colorTextDescription : undefined}
           onClick={onSelect}
         />
       );
@@ -131,19 +68,22 @@ const BuiltinSkillItem = memo<BuiltinSkillItemProps>(
             style={{ cursor: onSelect ? undefined : 'pointer' }}
             onClick={onSelect ? undefined : () => createBuiltinSkillDetailModal({ identifier })}
           >
-            <div className={`${styles.icon} ${!isInstalled ? styles.disconnectedIcon : ''}`}>
+            <div className={`${styles.icon} ${!isEnabled ? styles.disconnectedIcon : ''}`}>
               <Avatar avatar={avatar} size={16} />
             </div>
-            <span className={`${styles.title} ${!isInstalled ? styles.disconnectedTitle : ''}`}>
+            <span className={`${styles.title} ${!isEnabled ? styles.disconnectedTitle : ''}`}>
               {title}
             </span>
           </Flexbox>
-          {!isInstalled && renderStatus()}
+          {renderStatus()}
         </Flexbox>
         {!onSelect && (
           <Flexbox horizontal align="center" gap={8} onClick={stopPropagation}>
-            {isInstalled && renderStatus()}
-            {renderActions()}
+            <SkillEnabledSwitch
+              disabled={isEnabled ? !canEdit : !canCreate}
+              identifier={identifier}
+              kind="builtin"
+            />
           </Flexbox>
         )}
       </Flexbox>

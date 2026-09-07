@@ -10,9 +10,12 @@ import { useTranslation } from 'react-i18next';
 
 import ImperativeModal from '@/components/ImperativeModal';
 import SkillAvatar from '@/components/SkillAvatar';
+import { useAdminToolScope } from '@/features/AdminToolScope';
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { usePermission } from '@/hooks/usePermission';
 import { agentSkillService } from '@/services/skill';
 import { useToolStore } from '@/store/tool';
+import { builtinToolSelectors } from '@/store/tool/selectors';
 import { type SkillListItem } from '@/types/index';
 import { downloadFile } from '@/utils/client/downloadFile';
 
@@ -46,11 +49,31 @@ interface AgentSkillItemProps {
 const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
   const { t } = useTranslation('plugin');
   const { t: tc } = useTranslation('common');
+  const { t: ts } = useTranslation('setting');
   const [detailOpen, setDetailOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const { allowed: canEdit } = usePermission('edit_own_content');
-  const deleteAgentSkill = useToolStore((s) => s.deleteAgentSkill);
+  const [deleteAgentSkill, setSkillEnabled, isUserEnabled] = useToolStore((s) => [
+    s.deleteAgentSkill,
+    s.setSkillEnabled,
+    builtinToolSelectors.isSkillEnabled(skill.identifier, 'skill')(s),
+  ]);
+
+  // Admin org scope: the switch writes org-wide availability instead of the
+  // signed-in user's settings.
+  const adminScope = useAdminToolScope();
+  const enabled = adminScope ? adminScope.isOrgSkillEnabled(skill.identifier) : isUserEnabled;
+  const canToggleEnabled = adminScope ? adminScope.capabilities.canUpdateSkill : canEdit;
+
+  const handleToggleEnabled = async (next: boolean) => {
+    if (!canToggleEnabled) return;
+    if (adminScope) {
+      await adminScope.setOrgSkillEnabled(skill.identifier, next);
+      return;
+    }
+    await setSkillEnabled({ enabled: next, identifier: skill.identifier, kind: 'skill' });
+  };
 
   const handleDownload = async () => {
     if (!skill.zipFileHash) return;
@@ -98,12 +121,20 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
                 {skill.name}
               </span>
               <Tag icon={<Icon icon={SkillsIcon} />} size={'small'} />
+              {!enabled && <Tag size={'small'}>{ts('tools.skillEnabled.off')}</Tag>}
             </Flexbox>
             {skill.description && (
               <span className={itemStyles.description}>{skill.description}</span>
             )}
           </Flexbox>
-          <Flexbox horizontal>
+          <Flexbox horizontal align={'center'} gap={4}>
+            <SkillEnabledSwitch
+              checked={enabled}
+              disabled={!canToggleEnabled}
+              identifier={skill.identifier}
+              kind={'skill'}
+              onToggle={handleToggleEnabled}
+            />
             {skill.source === 'user' && (
               <ActionIcon
                 disabled={!canEdit}

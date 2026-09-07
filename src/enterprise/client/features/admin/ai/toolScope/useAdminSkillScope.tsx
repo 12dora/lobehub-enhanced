@@ -22,7 +22,9 @@ export const useAdminSkillScope = ({
     canSetBuiltinSkillDistribution,
     getBuiltinSkillDistribution,
     isBuiltinSkillEnabled,
+    isOrgSkillEnabled,
     setBuiltinSkillDistribution,
+    setOrgSkillEnabled,
     toggleBuiltinSkill,
   } = useBuiltinSkillDistribution({
     capabilities,
@@ -47,9 +49,11 @@ export const useAdminSkillScope = ({
     installFromMarket,
     isBuiltinSkillEnabled,
     isLoading,
+    isOrgSkillEnabled,
     orgSkills,
     retry,
     setBuiltinSkillDistribution,
+    setOrgSkillEnabled,
     toggleBuiltinSkill,
     useOrgSkillDetail,
   };

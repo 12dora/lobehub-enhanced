@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   list: vi.fn(),
   publish: vi.fn(),
+  setEnabled: vi.fn(),
 }));
 
 vi.mock('@/libs/trpc/client', () => ({
@@ -17,6 +18,7 @@ vi.mock('@/libs/trpc/client', () => ({
         get: { query: mocks.get },
         list: { query: mocks.list },
         publish: { mutate: mocks.publish },
+        setEnabled: { mutate: mocks.setEnabled },
       },
     },
   },
@@ -83,5 +85,17 @@ describe('M08 admin Skills client service', () => {
     expect(mocks.createVersion).toHaveBeenCalledWith(versionInput);
     expect(mocks.createVersion.mock.calls[0]?.[0]).not.toHaveProperty('checksum');
     expect(mocks.publish).toHaveBeenCalledOnce();
+  });
+
+  it('sends org-wide availability through setEnabled keyed by skillKey', async () => {
+    mocks.setEnabled.mockResolvedValue({ enabled: false, skillKey: 'lobe-artifacts' });
+
+    await expect(
+      adminSkillsService.setEnabled({ enabled: false, skillKey: 'lobe-artifacts' }),
+    ).resolves.toEqual({ enabled: false, skillKey: 'lobe-artifacts' });
+
+    // Availability must not travel as a distribution change.
+    expect(mocks.setEnabled).toHaveBeenCalledWith({ enabled: false, skillKey: 'lobe-artifacts' });
+    expect(mocks.setEnabled.mock.calls[0]?.[0]).not.toHaveProperty('distribution');
   });
 });

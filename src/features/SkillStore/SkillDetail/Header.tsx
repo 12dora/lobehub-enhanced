@@ -3,10 +3,11 @@
 import { Avatar, Flexbox, Icon, Text, Tooltip, useModalContext } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
 import { cssVar } from 'antd-style';
-import { Loader2, Plus, SquareArrowOutUpRight } from 'lucide-react';
+import { Loader2, SquareArrowOutUpRight } from 'lucide-react';
 import { memo, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { useSkillConnect } from '@/features/SkillStore/SkillList/LobeHub/useSkillConnect';
 import { usePermission } from '@/hooks/usePermission';
 import { useToolStore } from '@/store/tool';
@@ -49,17 +50,19 @@ const Header = memo<HeaderProps>(({ type }) => {
     type: isBuiltin ? 'lobehub' : type, // Use lobehub as fallback for builtin
   });
 
-  // Builtin tool installation state (global, stored in tool store)
-  const [installBuiltinTool, isBuiltinInstalled] = useToolStore((s) => [
-    s.installBuiltinTool,
-    builtinToolSelectors.isBuiltinToolInstalled(identifier)(s),
+  // Builtin availability is user-global: the switch doubles as install /
+  // uninstall, so no separate install button is rendered.
+  const [setSkillEnabled, isBuiltinEnabled] = useToolStore((s) => [
+    s.setSkillEnabled,
+    builtinToolSelectors.isSkillEnabled(identifier, 'builtin')(s),
   ]);
 
-  const handleBuiltinInstall = async () => {
-    if (!canCreate || !canEdit) return;
+  // Enabling matches install (create), disabling matches uninstall (edit).
+  const canToggleBuiltin = isBuiltinEnabled ? canEdit : canCreate;
 
-    await installBuiltinTool(identifier);
-    close();
+  const handleBuiltinToggle = async (next: boolean) => {
+    if (!canToggleBuiltin) return;
+    await setSkillEnabled({ enabled: next, identifier, kind: 'builtin' });
   };
 
   const hasTriggeredConnectRef = useRef(false);
@@ -95,21 +98,16 @@ const Header = memo<HeaderProps>(({ type }) => {
   };
 
   const renderConnectButton = () => {
-    // Handle builtin tools - only show install button, uninstall is done in settings
+    // Builtin skills and tools: a single enable/disable switch.
     if (isBuiltin) {
-      if (isBuiltinInstalled) return null;
-
       return (
-        <Tooltip title={!canCreate ? createReason : editReason}>
-          <Button
-            disabled={!canCreate || !canEdit}
-            icon={<Icon icon={Plus} />}
-            type="primary"
-            onClick={handleBuiltinInstall}
-          >
-            {t('tools.builtins.install')}
-          </Button>
-        </Tooltip>
+        <SkillEnabledSwitch
+          checked={isBuiltinEnabled}
+          disabled={!canToggleBuiltin}
+          identifier={identifier}
+          kind={'builtin'}
+          onToggle={handleBuiltinToggle}
+        />
       );
     }
 

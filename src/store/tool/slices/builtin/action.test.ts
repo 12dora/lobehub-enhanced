@@ -200,6 +200,115 @@ describe('createBuiltinToolSlice', () => {
     });
   });
 
+  describe('setSkillEnabled', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const mockUserState = (tool: any) =>
+      vi.spyOn(userService, 'getUserState').mockResolvedValue({ settings: { tool } } as any);
+
+    it('writes the personal disabled list for an installed skill', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({
+        humanIntervention: { approvalMode: 'manual' },
+        uninstalledBuiltinTools: ['a'],
+      });
+      const updateSpy = vi
+        .spyOn(userService, 'updateUserSettings')
+        .mockResolvedValue(undefined as any);
+
+      const { result } = renderHook(() => useToolStore());
+      await act(async () => {
+        await result.current.setSkillEnabled({
+          enabled: false,
+          identifier: 'my-skill',
+          kind: 'skill',
+        });
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith({
+        tool: {
+          disabledSkillIdentifiers: ['my-skill'],
+          humanIntervention: { approvalMode: 'manual' },
+          uninstalledBuiltinTools: ['a'],
+        },
+      });
+      expect(result.current.disabledSkillIdentifiers).toEqual(['my-skill']);
+    });
+
+    it('writes only the per-workspace disabled slot, leaving the personal one untouched', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue('ws-1');
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({
+        disabledSkillIdentifiers: ['personal-skill'],
+        disabledSkillIdentifiersByWorkspace: { 'ws-1': ['ws-skill'] },
+      });
+      const updateSpy = vi
+        .spyOn(userService, 'updateUserSettings')
+        .mockResolvedValue(undefined as any);
+
+      const { result } = renderHook(() => useToolStore());
+      await act(async () => {
+        await result.current.setSkillEnabled({
+          enabled: true,
+          identifier: 'ws-skill',
+          kind: 'skill',
+        });
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith({
+        tool: {
+          disabledSkillIdentifiers: ['personal-skill'],
+          disabledSkillIdentifiersByWorkspace: { 'ws-1': [] },
+        },
+      });
+    });
+
+    it('routes the builtin kind to the uninstalled builtin list', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({ uninstalledBuiltinTools: [] });
+      const updateSpy = vi
+        .spyOn(userService, 'updateUserSettings')
+        .mockResolvedValue(undefined as any);
+
+      const { result } = renderHook(() => useToolStore());
+      await act(async () => {
+        await result.current.setSkillEnabled({
+          enabled: false,
+          identifier: 'lobe-artifacts',
+          kind: 'builtin',
+        });
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith({
+        tool: { uninstalledBuiltinTools: ['lobe-artifacts'] },
+      });
+    });
+
+    it('is a no-op when the skill is already in the desired state', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({ disabledSkillIdentifiers: ['my-skill'] });
+      const updateSpy = vi
+        .spyOn(userService, 'updateUserSettings')
+        .mockResolvedValue(undefined as any);
+
+      const { result } = renderHook(() => useToolStore());
+      await act(async () => {
+        await result.current.setSkillEnabled({
+          enabled: false,
+          identifier: 'my-skill',
+          kind: 'skill',
+        });
+      });
+
+      expect(updateSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('toggleBuiltinToolLoading', () => {
     it('should toggle the loading state for a tool', () => {
       const { result } = renderHook(() => useToolStore());

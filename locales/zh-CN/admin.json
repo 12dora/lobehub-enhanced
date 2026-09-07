@@ -2844,6 +2844,7 @@
   "skillCatalog.editor.unsaved.leave": "不保存并离开",
   "skillCatalog.editor.unsaved.stay": "继续编辑",
   "skillCatalog.editor.unsaved.title": "技能修改尚未保存",
+  "skillCatalog.enabledSwitch.tooltip": "停用后所有用户均不可用",
   "skillCatalog.errors.generic": "技能操作失败，你的输入已保留。",
   "skillCatalog.form.allowBuiltinOverride": "允许显式覆盖内置标识",
   "skillCatalog.form.builtinOverrideWarning": "覆盖内置标识风险较高，需要管理员重新认证。",

@@ -10,10 +10,11 @@ import { useTranslation } from 'react-i18next';
 
 import ImperativeModal from '@/components/ImperativeModal';
 import { useAdminToolScope } from '@/features/AdminToolScope';
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { usePermission } from '@/hooks/usePermission';
 import { agentSkillService } from '@/services/skill';
 import { useToolStore } from '@/store/tool';
-import { agentSkillsSelectors } from '@/store/tool/selectors';
+import { agentSkillsSelectors, builtinToolSelectors } from '@/store/tool/selectors';
 import { type DiscoverSkillItem } from '@/types/discover';
 import { downloadFile } from '@/utils/client/downloadFile';
 
@@ -43,6 +44,7 @@ const styles = createStaticStyles(({ css }) => ({
 const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, identifier }) => {
   const { t } = useTranslation('plugin');
   const { t: tc } = useTranslation('common');
+  const { t: ts } = useTranslation('setting');
   const [detailOpen, setDetailOpen] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -64,10 +66,29 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
   const orgSkill = adminScope?.orgSkills.find((skill) => skill.identifier === identifier);
   const installed = adminScope ? Boolean(orgSkill) : storeInstalled;
   const installedSkill = adminScope ? orgSkill : storeInstalledSkill;
-  const [refreshAgentSkills, deleteAgentSkill] = useToolStore((s) => [
-    s.refreshAgentSkills,
-    s.deleteAgentSkill,
-  ]);
+  const [refreshAgentSkills, deleteAgentSkill, setSkillEnabled, isUserEnabled] = useToolStore(
+    (s) => [
+      s.refreshAgentSkills,
+      s.deleteAgentSkill,
+      s.setSkillEnabled,
+      builtinToolSelectors.isSkillEnabled(identifier, 'skill')(s),
+    ],
+  );
+  // Under the admin scope the switch writes org-wide availability.
+  const enabled = adminScope ? adminScope.isOrgSkillEnabled(identifier) : isUserEnabled;
+  const canToggleEnabled = adminScope ? adminScope.capabilities.canUpdateSkill : canEdit;
+
+  const handleToggleEnabled = useCallback(
+    async (next: boolean) => {
+      if (!canToggleEnabled) return;
+      if (adminScope) {
+        await adminScope.setOrgSkillEnabled(identifier, next);
+        return;
+      }
+      await setSkillEnabled({ enabled: next, identifier, kind: 'skill' });
+    },
+    [adminScope, canToggleEnabled, identifier, setSkillEnabled],
+  );
 
   const handleInstall = useCallback(async () => {
     if (!resolvedCanCreate || installing || installed) return;
@@ -117,36 +138,49 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
     }
   }, [installedSkill, name]);
 
+  const renderInstalledMenu = () => (
+    <DropdownMenu
+      nativeButton={false}
+      placement="bottomRight"
+      items={[
+        ...(installedSkill?.zipFileHash
+          ? [
+              {
+                icon: <Icon icon={DownloadIcon} />,
+                key: 'download',
+                label: tc('download'),
+                onClick: handleDownload,
+              },
+              { type: 'divider' as const },
+            ]
+          : []),
+        {
+          danger: true,
+          disabled: !resolvedCanDelete,
+          icon: <Icon icon={Trash2} />,
+          key: 'uninstall',
+          label: t('store.actions.uninstall'),
+          onClick: handleUninstall,
+        },
+      ]}
+    >
+      <ActionIcon disabled={!resolvedCanDelete} icon={MoreVerticalIcon} loading={loading} />
+    </DropdownMenu>
+  );
+
   const renderAction = () => {
     if (installed) {
       return (
-        <DropdownMenu
-          nativeButton={false}
-          placement="bottomRight"
-          items={[
-            ...(installedSkill?.zipFileHash
-              ? [
-                  {
-                    icon: <Icon icon={DownloadIcon} />,
-                    key: 'download',
-                    label: tc('download'),
-                    onClick: handleDownload,
-                  },
-                  { type: 'divider' as const },
-                ]
-              : []),
-            {
-              danger: true,
-              disabled: !resolvedCanDelete,
-              icon: <Icon icon={Trash2} />,
-              key: 'uninstall',
-              label: t('store.actions.uninstall'),
-              onClick: handleUninstall,
-            },
-          ]}
-        >
-          <ActionIcon disabled={!resolvedCanDelete} icon={MoreVerticalIcon} loading={loading} />
-        </DropdownMenu>
+        <Flexbox horizontal align={'center'} gap={4} style={{ flex: 'none' }}>
+          <SkillEnabledSwitch
+            checked={enabled}
+            disabled={!canToggleEnabled}
+            identifier={identifier}
+            kind={'skill'}
+            onToggle={handleToggleEnabled}
+          />
+          {renderInstalledMenu()}
+        </Flexbox>
       );
     }
 
@@ -180,6 +214,7 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
                 {name}
               </span>
               <Tag icon={<Icon icon={SkillsIcon} />} size={'small'} />
+              {installed && !enabled && <Tag size={'small'}>{ts('tools.skillEnabled.off')}</Tag>}
             </Flexbox>
             {description && <span className={itemStyles.description}>{description}</span>}
           </Flexbox>

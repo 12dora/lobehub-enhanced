@@ -6,12 +6,13 @@ import { Button, confirmModal, createModal } from '@lobehub/ui/base-ui';
 import { SkillsIcon } from '@lobehub/ui/icons';
 import { Space } from 'antd';
 import { cssVar } from 'antd-style';
-import { DownloadIcon, MoreHorizontalIcon, Plus, Trash2 } from 'lucide-react';
+import { DownloadIcon, MoreHorizontalIcon, Trash2 } from 'lucide-react';
 import { lazy, memo, Suspense, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useAdminToolScope } from '@/features/AdminToolScope';
 import NavItem from '@/features/NavPanel/components/NavItem';
+import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { createBuiltinAgentSkillDetailModal } from '@/features/SkillStore/SkillDetail';
 import { usePermission } from '@/hooks/usePermission';
 import { agentSkillService } from '@/services/skill';
@@ -46,27 +47,19 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
   const adminScope = useAdminToolScope();
 
   const deleteAgentSkill = useToolStore((s) => s.deleteAgentSkill);
-  const [storeInstallBuiltinTool, storeUninstallBuiltinTool, storeBuiltinInstalled] = useToolStore(
-    (s) => [
-      s.installBuiltinTool,
-      s.uninstallBuiltinTool,
-      isBuiltin ? builtinToolSelectors.isBuiltinToolInstalled(skill.identifier)(s) : true,
-    ],
-  );
-  // Admin org scope: builtin availability reflects the platform catalog and
-  // toggles write the org-wide distribution instead of user settings.
-  const isBuiltinInstalled =
+  const [storeBuiltinEnabled, storeSkillEnabled] = useToolStore((s) => [
+    isBuiltin ? builtinToolSelectors.isSkillEnabled(skill.identifier, 'builtin')(s) : true,
+    isBuiltin ? true : builtinToolSelectors.isSkillEnabled(skill.identifier, 'skill')(s),
+  ]);
+  // Admin org scope: builtin availability reflects the platform catalog and the
+  // switch writes the org-wide catalog instead of user settings.
+  const isBuiltinEnabled =
     adminScope && isBuiltin
       ? adminScope.isBuiltinSkillEnabled(skill.identifier)
-      : storeBuiltinInstalled;
-  const installBuiltinTool = (identifier: string) =>
-    adminScope
-      ? adminScope.toggleBuiltinSkill(identifier, true)
-      : storeInstallBuiltinTool(identifier);
-  const uninstallBuiltinTool = (identifier: string) =>
-    adminScope
-      ? adminScope.toggleBuiltinSkill(identifier, false)
-      : storeUninstallBuiltinTool(identifier);
+      : storeBuiltinEnabled;
+  // Org catalog skills have no per-row enable toggle in the admin scope yet.
+  const showEnabledSwitch = isBuiltin || !adminScope;
+  const isEnabled = isBuiltin ? isBuiltinEnabled : storeSkillEnabled;
 
   const title = isBuiltin
     ? t(`tools.builtins.${skill.identifier}.title`, { defaultValue: skill.name })
@@ -89,21 +82,19 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
     }
   };
 
+  // Bundled builtin skills are never deleted — the switch disables them — so
+  // this only ever removes an installed user/market (or org catalog) skill.
   const handleUninstall = () => {
-    if (!canEdit) return;
+    if (!canEdit || isBuiltin) return;
     confirmModal({
       okButtonProps: { danger: true },
       onOk: async () => {
-        if (isBuiltin) {
-          await uninstallBuiltinTool(skill.identifier);
-        } else {
-          setLoading(true);
-          try {
-            if (adminScope) await adminScope.deleteOrgSkill(skill.id);
-            else await deleteAgentSkill(skill.id);
-          } finally {
-            setLoading(false);
-          }
+        setLoading(true);
+        try {
+          if (adminScope) await adminScope.deleteOrgSkill(skill.id);
+          else await deleteAgentSkill(skill.id);
+        } finally {
+          setLoading(false);
         }
       },
       title: tp('store.actions.confirmUninstall'),
@@ -112,48 +103,35 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
 
   // ===== Status & Actions =====
 
-  const renderStatus = () => {
-    if (!isBuiltin) return null;
-    if (isBuiltinInstalled) {
-      return <span className={styles.connected}>{t('tools.builtins.installed')}</span>;
+  // Disabled rows stay selectable so the skill can be found and switched back
+  // on; a subtle tag is the only signal.
+  const renderStatus = () =>
+    isEnabled ? null : <span className={styles.disconnected}>{t('tools.skillEnabled.off')}</span>;
+
+  const renderEnabledSwitch = () => {
+    if (!showEnabledSwitch) return null;
+
+    if (isBuiltin) {
+      return (
+        <SkillEnabledSwitch
+          disabled={isBuiltinEnabled ? !canEdit : !canCreate}
+          identifier={skill.identifier}
+          kind="builtin"
+          {...(adminScope
+            ? {
+                checked: isBuiltinEnabled,
+                onToggle: (enabled) => adminScope.toggleBuiltinSkill(skill.identifier, enabled),
+              }
+            : {})}
+        />
+      );
     }
-    return <span className={styles.disconnected}>{t('tools.builtins.uninstalled')}</span>;
+
+    return <SkillEnabledSwitch disabled={!canEdit} identifier={skill.identifier} kind="skill" />;
   };
 
   const renderActions = () => {
-    if (isBuiltin) {
-      if (isBuiltinInstalled) {
-        return (
-          <DropdownMenu
-            placement="bottomRight"
-            items={[
-              {
-                danger: true,
-                disabled: !canEdit,
-                icon: <Icon icon={Trash2} />,
-                key: 'uninstall',
-                label: tp('store.actions.uninstall'),
-                onClick: handleUninstall,
-              },
-            ]}
-          >
-            <Button disabled={!canEdit} icon={<Icon icon={MoreHorizontalIcon} />} />
-          </DropdownMenu>
-        );
-      }
-      return (
-        <Button
-          disabled={!canCreate}
-          icon={<Icon icon={Plus} />}
-          onClick={() => {
-            if (!canCreate) return;
-            installBuiltinTool(skill.identifier);
-          }}
-        >
-          {tp('store.actions.install')}
-        </Button>
-      );
-    }
+    if (isBuiltin) return null;
 
     return (
       <Space.Compact>
@@ -219,7 +197,7 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
     );
   };
 
-  const showDisconnected = isBuiltin && !isBuiltinInstalled;
+  const showDisconnected = !isEnabled;
 
   if (onSelect) {
     return (
@@ -268,8 +246,8 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
         </Flexbox>
         {!onSelect && (
           <Flexbox horizontal align="center" gap={8} onClick={stopPropagation}>
-            {isBuiltin && isBuiltinInstalled && renderStatus()}
             {renderActions()}
+            {renderEnabledSwitch()}
           </Flexbox>
         )}
       </Flexbox>

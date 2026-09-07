@@ -6,6 +6,7 @@ import { getPluginMode } from '@lobechat/types';
 import debug from 'debug';
 import pMap from 'p-map';
 
+import { collectDisabledSkillIds } from '@/helpers/skillFilters';
 import { isBuiltinSkillAvailableInCurrentEnv } from '@/helpers/toolAvailability';
 import { agentSkillService } from '@/services/skill';
 import { getToolStoreState } from '@/store/tool';
@@ -123,7 +124,17 @@ export const resolveClientSkills = async (
 ): Promise<OperationSkillSet> => {
   const toolState = getToolStoreState();
   const pinnedIds = new Set(pluginIds ?? []);
-  const disabledIdSet = new Set(disabledIds ?? []);
+  // Per-agent disabled ids ∪ the user's own disable lists (bundled builtins via
+  // `uninstalledBuiltinTools`, everything else via `disabledSkillIdentifiers`).
+  // Mandatory catalog skills stay available whatever the user stored.
+  const disabledIdSet = new Set([
+    ...(disabledIds ?? []),
+    ...collectDisabledSkillIds({
+      disabledSkillIdentifiers: toolState.disabledSkillIdentifiers,
+      mandatorySkillIds: operationSnapshot?.mandatorySkillIds,
+      uninstalledBuiltinTools: toolState.uninstalledBuiltinTools,
+    }),
+  ]);
 
   const platformCatalog = operationSnapshot
     ? operationSnapshot.skills
