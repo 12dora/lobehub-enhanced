@@ -18,4 +18,18 @@ export interface UserToolConfig {
    * default state), not the user's personal `uninstalledBuiltinTools`.
    */
   uninstalledBuiltinToolsByWorkspace?: Record<string, string[]>;
+  /**
+   * Skill identifiers the user has disabled for every assistant (installed
+   * market/user skills by `agent_skills.identifier`, platform catalog skills
+   * by `skillKey`). Disabled skills are removed from the skill pool and cannot
+   * be activated by name; re-enabling only removes the identifier from this
+   * list, so nothing is deleted. Bundled builtin skills keep using
+   * `uninstalledBuiltinTools` for the same purpose. Personal context only.
+   */
+  disabledSkillIdentifiers?: string[];
+  /**
+   * Per-workspace counterpart of `disabledSkillIdentifiers`, keyed by
+   * workspace id (same fallback semantics as `uninstalledBuiltinToolsByWorkspace`).
+   */
+  disabledSkillIdentifiersByWorkspace?: Record<string, string[]>;
 }

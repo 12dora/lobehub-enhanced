@@ -71,6 +71,8 @@ const toolSchema = z
       .optional(),
     uninstalledBuiltinTools: z.array(z.string()).optional(),
     uninstalledBuiltinToolsByWorkspace: z.record(z.array(z.string())).optional(),
+    disabledSkillIdentifiers: z.array(z.string()).optional(),
+    disabledSkillIdentifiersByWorkspace: z.record(z.array(z.string())).optional(),
   })
   .strict();
 
