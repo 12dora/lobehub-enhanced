@@ -3,6 +3,8 @@ import { CURRENT_VERSION } from '@lobechat/const';
 import type { OwnDeploymentOrigins } from '@lobechat/utils';
 import { DEFAULT_FILE_INLINE_MAX_BYTES, DEFAULT_IMAGE_INLINE_MAX_BYTES } from '@lobechat/utils';
 import { isRecord } from '@lobechat/utils/object';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import debug from 'debug';
 import type { ChatModelCard } from 'model-bank';
 import { ModelProvider } from 'model-bank';
@@ -153,6 +155,8 @@ const extractSupportedReasoningLevels = (raw: unknown): string[] | undefined => 
 };
 
 const CATALOG_TTL = 60 * 60 * 1000;
+const CATALOG_TIMEOUT = 10_000;
+const MAX_CATALOGS = 64;
 const catalogLog = debug('lobe-model-runtime:chatgpt:catalog');
 interface CatalogEntry {
   reasoningLevels?: string[];
@@ -164,13 +168,33 @@ interface CatalogCache {
   expiresAt: number;
   inFlight?: Promise<unknown>;
 }
-// The SDK client belongs to one runtime/account. Weak keys avoid retaining credentials.
-const catalogs = new WeakMap<OpenAI, CatalogCache>();
+// Runtime clients are recreated each turn. Only their account identity is client-local;
+// catalog data and backoff are shared without retaining access tokens in cache keys.
+const clientAccounts = new WeakMap<OpenAI, string>();
+const catalogs = new Map<string, CatalogCache>();
 const getCatalog = (client: OpenAI): CatalogCache => {
-  let cache = catalogs.get(client);
+  const fingerprint = bytesToHex(sha256(new TextEncoder().encode(client.apiKey ?? ''))).slice(
+    0,
+    32,
+  );
+  const key = JSON.stringify([clientAccounts.get(client) ?? '', fingerprint, client.baseURL]);
+  const now = Date.now();
+  // Preserve this account's stale flags during refresh so failures can still use them.
+  // Other expired, idle entries are removed lazily; insertion order supplies the LRU bound.
+  for (const [storedKey, storedCache] of catalogs) {
+    if (storedKey !== key && !storedCache.inFlight && storedCache.expiresAt <= now) {
+      catalogs.delete(storedKey);
+    }
+  }
+  let cache = catalogs.get(key);
   if (!cache) {
     cache = { entries: new Map(), expiresAt: 0 };
-    catalogs.set(client, cache);
+  }
+  catalogs.delete(key);
+  catalogs.set(key, cache);
+  while (catalogs.size > MAX_CATALOGS) {
+    const oldest = catalogs.keys().next().value;
+    if (oldest !== undefined) catalogs.delete(oldest);
   }
   return cache;
 };
@@ -178,13 +202,26 @@ const getCatalog = (client: OpenAI): CatalogCache => {
 const fetchCodexCatalog = (client: OpenAI): Promise<unknown> => {
   const cache = getCatalog(client);
   cache.inFlight ??= (async () => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const version = await resolveCodexClientVersion();
-      const payload: unknown = await client.get('/models', {
-        maxRetries: 0,
-        query: { client_version: version },
-        timeout: 10_000,
-      });
+      // The SDK timeout only covers headers. Race the parsed APIPromise as well,
+      // including when a response body or fetch shim ignores the abort signal.
+      const payload: unknown = await Promise.race([
+        client.get('/models', {
+          maxRetries: 0,
+          query: { client_version: version },
+          signal: controller.signal,
+          timeout: CATALOG_TIMEOUT,
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('ChatGPT Codex catalog discovery timed out'));
+          }, CATALOG_TIMEOUT);
+        }),
+      ]);
       if (!isRecord(payload) || (!Array.isArray(payload.models) && !Array.isArray(payload.data))) {
         throw new TypeError('ChatGPT Codex models payload was not a list');
       }
@@ -206,6 +243,7 @@ const fetchCodexCatalog = (client: OpenAI): Promise<unknown> => {
       cache.entries = entries;
       return payload;
     } finally {
+      clearTimeout(timer);
       // Also back off after failures: chat must not retry a broken catalog on every turn.
       // Explicit admin models() calls can still retry immediately.
       cache.expiresAt = Date.now() + CATALOG_TTL;
@@ -365,8 +403,8 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
   },
   createImage: createChatGPTImage,
   customClient: {
-    createClient: ({ chatgptAccountId, ownOrigins: _ownOrigins, ...options }) =>
-      new OpenAI({
+    createClient: ({ chatgptAccountId, ownOrigins: _ownOrigins, ...options }) => {
+      const client = new OpenAI({
         ...options,
         defaultHeaders: {
           ...options.defaultHeaders,
@@ -376,7 +414,10 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
           'session-id': crypto.randomUUID(),
           'version': CURRENT_VERSION,
         },
-      }),
+      });
+      clientAccounts.set(client, chatgptAccountId ?? '');
+      return client;
+    },
   },
   debug: {
     chatCompletion: () => process.env.DEBUG_CHATGPT_CHAT_COMPLETION === '1',

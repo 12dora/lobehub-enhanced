@@ -9,14 +9,25 @@ import { CODEX_CLIENT_VERSION, LobeChatGPTAI } from './index';
 
 vi.mock('@lobechat/business-model-bank/model-config', () => ({ loadModels: vi.fn() }));
 let instance: InstanceType<typeof LobeChatGPTAI>;
+let accountId: string;
+let accountSequence = 0;
+const createRuntime = (options: ConstructorParameters<typeof LobeChatGPTAI>[0] = {}) => {
+  const runtime = new LobeChatGPTAI({
+    apiKey: 'test-token',
+    chatgptAccountId: accountId,
+    ...options,
+  });
+  vi.spyOn(runtime.client.responses, 'create').mockImplementation(
+    () => Promise.resolve(new ReadableStream()) as never,
+  );
+  return runtime;
+};
 beforeEach(() => {
   vi.mocked(loadModels).mockResolvedValue([]);
   vi.spyOn(clientVersion, 'resolveCodexClientVersion').mockResolvedValue(CODEX_CLIENT_VERSION);
   vi.spyOn(OpenAI.prototype, 'get').mockRejectedValue(new Error('catalog offline'));
-  instance = new LobeChatGPTAI({ apiKey: 'test-token', chatgptAccountId: 'test-account' });
-  vi.spyOn(instance.client.responses, 'create').mockImplementation(
-    () => Promise.resolve(new ReadableStream()) as never,
-  );
+  accountId = `test-account-${++accountSequence}`;
+  instance = createRuntime();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -39,8 +50,8 @@ describe('live protocol discovery', () => {
       },
     ],
   });
-  const liteHeader = () =>
-    (instance.client.responses.create as Mock).mock.lastCall?.[1]?.headers?.[
+  const liteHeader = (runtime = instance) =>
+    (runtime.client.responses.create as Mock).mock.lastCall?.[1]?.headers?.[
       'x-openai-internal-codex-responses-lite'
     ];
 
@@ -57,7 +68,7 @@ describe('live protocol discovery', () => {
     expect(liteHeader()).toBeUndefined();
   });
 
-  it('refreshes expired flags and isolates separate runtime clients', async () => {
+  it('refreshes expired flags and isolates separate accounts', async () => {
     vi.useFakeTimers();
     const get = vi.spyOn(instance.client, 'get').mockResolvedValue(fixture(true) as never);
     await chat();
@@ -94,6 +105,118 @@ describe('live protocol discovery', () => {
     await chat(instance, 'gpt-6-astra');
     expect(instance.client.get).toHaveBeenCalledTimes(1);
     expect(liteHeader()).toBe('true');
+  });
+
+  it('shares in-flight discovery and cached flags across three runtimes with the same credentials', async () => {
+    let resolveCatalog!: (payload: unknown) => void;
+    const get = vi.mocked(OpenAI.prototype.get).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCatalog = resolve;
+        }) as never,
+    );
+    const second = createRuntime();
+    const pending = [chat(), chat(second)];
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    resolveCatalog(fixture(true));
+    await Promise.all(pending);
+    const third = createRuntime();
+    await chat(third);
+    expect(get).toHaveBeenCalledTimes(1);
+    for (const runtime of [instance, second, third]) expect(liteHeader(runtime)).toBe('true');
+  });
+
+  it('shares failure backoff across three runtimes and retries after one hour', async () => {
+    vi.useFakeTimers();
+    for (const runtime of [instance, createRuntime(), createRuntime()]) {
+      await chat(runtime, 'gpt-6-astra');
+      expect(liteHeader(runtime)).toBe('true');
+    }
+    expect(OpenAI.prototype.get).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    vi.mocked(OpenAI.prototype.get).mockResolvedValue(fixture(true) as never);
+    const next = createRuntime();
+    await chat(next);
+    expect(OpenAI.prototype.get).toHaveBeenCalledTimes(2);
+    expect(liteHeader(next)).toBe('true');
+  });
+
+  it.each([
+    { chatgptAccountId: 'different-account' },
+    { apiKey: 'different-token' },
+    { baseURL: 'https://other.example/codex' },
+  ])('isolates catalog flags for different identity components: %j', async (options) => {
+    const get = vi.mocked(OpenAI.prototype.get).mockResolvedValue(fixture(true) as never);
+    await chat();
+    get.mockResolvedValue(fixture(false) as never);
+    const other = createRuntime(options);
+    await chat(other);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(liteHeader()).toBe('true');
+    expect(liteHeader(other)).toBeUndefined();
+  });
+
+  it('falls back within ten seconds when headers arrive but JSON parsing never completes', async () => {
+    vi.useFakeTimers();
+    vi.mocked(OpenAI.prototype.get).mockRestore();
+    const response = new Response('', { headers: { 'content-type': 'application/json' } });
+    const json = vi.spyOn(response, 'json').mockImplementation(() => new Promise(() => {}));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response);
+    let startedAt = 0;
+    vi.mocked(clientVersion.resolveCodexClientVersion).mockImplementation(async () => {
+      startedAt = Date.now();
+      return CODEX_CLIENT_VERSION;
+    });
+    instance = createRuntime({ fetch });
+    const pending = chat(instance, 'gpt-6-astra');
+    await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(9999 - (Date.now() - startedAt));
+    expect(instance.client.responses.create).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(liteHeader()).toBe('true');
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    // The stuck body must not keep later runtime instances waiting or retrying.
+    await chat(createRuntime({ fetch }), 'gpt-6-astra');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // An explicit refresh bypasses backoff and proves the in-flight slot was cleared.
+    fetch.mockResolvedValue(
+      new Response(JSON.stringify(fixture(true)), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await instance.models();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves cached protocol flags when refreshing an expired catalog fails', async () => {
+    vi.useFakeTimers();
+    const get = vi.mocked(OpenAI.prototype.get).mockResolvedValue(fixture(true) as never);
+    await chat();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    get.mockRejectedValue(new Error('catalog offline'));
+    const second = createRuntime();
+    await chat(second);
+    await chat(createRuntime());
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(liteHeader(second)).toBe('true');
+  });
+
+  it('evicts the least recently used catalog above 64 accounts', async () => {
+    const get = vi.mocked(OpenAI.prototype.get).mockResolvedValue(fixture(true) as never);
+    await chat();
+    for (let index = 0; index < 63; index++) {
+      await chat(createRuntime({ chatgptAccountId: `${accountId}-${index}` }));
+    }
+    await chat(createRuntime()); // Keep the original account recently used.
+    await chat(createRuntime({ chatgptAccountId: `${accountId}-overflow` }));
+    await chat(createRuntime());
+    expect(get).toHaveBeenCalledTimes(65);
+    await chat(createRuntime({ chatgptAccountId: `${accountId}-0` }));
+    expect(get).toHaveBeenCalledTimes(66);
   });
 
   it('sends the resolved version and preserves live Astra settings and ultra efforts', async () => {

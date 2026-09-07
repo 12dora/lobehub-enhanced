@@ -35,6 +35,8 @@ vi.mock('@lobechat/utils', async (importOriginal) => {
 
 describe('LobeChatGPTAI', () => {
   let instance: InstanceType<typeof LobeChatGPTAI>;
+  let accountId: string;
+  let accountSequence = 0;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -46,7 +48,8 @@ describe('LobeChatGPTAI', () => {
     vi.spyOn(clientVersion, 'resolveCodexClientVersion').mockResolvedValue(CODEX_CLIENT_VERSION);
     vi.spyOn(OpenAI.prototype, 'get').mockRejectedValue(new Error('catalog offline'));
     vi.mocked(imageUrlToBase64).mockReset();
-    instance = new LobeChatGPTAI({ apiKey: 'access-token', chatgptAccountId: 'account-id' });
+    accountId = `account-id-${++accountSequence}`;
+    instance = new LobeChatGPTAI({ apiKey: 'access-token', chatgptAccountId: accountId });
     vi.spyOn(instance['client'].chat.completions, 'create').mockResolvedValue(
       new ReadableStream() as never,
     );
@@ -62,7 +65,7 @@ describe('LobeChatGPTAI', () => {
     expect(instance['client'].apiKey).toBe('access-token');
     expect(headers).toEqual(
       expect.objectContaining({
-        'ChatGPT-Account-Id': 'account-id',
+        'ChatGPT-Account-Id': accountId,
         'User-Agent': `${BRANDING_NAME}/${CURRENT_VERSION}`,
         'originator': 'lobehub',
         'session-id': expect.any(String),
@@ -609,6 +612,7 @@ describe('LobeChatGPTAI', () => {
       expect(instance['client'].get).toHaveBeenCalledWith('/models', {
         maxRetries: 0,
         query: { client_version: CODEX_CLIENT_VERSION },
+        signal: expect.any(AbortSignal),
         timeout: 10_000,
       });
       expect(models.map((model) => model.id)).toEqual([
@@ -750,6 +754,7 @@ describe('LobeChatGPTAI', () => {
       expect(instance['client'].get).toHaveBeenLastCalledWith('/models', {
         maxRetries: 0,
         query: { client_version: CODEX_CLIENT_VERSION },
+        signal: expect.any(AbortSignal),
         timeout: 10_000,
       });
     });
