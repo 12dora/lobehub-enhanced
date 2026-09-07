@@ -31,7 +31,12 @@ const resolveProvider = async (issuer: string) => {
       (provider.type === 'authentik' || provider.type === 'generic_oidc') &&
       provider.issuer === issuer,
   );
-  const env = snapshot.providerIds.includes(authentik.id) && authentik.checkEnvs();
+  // Startup removes database rows shadowed by environment providers, so an active
+  // ID belongs to the environment only when no database provider owns that key.
+  const env =
+    snapshot.providerIds.includes(authentik.id) &&
+    !snapshot.databaseProviders.some((provider) => provider.providerKey === authentik.id) &&
+    authentik.checkEnvs();
   const envMatches = env && env.AUTH_AUTHENTIK_ISSUER.trim() === issuer;
   if (providers.length + (envMatches ? 1 : 0) !== 1) {
     throw new InvalidLogoutRequest('Unknown or ambiguous logout token issuer');
@@ -128,12 +133,24 @@ export const verifyBackchannelLogoutToken = async (token: string) => {
       ]),
     )
     .digest('hex');
-  const remembered = await redis.set(`oidc:backchannel-logout:${replayId}`, '1', {
+  const replayKey = `oidc:backchannel-logout:${replayId}`;
+  const remembered = await redis.set(replayKey, '1', {
     // Without exp, retain through the last second in which iat is accepted.
     exat: payload.exp ?? payload.iat! + MAX_TOKEN_AGE_SECONDS + 1,
     nx: true,
   });
   if (remembered !== 'OK') throw new InvalidLogoutRequest('Logout token jti has already been used');
 
-  return { providerKey: provider.providerKey, sub: payload.sub };
+  return {
+    providerKey: provider.providerKey,
+    releaseReplayMarker: async () => {
+      try {
+        await redis.del(replayKey);
+      } catch {
+        // Best effort; never expose Redis command arguments or mask revocation failure.
+        console.error('OIDC back-channel logout replay marker cleanup failed');
+      }
+    },
+    sub: payload.sub,
+  };
 };

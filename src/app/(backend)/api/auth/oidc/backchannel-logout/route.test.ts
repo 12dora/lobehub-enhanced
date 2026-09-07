@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     AUTH_AUTHENTIK_SECRET: '',
     AUTH_COOKIE_PREFIX: 'test-aihub',
   },
+  del: vi.fn(),
   initializeRedis: vi.fn(),
   set: vi.fn(),
   snapshot: vi.fn(),
@@ -147,7 +148,8 @@ beforeEach(async () => {
   mocks.deleteSession.mockImplementation(async (token) => {
     secondarySessions.delete(token);
   });
-  mocks.initializeRedis.mockResolvedValue({ set: mocks.set });
+  mocks.initializeRedis.mockResolvedValue({ del: mocks.del, set: mocks.set });
+  mocks.del.mockImplementation(async (key: string) => Number(replayKeys.delete(key)));
   mocks.set.mockImplementation(async (key: string) => {
     if (replayKeys.has(key)) return null;
     replayKeys.add(key);
@@ -282,6 +284,32 @@ describe('OIDC back-channel logout', () => {
     expect(await remainingSessions()).toHaveLength(4);
   });
 
+  it('chooses the database authentik provider when populated env credentials are inactive', async () => {
+    Object.assign(mocks.env, {
+      AUTH_AUTHENTIK_ID: 'inactive-env-client',
+      AUTH_AUTHENTIK_ISSUER: issuer,
+      AUTH_AUTHENTIK_SECRET: 'secret',
+    });
+    expect((await POST(request(await mint()))).status).toBe(200);
+    expect(await remainingSessions()).toEqual(['b-1', 'other-provider']);
+    expect(mocks.fetch).not.toHaveBeenCalledWith(
+      `${issuer}.well-known/openid-configuration`,
+      expect.anything(),
+    );
+  });
+
+  it('evicts sessions sequentially to preserve the per-user active sessions index', async () => {
+    let activeSessions = ['a-1', 'a-2'];
+    mocks.deleteSession.mockImplementation(async (token) => {
+      const current = [...activeSessions];
+      await Promise.resolve();
+      activeSessions = current.filter((entry) => entry !== token);
+      secondarySessions.delete(token);
+    });
+    expect((await POST(request(await mint()))).status).toBe(200);
+    expect(activeSessions).toEqual([]);
+  });
+
   it('supports the enabled env Authentik provider without database providers', async () => {
     mocks.snapshot.mockReturnValue({ databaseProviders: [], providerIds: ['authentik'] });
     Object.assign(mocks.env, {
@@ -393,12 +421,37 @@ describe('OIDC back-channel logout', () => {
     expect(await remainingSessions()).toHaveLength(4);
   });
 
+  it('releases the replay marker after a database failure so the same token can retry', async () => {
+    const token = await mint();
+    vi.spyOn(serverDB, 'delete').mockImplementationOnce(() => {
+      throw new Error('database unavailable');
+    });
+    expect((await POST(request(token))).status).toBe(400);
+    expect(await remainingSessions()).toHaveLength(4);
+    expect(mocks.del).toHaveBeenCalledWith(mocks.set.mock.calls[0][0]);
+    expect(replayKeys.size).toBe(0);
+    expect((await POST(request(token))).status).toBe(200);
+    expect(await remainingSessions()).toEqual(['b-1', 'other-provider']);
+  });
+
+  it('reports revocation failure even if replay marker cleanup fails', async () => {
+    mocks.del.mockRejectedValueOnce(new Error('redis unavailable'));
+    vi.spyOn(serverDB, 'delete').mockImplementationOnce(() => {
+      throw new Error('database unavailable');
+    });
+    expect((await POST(request(await mint()))).status).toBe(400);
+    expect(await remainingSessions()).toHaveLength(4);
+    expect(mocks.del).toHaveBeenCalledOnce();
+  });
+
   it('invalidates liveness and reports failure when secondary-storage cleanup fails', async () => {
     mocks.deleteSession.mockRejectedValue(new Error('storage unavailable'));
     expect((await POST(request(await mint()))).status).toBe(400);
     expect(await remainingSessions()).toEqual(['b-1', 'other-provider']);
     expect(liveness.bumpUserActiveCacheEpoch).toHaveBeenCalledOnce();
-    expect(mocks.deleteSession).toHaveBeenCalledTimes(2);
+    expect(mocks.deleteSession).toHaveBeenCalledTimes(1);
+    expect(mocks.del).toHaveBeenCalledWith(mocks.set.mock.calls[0][0]);
+    expect(replayKeys.size).toBe(0);
   });
 
   it.each(['', 'logout_token=', 'logout_token=malformed', 'logout_token=a&logout_token=b'])(

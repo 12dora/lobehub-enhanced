@@ -26,44 +26,46 @@ export const POST = async (request: Request): Promise<Response> => {
     if (typeof token !== 'string' || !token || form.getAll('logout_token').length !== 1) {
       throw new InvalidLogoutRequest('Exactly one logout_token is required');
     }
-    const { providerKey, sub } = await verifyBackchannelLogoutToken(token);
-    const matchingUsers = serverDB
-      .selectDistinct({ userId: account.userId })
-      .from(account)
-      .where(and(eq(account.providerId, providerKey), eq(account.accountId, sub)));
-    // Capture exactly the deleted rows, including sessions created since account lookup.
-    const deleted = await serverDB
-      .delete(session)
-      .where(inArray(session.userId, matchingUsers))
-      .returning({ token: session.token });
-
+    const { providerKey, releaseReplayMarker, sub } = await verifyBackchannelLogoutToken(token);
     try {
-      if (deleted.length > 0) {
-        const { auth } = await import('@/auth');
-        const context = await auth.$context;
-        // The adapter also maintains active-sessions-{userId}. Unlike the admin
-        // best-effort wrapper, report failure if any secondary-storage eviction fails.
-        const results = await Promise.allSettled(
-          deleted.map(({ token }) => context.internalAdapter.deleteSession(token)),
-        );
-        if (results.some((result) => result.status === 'rejected')) {
-          throw new Error('Logout secondary storage eviction failed');
-        }
-      }
-    } finally {
-      // Same immediate process invalidation and cross-instance 5s TTL as admin revoke.
-      bumpUserActiveCacheEpoch();
-    }
+      const matchingUsers = serverDB
+        .selectDistinct({ userId: account.userId })
+        .from(account)
+        .where(and(eq(account.providerId, providerKey), eq(account.accountId, sub)));
+      // Capture exactly the deleted rows, including sessions created since account lookup.
+      const deleted = await serverDB
+        .delete(session)
+        .where(inArray(session.userId, matchingUsers))
+        .returning({ token: session.token });
 
-    console.info(
-      JSON.stringify({
-        event: 'oidc.backchannel_logout',
-        providerKey,
-        sessionsRevoked: deleted.length,
-        sub,
-      }),
-    );
-    return Response.json({}, { headers });
+      try {
+        if (deleted.length > 0) {
+          const { auth } = await import('@/auth');
+          const context = await auth.$context;
+          // The adapter also maintains active-sessions-{userId}. Unlike the admin
+          // best-effort wrapper, report failure if any secondary-storage eviction fails.
+          for (const { token } of deleted) {
+            await context.internalAdapter.deleteSession(token);
+          }
+        }
+      } finally {
+        // Same immediate process invalidation and cross-instance 5s TTL as admin revoke.
+        bumpUserActiveCacheEpoch();
+      }
+
+      console.info(
+        JSON.stringify({
+          event: 'oidc.backchannel_logout',
+          providerKey,
+          sessionsRevoked: deleted.length,
+          sub,
+        }),
+      );
+      return Response.json({}, { headers });
+    } catch (error) {
+      await releaseReplayMarker();
+      throw error;
+    }
   } catch (error) {
     // Never serialize JWTs, session tokens, or Redis command arguments from thrown errors.
     console.error('OIDC back-channel logout failed', {
