@@ -2,7 +2,10 @@ import { shouldOmitBuiltinInboxSystemRole } from '@lobechat/builtin-agents';
 import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import { AgentBuilderIdentifier } from '@lobechat/builtin-tool-agent-builder';
 import { AgentManagementIdentifier } from '@lobechat/builtin-tool-agent-management';
-import { formatUploadedFilesPrompt } from '@lobechat/builtin-tool-cloud-sandbox';
+import {
+  formatUploadedFilesPrompt,
+  resolvePreinstalledSoftwarePrompt,
+} from '@lobechat/builtin-tool-cloud-sandbox';
 import {
   type ComposioServiceSummary,
   CredsIdentifier,
@@ -64,6 +67,7 @@ import { agentGroupSelectors } from '@/store/agentGroup/selectors';
 import { aiProviderSelectors, getAiInfraStoreState } from '@/store/aiInfra';
 import { getChatStoreState } from '@/store/chat';
 import { chatSelectors, topicSelectors } from '@/store/chat/selectors';
+import { getServerConfigStoreState, serverConfigSelectors } from '@/store/serverConfig';
 import { getToolStoreState } from '@/store/tool';
 import {
   builtinToolSelectors,
@@ -835,6 +839,16 @@ export const contextEngineering = async ({
           year: 'numeric',
         }).format(new Date()),
       sandbox_enabled: () => String(tools?.includes('lobe-cloud-sandbox') ?? false),
+      // NOTICE: required by builtin-tool-cloud-sandbox/src/systemRole.ts —
+      // describes the software baked into the active sandbox image. Local Docker
+      // and the upstream cloud image differ; pick the matching prompt.
+      sandbox_preinstalled_software: () => {
+        if (!tools?.includes('lobe-cloud-sandbox')) return '';
+        const serverConfigState = getServerConfigStoreState();
+        return resolvePreinstalledSoftwarePrompt(
+          serverConfigState ? serverConfigSelectors.sandboxProvider(serverConfigState) : undefined,
+        );
+      },
       // NOTICE: required by builtin-tool-cloud-sandbox/src/systemRole.ts —
       // lists the topic files synced into the sandbox upload dir. Read lazily
       // from the chat store so we only pay the cost when the placeholder renders.

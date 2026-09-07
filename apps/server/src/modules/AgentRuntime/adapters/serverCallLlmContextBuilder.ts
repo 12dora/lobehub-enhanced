@@ -277,20 +277,26 @@ export const buildServerCallLlmContext = async ({
 
   const sandboxEnabled = String(resolved.enabledToolIds.includes('lobe-cloud-sandbox'));
   let sandboxUploadedFiles = '';
-  if (
-    !isManagedPlatformOperation &&
-    sandboxEnabled === 'true' &&
-    ctx.serverDB &&
-    ctx.userId &&
-    lobehubSkillTopicId
-  ) {
+  let sandboxPreinstalledSoftware = '';
+  if (!isManagedPlatformOperation && sandboxEnabled === 'true') {
     try {
-      const { formatUploadedFilesPrompt } = await import('@lobechat/builtin-tool-cloud-sandbox');
-      const fileModel = new FileModel(ctx.serverDB, ctx.userId);
-      const uploadedFiles = await fileModel.findFilesToInitInSandbox(lobehubSkillTopicId);
-      sandboxUploadedFiles = formatUploadedFilesPrompt(uploadedFiles);
+      const { resolvePreinstalledSoftwarePrompt } =
+        await import('@lobechat/builtin-tool-cloud-sandbox');
+      const { getSandboxProviderKind } = await import('@/server/services/sandbox/factory');
+      sandboxPreinstalledSoftware = resolvePreinstalledSoftwarePrompt(getSandboxProviderKind());
     } catch (error) {
-      log('Failed to resolve files for {{sandbox_uploaded_files}} substitution: %O', error);
+      log('Failed to resolve {{sandbox_preinstalled_software}} substitution: %O', error);
+    }
+
+    if (ctx.serverDB && ctx.userId && lobehubSkillTopicId) {
+      try {
+        const { formatUploadedFilesPrompt } = await import('@lobechat/builtin-tool-cloud-sandbox');
+        const fileModel = new FileModel(ctx.serverDB, ctx.userId);
+        const uploadedFiles = await fileModel.findFilesToInitInSandbox(lobehubSkillTopicId);
+        sandboxUploadedFiles = formatUploadedFilesPrompt(uploadedFiles);
+      } catch (error) {
+        log('Failed to resolve files for {{sandbox_uploaded_files}} substitution: %O', error);
+      }
     }
   }
 
@@ -553,6 +559,7 @@ export const buildServerCallLlmContext = async ({
           language: serverLanguage,
           memory_effort: memoryEffort,
           sandbox_enabled: sandboxEnabled,
+          sandbox_preinstalled_software: sandboxPreinstalledSoftware,
           sandbox_uploaded_files: sandboxUploadedFiles,
           session_date: sessionDate,
           username: serverUsername,

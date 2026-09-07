@@ -10,13 +10,12 @@ description: >
 
 Self-serve upgrade path for office files, PDFs, archives, and unknown binaries
 inside the cloud sandbox. Prefer already-attached page images and the
-`viewDocumentPages` tool when they are present. Never loop on re-reading empty
-extracted text — empty text means a scanned or image-only page; render or ask
-for the page image instead.
+`viewDocumentPages` tool (Gotenberg sidecar) when they are present. Never loop
+on re-reading empty extracted text — empty text means a scanned or image-only
+page; render or ask for the page image instead.
 
-This sandbox does **not** ship LibreOffice. Whole-page layout rendering is the
-document-render sidecar's job. Use Python libraries here for text, tables, and
-targeted page images.
+Office/PDF Python libraries, LibreOffice, pandoc, and poppler are preinstalled.
+Do not `pip install` them.
 
 ## Locate the file
 
@@ -32,13 +31,15 @@ the `file` command before picking a recipe:
 file /mnt/data/uploads/<name>-<fileId>
 ```
 
-## Install tools
+## Conversion & preview
 
-Install inside the sandbox (safe to re-run; already-present packages are reused):
+- Office ↔ PDF: `soffice --headless --convert-to pdf|docx|xlsx|pptx --outdir <dir> <file>`
+- Markdown → DOCX: `pandoc in.md -o out.docx`
+- PDF page previews: `pdftoppm -png -r 80 file.pdf page`
 
-```bash
-pip install python-pptx python-docx openpyxl pypdf pdfplumber pymupdf
-```
+For _viewing_ user uploads, prefer attached page images / `viewDocumentPages`
+(Gotenberg). Use LibreOffice / `pdftoppm` for conversions and for previews of
+files you created in the sandbox.
 
 ## Recipes
 
@@ -56,8 +57,8 @@ Do not dump every image unless the user asked; summarize counts and names first.
 
 **Render a page to PNG**
 
-When attached images / `viewDocumentPages` are missing and you need to *see* a
-page (scanned PDF, layout-heavy slide):
+When attached images / `viewDocumentPages` are missing and you need to _see_ a
+page (scanned PDF, layout-heavy slide), use `pdftoppm` or:
 
 ```python
 import fitz  # pymupdf
@@ -80,5 +81,4 @@ instead of guessing cell text.
 ## Do not
 
 - Re-parse a file whose text layer is empty hoping it will appear.
-- Convert the whole deck with LibreOffice (not in this image; sidecar owns that).
 - Download the original over HTTP when `sandboxPath` is set.

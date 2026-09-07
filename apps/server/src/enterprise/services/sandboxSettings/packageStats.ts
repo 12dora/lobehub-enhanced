@@ -1,3 +1,7 @@
+import {
+  SANDBOX_LOCAL_APT_PACKAGES,
+  SANDBOX_LOCAL_NPM_PACKAGES,
+} from '@lobechat/builtin-tool-cloud-sandbox';
 import { max, sql } from 'drizzle-orm';
 
 import { platformSandboxPackageInstalls } from '@/database/schemas/platform';
@@ -13,16 +17,15 @@ import type { AdminSystemGetSandboxPackageStatsOutput } from '../../contracts/ad
  *
  * "Preinstalled" is a claim about ONE manager's namespace: `curl` is in the image as an apt
  * package and says nothing about an npm package of the same name. Checking every row against the
- * pip list alone therefore labelled every apt and npm install a "candidate" — including the five
- * apt packages and the one npm package the image demonstrably already carries.
+ * pip list alone therefore labelled every apt and npm install a "candidate" — including packages
+ * the image demonstrably already carries.
  *
- * apt: the `apt-get install --no-install-recommends` block, minus `xz-utils`, which the same layer
- * purges after unpacking Node. npm: the single `npm install -g` line. The pip list is the shared
- * constant the sandbox runtime uses.
+ * apt / npm / pip lists are the shared LOCAL-image constants (apt minus `xz-utils`, which the
+ * Dockerfile purges after unpacking Node).
  */
 const SANDBOX_PREINSTALLED_BY_MANAGER: Record<SandboxPackageInstallManager, readonly string[]> = {
-  apt: ['build-essential', 'ca-certificates', 'curl', 'git', 'unzip'],
-  npm: ['tsx'],
+  apt: SANDBOX_LOCAL_APT_PACKAGES,
+  npm: SANDBOX_LOCAL_NPM_PACKAGES,
   pip: SANDBOX_PREINSTALLED_PIP_PACKAGES,
 };
 

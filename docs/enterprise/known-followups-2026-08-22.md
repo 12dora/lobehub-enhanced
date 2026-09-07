@@ -38,7 +38,7 @@ Items raised by code review that were judged low-impact / theoretical for this d
 
 - **Image-only PDFs are rasterized server-side** (pdfjs + @napi-rs/canvas) and attached as page images for ChatGPT/ChatGPTWeb/Grok/SuperGrok/Cursor; triggered only when the extracted text is < 20 chars. Plain API providers (OpenAI/Anthropic/…) are not in the hook's provider set — add them to `OWN_ORIGIN_ATTACHMENT_INLINE_RUNTIMES` if needed.
 - **Codex backend does not rasterize PDFs** (`input_file` of a scan → "blank page"); the official Codex client and ChatGPT web do their own conversion. Our page images are the equivalent.
-- **Agent loops may still prefer tools over attached images** (Codex first trusted an empty tool read; Grok Build tried to upscale via the sandbox, which has no `pdftoppm`). Mitigated by the explicit notice + rewritten `<file>` body; dense pages get zoomed 2×2 tiles (t8). Consider adding poppler/pdf tooling to the sandbox image.
+- **Agent loops may still prefer tools over attached images** (Codex first trusted an empty tool read; Grok Build tried to upscale via the sandbox, which at the time had no `pdftoppm` — poppler-utils is now baked into `Dockerfile.sandbox`). Mitigated by the explicit notice + rewritten `<file>` body; dense pages get zoomed 2×2 tiles (t8).
 - `docker logs --since` returned nothing after the Docker Desktop crash/restart (daemon clock skew); use `--tail N` instead.
 - Host crash on 2026-08-22: Docker image builds + parallel agent test suites + three agent-mode experiments (each spawning a sandbox container) saturated the CPU. Rule: one heavy job at a time; lower the Docker Desktop CPU cap before builds.
 

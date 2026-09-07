@@ -61,7 +61,10 @@ with `EACCES` / “Docker daemon is unreachable”, the GID is wrong — the soc
 is `root:docker` mode `0660` on a typical Linux host.
 
 Build the sandbox runtime image from the repo root (`bun run build:sandbox-image`,
-add `-- --smoke` to run `tsx` + `unzip` inside the image).
+add `-- --smoke` to run `scripts/sandbox-image-smoke.sh` as uid 1000 on a
+read-only rootfs). The image bakes in LibreOffice, pandoc, poppler-utils, CJK
+fonts, and pinned Python/Node Office libraries so Word/Excel/PowerPoint work
+without runtime package downloads (the rootfs is read-only).
 
 Database migrations run automatically when the app container starts.
 

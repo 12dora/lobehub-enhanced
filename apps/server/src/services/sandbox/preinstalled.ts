@@ -1,30 +1,7 @@
 /**
- * Pip packages baked into `Dockerfile.sandbox`. Keep this list identical to the
- * image's `pip install --no-cache-dir` block (lowercase, pip-normalized names).
+ * Pip packages baked into `Dockerfile.sandbox`. Alias of the shared LOCAL image
+ * list; keep the Dockerfile pip block identical (lowercase, pip-normalized).
  * The sibling test parses the Dockerfile so the two cannot drift.
  */
-export const SANDBOX_PREINSTALLED_PIP_PACKAGES = [
-  'beautifulsoup4',
-  'chardet',
-  'lxml',
-  'matplotlib',
-  'numpy',
-  'openpyxl',
-  'pandas',
-  'pdfplumber',
-  'pillow',
-  'pymupdf',
-  'pypdf',
-  'python-dateutil',
-  'python-docx',
-  'python-pptx',
-  'pyyaml',
-  'reportlab',
-  'requests',
-  'scipy',
-  'tabulate',
-  'xlrd',
-  'xlsxwriter',
-] as const;
-
-export type SandboxPreinstalledPipPackage = (typeof SANDBOX_PREINSTALLED_PIP_PACKAGES)[number];
+export type { SandboxLocalPipPackage as SandboxPreinstalledPipPackage } from '@lobechat/builtin-tool-cloud-sandbox';
+export { SANDBOX_LOCAL_PIP_PACKAGES as SANDBOX_PREINSTALLED_PIP_PACKAGES } from '@lobechat/builtin-tool-cloud-sandbox';

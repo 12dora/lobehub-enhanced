@@ -10,11 +10,13 @@ import { resolveServerCallLlmContextHints } from './serverCallLlmContextHints';
 const {
   callTool,
   createCachedPreSignedUrlForPreview,
+  getSandboxProviderKind,
   serverMessagesEngine,
   syncOverLimitAttachments,
 } = vi.hoisted(() => ({
   callTool: vi.fn(),
   createCachedPreSignedUrlForPreview: vi.fn(async (url: string) => `https://signed.example/${url}`),
+  getSandboxProviderKind: vi.fn((): 'local' | 'market' | 'onlyboxes' => 'local'),
   serverMessagesEngine: vi.fn(async (input: { messages: unknown[] }) => input.messages),
   syncOverLimitAttachments: vi.fn(async (files: Array<{ id: string; name: string }>) =>
     Object.fromEntries(
@@ -24,6 +26,10 @@ const {
 }));
 
 vi.mock('@/server/modules/Mecha/ContextEngineering', () => ({ serverMessagesEngine }));
+
+vi.mock('@/server/services/sandbox/factory', () => ({
+  getSandboxProviderKind,
+}));
 
 vi.mock('@/server/services/file', () => ({
   FileService: vi.fn().mockImplementation(() => ({
@@ -137,6 +143,7 @@ const mockHintsWithNativeFiles = () => {
 
 const engineInput = () =>
   serverMessagesEngine.mock.calls[0][0] as {
+    additionalVariables?: { sandbox_preinstalled_software?: string };
     capabilities?: { isCanUseFiles: (model: string, provider: string) => boolean };
     fileContext?: {
       omitFileUrlFileIds?: string[];
@@ -167,6 +174,7 @@ describe('buildServerCallLlmContext — sandbox attachment sync', () => {
           files.map((file) => [file.id, sandboxOverLimitUploadPath(file.name, file.id)]),
         ),
     );
+    getSandboxProviderKind.mockReturnValue('local');
   });
 
   it('signs a bot-originated document storage key and syncs without callTool', async () => {
@@ -322,5 +330,45 @@ describe('buildServerCallLlmContext — sandbox attachment sync', () => {
       'file-zip': sandboxOverLimitUploadPath('data.zip', 'file-zip'),
     });
     expect(input.fileContext?.omitFileUrlFileIds).toEqual(['file-zip']);
+  });
+
+  it('injects the local preinstalled software prompt when the sandbox provider is local', async () => {
+    getSandboxProviderKind.mockReturnValue('local');
+
+    await buildServerCallLlmContext({
+      ctx: makeCtx() as never,
+      llmPayload: {
+        messages: [{ content: 'summarize', fileList: [smallDocument], role: 'user' }],
+      } as never,
+      model: 'gpt-4',
+      provider: 'openai',
+      resolvedExecution: null,
+      state: { metadata: { topicId: 'topic-1' } } as never,
+      tooling: tooling as never,
+    });
+
+    expect(engineInput().additionalVariables?.sandbox_preinstalled_software).toContain(
+      'Dockerfile.sandbox',
+    );
+  });
+
+  it('injects the cloud preinstalled software prompt for non-local providers', async () => {
+    getSandboxProviderKind.mockReturnValue('market');
+
+    await buildServerCallLlmContext({
+      ctx: makeCtx() as never,
+      llmPayload: {
+        messages: [{ content: 'summarize', fileList: [smallDocument], role: 'user' }],
+      } as never,
+      model: 'gpt-4',
+      provider: 'openai',
+      resolvedExecution: null,
+      state: { metadata: { topicId: 'topic-1' } } as never,
+      tooling: tooling as never,
+    });
+
+    expect(engineInput().additionalVariables?.sandbox_preinstalled_software).toContain(
+      'lobehubbot/python-node',
+    );
   });
 });

@@ -176,7 +176,7 @@
 
 ## 8. 智能体模式:沙箱 + skill(补足上限)
 - 所有附件同步进 `/mnt/data/uploads/<name>-<fileId>`(去掉"仅超限"条件),`<files_info>` 标 `sandboxPath`;同步失败不影响投喂(已修复)。
-- 内置 `document-processing` skill:描述写成触发条件("附带/询问 PDF、Office、压缩包、未知二进制,或需要更多页、OCR、抽表时");正文:`file` 判类型 → `pip install python-pptx/pypdf/...`(沙箱可自装)→ 转文本/图 → `exportFile` 或直接回图。沙箱镜像不预装 LibreOffice;整页渲染仍由 sidecar 承担。
+- 内置 `document-processing` skill:描述写成触发条件("附带/询问 PDF、Office、压缩包、未知二进制,或需要更多页、OCR、抽表时");正文:`file` 判类型 → 用镜像预装的 python-docx / python-pptx / openpyxl / pypdf / pymupdf 等处理 → 需要转 PDF 或渲页时用 `soffice --headless --convert-to pdf --outdir /mnt/data <file>` 和 `pdftoppm`(根文件系统只读,运行时 `apt` / `pip install` / `npm install -g` 不可用)→ `exportFile` 或直接回图。聊天投喂的整页渲染仍由 Gotenberg sidecar 承担;沙箱 LibreOffice 只服务智能体在沙箱内的创建/编辑/转换。
 - Cursor 端点无 shell,不适用本层。
 
 ---

@@ -1,4 +1,8 @@
 // @vitest-environment node
+import {
+  SANDBOX_LOCAL_APT_PACKAGES,
+  SANDBOX_LOCAL_NPM_PACKAGES,
+} from '@lobechat/builtin-tool-cloud-sandbox';
 import { inArray } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -70,11 +74,17 @@ describe('getSandboxPackageStats', () => {
     const result = await getSandboxPackageStats(db, { days: 30, limit: 20 });
     expect(result.windowDays).toBe(30);
     expect(result.totalPackages).toBe(3);
-    // The image ships more than pip packages; the list the card counts covers all of them.
+    // The image ships apt + npm + pip packages; the card counts all of them.
     expect(result.preinstalled).toEqual(
-      expect.arrayContaining([...SANDBOX_PREINSTALLED_PIP_PACKAGES]),
+      expect.arrayContaining([
+        ...SANDBOX_LOCAL_APT_PACKAGES,
+        ...SANDBOX_LOCAL_NPM_PACKAGES,
+        ...SANDBOX_PREINSTALLED_PIP_PACKAGES,
+      ]),
     );
-    expect(result.preinstalled).toEqual(expect.arrayContaining(['curl', 'git', 'tsx']));
+    expect(result.preinstalled).toEqual(
+      expect.arrayContaining(['curl', 'git', 'tsx', 'libreoffice-writer', 'docx', 'python-docx']),
+    );
     expect(result.items.map((item) => item.package)).toEqual(['requests', 'lodash', 'obscure-lib']);
     expect(result.items[0]).toMatchObject({
       installs: 10,
@@ -108,6 +118,8 @@ describe('getSandboxPackageStats', () => {
       { installCount: 8, manager: 'apt', package: 'vim', userId: userA },
       { installCount: 7, manager: 'npm', package: 'tsx', userId: userA },
       { installCount: 6, manager: 'npm', package: 'lodash', userId: userA },
+      { installCount: 2, manager: 'apt', package: 'libreoffice-writer', userId: userA },
+      { installCount: 1, manager: 'npm', package: 'docx', userId: userA },
       // Same spelling, different namespace: neither claim may leak into the other.
       { installCount: 5, manager: 'npm', package: 'requests', userId: userA },
       { installCount: 4, manager: 'pip', package: 'curl', userId: userA },
@@ -120,7 +132,9 @@ describe('getSandboxPackageStats', () => {
 
     expect(flag('apt', 'curl')).toBe(true);
     expect(flag('apt', 'vim')).toBe(false);
+    expect(flag('apt', 'libreoffice-writer')).toBe(true);
     expect(flag('npm', 'tsx')).toBe(true);
+    expect(flag('npm', 'docx')).toBe(true);
     expect(flag('npm', 'lodash')).toBe(false);
     expect(flag('npm', 'requests')).toBe(false);
     expect(flag('pip', 'curl')).toBe(false);

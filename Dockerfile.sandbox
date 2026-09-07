@@ -1,25 +1,45 @@
 # Isolated Cloud Sandbox image for SANDBOX_PROVIDER=local.
 # Not bundled into the main app Dockerfile. Build with:
 #   bun run build:sandbox-image
+#
+# Keep the apt / npm -g / pip blocks identical to SANDBOX_LOCAL_*_PACKAGES in
+# packages/builtin-tool-cloud-sandbox/src/preinstalled.ts (drift tests parse them).
+#
+# LibreOffice headless conversion (uid 1000, read-only rootfs; HOME=/mnt/data is
+# the writable profile + workspace — the local provider sets this at runtime):
+#   soffice --headless --convert-to pdf --outdir /mnt/data <file>
 FROM python:3.12-slim
 
 ARG NODE_VERSION=22.16.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    NODE_PATH=/usr/local/lib/node_modules \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    SAL_USE_VCLPLUGIN=svp
 
-ARG TSX_VERSION=4.22.4
-
+# xz-utils is only needed to unpack the Node tarball and is purged in this layer;
+# it is not part of SANDBOX_LOCAL_APT_PACKAGES.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     curl \
+    file \
+    fonts-dejavu-core \
+    fonts-liberation \
+    fonts-noto-cjk \
     git \
+    jq \
+    libreoffice-calc \
+    libreoffice-impress \
+    libreoffice-writer \
+    pandoc \
+    poppler-utils \
     unzip \
+    wget \
     xz-utils \
   && arch="$(dpkg --print-architecture)" \
   && case "$arch" in \
@@ -29,20 +49,31 @@ RUN apt-get update \
     esac \
   && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
     | tar -xJ -C /usr/local --strip-components=1 \
-  && npm install -g "tsx@${TSX_VERSION}" \
+  && npm install -g \
+    "docx@9.7.1" \
+    "exceljs@4.4.0" \
+    "mammoth@1.12.2" \
+    "pdf-lib@1.17.1" \
+    "pptxgenjs@4.0.1" \
+    "tsx@4.22.4" \
   && apt-get purge -y xz-utils \
   && apt-get autoremove -y \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
 
 RUN pip install --no-cache-dir --upgrade pip \
   && pip install --no-cache-dir \
     beautifulsoup4 \
     chardet \
+    defusedxml \
+    docxcompose \
+    docxtpl \
     lxml \
     matplotlib \
     numpy \
+    odfpy \
     openpyxl \
     pandas \
+    pdf2image \
     pdfplumber \
     pillow \
     pymupdf \
@@ -63,6 +94,7 @@ RUN useradd --uid 1000 --create-home --shell /bin/bash sandbox \
   && chown sandbox:sandbox /mnt/data
 
 USER sandbox
+ENV HOME=/mnt/data
 WORKDIR /mnt/data
 
 CMD ["sleep", "infinity"]

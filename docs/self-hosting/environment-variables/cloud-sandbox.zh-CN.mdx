@@ -103,10 +103,23 @@ tags:
 ```bash
 bun run build:sandbox-image
 # 打上 aihub-sandbox:<package version> 和 aihub-sandbox:latest
-bun run build:sandbox-image -- --smoke   # 再在镜像里跑 tsx hello 和 unzip -v
+bun run build:sandbox-image -- --smoke   # 跑 scripts/sandbox-image-smoke.sh（Office + tsx + unzip）
 ```
 
-镜像基于 `python:3.12-slim`，另外包含 Node 22、git、curl、unzip、固定版本的全局 `tsx`、编译工具链，以及常用的数据 / 文档 Python 库。默认工作目录是 `/mnt/data`。
+镜像基于 `python:3.12-slim`（Debian trixie），另外包含 Node 22、编译工具链，以及下文列出的预装软件。默认工作目录是 `/mnt/data`。运行时容器根文件系统是**只读**的（`/tmp` 是 noexec tmpfs；`/mnt/data` 是可写 HOME），因此 `apt-get`、`npm install -g` 和系统级 `pip install` 不会成功——软件必须写进 `Dockerfile.sandbox`。
+
+### 办公文档
+
+Word / Excel / PowerPoint 的创建、编辑、转换都已预装，智能体不应再等待运行时下载。
+
+- **LibreOffice** writer / calc / impress — `soffice --headless --convert-to pdf --outdir /mnt/data <file>`（也支持 docx/xlsx/pptx/odt）。`HOME=/mnt/data` 可写，用户配置写在这里。
+- **pandoc** — Markdown/HTML ↔ DOCX/ODT。
+- **poppler-utils** — `pdftoppm`（PDF 页 → PNG）和 `pdftotext`。
+- **字体：** Noto CJK、Liberation、DejaVu，保证 CJK 文字能进 PDF。
+- **Python：** `python-docx`、`docxtpl`、`docxcompose`、`openpyxl`、`xlsxwriter`、`xlrd`、`python-pptx`、`odfpy`、`pypdf`、`pdfplumber`、`pymupdf`、`reportlab`、`pdf2image`，以及 `Dockerfile.sandbox` pip 块中的其余库。
+- **Node（全局，经 `NODE_PATH` 可 `require()`）：** `docx`、`exceljs`、`pptxgenjs`、`mammoth`、`pdf-lib`、`tsx@4.22.4`。
+
+`scripts/sandbox-image-smoke.sh` 会以 uid `1000`、只读根文件系统跑这些检查。镜像不含 Chromium/Playwright、FFmpeg、Tesseract、Java。
 
 ### 限额与 Docker 连接
 

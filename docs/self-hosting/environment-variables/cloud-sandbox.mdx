@@ -103,10 +103,23 @@ Build and tag the sandbox image (not the main app image):
 ```bash
 bun run build:sandbox-image
 # tags aihub-sandbox:<package version> and aihub-sandbox:latest
-bun run build:sandbox-image -- --smoke   # also runs tsx hello + unzip -v in the image
+bun run build:sandbox-image -- --smoke   # runs scripts/sandbox-image-smoke.sh (Office + tsx + unzip)
 ```
 
-The image is `python:3.12-slim` plus Node 22, git, curl, unzip, a pinned global `tsx`, a compiler toolchain, and common data/document Python libraries. Default working directory is `/mnt/data`.
+The image is `python:3.12-slim` (Debian trixie) plus Node 22, a compiler toolchain, and the packages listed below. Default working directory is `/mnt/data`. The container root filesystem is **read-only** at run time (`/tmp` is a noexec tmpfs; `/mnt/data` is the writable HOME), so `apt-get`, `npm install -g`, and system-wide `pip install` cannot succeed — bake packages into `Dockerfile.sandbox` instead.
+
+### Office documents
+
+Word, Excel, and PowerPoint create/edit/convert paths are preinstalled. Agents must not wait on package downloads.
+
+- **LibreOffice** writer / calc / impress — `soffice --headless --convert-to pdf --outdir /mnt/data <file>` (also docx/xlsx/pptx/odt). `HOME=/mnt/data` is writable so the user profile lands there.
+- **pandoc** — Markdown/HTML ↔ DOCX/ODT.
+- **poppler-utils** — `pdftoppm` (PDF pages → PNG) and `pdftotext`.
+- **Fonts:** Noto CJK, Liberation, DejaVu so CJK text survives PDF export.
+- **Python:** `python-docx`, `docxtpl`, `docxcompose`, `openpyxl`, `xlsxwriter`, `xlrd`, `python-pptx`, `odfpy`, `pypdf`, `pdfplumber`, `pymupdf`, `reportlab`, `pdf2image`, plus numpy/pandas/scipy/matplotlib and the rest of the pip block in `Dockerfile.sandbox`.
+- **Node (global, `require()`-able via `NODE_PATH`):** `docx`, `exceljs`, `pptxgenjs`, `mammoth`, `pdf-lib`, `tsx@4.22.4`.
+
+`scripts/sandbox-image-smoke.sh` runs those checks as uid `1000` on a read-only rootfs. Not in the image: Chromium/Playwright, FFmpeg, Tesseract, Java.
 
 ### Limits and Docker connection
 

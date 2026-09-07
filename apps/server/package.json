@@ -6,6 +6,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@lobechat/builtin-tool-cloud-sandbox": "workspace:*",
     "@lobechat/builtin-tool-document-pages": "workspace:*"
   }
 }

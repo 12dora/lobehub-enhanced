@@ -144,6 +144,7 @@ describe('buildServerCallLlmContext — managed exact prompt boundary', () => {
       expect.objectContaining({
         agent_id: 'dynamic-agent-id',
         device_name: 'dynamic-device',
+        sandbox_preinstalled_software: '',
       }),
     );
     expect(input.botPlatformContext).toEqual(dynamicCtx.botPlatformContext);
