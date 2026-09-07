@@ -77,7 +77,7 @@ const withSetEnabledPermissionLookup = trpc.middleware(async ({ ctx, getRawInput
   const raw = await getRawInput();
   const skillKey = (raw as { skillKey?: string } | null)?.skillKey;
   const permission = await resolveSetEnabledPermission(
-    (ctx as { serverDB: LobeChatDatabase }).serverDB,
+    (ctx as unknown as { serverDB: LobeChatDatabase }).serverDB,
     skillKey,
   );
   return setEnabledPermissionStore.run(permission, () => next());
