@@ -64,7 +64,9 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
   // signed-in user's settings.
   const adminScope = useAdminToolScope();
   const enabled = adminScope ? adminScope.isOrgSkillEnabled(skill.identifier) : isUserEnabled;
-  const canToggleEnabled = adminScope ? adminScope.capabilities.canUpdateSkill : canEdit;
+  const canToggleEnabled = adminScope
+    ? adminScope.canSetSkillAvailability(skill.identifier)
+    : canEdit;
 
   const handleToggleEnabled = async (next: boolean) => {
     if (!canToggleEnabled) return;
@@ -133,6 +135,7 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
               disabled={!canToggleEnabled}
               identifier={skill.identifier}
               kind={'skill'}
+              label={skill.name}
               onToggle={handleToggleEnabled}
             />
             {skill.source === 'user' && (

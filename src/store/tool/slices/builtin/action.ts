@@ -1,5 +1,6 @@
 import { defaultUninstalledBuiltinTools } from '@lobechat/builtin-tools';
 import debug from 'debug';
+import { t } from 'i18next';
 import { type SWRResponse } from 'swr';
 import useSWR from 'swr';
 
@@ -7,6 +8,7 @@ import {
   getActiveWorkspaceId,
   useActiveWorkspaceId,
 } from '@/business/client/hooks/useActiveWorkspaceId';
+import { message } from '@/components/AntdStaticMethods';
 import { mutate } from '@/libs/swr';
 import { toolKeys } from '@/libs/swr/keys';
 import { userService } from '@/services/user';
@@ -114,6 +116,43 @@ const buildDisabledSkillsUpdate = <T extends UninstalledBuiltinToolsScope>(
     : { ...tool, disabledSkillIdentifiers: nextDisabled };
 
 /**
+ * The `settings.tool` slots the skill toggles rewrite. Only these are carried
+ * over from an in-flight burst of toggles; every other setting stays whatever
+ * the server last returned.
+ */
+const SKILL_DISABLE_SLOTS = [
+  'disabledSkillIdentifiers',
+  'disabledSkillIdentifiersByWorkspace',
+  'uninstalledBuiltinTools',
+  'uninstalledBuiltinToolsByWorkspace',
+] as const;
+
+/**
+ * Overlay the disable slots this store already persisted onto a freshly read
+ * `tool` object.
+ *
+ * Toggles are serialized, so the previous write has always resolved by the time
+ * the next one reads — but the read can still miss it (a cached or replicated
+ * response), and rebasing onto that stale value is exactly the lost update the
+ * queue exists to prevent.
+ */
+const mergePersistedDisableSlots = <T extends UninstalledBuiltinToolsScope>(
+  tool: T | undefined,
+  persisted: UninstalledBuiltinToolsScope | undefined,
+): T | undefined => {
+  if (!persisted) return tool;
+
+  const merged = { ...tool } as T;
+  for (const slot of SKILL_DISABLE_SLOTS) {
+    if (Object.hasOwn(persisted, slot)) {
+      (merged as UninstalledBuiltinToolsScope)[slot] = persisted[slot] as never;
+    }
+  }
+
+  return merged;
+};
+
+/**
  * Builtin Tool Action Interface
  */
 
@@ -124,6 +163,18 @@ export const createBuiltinToolSlice = (set: Setter, get: () => ToolStore, _api?:
 export class BuiltinToolActionImpl {
   readonly #get: () => ToolStore;
   readonly #set: Setter;
+
+  /**
+   * Serializes every `settings.tool` mutation issued by this store. Each toggle
+   * is a read-modify-write of the whole `tool` object, so two overlapping
+   * toggles would both rebase on the pre-toggle value and the later write would
+   * silently drop the earlier one.
+   */
+  #settingsMutationChain: Promise<unknown> = Promise.resolve();
+  /** Number of queued-or-running settings mutations. */
+  #settingsMutationDepth = 0;
+  /** Last `tool` payload persisted during the current burst; see {@link mergePersistedDisableSlots}. */
+  #persistedToolSettings: UninstalledBuiltinToolsScope | undefined;
 
   constructor(set: Setter, get: () => ToolStore, _api?: unknown) {
     void _api;
@@ -197,44 +248,101 @@ export class BuiltinToolActionImpl {
   // ========== Uninstalled Builtin Tools Management ==========
 
   /**
+   * Run a `settings.tool` mutation after every earlier one has settled, so the
+   * read-modify-write cycles never interleave. A rejected task does not break
+   * the chain: the next mutation still runs.
+   */
+  #enqueueToolSettingsMutation = <T>(task: () => Promise<T>): Promise<T> => {
+    this.#settingsMutationDepth += 1;
+
+    const run = this.#settingsMutationChain.then(task, task);
+
+    this.#settingsMutationChain = run.then(
+      () => this.#releaseToolSettingsMutation(),
+      () => this.#releaseToolSettingsMutation(),
+    );
+
+    return run;
+  };
+
+  #releaseToolSettingsMutation = (): void => {
+    this.#settingsMutationDepth -= 1;
+    // The overlay only has to bridge the writes of a single burst. Once the
+    // queue drains the server is authoritative again, so another device's
+    // changes are never overwritten by a stale local snapshot.
+    if (this.#settingsMutationDepth <= 0) {
+      this.#settingsMutationDepth = 0;
+      this.#persistedToolSettings = undefined;
+    }
+  };
+
+  /** Freshest `tool` settings: the server value plus this burst's own writes. */
+  #readToolSettings = async () => {
+    const userState = await userService.getUserState();
+
+    return mergePersistedDisableSlots(userState?.settings?.tool, this.#persistedToolSettings);
+  };
+
+  /** Surface a failed skill toggle; the caller has already rolled the store back. */
+  #notifySkillToggleFailed = (error: unknown): void => {
+    log('skill toggle failed: %o', error);
+    message.error(t('tools.skillEnabled.saveFailed', { ns: 'setting' }));
+  };
+
+  /**
    * Toggle a builtin tool's installed state for the active scope (personal or
    * workspace), persisting to the matching slot in user settings.
    *
    * The current list is read fresh from the server so the diff is against the
    * real stored value (not the default seed), and the full `tool` object is
    * written back so the other scope's list and `humanIntervention` survive the
-   * server's wholesale column replacement.
+   * server's wholesale column replacement. The whole read-modify-write runs on
+   * the settings queue, so a second toggle can never overwrite the first.
    */
-  #toggleBuiltinToolInstalled = async (identifier: string, install: boolean): Promise<void> => {
-    const workspaceId = getActiveWorkspaceId();
+  #toggleBuiltinToolInstalled = (identifier: string, install: boolean): Promise<void> =>
+    this.#enqueueToolSettingsMutation(async () => {
+      const workspaceId = getActiveWorkspaceId();
 
-    const userState = await userService.getUserState();
-    const tool = userState?.settings?.tool;
-    const currentUninstalled = resolveUninstalledBuiltinTools(tool, workspaceId);
+      const tool = await this.#readToolSettings();
+      const currentUninstalled = resolveUninstalledBuiltinTools(tool, workspaceId);
 
-    const alreadyUninstalled = currentUninstalled.includes(identifier);
-    // No-op if the tool is already in the desired state.
-    if (install ? !alreadyUninstalled : alreadyUninstalled) return;
+      const alreadyUninstalled = currentUninstalled.includes(identifier);
+      // No-op if the tool is already in the desired state.
+      if (install ? !alreadyUninstalled : alreadyUninstalled) return;
 
-    const newUninstalled = install
-      ? currentUninstalled.filter((id) => id !== identifier)
-      : [...currentUninstalled, identifier];
+      const newUninstalled = install
+        ? currentUninstalled.filter((id) => id !== identifier)
+        : [...currentUninstalled, identifier];
 
-    // Optimistic update
-    this.#set(
-      { uninstalledBuiltinTools: newUninstalled, uninstalledBuiltinToolsLoading: false },
-      false,
-      n(install ? 'installBuiltinTool' : 'uninstallBuiltinTool'),
-    );
+      const nextTool = buildUninstalledToolsUpdate(tool, workspaceId, newUninstalled);
+      const previousUninstalled = this.#get().uninstalledBuiltinTools;
 
-    // Persist to user settings (scoped to personal / active workspace)
-    await userService.updateUserSettings({
-      tool: buildUninstalledToolsUpdate(tool, workspaceId, newUninstalled),
+      // Optimistic update
+      this.#set(
+        { uninstalledBuiltinTools: newUninstalled, uninstalledBuiltinToolsLoading: false },
+        false,
+        n(install ? 'installBuiltinTool' : 'uninstallBuiltinTool'),
+      );
+
+      try {
+        // Persist to user settings (scoped to personal / active workspace)
+        await userService.updateUserSettings({ tool: nextTool });
+      } catch (error) {
+        // Roll the optimistic state back so the row matches what is stored.
+        this.#set(
+          { uninstalledBuiltinTools: previousUninstalled },
+          false,
+          n('rollbackBuiltinToolInstalled'),
+        );
+        this.#notifySkillToggleFailed(error);
+        throw error;
+      }
+
+      this.#persistedToolSettings = nextTool;
+
+      // Refresh to ensure consistency
+      await this.refreshUninstalledBuiltinTools();
     });
-
-    // Refresh to ensure consistency
-    await this.refreshUninstalledBuiltinTools();
-  };
 
   /**
    * Install a builtin tool by removing it from the uninstalled list
@@ -254,35 +362,45 @@ export class BuiltinToolActionImpl {
    * Toggle a skill's disabled state for the active scope (personal or
    * workspace) by writing `disabledSkillIdentifiers` in user settings.
    *
-   * Same read-then-write discipline as the builtin list: the stored value is
-   * read fresh from the server and the whole `tool` object is written back,
-   * because the server replaces the column wholesale.
+   * Same read-then-write discipline as the builtin list — queued, read fresh
+   * from the server and written back whole, because the server replaces the
+   * column wholesale.
    */
-  #toggleSkillDisabled = async (identifier: string, enabled: boolean): Promise<void> => {
-    const workspaceId = getActiveWorkspaceId();
+  #toggleSkillDisabled = (identifier: string, enabled: boolean): Promise<void> =>
+    this.#enqueueToolSettingsMutation(async () => {
+      const workspaceId = getActiveWorkspaceId();
 
-    const userState = await userService.getUserState();
-    const tool = userState?.settings?.tool;
-    const currentDisabled = resolveDisabledSkillIdentifiers(tool, workspaceId);
+      const tool = await this.#readToolSettings();
+      const currentDisabled = resolveDisabledSkillIdentifiers(tool, workspaceId);
 
-    const alreadyDisabled = currentDisabled.includes(identifier);
-    // No-op if the skill is already in the desired state.
-    if (enabled ? !alreadyDisabled : alreadyDisabled) return;
+      const alreadyDisabled = currentDisabled.includes(identifier);
+      // No-op if the skill is already in the desired state.
+      if (enabled ? !alreadyDisabled : alreadyDisabled) return;
 
-    const nextDisabled = enabled
-      ? currentDisabled.filter((id) => id !== identifier)
-      : [...currentDisabled, identifier];
+      const nextDisabled = enabled
+        ? currentDisabled.filter((id) => id !== identifier)
+        : [...currentDisabled, identifier];
 
-    // Optimistic update
-    this.#set({ disabledSkillIdentifiers: nextDisabled }, false, n('setSkillEnabled'));
+      const nextTool = buildDisabledSkillsUpdate(tool, workspaceId, nextDisabled);
+      const previousDisabled = this.#get().disabledSkillIdentifiers;
 
-    await userService.updateUserSettings({
-      tool: buildDisabledSkillsUpdate(tool, workspaceId, nextDisabled),
+      // Optimistic update
+      this.#set({ disabledSkillIdentifiers: nextDisabled }, false, n('setSkillEnabled'));
+
+      try {
+        await userService.updateUserSettings({ tool: nextTool });
+      } catch (error) {
+        // Roll the optimistic state back so the switch matches what is stored.
+        this.#set({ disabledSkillIdentifiers: previousDisabled }, false, n('rollbackSkillEnabled'));
+        this.#notifySkillToggleFailed(error);
+        throw error;
+      }
+
+      this.#persistedToolSettings = nextTool;
+
+      // Refresh to ensure consistency
+      await this.refreshUninstalledBuiltinTools();
     });
-
-    // Refresh to ensure consistency
-    await this.refreshUninstalledBuiltinTools();
-  };
 
   /**
    * Enable or disable a skill for the signed-in user across every assistant.

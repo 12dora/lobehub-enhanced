@@ -25,6 +25,11 @@ export interface SkillEnabledSwitchProps {
   identifier: string;
   /** Which persistence slot the toggle writes to. */
   kind: 'builtin' | 'skill';
+  /**
+   * Display name of the skill. Folded into the control's accessible name so
+   * screen-reader users can tell the switches of a list apart.
+   */
+  label?: string;
   /** External busy state (e.g. an org catalog write in flight). */
   loading?: boolean;
   /** Mandatory catalog distribution: locked on, users cannot disable it. */
@@ -53,6 +58,7 @@ const SkillEnabledSwitch = memo<SkillEnabledSwitchProps>(
     disabled,
     identifier,
     kind,
+    label,
     loading,
     mandatory,
     onChange,
@@ -76,17 +82,28 @@ const SkillEnabledSwitch = memo<SkillEnabledSwitchProps>(
         if (onToggle) await onToggle(next);
         else await setSkillEnabled({ enabled: next, identifier, kind });
         onChange?.(next);
+      } catch {
+        // The write owner (tool store / admin scope) rolls its own state back
+        // and surfaces the error; the switch only has to leave the busy state,
+        // after which it re-renders from whatever state actually persisted.
       } finally {
         setPending(false);
       }
     };
+
+    const stateLabel = isEnabled ? t('tools.skillEnabled.on') : t('tools.skillEnabled.off');
+    // The switch renders as a bare button with no visible text and the base-ui
+    // component forwards no aria-* props, so `title` is the only accessible-name
+    // hook available — without the skill name every switch in a list would be
+    // announced identically.
+    const accessibleName = label ? `${label}: ${stateLabel}` : stateLabel;
 
     return (
       <Tooltip
         title={
           mandatory
             ? t('tools.skillEnabled.mandatory')
-            : `${isEnabled ? t('tools.skillEnabled.on') : t('tools.skillEnabled.off')} — ${t('tools.skillEnabled.tooltip')}`
+            : `${stateLabel} — ${t('tools.skillEnabled.tooltip')}`
         }
       >
         <span onClick={stopPropagation}>
@@ -95,7 +112,7 @@ const SkillEnabledSwitch = memo<SkillEnabledSwitchProps>(
             disabled={mandatory || disabled}
             loading={loading || pending}
             size={size}
-            title={isEnabled ? t('tools.skillEnabled.on') : t('tools.skillEnabled.off')}
+            title={accessibleName}
             onChange={(next) => {
               void handleChange(next);
             }}

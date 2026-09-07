@@ -51,15 +51,15 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
     isBuiltin ? builtinToolSelectors.isSkillEnabled(skill.identifier, 'builtin')(s) : true,
     isBuiltin ? true : builtinToolSelectors.isSkillEnabled(skill.identifier, 'skill')(s),
   ]);
-  // Admin org scope: builtin availability reflects the platform catalog and the
-  // switch writes the org-wide catalog instead of user settings.
+  // Admin org scope: availability reflects the platform catalog and the switch
+  // writes the org-wide catalog instead of user settings.
   const isBuiltinEnabled =
     adminScope && isBuiltin
       ? adminScope.isBuiltinSkillEnabled(skill.identifier)
       : storeBuiltinEnabled;
-  // Org catalog skills have no per-row enable toggle in the admin scope yet.
-  const showEnabledSwitch = isBuiltin || !adminScope;
-  const isEnabled = isBuiltin ? isBuiltinEnabled : storeSkillEnabled;
+  const isSkillEnabled =
+    adminScope && !isBuiltin ? adminScope.isOrgSkillEnabled(skill.identifier) : storeSkillEnabled;
+  const isEnabled = isBuiltin ? isBuiltinEnabled : isSkillEnabled;
 
   const title = isBuiltin
     ? t(`tools.builtins.${skill.identifier}.title`, { defaultValue: skill.name })
@@ -109,14 +109,21 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
     isEnabled ? null : <span className={styles.disconnected}>{t('tools.skillEnabled.off')}</span>;
 
   const renderEnabledSwitch = () => {
-    if (!showEnabledSwitch) return null;
-
     if (isBuiltin) {
       return (
         <SkillEnabledSwitch
-          disabled={isBuiltinEnabled ? !canEdit : !canCreate}
           identifier={skill.identifier}
           kind="builtin"
+          label={title}
+          disabled={
+            adminScope
+              ? // Org-wide availability needs catalog rights, not the personal
+                // content permissions.
+                !adminScope.canSetSkillAvailability(skill.identifier)
+              : isBuiltinEnabled
+                ? !canEdit
+                : !canCreate
+          }
           {...(adminScope
             ? {
                 checked: isBuiltinEnabled,
@@ -127,7 +134,28 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill, isSelected, onSelect 
       );
     }
 
-    return <SkillEnabledSwitch disabled={!canEdit} identifier={skill.identifier} kind="skill" />;
+    // Uploaded org catalog skill: the switch publishes org-wide availability.
+    if (adminScope) {
+      return (
+        <SkillEnabledSwitch
+          checked={isSkillEnabled}
+          disabled={!adminScope.canSetSkillAvailability(skill.identifier)}
+          identifier={skill.identifier}
+          kind="skill"
+          label={title}
+          onToggle={(enabled) => adminScope.setOrgSkillEnabled(skill.identifier, enabled)}
+        />
+      );
+    }
+
+    return (
+      <SkillEnabledSwitch
+        disabled={!canEdit}
+        identifier={skill.identifier}
+        kind="skill"
+        label={title}
+      />
+    );
   };
 
   const renderActions = () => {

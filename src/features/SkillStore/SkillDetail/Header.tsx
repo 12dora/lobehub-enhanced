@@ -7,6 +7,7 @@ import { Loader2, SquareArrowOutUpRight } from 'lucide-react';
 import { memo, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useAdminToolScope } from '@/features/AdminToolScope';
 import SkillEnabledSwitch from '@/features/SkillEnabledSwitch';
 import { useSkillConnect } from '@/features/SkillStore/SkillList/LobeHub/useSkillConnect';
 import { usePermission } from '@/hooks/usePermission';
@@ -50,18 +51,36 @@ const Header = memo<HeaderProps>(({ type }) => {
     type: isBuiltin ? 'lobehub' : type, // Use lobehub as fallback for builtin
   });
 
+  // Admin org scope: the switch writes org-wide catalog availability instead of
+  // the signed-in user's settings. The scope is re-provided by the imperative
+  // modal bridge, so it is present even though this modal mounts outside the
+  // admin page tree.
+  const adminScope = useAdminToolScope();
+
   // Builtin availability is user-global: the switch doubles as install /
   // uninstall, so no separate install button is rendered.
-  const [setSkillEnabled, isBuiltinEnabled] = useToolStore((s) => [
+  const [setSkillEnabled, isUserBuiltinEnabled] = useToolStore((s) => [
     s.setSkillEnabled,
     builtinToolSelectors.isSkillEnabled(identifier, 'builtin')(s),
   ]);
 
+  const isBuiltinEnabled = adminScope
+    ? adminScope.isBuiltinSkillEnabled(identifier)
+    : isUserBuiltinEnabled;
+
   // Enabling matches install (create), disabling matches uninstall (edit).
-  const canToggleBuiltin = isBuiltinEnabled ? canEdit : canCreate;
+  const canToggleBuiltin = adminScope
+    ? adminScope.canSetSkillAvailability(identifier)
+    : isBuiltinEnabled
+      ? canEdit
+      : canCreate;
 
   const handleBuiltinToggle = async (next: boolean) => {
     if (!canToggleBuiltin) return;
+    if (adminScope) {
+      await adminScope.toggleBuiltinSkill(identifier, next);
+      return;
+    }
     await setSkillEnabled({ enabled: next, identifier, kind: 'builtin' });
   };
 
@@ -106,6 +125,7 @@ const Header = memo<HeaderProps>(({ type }) => {
           disabled={!canToggleBuiltin}
           identifier={identifier}
           kind={'builtin'}
+          label={label}
           onToggle={handleBuiltinToggle}
         />
       );

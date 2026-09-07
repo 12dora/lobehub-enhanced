@@ -7,6 +7,8 @@ import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as ZodModule from 'zod';
 
+import type { AdminToolScope } from '@/features/AdminToolScope';
+import { AdminToolScopeProvider } from '@/features/AdminToolScope';
 import { LobehubSkillStatus } from '@/store/tool/slices/lobehubSkillStore/types';
 
 import SkillDetail from './index';
@@ -153,9 +155,36 @@ vi.mock('@/features/AgentSkillDetail', () => ({
 }));
 
 vi.mock('@/features/SkillEnabledSwitch', () => ({
-  default: ({ identifier, kind }: { identifier: string; kind: 'builtin' | 'skill' }) => (
-    <div data-identifier={identifier} data-kind={kind} data-testid="skill-enabled-switch" />
+  default: ({
+    checked,
+    disabled,
+    identifier,
+    kind,
+    label,
+    onToggle,
+  }: {
+    checked?: boolean;
+    disabled?: boolean;
+    identifier: string;
+    kind: 'builtin' | 'skill';
+    label?: string;
+    onToggle?: (enabled: boolean) => void;
+  }) => (
+    <div
+      data-checked={String(checked)}
+      data-disabled={String(disabled)}
+      data-identifier={identifier}
+      data-kind={kind}
+      data-label={label}
+      data-testid="skill-enabled-switch"
+      onClick={() => onToggle?.(false)}
+    />
   ),
+}));
+
+// The distribution control pulls in @lobehub/ui components this suite stubs out.
+vi.mock('@/features/AdminToolScope/AdminBuiltinSkillDistribution', () => ({
+  default: () => <div data-testid="builtin-distribution" />,
 }));
 
 vi.mock('@/features/Connectors', () => ({
@@ -290,6 +319,66 @@ describe('SkillDetail', () => {
     expect(toggle).toHaveAttribute('data-identifier', 'my-skill');
     expect(toggle).toHaveAttribute('data-kind', 'skill');
     expect(screen.getByRole('button', { name: 'store.actions.uninstall' })).toBeInTheDocument();
+  });
+
+  describe('under the admin scope', () => {
+    const renderWithAdminScope = (
+      ui: ReactNode,
+      overrides: Partial<AdminToolScope> = {},
+    ): AdminToolScope => {
+      const scope = {
+        canSetSkillAvailability: vi.fn(() => true),
+        connectors: [],
+        deleteOrgSkill: vi.fn(),
+        isBuiltinSkillEnabled: vi.fn(() => true),
+        isOrgSkillEnabled: vi.fn(() => false),
+        orgSkills: [{ id: 'db-1', identifier: 'org.skill', name: 'Org Skill' }],
+        setOrgSkillEnabled: vi.fn().mockResolvedValue(undefined),
+        toggleBuiltinSkill: vi.fn().mockResolvedValue(undefined),
+        useOrgSkillDetail: vi.fn(() => ({ isLoading: false })),
+        ...overrides,
+      } as unknown as AdminToolScope;
+
+      render(<AdminToolScopeProvider value={scope}>{ui}</AdminToolScopeProvider>);
+
+      return scope;
+    };
+
+    it('toggles org-wide availability for an uploaded skill', async () => {
+      const scope = renderWithAdminScope(<SkillDetail identifier="db-1" type="agent-skill" />);
+
+      // The row is addressed by id; the catalog write is keyed by skill key.
+      const toggle = screen.getByTestId('skill-enabled-switch');
+      expect(toggle).toHaveAttribute('data-identifier', 'org.skill');
+      expect(toggle).toHaveAttribute('data-checked', 'false');
+      expect(toggle).toHaveAttribute('data-label', 'Org Skill');
+
+      await userEvent.click(toggle);
+
+      expect(scope.setOrgSkillEnabled).toHaveBeenCalledWith('org.skill', false);
+    });
+
+    it('locks the uploaded-skill switch without catalog permission', () => {
+      renderWithAdminScope(<SkillDetail identifier="db-1" type="agent-skill" />, {
+        canSetSkillAvailability: vi.fn(() => false),
+      });
+
+      expect(screen.getByTestId('skill-enabled-switch')).toHaveAttribute('data-disabled', 'true');
+    });
+
+    it('gates the builtin switch on catalog permission, not personal content rights', () => {
+      mocks.toolState.builtinSkills = [
+        { content: '# Artifacts', identifier: 'lobe-artifacts', name: 'Artifacts' },
+      ];
+
+      renderWithAdminScope(<SkillDetail identifier="lobe-artifacts" type="builtin-skill" />, {
+        canSetSkillAvailability: vi.fn(() => false),
+      });
+
+      const toggle = screen.getByTestId('skill-enabled-switch');
+      expect(toggle).toHaveAttribute('data-disabled', 'true');
+      expect(toggle).toHaveAttribute('data-label', 'Artifacts');
+    });
   });
 
   it('shows a disconnect action for a connected LobeHub connector without configurable tools', async () => {

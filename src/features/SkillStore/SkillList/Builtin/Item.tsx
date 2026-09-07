@@ -39,7 +39,7 @@ const Item = memo<ItemProps>(({ avatar, description, identifier, onOpenDetail, t
   const enabled = adminScope ? adminScope.isBuiltinSkillEnabled(identifier) : isUserEnabled;
   // Enabling matches install (create), disabling matches uninstall (edit).
   const canToggle = adminScope
-    ? adminScope.canSetBuiltinSkillDistribution(identifier)
+    ? adminScope.canSetSkillAvailability(identifier)
     : enabled
       ? canEdit
       : canCreate;
@@ -79,6 +79,7 @@ const Item = memo<ItemProps>(({ avatar, description, identifier, onOpenDetail, t
           disabled={!canToggle}
           identifier={identifier}
           kind={'builtin'}
+          label={title || identifier}
           onToggle={handleToggle}
         />
       </div>

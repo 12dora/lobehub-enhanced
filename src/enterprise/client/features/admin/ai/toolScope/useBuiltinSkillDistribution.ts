@@ -131,29 +131,27 @@ export const useBuiltinSkillDistribution = ({
   );
 
   /**
-   * Org-wide availability write. Materializing a builtin override row is the
-   * server's job (setEnabled is keyed by skillKey), so the only client-side
-   * gate is the permission the write will require — and the server selects that
-   * permission from the key alone (bundled builtin ⇒ CREATE, otherwise UPDATE),
-   * so mirroring row presence here would disagree with it.
+   * Org-wide availability writes always publish. The server patches an existing
+   * catalog row (UPDATE) and materializes an override row for a bundled builtin
+   * that has none (CREATE); `capabilities` already folds SKILL_PUBLISH into
+   * both. A key with neither a row nor bundled content has nothing to write.
    */
+  const canSetSkillAvailability = useCallback(
+    (identifier: string): boolean => {
+      if (skillRowsByKey.has(identifier)) return capabilities.canUpdateSkill;
+      return bundledBuiltinKeys.has(identifier) ? capabilities.canCreateSkill : false;
+    },
+    [bundledBuiltinKeys, capabilities.canCreateSkill, capabilities.canUpdateSkill, skillRowsByKey],
+  );
+
   const setSkillKeyEnabled = useCallback(
     async (skillKey: string, enabled: boolean) => {
-      const permitted = bundledBuiltinKeys.has(skillKey)
-        ? capabilities.canCreateSkill
-        : capabilities.canUpdateSkill;
-      if (!permitted) throw new Error(LOCAL_ERROR.PERMISSION);
+      if (!canSetSkillAvailability(skillKey)) throw new Error(LOCAL_ERROR.PERMISSION);
       await adminSkillsService.setEnabled({ enabled, skillKey });
       notifyApplyOutcome({ publishError: null, published: true });
       retry();
     },
-    [
-      bundledBuiltinKeys,
-      capabilities.canCreateSkill,
-      capabilities.canUpdateSkill,
-      notifyApplyOutcome,
-      retry,
-    ],
+    [canSetSkillAvailability, notifyApplyOutcome, retry],
   );
 
   const withSkillFailureToast = useCallback(
@@ -183,6 +181,7 @@ export const useBuiltinSkillDistribution = ({
 
   return {
     canSetBuiltinSkillDistribution,
+    canSetSkillAvailability,
     getBuiltinSkillDistribution,
     isBuiltinSkillEnabled,
     isOrgSkillEnabled,

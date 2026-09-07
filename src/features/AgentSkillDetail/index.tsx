@@ -169,7 +169,11 @@ const AgentSkillDetail = memo<AgentSkillDetailProps>(({ skillId, useFetchDetail 
                     )}
                     {showEnabledSwitch && identifier && (
                       <div style={{ marginInlineStart: 4 }}>
-                        <SkillEnabledSwitch identifier={identifier} kind={'skill'} />
+                        <SkillEnabledSwitch
+                          identifier={identifier}
+                          kind={'skill'}
+                          label={skillDetail.name}
+                        />
                       </div>
                     )}
                   </Flexbox>

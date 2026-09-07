@@ -76,7 +76,7 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
   );
   // Under the admin scope the switch writes org-wide availability.
   const enabled = adminScope ? adminScope.isOrgSkillEnabled(identifier) : isUserEnabled;
-  const canToggleEnabled = adminScope ? adminScope.capabilities.canUpdateSkill : canEdit;
+  const canToggleEnabled = adminScope ? adminScope.canSetSkillAvailability(identifier) : canEdit;
 
   const handleToggleEnabled = useCallback(
     async (next: boolean) => {
@@ -177,6 +177,7 @@ const MarketSkillItem = memo<DiscoverSkillItem>(({ name, icon, description, iden
             disabled={!canToggleEnabled}
             identifier={identifier}
             kind={'skill'}
+            label={name}
             onToggle={handleToggleEnabled}
           />
           {renderInstalledMenu()}

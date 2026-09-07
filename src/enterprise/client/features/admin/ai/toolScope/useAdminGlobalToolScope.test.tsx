@@ -541,6 +541,105 @@ describe('useAdminGlobalToolScope', () => {
 
       expect(mocks.skills.setEnabled).not.toHaveBeenCalled();
     });
+
+    it('requires update permission for a builtin that already has an override row', async () => {
+      accessMocks.permissions = [
+        'platform_skill:read:all',
+        'platform_skill:create:all',
+        'platform_skill:publish:all',
+      ];
+      mocks.skills.list.mockResolvedValue({
+        items: [
+          skillRow({
+            allowBuiltinOverride: true,
+            id: 'row-artifacts',
+            skillKey: 'lobe-artifacts',
+            source: 'builtin',
+          }),
+        ],
+        nextCursor: null,
+      });
+      const { result } = renderScope('skill');
+      await waitFor(() =>
+        expect(result.current.canSetSkillAvailability('lobe-artifacts')).toBe(false),
+      );
+
+      await act(async () => {
+        await expect(result.current.toggleBuiltinSkill('lobe-artifacts', false)).rejects.toThrow(
+          'PLATFORM_PERMISSION_DENIED',
+        );
+      });
+
+      expect(mocks.skills.setEnabled).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('canSetSkillAvailability', () => {
+    const withPermissions = (...skillPermissions: string[]) => {
+      accessMocks.permissions = ['platform_skill:read:all', ...skillPermissions];
+    };
+
+    it('needs update + publish once a catalog row exists, whatever its source', async () => {
+      withPermissions('platform_skill:update:all', 'platform_skill:publish:all');
+      mocks.skills.list.mockResolvedValue({
+        items: [
+          skillRow(),
+          skillRow({
+            allowBuiltinOverride: true,
+            id: 'row-artifacts',
+            skillKey: 'lobe-artifacts',
+            source: 'builtin',
+          }),
+        ],
+        nextCursor: null,
+      });
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(result.current.canSetSkillAvailability('org.skill')).toBe(true));
+
+      expect(result.current.canSetSkillAvailability('lobe-artifacts')).toBe(true);
+    });
+
+    it('rejects create-only holders on an existing row', async () => {
+      withPermissions('platform_skill:create:all', 'platform_skill:publish:all');
+      mocks.skills.list.mockResolvedValue({ items: [skillRow()], nextCursor: null });
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(result.current.orgSkills).toHaveLength(1));
+
+      expect(result.current.canSetSkillAvailability('org.skill')).toBe(false);
+    });
+
+    it('needs create + publish for a bundled builtin with no row', async () => {
+      withPermissions('platform_skill:create:all', 'platform_skill:publish:all');
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalled());
+
+      expect(result.current.canSetSkillAvailability('lobe-artifacts')).toBe(true);
+    });
+
+    it('rejects update-only holders on a bundled builtin with no row', async () => {
+      withPermissions('platform_skill:update:all', 'platform_skill:publish:all');
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalled());
+
+      expect(result.current.canSetSkillAvailability('lobe-artifacts')).toBe(false);
+    });
+
+    it('rejects every permission set without publish', async () => {
+      withPermissions('platform_skill:create:all', 'platform_skill:update:all');
+      mocks.skills.list.mockResolvedValue({ items: [skillRow()], nextCursor: null });
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(result.current.orgSkills).toHaveLength(1));
+
+      expect(result.current.canSetSkillAvailability('org.skill')).toBe(false);
+      expect(result.current.canSetSkillAvailability('lobe-artifacts')).toBe(false);
+    });
+
+    it('rejects an unknown key that is neither a row nor a bundled builtin', async () => {
+      const { result } = renderScope('skill');
+      await waitFor(() => expect(mocks.skills.list).toHaveBeenCalled());
+
+      expect(result.current.canSetSkillAvailability('not.a.skill')).toBe(false);
+    });
   });
 
   describe('setBuiltinSkillDistribution', () => {

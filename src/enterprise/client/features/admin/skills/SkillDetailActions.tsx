@@ -10,23 +10,33 @@ import type { SkillPermissions } from './controller';
 
 const BUNDLED_BUILTIN_SKILL_KEYS = new Set(bundledBuiltinSkills.map((skill) => skill.identifier));
 
+export interface SkillAvailabilityTarget {
+  /** A catalog row already exists for this key (any source, any status). */
+  hasCatalogRow: boolean;
+  skillKey: string;
+}
+
 /**
- * `admin.skills.setEnabled` always publishes, and the server derives its
- * permission from the key alone: a bundled builtin materializes an override
- * (CREATE), anything else patches an existing row (UPDATE). Mirror that so the
- * switch is never offered for a write the server would reject.
+ * `admin.skills.setEnabled` always publishes, and the server picks its
+ * permission from the row: an existing catalog row is patched (SKILL_UPDATE),
+ * a bundled builtin without one is materialized first (SKILL_CREATE). Mirror
+ * that so the switch is never offered for a write the server would reject.
  */
 export const canSetSkillAvailability = (
-  skillKey: string,
+  target: SkillAvailabilityTarget,
   permissions: Pick<SkillPermissions, 'canCreate' | 'canPublish' | 'canUpdate'>,
-): boolean =>
-  permissions.canPublish &&
-  (BUNDLED_BUILTIN_SKILL_KEYS.has(skillKey) ? permissions.canCreate : permissions.canUpdate);
+): boolean => {
+  if (!permissions.canPublish) return false;
+  if (target.hasCatalogRow) return permissions.canUpdate;
+  return BUNDLED_BUILTIN_SKILL_KEYS.has(target.skillKey) ? permissions.canCreate : false;
+};
 
 export interface SkillAvailabilitySwitchProps {
   /** Org-wide availability of the published skill. */
   checked: boolean;
   disabled: boolean;
+  /** Skill display name, prefixed onto the accessible name so rows stay distinguishable. */
+  label?: string;
   loading?: boolean;
   onChange: (enabled: boolean) => void;
 }
@@ -37,8 +47,14 @@ export interface SkillAvailabilitySwitchProps {
  * leaves the published catalog for every user, a merely optional one does not.
  */
 export const SkillAvailabilitySwitch = memo<SkillAvailabilitySwitchProps>(
-  ({ checked, disabled, loading, onChange }) => {
+  ({ checked, disabled, label, loading, onChange }) => {
     const { t } = useTranslation('admin');
+
+    // base-ui Switch forwards only `title`, which is what the accessible name
+    // falls back to — carry the skill name and current state there so a list of
+    // switches is not announced as a row of identical controls.
+    const state = t(checked ? 'skillCatalog.boolean.true' : 'skillCatalog.boolean.false');
+    const accessibleName = `${label || t('skillCatalog.detail.identity.enabled')}: ${state}`;
 
     return (
       <Tooltip title={t('skillCatalog.enabledSwitch.tooltip')}>
@@ -47,7 +63,7 @@ export const SkillAvailabilitySwitch = memo<SkillAvailabilitySwitchProps>(
           disabled={disabled}
           loading={loading}
           size="small"
-          title={t('skillCatalog.detail.identity.enabled')}
+          title={accessibleName}
           onChange={(next) => onChange(next)}
         />
       </Tooltip>
@@ -83,6 +99,8 @@ export interface SkillDetailActionsProps {
   onValidate: () => void;
   saveFailed: boolean;
   selectedVersionId?: string;
+  /** Display name of the skill, used for the availability switch accessible name. */
+  skillName?: string;
 }
 
 /**
@@ -111,6 +129,7 @@ const SkillDetailActions = memo<SkillDetailActionsProps>(
     onValidate,
     saveFailed,
     selectedVersionId,
+    skillName,
   }) => {
     const { t } = useTranslation('admin');
     const navigate = useNavigate();
@@ -120,6 +139,7 @@ const SkillDetailActions = memo<SkillDetailActionsProps>(
         <SkillAvailabilitySwitch
           checked={enabled}
           disabled={enabledDisabled}
+          label={skillName}
           loading={enabledPending}
           onChange={onSetEnabled}
         />

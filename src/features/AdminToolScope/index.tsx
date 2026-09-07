@@ -51,6 +51,12 @@ export interface AdminToolScope {
    * Create permission is required when no override row exists yet; update otherwise.
    */
   canSetBuiltinSkillDistribution: (identifier: string) => boolean;
+  /**
+   * Whether the signed-in admin may flip org-wide availability for this key.
+   * An existing catalog row is patched (update); a bundled builtin without a row
+   * is materialized first (create). Both paths publish.
+   */
+  canSetSkillAvailability: (identifier: string) => boolean;
   /** Platform SKILL_* / CONNECTOR_* capabilities from useAdminAccess. */
   capabilities: AdminToolScopeCapabilities;
   /** Extra warning/notice rendered above both settings views (e.g. per-user OAuth caveat). */

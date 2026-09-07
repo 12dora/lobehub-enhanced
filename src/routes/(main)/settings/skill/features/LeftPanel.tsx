@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { useAdminToolScope } from '@/features/AdminToolScope';
 import { CustomConnectorModal } from '@/features/Connectors';
 import { masterDetailSurfaceStyles } from '@/features/SettingsCatalogSurface';
-import { createSkillStoreModal } from '@/features/SkillStore';
+import { createSkillStoreModal, useSkillStoreAdminScopeSync } from '@/features/SkillStore';
 import { openImportFromGithubModal } from '@/features/SkillStore/SkillList/ImportFromGithubModal';
 import { openImportFromUrlModal } from '@/features/SkillStore/SkillList/ImportFromUrlModal';
 import { openUploadSkillModal } from '@/features/SkillStore/SkillList/UploadSkillModal';
@@ -36,6 +36,10 @@ const LeftPanel = memo<LeftPanelProps>(
     const { t } = useTranslation('setting');
     const [showAddConnector, setShowAddConnector] = useState(false);
     const adminScope = useAdminToolScope();
+
+    // Skill store / skill detail modals mount outside this tree; publish the
+    // scope so they keep reading the live org catalog instead of a snapshot.
+    useSkillStoreAdminScopeSync(adminScope);
 
     const handleOpenStore = useCallback(() => {
       createSkillStoreModal(adminScope);

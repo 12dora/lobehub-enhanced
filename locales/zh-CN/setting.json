@@ -1419,6 +1419,7 @@
   "tools.skillEnabled.mandatory": "组织要求启用",
   "tools.skillEnabled.off": "已停用",
   "tools.skillEnabled.on": "已启用",
+  "tools.skillEnabled.saveFailed": "更新技能状态失败，请重试",
   "tools.skillEnabled.tooltip": "停用后助理无法调用该技能",
   "tools.tabs.all": "全部",
   "tools.tabs.installed": "已启用",

@@ -149,9 +149,15 @@ const SkillListPage = memo(() => {
         render: (value: boolean, item) => (
           <SkillAvailabilitySwitch
             checked={item.status !== 'archived' && value !== false}
+            label={item.displayName}
             loading={enabledPendingKey === item.skillKey}
             disabled={
-              !canSetSkillAvailability(item.skillKey, skillPermissions) ||
+              // Every listed row exists in the catalog, so the write is an
+              // update + publish regardless of the row's source.
+              !canSetSkillAvailability(
+                { hasCatalogRow: true, skillKey: item.skillKey },
+                skillPermissions,
+              ) ||
               item.status === 'archived' ||
               enabledPendingKey === item.skillKey
             }

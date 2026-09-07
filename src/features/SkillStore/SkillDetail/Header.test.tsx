@@ -20,6 +20,11 @@ const mocks = vi.hoisted(() => {
   );
 
   return {
+    adminScope: null as null | {
+      canSetSkillAvailability: (identifier: string) => boolean;
+      isBuiltinSkillEnabled: (identifier: string) => boolean;
+      toggleBuiltinSkill: ReturnType<typeof vi.fn>;
+    },
     close: vi.fn(),
     detail: {
       identifier: 'lobe-artifacts',
@@ -77,19 +82,25 @@ vi.mock('./DetailContext', () => ({
 vi.mock('@/features/SkillEnabledSwitch', () => ({
   default: ({
     checked,
+    disabled,
     identifier,
     kind,
+    label,
     onToggle,
   }: {
     checked?: boolean;
+    disabled?: boolean;
     identifier: string;
     kind: string;
+    label?: string;
     onToggle?: (next: boolean) => void;
   }) => (
     <button
       data-checked={String(checked)}
+      data-disabled={String(Boolean(disabled))}
       data-identifier={identifier}
       data-kind={kind}
+      data-label={label}
       data-testid="skill-enabled-switch"
       type="button"
       onClick={() => onToggle?.(!checked)}
@@ -97,6 +108,10 @@ vi.mock('@/features/SkillEnabledSwitch', () => ({
       switch
     </button>
   ),
+}));
+
+vi.mock('@/features/AdminToolScope', () => ({
+  useAdminToolScope: () => mocks.adminScope,
 }));
 
 vi.mock('@/features/SkillStore/SkillList/LobeHub/useSkillConnect', () => ({
@@ -124,6 +139,7 @@ vi.mock('@/store/tool/selectors', () => ({
 
 describe('SkillStore detail Header', () => {
   beforeEach(() => {
+    mocks.adminScope = null;
     mocks.toolState.disabledBuiltinIds = [];
     mocks.toolState.setSkillEnabled.mockClear();
     mocks.toolState.setSkillEnabled.mockResolvedValue(undefined);
@@ -152,6 +168,57 @@ describe('SkillStore detail Header', () => {
         kind: 'builtin',
       });
     });
+  });
+
+  it('passes the display name to the switch for its accessible name', () => {
+    render(<Header type="builtin" />);
+
+    expect(screen.getByTestId('skill-enabled-switch')).toHaveAttribute('data-label', 'Artifacts');
+  });
+
+  it('writes org-wide availability under the admin scope instead of user settings', async () => {
+    const toggleBuiltinSkill = vi.fn().mockResolvedValue(undefined);
+    mocks.adminScope = {
+      canSetSkillAvailability: () => true,
+      isBuiltinSkillEnabled: () => true,
+      toggleBuiltinSkill,
+    };
+    render(<Header type="builtin" />);
+
+    expect(screen.getByTestId('skill-enabled-switch')).toHaveAttribute('data-checked', 'true');
+    await userEvent.click(screen.getByTestId('skill-enabled-switch'));
+
+    await waitFor(() => {
+      expect(toggleBuiltinSkill).toHaveBeenCalledWith('lobe-artifacts', false);
+    });
+    expect(mocks.toolState.setSkillEnabled).not.toHaveBeenCalled();
+  });
+
+  it('reads the checked state from the admin scope', () => {
+    mocks.adminScope = {
+      canSetSkillAvailability: () => true,
+      isBuiltinSkillEnabled: () => false,
+      toggleBuiltinSkill: vi.fn(),
+    };
+    render(<Header type="builtin" />);
+
+    expect(screen.getByTestId('skill-enabled-switch')).toHaveAttribute('data-checked', 'false');
+  });
+
+  it('ignores the toggle when the admin cannot set skill availability', async () => {
+    const toggleBuiltinSkill = vi.fn();
+    mocks.adminScope = {
+      canSetSkillAvailability: () => false,
+      isBuiltinSkillEnabled: () => true,
+      toggleBuiltinSkill,
+    };
+    render(<Header type="builtin" />);
+
+    expect(screen.getByTestId('skill-enabled-switch')).toHaveAttribute('data-disabled', 'true');
+    await userEvent.click(screen.getByTestId('skill-enabled-switch'));
+
+    expect(toggleBuiltinSkill).not.toHaveBeenCalled();
+    expect(mocks.toolState.setSkillEnabled).not.toHaveBeenCalled();
   });
 
   it('keeps the connect button for connector skills', () => {

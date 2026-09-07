@@ -3,6 +3,7 @@
 import { createModal } from '@lobehub/ui/base-ui';
 import { t } from 'i18next';
 
+import { SkillStoreAdminScopeProvider } from '../adminScope';
 import { BuiltinAgentSkillDetailContent } from './BuiltinAgentSkillDetailContent';
 import { BuiltinSkillDetailContent } from './BuiltinSkillDetailContent';
 import { ComposioSkillDetailContent } from './ComposioSkillDetailContent';
@@ -16,7 +17,11 @@ export const createBuiltinAgentSkillDetailModal = ({
   identifier,
 }: CreateBuiltinAgentSkillDetailModalOptions) =>
   createModal({
-    content: <BuiltinAgentSkillDetailContent identifier={identifier} />,
+    content: (
+      <SkillStoreAdminScopeProvider>
+        <BuiltinAgentSkillDetailContent identifier={identifier} />
+      </SkillStoreAdminScopeProvider>
+    ),
     footer: null,
     title: t('dev.title.skillDetails', { ns: 'plugin' }),
     width: 800,
@@ -30,7 +35,11 @@ export const createBuiltinSkillDetailModal = ({
   identifier,
 }: CreateBuiltinSkillDetailModalOptions) =>
   createModal({
-    content: <BuiltinSkillDetailContent identifier={identifier} />,
+    content: (
+      <SkillStoreAdminScopeProvider>
+        <BuiltinSkillDetailContent identifier={identifier} />
+      </SkillStoreAdminScopeProvider>
+    ),
     footer: null,
     title: t('dev.title.skillDetails', { ns: 'plugin' }),
     width: 800,
@@ -46,7 +55,11 @@ export const createComposioSkillDetailModal = ({
   serverName,
 }: CreateComposioSkillDetailModalOptions) =>
   createModal({
-    content: <ComposioSkillDetailContent identifier={identifier} serverName={serverName} />,
+    content: (
+      <SkillStoreAdminScopeProvider>
+        <ComposioSkillDetailContent identifier={identifier} serverName={serverName} />
+      </SkillStoreAdminScopeProvider>
+    ),
     footer: null,
     title: t('dev.title.skillDetails', { ns: 'plugin' }),
     width: 800,
@@ -60,7 +73,11 @@ export const createLobehubSkillDetailModal = ({
   identifier,
 }: CreateLobehubSkillDetailModalOptions) =>
   createModal({
-    content: <LobehubSkillDetailContent identifier={identifier} />,
+    content: (
+      <SkillStoreAdminScopeProvider>
+        <LobehubSkillDetailContent identifier={identifier} />
+      </SkillStoreAdminScopeProvider>
+    ),
     footer: null,
     title: t('dev.title.skillDetails', { ns: 'plugin' }),
     width: 800,

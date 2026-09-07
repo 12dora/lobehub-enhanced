@@ -20,6 +20,7 @@ export const useAdminSkillScope = ({
 
   const {
     canSetBuiltinSkillDistribution,
+    canSetSkillAvailability,
     getBuiltinSkillDistribution,
     isBuiltinSkillEnabled,
     isOrgSkillEnabled,
@@ -40,6 +41,7 @@ export const useAdminSkillScope = ({
 
   return {
     canSetBuiltinSkillDistribution,
+    canSetSkillAvailability,
     deleteOrgSkill,
     error,
     getBuiltinSkillDistribution,

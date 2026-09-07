@@ -212,7 +212,15 @@ const ExternalFilterLink = () => {
 describe('SkillListPage', () => {
   beforeEach(() => {
     mocks.data = {
-      items: [{ enabled: true, id: 's1', skillKey: 'skill.one', status: 'published' }],
+      items: [
+        {
+          displayName: 'Skill One',
+          enabled: true,
+          id: 's1',
+          skillKey: 'skill.one',
+          status: 'published',
+        },
+      ],
       nextCursor: 'next-cursor',
     };
     mocks.create.mockReset();
@@ -454,6 +462,45 @@ describe('SkillListPage', () => {
 
     it('renders read-only without both the update and publish permissions', () => {
       mocks.permissions = [PLATFORM_PERMISSIONS.SKILL_READ, PLATFORM_PERMISSIONS.SKILL_UPDATE];
+      renderList();
+
+      expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('switch'));
+      expect(mocks.setEnabled).not.toHaveBeenCalled();
+    });
+
+    it('names the switch after the skill and its current state', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      renderList();
+
+      expect(
+        screen.getByRole('switch', { name: 'Skill One: skillCatalog.boolean.true' }),
+      ).toBeTruthy();
+    });
+
+    it('locks a builtin override row for create-only holders (rows need update)', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_CREATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      mocks.data = {
+        items: [
+          {
+            displayName: 'Artifacts',
+            enabled: true,
+            id: 's1',
+            skillKey: 'lobe-artifacts',
+            source: 'builtin',
+            status: 'published',
+          },
+        ],
+        nextCursor: null,
+      };
       renderList();
 
       expect(screen.getByRole('switch')).toHaveProperty('disabled', true);

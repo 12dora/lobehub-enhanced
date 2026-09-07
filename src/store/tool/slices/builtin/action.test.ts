@@ -2,12 +2,17 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import * as workspaceHooks from '@/business/client/hooks/useActiveWorkspaceId';
+import { message } from '@/components/AntdStaticMethods';
 import * as swr from '@/libs/swr';
 import { userService } from '@/services/user';
 
 import { useToolStore } from '../../store';
 
 vi.mock('zustand/traditional');
+
+vi.mock('@/components/AntdStaticMethods', () => ({
+  message: { error: vi.fn(), success: vi.fn() },
+}));
 
 describe('createBuiltinToolSlice', () => {
   describe('transformApiArgumentsToAiState', () => {
@@ -286,6 +291,122 @@ describe('createBuiltinToolSlice', () => {
       expect(updateSpy).toHaveBeenCalledWith({
         tool: { uninstalledBuiltinTools: ['lobe-artifacts'] },
       });
+    });
+
+    it('serializes concurrent toggles so the later write keeps the earlier one', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      // Stale on purpose: the read never reflects the write already in flight,
+      // so only the queue can keep the first identifier.
+      mockUserState({ disabledSkillIdentifiers: [], uninstalledBuiltinTools: [] });
+      const updateSpy = vi
+        .spyOn(userService, 'updateUserSettings')
+        .mockResolvedValue(undefined as any);
+
+      const { result } = renderHook(() => useToolStore());
+      await act(async () => {
+        await Promise.all([
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'skill-a',
+            kind: 'skill',
+          }),
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'skill-b',
+            kind: 'skill',
+          }),
+        ]);
+      });
+
+      expect(updateSpy).toHaveBeenCalledTimes(2);
+      expect(updateSpy.mock.calls.at(-1)?.[0]).toEqual({
+        tool: { disabledSkillIdentifiers: ['skill-a', 'skill-b'], uninstalledBuiltinTools: [] },
+      });
+      expect(result.current.disabledSkillIdentifiers).toEqual(['skill-a', 'skill-b']);
+    });
+
+    it('shares one queue between the builtin and the skill slot', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({ disabledSkillIdentifiers: [], uninstalledBuiltinTools: [] });
+      const updateSpy = vi
+        .spyOn(userService, 'updateUserSettings')
+        .mockResolvedValue(undefined as any);
+
+      const { result } = renderHook(() => useToolStore());
+      await act(async () => {
+        await Promise.all([
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'lobe-artifacts',
+            kind: 'builtin',
+          }),
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'my-skill',
+            kind: 'skill',
+          }),
+        ]);
+      });
+
+      // The skill write must carry the builtin write that landed just before it.
+      expect(updateSpy.mock.calls.at(-1)?.[0]).toEqual({
+        tool: {
+          disabledSkillIdentifiers: ['my-skill'],
+          uninstalledBuiltinTools: ['lobe-artifacts'],
+        },
+      });
+    });
+
+    it('rolls the optimistic state back and reports a failed write', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({ disabledSkillIdentifiers: [] });
+      vi.spyOn(userService, 'updateUserSettings').mockRejectedValue(new Error('offline'));
+      vi.mocked(message.error).mockClear();
+
+      const { result } = renderHook(() => useToolStore());
+      act(() => {
+        useToolStore.setState({ disabledSkillIdentifiers: [] });
+      });
+
+      await act(async () => {
+        await expect(
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'my-skill',
+            kind: 'skill',
+          }),
+        ).rejects.toThrow('offline');
+      });
+
+      expect(result.current.disabledSkillIdentifiers).toEqual([]);
+      expect(message.error).toHaveBeenCalledTimes(1);
+    });
+
+    it('rolls the builtin list back when the write fails', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({ uninstalledBuiltinTools: [] });
+      vi.spyOn(userService, 'updateUserSettings').mockRejectedValue(new Error('offline'));
+
+      const { result } = renderHook(() => useToolStore());
+      act(() => {
+        useToolStore.setState({ uninstalledBuiltinTools: [] });
+      });
+
+      await act(async () => {
+        await expect(
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'lobe-artifacts',
+            kind: 'builtin',
+          }),
+        ).rejects.toThrow('offline');
+      });
+
+      expect(result.current.uninstalledBuiltinTools).toEqual([]);
     });
 
     it('is a no-op when the skill is already in the desired state', async () => {

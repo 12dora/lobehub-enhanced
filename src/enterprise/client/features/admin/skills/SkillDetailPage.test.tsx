@@ -601,6 +601,32 @@ describe('SkillDetailPage independent async states', () => {
       expect(mocks.refreshLists).toHaveBeenCalled();
     });
 
+    it('names the switch after the skill and its current state', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_UPDATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      renderPage();
+
+      expect(
+        screen.getByRole('switch', { name: 'Skill One: skillCatalog.boolean.true' }),
+      ).toBeTruthy();
+    });
+
+    it('stays locked for create-only holders because the detail row already exists', () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.SKILL_READ,
+        PLATFORM_PERMISSIONS.SKILL_CREATE,
+        PLATFORM_PERMISSIONS.SKILL_PUBLISH,
+      ];
+      renderPage();
+
+      expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('switch'));
+      expect(mocks.setEnabled).not.toHaveBeenCalled();
+    });
+
     it('locks the switch while the identity draft is dirty so the two do not fight', () => {
       mocks.permissions = [
         PLATFORM_PERMISSIONS.SKILL_READ,

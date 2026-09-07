@@ -23,6 +23,7 @@ export const useAdminGlobalToolScope = (view: 'connector' | 'skill'): AdminToolS
 
   const {
     canSetBuiltinSkillDistribution,
+    canSetSkillAvailability,
     deleteOrgSkill,
     error: skillError,
     getBuiltinSkillDistribution,
@@ -77,6 +78,7 @@ export const useAdminGlobalToolScope = (view: 'connector' | 'skill'): AdminToolS
   return useMemo<AdminToolScope>(
     () => ({
       canSetBuiltinSkillDistribution,
+      canSetSkillAvailability,
       capabilities,
       connectorNotice,
       connectors,
@@ -105,6 +107,7 @@ export const useAdminGlobalToolScope = (view: 'connector' | 'skill'): AdminToolS
     }),
     [
       canSetBuiltinSkillDistribution,
+      canSetSkillAvailability,
       capabilities,
       connectorNotice,
       connectors,

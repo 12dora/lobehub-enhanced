@@ -83,6 +83,7 @@ const BuiltinSkillItem = memo<BuiltinSkillItemProps>(
               disabled={isEnabled ? !canEdit : !canCreate}
               identifier={identifier}
               kind="builtin"
+              label={title}
             />
           </Flexbox>
         )}

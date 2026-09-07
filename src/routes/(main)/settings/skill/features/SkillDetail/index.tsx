@@ -231,12 +231,18 @@ const LegacySkillDetail = memo<SkillDetailProps>(
       : storeBuiltinEnabled;
 
     // The detail panel is addressed by the skill row id for agent skills, while
-    // the user disable list is keyed by the skill identifier.
-    const agentSkillIdentifier = useToolStore((s) =>
+    // both disable lists are keyed by the skill identifier.
+    const agentSkillRow = useToolStore((s) =>
       type === 'agent-skill'
-        ? (s.agentSkills || []).find((skill) => skill.id === identifier)?.identifier
+        ? (s.agentSkills || []).find((skill) => skill.id === identifier)
         : undefined,
     );
+    // Under the admin scope this panel shows the org catalog, so an uploaded
+    // skill's row (and the key its availability write uses) comes from there.
+    const orgSkillRow =
+      type === 'agent-skill' && adminScope
+        ? adminScope.orgSkills.find((skill) => skill.id === identifier)
+        : undefined;
 
     const isConnectorType =
       type === 'builtin' ||
@@ -374,14 +380,29 @@ const LegacySkillDetail = memo<SkillDetailProps>(
             >
               {t('store.actions.uninstall')}
             </Button>
-            {/* Org catalog skills have no per-user enable toggle. */}
-            {!adminScope && agentSkillIdentifier && (
-              <SkillEnabledSwitch
-                disabled={!canEdit}
-                identifier={agentSkillIdentifier}
-                kind="skill"
-              />
-            )}
+            {/* Admin scope disables the skill org-wide (catalog availability);
+                every other surface disables it only for the signed-in user. */}
+            {adminScope
+              ? orgSkillRow && (
+                  <SkillEnabledSwitch
+                    checked={adminScope.isOrgSkillEnabled(orgSkillRow.identifier)}
+                    disabled={!adminScope.canSetSkillAvailability(orgSkillRow.identifier)}
+                    identifier={orgSkillRow.identifier}
+                    kind="skill"
+                    label={orgSkillRow.name}
+                    onToggle={(enabled) =>
+                      adminScope.setOrgSkillEnabled(orgSkillRow.identifier, enabled)
+                    }
+                  />
+                )
+              : agentSkillRow && (
+                  <SkillEnabledSwitch
+                    disabled={!canEdit}
+                    identifier={agentSkillRow.identifier}
+                    kind="skill"
+                    label={agentSkillRow.name}
+                  />
+                )}
           </div>
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <Suspense
@@ -416,9 +437,18 @@ const LegacySkillDetail = memo<SkillDetailProps>(
             </div>
             <div style={{ alignItems: 'center', display: 'flex', flexShrink: 0, gap: 8 }}>
               <SkillEnabledSwitch
-                disabled={isBuiltinEnabled ? !canEdit : !canCreate}
                 identifier={identifier}
                 kind="builtin"
+                label={builtinSkillTitle}
+                disabled={
+                  adminScope
+                    ? // Org-wide availability needs catalog rights, not the
+                      // personal content permissions.
+                      !adminScope.canSetSkillAvailability(identifier)
+                    : isBuiltinEnabled
+                      ? !canEdit
+                      : !canCreate
+                }
                 {...(adminScope
                   ? {
                       checked: isBuiltinEnabled,

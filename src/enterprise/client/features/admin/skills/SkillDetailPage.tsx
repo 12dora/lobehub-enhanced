@@ -68,7 +68,12 @@ const DetailContent = memo<{
   const identityDirty = isSkillIdentityDirty(editor.draft, editor.baseDraft);
   const [enabledPending, setEnabledPending] = useState(false);
   const isArchived = data.draft.status === 'archived';
-  const canSetAvailability = canSetSkillAvailability(data.draft.skillKey, permission);
+  // The detail page always renders an existing catalog row, so availability is
+  // an update + publish write.
+  const canSetAvailability = canSetSkillAvailability(
+    { hasCatalogRow: true, skillKey: data.draft.skillKey },
+    permission,
+  );
 
   /**
    * Org-wide availability is a property of the published row, not of the draft
@@ -116,6 +121,7 @@ const DetailContent = memo<{
           isArchived={isArchived}
           saveFailed={editor.saveState === 'failed'}
           selectedVersionId={selectedVersionId}
+          skillName={data.draft.displayName}
           enabledDisabled={
             !canSetAvailability || isArchived || actionsDisabled || editor.dirty || enabledPending
           }
