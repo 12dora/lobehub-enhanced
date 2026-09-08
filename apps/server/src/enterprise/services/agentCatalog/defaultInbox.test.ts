@@ -211,6 +211,53 @@ describe('PlatformDefaultInboxService', () => {
     expect(operationStartedAfterRollback.systemRole).toBe('Managed prompt v1');
   });
 
+  it('applies a pinned thinking effort only when the user has not set that chatConfig key', async () => {
+    const captured = snapshot('v2');
+    captured.config.thinkingEffort = { controlKey: 'reasoningEffort', level: 'high' };
+    const service = new PlatformDefaultInboxService(db, 'user', {
+      flags: flagsOn,
+      materializationService: {
+        resolveForExistingAgent: vi.fn(async () => ({
+          agentId: 'builtin-inbox-id',
+          config: resolvedConfig(captured),
+          dependencySnapshot,
+        })),
+      },
+      resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+      validateDependencies: vi.fn(async () => ({ valid: true as const })),
+    });
+
+    const withDefault = await service.getEffectiveBuiltinConfig(base());
+    expect(withDefault.chatConfig.reasoningEffort).toBe('high');
+    expect(withDefault.chatConfig.enableStreaming).toBe(base().chatConfig.enableStreaming);
+    expect(withDefault.title).toBe('Inbox v2');
+
+    const userSet = base();
+    userSet.chatConfig = { ...userSet.chatConfig, reasoningEffort: 'low' };
+    const withUser = await service.getEffectiveBuiltinConfig(userSet);
+    expect(withUser.chatConfig.reasoningEffort).toBe('low');
+  });
+
+  it('leaves chatConfig unchanged when the version does not pin an effort', async () => {
+    const captured = snapshot('v2');
+    const service = new PlatformDefaultInboxService(db, 'user', {
+      flags: flagsOn,
+      materializationService: {
+        resolveForExistingAgent: vi.fn(async () => ({
+          agentId: 'builtin-inbox-id',
+          config: resolvedConfig(captured),
+          dependencySnapshot,
+        })),
+      },
+      resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+      validateDependencies: vi.fn(async () => ({ valid: true as const })),
+    });
+
+    const legacy = base();
+    const result = await service.getEffectiveBuiltinConfig(legacy);
+    expect(result.chatConfig).toEqual(legacy.chatConfig);
+  });
+
   it('treats managed avatar null as an authoritative clear', async () => {
     const baseSnapshot = snapshot('v2');
     const captured: PlatformAgentOperationSnapshot = {

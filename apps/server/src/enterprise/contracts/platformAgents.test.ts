@@ -238,6 +238,31 @@ describe('platform Agent contracts', () => {
     ).toBe(false);
   });
 
+  it('accepts a registry thinking-effort pin, null, or an omitted key, and rejects unknown pairs', () => {
+    expect(platformAgentVersionConfigSchema.safeParse(config).success).toBe(true);
+    expect(
+      platformAgentVersionConfigSchema.safeParse({ ...config, thinkingEffort: null }).success,
+    ).toBe(true);
+    expect(
+      platformAgentVersionConfigSchema.safeParse({
+        ...config,
+        thinkingEffort: { controlKey: 'reasoningEffort', level: 'high' },
+      }).success,
+    ).toBe(true);
+    expect(
+      platformAgentVersionConfigSchema.safeParse({
+        ...config,
+        thinkingEffort: { controlKey: 'not-a-control', level: 'high' },
+      }).success,
+    ).toBe(false);
+    expect(
+      platformAgentVersionConfigSchema.safeParse({
+        ...config,
+        thinkingEffort: { controlKey: 'reasoningEffort', level: 'ultra' },
+      }).success,
+    ).toBe(false);
+  });
+
   it('requires the default inbox identity and published pointer to agree', () => {
     const draft = {
       agentKey: 'default-inbox',

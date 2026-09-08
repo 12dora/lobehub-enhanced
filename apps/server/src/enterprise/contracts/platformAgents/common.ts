@@ -1,3 +1,4 @@
+import { EFFORT_CONTROL_REGISTRY, isEffortControlKey } from '@lobechat/model-runtime';
 import { PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY } from '@lobechat/types';
 import { z } from 'zod';
 
@@ -64,6 +65,32 @@ export const uniqueStringsSchema = (item: z.ZodType<string>, max: number) =>
       }
     });
 
+export const platformAgentThinkingEffortSchema = z
+  .object({
+    controlKey: z.string().trim().min(1).max(64),
+    level: z.string().trim().min(1).max(32),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!isEffortControlKey(value.controlKey)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'unknown thinking-effort control key',
+        path: ['controlKey'],
+      });
+      return;
+    }
+    if (
+      !(EFFORT_CONTROL_REGISTRY[value.controlKey].levels as readonly string[]).includes(value.level)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'thinking-effort level is not offered by the control',
+        path: ['level'],
+      });
+    }
+  });
+
 export const platformAgentVersionConfigSchema = z
   .object({
     avatar: safeText(2048, 1).nullable(),
@@ -80,6 +107,7 @@ export const platformAgentVersionConfigSchema = z
     // Empty is valid: the legacy inbox default is `""`, and admins may publish no prompt.
     systemRole: safeText(100_000),
     tags: uniqueStringsSchema(safeText(100, 1), 50),
+    thinkingEffort: platformAgentThinkingEffortSchema.nullable().optional(),
   })
   .strict();
 

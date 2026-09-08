@@ -186,6 +186,7 @@ export const buildDefaultInboxSeed = async (
     openingQuestions,
     systemRole,
     tags: [],
+    thinkingEffort: null,
   });
   if (!configParsed.success) {
     throw new PlatformAgentInvalidInputError(

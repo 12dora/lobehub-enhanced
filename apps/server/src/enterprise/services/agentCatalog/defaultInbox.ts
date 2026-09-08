@@ -14,6 +14,7 @@ import {
   type PlatformAgentOperationHandle,
 } from './effectiveResolver';
 import { PlatformAgentMaterializationService } from './materialization';
+import { resolveThinkingEffortChatConfigPatch } from './thinkingEffort';
 
 interface PlatformDefaultInboxServiceOptions {
   flags?: EnterpriseFeatureFlags;
@@ -55,8 +56,10 @@ export class PlatformDefaultInboxService {
 
   /**
    * Overlay only the fields owned by the immutable platform version. Internal id/slug and the
-   * existing non-managed chat/TTS/agency fields remain intact. Resolver/exact-version/dependency
-   * errors propagate (never masquerade as "no default"); only a real null capture falls back.
+   * existing non-managed chat/TTS/agency fields remain intact. A version thinking-effort pin is a
+   * default, not a lock: it fills chatConfig only when the user has not set that key.
+   * Resolver/exact-version/dependency errors propagate (never masquerade as "no default"); only a
+   * real null capture falls back.
    */
   getEffectiveBuiltinConfig = async (base: BuiltinInboxConfig): Promise<BuiltinInboxConfig> => {
     if (base.slug !== INBOX_SESSION_ID) return base;
@@ -71,6 +74,8 @@ export class PlatformDefaultInboxService {
       this.db,
       resolved.dependencySnapshot,
     );
+
+    const effortPatch = resolveThinkingEffortChatConfigPatch(snapshot.config);
 
     return {
       ...base,
@@ -92,6 +97,15 @@ export class PlatformDefaultInboxService {
       systemRole: snapshot.config.systemRole,
       tags: snapshot.config.tags,
       title: snapshot.config.displayName,
+      ...(effortPatch
+        ? {
+            chatConfig: {
+              ...base.chatConfig,
+              [effortPatch.configKey]:
+                base.chatConfig?.[effortPatch.configKey] ?? effortPatch.level,
+            } as BuiltinInboxConfig['chatConfig'],
+          }
+        : {}),
     };
   };
 }

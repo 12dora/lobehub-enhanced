@@ -51,7 +51,9 @@ describe('buildDefaultInboxSeed', () => {
       modelParameters: expect.objectContaining({ temperature: 0.2 }),
       openingMessage: 'Hello',
       systemRole: 'Be helpful.',
+      thinkingEffort: null,
     });
+    expect(seed.config.thinkingEffort).toBeNull();
     expect(seed.dependencySnapshot.model).toEqual({
       modelKey: DEFAULT_AGENT_CONFIG.model,
       providerChecksum: checksum,

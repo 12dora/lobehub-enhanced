@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_CONFIG } from '@lobechat/const';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -11,7 +12,10 @@ import type { EnterpriseObservabilityEvent } from '../../observability';
 import { setEnterprisePlatformObserverForTest } from '../../observability';
 import type { PlatformAgentOperationSnapshot } from './effectiveResolver';
 import { PlatformAgentMaterializationError, PlatformAgentNotFoundError } from './errors';
-import { PlatformAgentMaterializationService } from './materialization';
+import {
+  buildPlatformAgentRuntimeConfig,
+  PlatformAgentMaterializationService,
+} from './materialization';
 
 const CHECKSUM = 'a'.repeat(64);
 const observed: EnterpriseObservabilityEvent[] = [];
@@ -370,6 +374,68 @@ describe('PlatformAgentMaterializationService', () => {
       '[enterprise-observability] metric sink failed',
       expect.objectContaining({ errorClass: 'UnexpectedError' }),
     );
+  });
+
+  describe('buildPlatformAgentRuntimeConfig thinkingEffort', () => {
+    const deps = exactVersion().dependencySnapshot;
+
+    it('pins the registry chatConfig key from a valid version effort', () => {
+      const runtime = buildPlatformAgentRuntimeConfig(
+        'agt_1',
+        {
+          config: {
+            ...config('Research Agent'),
+            thinkingEffort: { controlKey: 'reasoningEffort', level: 'high' },
+          },
+        },
+        deps,
+      );
+      expect(runtime.chatConfig).toEqual({
+        ...DEFAULT_AGENT_CONFIG.chatConfig,
+        reasoningEffort: 'high',
+      });
+    });
+
+    it('keeps DEFAULT_AGENT_CONFIG.chatConfig when thinkingEffort is absent or null', () => {
+      expect(
+        buildPlatformAgentRuntimeConfig('agt_1', { config: config('Research Agent') }, deps)
+          .chatConfig,
+      ).toEqual(DEFAULT_AGENT_CONFIG.chatConfig);
+      expect(
+        buildPlatformAgentRuntimeConfig(
+          'agt_1',
+          { config: { ...config('Research Agent'), thinkingEffort: null } },
+          deps,
+        ).chatConfig,
+      ).toEqual(DEFAULT_AGENT_CONFIG.chatConfig);
+    });
+
+    it('ignores an unknown or unoffered pair without throwing', () => {
+      expect(
+        buildPlatformAgentRuntimeConfig(
+          'agt_1',
+          {
+            config: {
+              ...config('Research Agent'),
+              thinkingEffort: { controlKey: 'not-a-control', level: 'high' },
+            },
+          },
+          deps,
+        ).chatConfig,
+      ).toEqual(DEFAULT_AGENT_CONFIG.chatConfig);
+      expect(
+        buildPlatformAgentRuntimeConfig(
+          'agt_1',
+          {
+            config: {
+              ...config('Research Agent'),
+              thinkingEffort: { controlKey: 'reasoningEffort', level: 'ultra' },
+            },
+          },
+          deps,
+        ).chatConfig,
+      ).toEqual(DEFAULT_AGENT_CONFIG.chatConfig);
+    });
   });
 
   describe('materializeFromPin (resume replay)', () => {

@@ -27,6 +27,7 @@ import {
   PlatformAgentUnavailableError,
   redactPlatformReadError,
 } from './errors';
+import { resolveThinkingEffortChatConfigPatch } from './thinkingEffort';
 
 const CHECKSUM_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -81,10 +82,19 @@ export const buildPlatformAgentRuntimeConfig = (
 ): AgentConfigWithId => {
   const { config } = snapshot;
   const model = dependencySnapshot.model;
+  const effortPatch = resolveThinkingEffortChatConfigPatch(config);
   return {
     ...DEFAULT_AGENT_CONFIG,
     avatar: config.avatar,
     backgroundColor: config.backgroundColor ?? undefined,
+    ...(effortPatch
+      ? {
+          chatConfig: {
+            ...DEFAULT_AGENT_CONFIG.chatConfig,
+            [effortPatch.configKey]: effortPatch.level,
+          } as (typeof DEFAULT_AGENT_CONFIG)['chatConfig'],
+        }
+      : {}),
     description: config.description,
     id: agentId,
     model: model.modelKey,
