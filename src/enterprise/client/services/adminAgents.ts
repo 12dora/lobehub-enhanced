@@ -38,6 +38,7 @@ export const createLambdaAdminAgentsClient = (): AdminAgentsClient => ({
   setDefaultInbox: (input) => lambdaClient.admin.agents.setDefaultInbox.mutate(input),
   startRollout: (input) => lambdaClient.admin.agents.rollouts.start.mutate(input),
   upsertAssignment: (input) => lambdaClient.admin.agents.assignments.upsert.mutate(input),
+  uploadAvatar: (input) => lambdaClient.admin.agents.uploadAvatar.mutate(input),
 });
 
 /**

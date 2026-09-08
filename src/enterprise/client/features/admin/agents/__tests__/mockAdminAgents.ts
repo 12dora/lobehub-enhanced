@@ -626,5 +626,11 @@ export const createMockAdminAgentsClient = (): AdminAgentsClient => {
         }),
       );
     },
+    uploadAvatar: async (input) => ({
+      height: 256,
+      mimeType: 'image/webp' as const,
+      url: `https://assets.example.test/platform-agents/avatars/${input.requestId}.webp`,
+      width: 256,
+    }),
   };
 };

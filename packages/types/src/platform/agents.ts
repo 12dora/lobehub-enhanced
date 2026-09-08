@@ -69,6 +69,17 @@ export interface PlatformAgentModelParameters {
   topP?: number;
 }
 
+/**
+ * Thinking-effort level pinned by an Agent version. `controlKey` is a key of the model-runtime
+ * `EFFORT_CONTROL_REGISTRY` (e.g. `gpt5_6ReasoningEffort`, `reasoningEffort`, `thinkingLevel`);
+ * `level` must be one of that control's levels. The runtime writes it to the matching
+ * `chatConfig` field (`EFFORT_CONTROL_REGISTRY[controlKey].configKey`).
+ */
+export interface PlatformAgentThinkingEffort {
+  controlKey: string;
+  level: string;
+}
+
 /** Secret-free immutable Agent configuration. Dependencies are pinned separately. */
 export interface PlatformAgentVersionConfig {
   avatar: string | null;
@@ -80,6 +91,11 @@ export interface PlatformAgentVersionConfig {
   openingQuestions: string[];
   systemRole: string;
   tags: string[];
+  /**
+   * Default thinking effort. `null`/absent = follow the model default. Versions published before
+   * this field existed have no key, so readers must treat `undefined` as `null`.
+   */
+  thinkingEffort?: PlatformAgentThinkingEffort | null;
 }
 
 export interface PlatformAgentModelDependencyRef {

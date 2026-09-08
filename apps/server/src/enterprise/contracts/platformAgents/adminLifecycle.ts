@@ -211,6 +211,28 @@ export const adminPlatformAgentProvisionDefaultInboxInputSchema = z
 export const adminPlatformAgentProvisionDefaultInboxOutputSchema =
   adminPlatformAgentGetOutputSchema;
 
+/**
+ * Image avatar upload for the Agent editor. The server validates the bytes exactly like a
+ * branding asset (png/jpg/webp, ≤5 MB, no animation), stores the object and returns the URL to
+ * persist in `config.avatar`. `requestId` makes retries idempotent.
+ */
+export const adminPlatformAgentUploadAvatarInputSchema = z
+  .object({
+    bytesBase64: z.string().min(4).max(8_000_000),
+    fileName: z.string().trim().min(1).max(255),
+    requestId: z.string().uuid(),
+  })
+  .strict();
+
+export const adminPlatformAgentUploadAvatarOutputSchema = z
+  .object({
+    height: z.number().int().positive(),
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    url: z.string().trim().min(1).max(2048),
+    width: z.number().int().positive(),
+  })
+  .strict();
+
 export const adminPlatformAgentVersionsListInputSchema = z
   .object({
     agentId: idSchema,

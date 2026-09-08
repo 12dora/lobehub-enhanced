@@ -28,6 +28,8 @@ import type {
   AdminPlatformAgentListOutput,
   AdminPlatformAgentRollbackInput,
   AdminPlatformAgentRollbackOutput,
+  AdminPlatformAgentUploadAvatarInput,
+  AdminPlatformAgentUploadAvatarOutput,
   AdminPlatformAgentRolloutCancelInput,
   AdminPlatformAgentRolloutCancelOutput,
   AdminPlatformAgentRolloutGetInput,
@@ -217,4 +219,8 @@ export interface AdminAgentsClient {
   upsertAssignment: (
     input: AdminPlatformAgentAssignmentUpsertInput,
   ) => Promise<AdminPlatformAgentAssignmentUpsertOutput>;
+  /** Upload an image avatar for the editor; the returned `url` is what `config.avatar` stores. */
+  uploadAvatar: (
+    input: AdminPlatformAgentUploadAvatarInput,
+  ) => Promise<AdminPlatformAgentUploadAvatarOutput>;
 }
