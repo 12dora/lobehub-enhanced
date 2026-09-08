@@ -14,7 +14,7 @@ import { parseAgentConfig } from '@/server/globalConfig/parseDefaultAgent';
 import { AgentService } from './index';
 
 const { mockGetEffectiveBuiltinConfig } = vi.hoisted(() => ({
-  mockGetEffectiveBuiltinConfig: vi.fn(async (base) => base),
+  mockGetEffectiveBuiltinConfig: vi.fn(async (base: any, _options?: any) => base),
 }));
 
 vi.mock('@/envs/app', () => ({
@@ -362,7 +362,7 @@ describe('AgentService', () => {
         params: { temperature: 1 },
         provider: 'deepseek',
       });
-      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base, options) => {
+      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base: any, options?: any) => {
         const row = options?.userRow;
         if (!row?.model && !row?.provider) {
           return { ...base, model: 'admin-inbox-model', provider: 'admin-provider' };
@@ -488,7 +488,7 @@ describe('AgentService', () => {
         params: { temperature: 1 },
         provider: 'deepseek',
       });
-      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base, options) => {
+      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base: any, options?: any) => {
         const row = options?.userRow;
         if (!row?.model && !row?.provider) {
           return { ...base, model: 'admin-inbox-model', provider: 'admin-provider' };
@@ -693,7 +693,7 @@ describe('AgentService', () => {
         provider: 'deepseek',
       });
       vi.mocked(isRedisEnabled).mockReturnValue(false);
-      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base, options) => {
+      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base: any, options?: any) => {
         const row = options?.userRow;
         if (!row?.model && !row?.provider) {
           return { ...base, model: 'admin-inbox-model', provider: 'admin-provider' };
