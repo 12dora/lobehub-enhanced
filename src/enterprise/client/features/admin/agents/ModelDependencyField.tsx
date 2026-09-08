@@ -63,6 +63,8 @@ export interface ModelDependencyFieldProps {
   editable: boolean;
   /** Set when the surrounding form section already carries the "Model" heading. */
   hideTitle?: boolean;
+  /** Only the default assistant leaves the effort adjustable by members, so only it says so. */
+  isDefaultInbox?: boolean;
   model: PlatformAgentModelDependencyRef | null;
   onChooseModel: (modelKey: string | undefined) => void;
   onChooseProvider: (providerId: string | undefined) => void;
@@ -229,13 +231,14 @@ const ModelPicker = ({
  */
 const ThinkingEffortPicker = ({
   editable,
+  isDefaultInbox,
   model,
   onChooseThinkingEffort,
   source,
   thinkingEffort,
 }: Pick<
   ModelDependencyFieldProps,
-  'editable' | 'model' | 'onChooseThinkingEffort' | 'source' | 'thinkingEffort'
+  'editable' | 'isDefaultInbox' | 'model' | 'onChooseThinkingEffort' | 'source' | 'thinkingEffort'
 >) => {
   const { t } = useTranslation(['admin', 'setting']);
   const option = model
@@ -248,8 +251,14 @@ const ThinkingEffortPicker = ({
   return (
     <div className={styles.field}>
       <FieldLabel
-        help={t('agentCatalog.editor.thinkingEffortDesc')}
         htmlFor={THINKING_EFFORT_SELECT_ID}
+        help={t(
+          // Only the default assistant applies the effort as a default a member can still change;
+          // every other platform assistant pins it, so it must not promise otherwise.
+          isDefaultInbox
+            ? 'agentCatalog.editor.thinkingEffortDescDefaultInbox'
+            : 'agentCatalog.editor.thinkingEffortDesc',
+        )}
       >
         {t('agentCatalog.editor.thinkingEffort')}
       </FieldLabel>
@@ -290,6 +299,7 @@ export const ModelDependencyField = ({
   displayModelStale,
   editable,
   hideTitle = false,
+  isDefaultInbox = false,
   model,
   onChooseModel,
   onChooseThinkingEffort,
@@ -363,6 +373,7 @@ export const ModelDependencyField = ({
             {/* The effort belongs to the model, so it is picked in the same row, not a section away. */}
             <ThinkingEffortPicker
               editable={editable}
+              isDefaultInbox={isDefaultInbox}
               model={model}
               source={source}
               thinkingEffort={thinkingEffort}

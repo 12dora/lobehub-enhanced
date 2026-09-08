@@ -93,6 +93,7 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
             agentId={agent?.identity.id ?? 'new-platform-agent'}
             dependencies={form.value.dependencies}
             editable={!readOnly}
+            isDefaultInbox={isDefaultInbox}
             thinkingEffort={config.thinkingEffort ?? null}
             onChange={form.setDependencies}
             onThinkingEffortChange={(next) => form.patchConfig('thinkingEffort', next)}
@@ -122,6 +123,7 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                     <div className={styles.stack}>
                       <AgentEditorIdentityFields
                         agentKey={form.agentKey}
+                        avatarUploading={form.avatarUpload.uploading}
                         changeAgentKey={form.changeAgentKey}
                         config={config}
                         isCreate={form.isCreate}
@@ -131,6 +133,7 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                         patchConfig={form.patchConfig}
                         readOnly={readOnly}
                         setDisplayName={form.setDisplayName}
+                        uploadAvatar={(file) => void form.avatarUpload.upload(file)}
                       />
                       {/* The model is required, so it stays above the fold with the other basics. */}
                       {slots.model}

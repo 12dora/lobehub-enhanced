@@ -24,7 +24,6 @@ import {
   TAGS_ID,
 } from './agentEditorForm.styles';
 import { FieldLabel } from './dependencyEditorShared';
-import { useAgentAvatarUpload } from './useAgentAvatarUpload';
 import { AGENT_KEY_MAX_LENGTH } from './useAgentEditorForm';
 
 type PatchConfig = <Key extends keyof PlatformAgentVersionConfig>(
@@ -34,6 +33,8 @@ type PatchConfig = <Key extends keyof PlatformAgentVersionConfig>(
 
 export interface AgentEditorIdentityFieldsProps {
   agentKey: string;
+  /** True while an avatar image is still being stored — the form keeps Save closed until it lands. */
+  avatarUploading: boolean;
   changeAgentKey: (next: string) => void;
   config: PlatformAgentVersionConfig;
   isCreate: boolean;
@@ -44,11 +45,14 @@ export interface AgentEditorIdentityFieldsProps {
   patchConfig: PatchConfig;
   readOnly: boolean;
   setDisplayName: (next: string) => void;
+  /** Stores the picked image and writes back only the hosted URL. */
+  uploadAvatar: (file: File) => void;
 }
 
 export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
   ({
     agentKey,
+    avatarUploading,
     changeAgentKey,
     config,
     isCreate,
@@ -58,12 +62,10 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
     patchConfig,
     readOnly,
     setDisplayName,
+    uploadAvatar,
   }) => {
     const { t } = useTranslation('admin');
     const background = config.backgroundColor ?? undefined;
-    const { upload, uploading } = useAgentAvatarUpload({
-      onUploaded: (url) => patchConfig('avatar', url),
-    });
     // Members see the default assistant's built-in avatar as the published brand icon, so the
     // editor shows exactly that. What is stored never changes — this is display only.
     const inboxAvatar = useDefaultInboxAvatar(config.avatar);
@@ -87,7 +89,7 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
                 allowUpload
                 allowDelete={Boolean(config.avatar)}
                 background={background}
-                loading={uploading}
+                loading={avatarUploading}
                 size={48}
                 value={avatar}
                 texts={{
@@ -95,7 +97,7 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
                   uploadBtn: t('agentCatalog.editor.avatarUpload'),
                 }}
                 onDelete={() => patchConfig('avatar', null)}
-                onUpload={(file) => void upload(file)}
+                onUpload={uploadAvatar}
                 onChange={(next: string) => {
                   // The uploader also emits its cropped image as a data URL. That path is owned by
                   // `onUpload`, which stores the image and writes the hosted URL instead — an inline

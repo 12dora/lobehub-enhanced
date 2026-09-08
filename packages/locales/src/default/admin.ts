@@ -196,7 +196,8 @@ export default {
   'agentCatalog.editor.tagsPlaceholder': 'Add a tag and press Enter',
   'agentCatalog.editor.thinkingEffort': 'Thinking effort',
   'agentCatalog.editor.thinkingEffortDefault': 'Model default',
-  'agentCatalog.editor.thinkingEffortDesc':
+  'agentCatalog.editor.thinkingEffortDesc': 'Unset follows the model default.',
+  'agentCatalog.editor.thinkingEffortDescDefaultInbox':
     'Unset follows the model default. Members can adjust it in chat.',
   'agentCatalog.editor.thinkingEffortUnsupported': 'Not supported by this model',
   'agentCatalog.editor.title.create': 'New assistant',

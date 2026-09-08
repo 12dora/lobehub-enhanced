@@ -114,6 +114,108 @@ describe('useAgentAvatarUpload', () => {
     );
   });
 
+  it('lets the newest pick win however the uploads finish', async () => {
+    const deferred: ((value: { url: string }) => void)[] = [];
+    mocks.uploadAvatar.mockImplementation(
+      () =>
+        new Promise<{ url: string }>((resolve) => {
+          deferred.push(resolve);
+        }),
+    );
+    const { hook, onUploaded } = renderUpload();
+
+    let first: Promise<void>;
+    let second: Promise<void>;
+    act(() => {
+      first = hook.result.current.upload(webpFile());
+    });
+    await waitFor(() => expect(deferred).toHaveLength(1));
+    act(() => {
+      second = hook.result.current.upload(webpFile());
+    });
+    await waitFor(() => expect(deferred).toHaveLength(2));
+
+    // The second pick settles first; the first one landing afterwards must not overwrite it…
+    await act(async () => {
+      deferred[1]({ url: 'https://files.example.com/second.webp' });
+      await second!;
+    });
+    expect(onUploaded).toHaveBeenCalledExactlyOnceWith('https://files.example.com/second.webp');
+    expect(hook.result.current.uploading).toBe(false);
+
+    await act(async () => {
+      deferred[0]({ url: 'https://files.example.com/first.webp' });
+      await first!;
+    });
+    expect(onUploaded).toHaveBeenCalledExactlyOnceWith('https://files.example.com/second.webp');
+    expect(hook.result.current.uploading).toBe(false);
+  });
+
+  it('keeps the pending state until the LATEST upload settles', async () => {
+    const deferred: ((value: { url: string }) => void)[] = [];
+    mocks.uploadAvatar.mockImplementation(
+      () =>
+        new Promise<{ url: string }>((resolve) => {
+          deferred.push(resolve);
+        }),
+    );
+    const { hook } = renderUpload();
+
+    let first: Promise<void>;
+    act(() => {
+      first = hook.result.current.upload(webpFile());
+    });
+    await waitFor(() => expect(deferred).toHaveLength(1));
+    act(() => {
+      void hook.result.current.upload(webpFile());
+    });
+    await waitFor(() => expect(deferred).toHaveLength(2));
+
+    // A superseded upload finishing must not report the newer one as done.
+    await act(async () => {
+      deferred[0]({ url: 'https://files.example.com/first.webp' });
+      await first!;
+    });
+    expect(hook.result.current.uploading).toBe(true);
+  });
+
+  it('says nothing after the editor is gone', async () => {
+    let release: (value: { url: string }) => void = () => {};
+    let fail: (cause: unknown) => void = () => {};
+    mocks.uploadAvatar
+      .mockReturnValueOnce(
+        new Promise<{ url: string }>((resolve) => {
+          release = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<{ url: string }>((_resolve, reject) => {
+          fail = reject;
+        }),
+      );
+    const { hook, onUploaded } = renderUpload();
+
+    let settled: Promise<unknown>;
+    act(() => {
+      settled = Promise.all([
+        hook.result.current.upload(webpFile()),
+        hook.result.current.upload(webpFile()),
+      ]);
+    });
+    // Both are genuinely in flight when the modal closes — that is the case worth guarding.
+    await waitFor(() => expect(mocks.uploadAvatar).toHaveBeenCalledTimes(2));
+    hook.unmount();
+
+    await act(async () => {
+      release({ url: 'https://files.example.com/avatar.webp' });
+      fail(new Error('offline'));
+      await settled!;
+    });
+    // The modal is closed: neither the config write nor the toast has anywhere to land.
+    expect(onUploaded).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
   it('reports the upload as in flight until it settles', async () => {
     let release: (value: { url: string }) => void = () => {};
     mocks.uploadAvatar.mockReturnValue(

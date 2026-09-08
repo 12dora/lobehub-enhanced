@@ -43,6 +43,8 @@ interface DependencyEditorProps {
   dependencies: AdminAgentDraftDependencies;
   editable: boolean;
   enabled: boolean;
+  /** The platform default assistant, whose thinking effort members may still override in chat. */
+  isDefaultInbox?: boolean;
   onChange: (next: AdminAgentDraftDependencies) => void;
   /**
    * The thinking effort lives on the version config, not on the dependency snapshot, but it is
@@ -59,6 +61,7 @@ export const DependencyEditor = ({
   dependencies,
   editable,
   enabled,
+  isDefaultInbox = false,
   onChange,
   onThinkingEffortChange,
   onValidityChange,
@@ -306,6 +309,7 @@ export const DependencyEditor = ({
         displayModelStale={displayModelStale}
         editable={editable}
         hideTitle={Boolean(children)}
+        isDefaultInbox={isDefaultInbox}
         model={model}
         providerId={providerId}
         providerSearch={providerSearch}

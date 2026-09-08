@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { applyAssignmentPlan, classifySubmitFailure } from './agentEditorSubmit';
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
+  uploadAvatar: vi.fn(),
   upsertAssignment: vi.fn(),
 }));
 
@@ -29,6 +30,7 @@ vi.mock('@/enterprise/client/services/adminAgents', () => ({
     list: mocks.list,
     removeAssignment: mocks.removeAssignment,
     save: mocks.save,
+    uploadAvatar: mocks.uploadAvatar,
     upsertAssignment: mocks.upsertAssignment,
   },
 }));
@@ -141,6 +143,7 @@ beforeEach(() => {
   });
   mocks.toastSuccess.mockReset();
   mocks.toastWarning.mockReset();
+  mocks.uploadAvatar.mockReset();
   // What a reconcile read would find. Tests set this to whatever actually committed before the
   // transport gave up, which is the entire point of reconciling instead of assuming.
   server.assignments = [];
@@ -418,6 +421,49 @@ describe('useAgentEditorForm create', () => {
 
     expect(result.current.keyValid).toBe(false);
     expect(result.current.canSubmit).toBe(false);
+  });
+});
+
+describe('useAgentEditorForm avatar upload', () => {
+  const webp = () => new File([new Uint8Array([1, 2, 3])], 'avatar.webp', { type: 'image/webp' });
+
+  it('does not save during a deferred upload, and saves once it lands', async () => {
+    let release: (value: { url: string }) => void = () => {};
+    mocks.uploadAvatar.mockReturnValue(
+      new Promise<{ url: string }>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useAgentEditorForm({ agent }));
+    act(() => result.current.setDepValidity(READY));
+    act(() => result.current.setDisplayName('Research Assistant v2'));
+    expect(result.current.canSubmit).toBe(true);
+
+    let pending: Promise<void>;
+    act(() => {
+      pending = result.current.avatarUpload.upload(webp());
+    });
+    // Saving now would publish the OLD avatar and strand the new URL in a draft nobody saves.
+    await waitFor(() => expect(result.current.canSubmit).toBe(false));
+    await act(async () => {
+      await result.current.submit();
+    });
+    expect(mocks.save).not.toHaveBeenCalled();
+
+    await act(async () => {
+      release({ url: 'https://files.example.com/avatar.webp' });
+      await pending!;
+    });
+    expect(result.current.value.config.avatar).toBe('https://files.example.com/avatar.webp');
+    expect(result.current.canSubmit).toBe(true);
+
+    await act(async () => {
+      await result.current.submit();
+    });
+    expect(mocks.save).toHaveBeenCalledOnce();
+    expect(mocks.save.mock.calls.at(-1)![0].config).toMatchObject({
+      avatar: 'https://files.example.com/avatar.webp',
+    });
   });
 });
 

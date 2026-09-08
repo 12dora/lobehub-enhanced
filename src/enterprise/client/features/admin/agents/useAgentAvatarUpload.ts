@@ -1,7 +1,7 @@
 'use client';
 
 import { toast } from '@lobehub/ui/base-ui';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { mapEnterpriseError } from '@/enterprise/client/errors/mapEnterpriseError';
@@ -53,9 +53,27 @@ export interface UseAgentAvatarUploadParams {
 export const useAgentAvatarUpload = ({ onUploaded }: UseAgentAvatarUploadParams) => {
   const { t } = useTranslation('admin');
   const [uploading, setUploading] = useState(false);
+  /**
+   * Only the newest pick may write the avatar or clear the pending state. Two uploads started in a
+   * row can settle in either order, and the slower first one landing last would otherwise silently
+   * replace the image the admin actually chose — and end the "uploading" state early.
+   */
+  const latestRequestRef = useRef(0);
+  // Nothing may be reported after the modal closes: the form state is gone and a toast then belongs
+  // to a dialog the admin already dismissed.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // Re-armed on every mount: StrictMode's mount → unmount → remount must not leave it false.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const upload = useCallback(
     async (file: File) => {
+      const requestId = latestRequestRef.current + 1;
+      latestRequestRef.current = requestId;
       setUploading(true);
       try {
         const { url } = await adminAgentsService.uploadAvatar({
@@ -63,14 +81,17 @@ export const useAgentAvatarUpload = ({ onUploaded }: UseAgentAvatarUploadParams)
           fileName: AVATAR_FILE_NAME,
           requestId: crypto.randomUUID(),
         });
+        if (!mountedRef.current || latestRequestRef.current !== requestId) return;
         onUploaded(url);
       } catch (cause) {
+        if (!mountedRef.current || latestRequestRef.current !== requestId) return;
         // The stable code is the only part of a server failure worth showing an operator.
         const code = mapEnterpriseError(cause)?.code;
         const message = t('agentCatalog.editor.avatarUploadFailed');
         toast.error(code ? `${message} (${code})` : message);
       } finally {
-        setUploading(false);
+        // Superseded uploads leave the flag alone — it belongs to the request still in flight.
+        if (mountedRef.current && latestRequestRef.current === requestId) setUploading(false);
       }
     },
     [onUploaded, t],

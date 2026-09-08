@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import type { AdminReauthAuthMethod } from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
 
@@ -8,6 +8,7 @@ import type { AgentEditorSaveMeta } from './agentEditorCommitSteps';
 import { isCurrentAgentVersionMissing } from './agentEditorValue';
 import type { AdminAgentDetailOutput, AdminPlatformAgentSaveOutput } from './types';
 import { useAgentAssignmentDraft } from './useAgentAssignmentDraft';
+import { useAgentAvatarUpload } from './useAgentAvatarUpload';
 import { useAgentEditorCommit, useAgentEditorOutcome } from './useAgentEditorCommit';
 import { useAgentEditorDraft } from './useAgentEditorDraft';
 
@@ -80,6 +81,13 @@ export const useAgentEditorForm = ({
   // The published pointer is not among the loaded versions: nothing here may author a version.
   const currentVersionMissing = useMemo(() => isCurrentAgentVersionMissing(agent), [agent]);
   const configEditable = canEditConfig && !currentVersionMissing;
+  // Owned here rather than by the avatar field: an in-flight upload has to close Save, and the
+  // version that would be published while it runs still carries the previous avatar.
+  const applyUploadedAvatar = useCallback(
+    (url: string) => draft.patchConfig('avatar', url),
+    [draft.patchConfig],
+  );
+  const avatarUpload = useAgentAvatarUpload({ onUploaded: applyUploadedAvatar });
 
   const commit = useAgentEditorCommit({
     agent,
@@ -104,13 +112,25 @@ export const useAgentEditorForm = ({
   const canSubmit =
     !commit.saving &&
     !commit.resumeBlocked &&
+    !avatarUpload.uploading &&
     configReady &&
     (commit.dirty || (configEditable && !commit.hasIdentity));
+
+  /**
+   * Saving mid-upload would publish a version with the OLD avatar and then patch the new URL into a
+   * draft nobody saves — so the write waits, exactly like the disabled button says.
+   */
+  const submit = useCallback(async () => {
+    if (avatarUpload.uploading) return;
+    await commit.submit();
+  }, [avatarUpload.uploading, commit.submit]);
 
   return {
     agentKey: draft.agentKey,
     /** The 分配策略 editor state; only meaningful when `canAssign` is true. */
     assignments,
+    /** The avatar image upload behind the identity field, and whether one is still in flight. */
+    avatarUpload,
     canAssign,
     /** False for an assignment-only operator, or when the live version could not be loaded. */
     configEditable,
@@ -130,7 +150,7 @@ export const useAgentEditorForm = ({
     setDependencies: draft.setDependencies,
     setDepValidity: draft.setDepValidity,
     setDisplayName: draft.setDisplayName,
-    submit: commit.submit,
+    submit,
     /** A rejected write may have committed and we could not tell — Save is closed until reopened. */
     resumeBlocked: commit.resumeBlocked,
     /** `default-inbox` for the platform's built-in assistant, which every member already gets. */

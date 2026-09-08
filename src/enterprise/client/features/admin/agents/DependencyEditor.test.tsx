@@ -1375,6 +1375,7 @@ describe('DependencyEditor thinking effort', () => {
   const renderWithEffort = (
     thinkingEffort: { controlKey: string; level: string } | null,
     onThinkingEffortChange = vi.fn(),
+    isDefaultInbox = false,
   ) => {
     const { unmount } = render(
       <DependencyEditor
@@ -1382,6 +1383,7 @@ describe('DependencyEditor thinking effort', () => {
         enabled
         agentId="agent-1"
         dependencies={{ connectors: [], model: MODEL_REF, skills: [] }}
+        isDefaultInbox={isDefaultInbox}
         thinkingEffort={thinkingEffort}
         onChange={vi.fn()}
         onThinkingEffortChange={onThinkingEffortChange}
@@ -1460,6 +1462,30 @@ describe('DependencyEditor thinking effort', () => {
       target: { value: 'gpt-5.2' },
     });
     expect(onThinkingEffortChange).toHaveBeenCalledWith(null);
+  });
+
+  it('promises a member override only where there is one — the default assistant', () => {
+    publishEffortModels(['reasoningEffort']);
+    const help = () => document.querySelectorAll('[data-tooltip]');
+
+    // Every other platform assistant pins the effort, so its help must not mention chat.
+    const pinned = renderWithEffort(null);
+    expect(
+      [...help()].some(
+        (node) => node.getAttribute('data-tooltip') === 'agentCatalog.editor.thinkingEffortDesc',
+      ),
+    ).toBe(true);
+    pinned.unmount();
+
+    const inbox = renderWithEffort(null, vi.fn(), true);
+    expect(
+      [...help()].some(
+        (node) =>
+          node.getAttribute('data-tooltip') ===
+          'agentCatalog.editor.thinkingEffortDescDefaultInbox',
+      ),
+    ).toBe(true);
+    inbox.unmount();
   });
 
   it('drops a stored effort when the provider changes and the model goes with it', () => {

@@ -11,7 +11,6 @@ const formMock = vi.hoisted(() => ({
 
 const avatarMock = vi.hoisted(() => ({
   branding: { iconUrl: null, logoUrl: null, publishedRevision: null } as Record<string, unknown>,
-  onUploaded: (_url: string) => {},
   upload: vi.fn(),
   uploading: false,
 }));
@@ -108,13 +107,6 @@ vi.mock('@/components/EmojiPicker', () => ({
     </div>
   ),
 }));
-// The real hook is covered by its own test; here only the wiring around it is in scope.
-vi.mock('./useAgentAvatarUpload', () => ({
-  useAgentAvatarUpload: ({ onUploaded }: { onUploaded: (url: string) => void }) => {
-    avatarMock.onUploaded = onUploaded;
-    return { upload: avatarMock.upload, uploading: avatarMock.uploading };
-  },
-}));
 // The real resolver runs; only the published brand it reads is supplied here.
 vi.mock('@/enterprise/client/providers/RuntimeBrandingProvider', () => ({
   useBranding: () => avatarMock.branding,
@@ -127,11 +119,16 @@ vi.mock('./DependencyEditor', () => ({
   DependencyEditor: ({
     children,
     editable,
+    isDefaultInbox,
   }: {
     children: (slots: Record<string, ReactNode>) => ReactNode;
     editable?: boolean;
+    isDefaultInbox?: boolean;
   }) => (
-    <div data-dependency-editable={String(Boolean(editable))}>
+    <div
+      data-dependency-default-inbox={String(Boolean(isDefaultInbox))}
+      data-dependency-editable={String(Boolean(editable))}
+    >
       {children({
         connectors: <div>connectors-field</div>,
         model: <div>model-field</div>,
@@ -153,6 +150,8 @@ vi.mock('./useAgentEditorForm', () => ({
 const baseForm = () => ({
   agentKey: '',
   assignments: {} as Record<string, unknown>,
+  // Owned by the form hook, so the in-flight upload can also close Save.
+  avatarUpload: { upload: avatarMock.upload, uploading: avatarMock.uploading },
   canAssign: false,
   canSubmit: false,
   configEditable: true,
@@ -207,6 +206,7 @@ beforeEach(() => {
   avatarMock.branding = { iconUrl: null, logoUrl: null, publishedRevision: null };
   avatarMock.upload = vi.fn();
   avatarMock.uploading = false;
+  formMock.value = baseForm();
 });
 
 const picker = () => screen.getByText('emoji-picker').parentElement!;
@@ -343,15 +343,10 @@ describe('AgentEditorForm layout', () => {
     fireEvent.click(screen.getByText('pick-upload'));
     expect(avatarMock.upload).toHaveBeenCalledWith(expect.any(File));
 
-    // The cropped image also arrives as a data URL; only the hosted URL may be published.
+    // The cropped image also arrives as a data URL; only the hosted URL the upload returns may be
+    // published, and that write is the form hook's (see useAgentEditorForm.test.ts).
     fireEvent.click(screen.getByText('pick-data-url'));
     expect(form.patchConfig).not.toHaveBeenCalled();
-
-    avatarMock.onUploaded('https://files.example.com/avatar.webp');
-    expect(form.patchConfig).toHaveBeenCalledWith(
-      'avatar',
-      'https://files.example.com/avatar.webp',
-    );
   });
 
   it('offers a clear back to the default only once an avatar is set', () => {
@@ -370,8 +365,10 @@ describe('AgentEditorForm layout', () => {
   });
 
   it('shows the upload in flight on the avatar itself', () => {
-    avatarMock.uploading = true;
-    formMock.value = withAvatar(null);
+    formMock.value = {
+      ...withAvatar(null),
+      avatarUpload: { upload: avatarMock.upload, uploading: true },
+    };
     render(<AgentEditorForm />);
     expect(picker().dataset.loading).toBe('true');
   });
@@ -523,6 +520,19 @@ describe('AgentEditorForm layout', () => {
     render(<AgentEditorForm />);
     expect(screen.getByLabelText('agentCatalog.editor.key')).toBeDisabled();
     expect(helpFor('agentCatalog.editor.keyDefaultInboxDesc')).toBeTruthy();
+  });
+
+  it('tells the dependency editor when it is looking at the default assistant', () => {
+    // Only the default assistant's thinking effort stays adjustable by members, so only its help
+    // text may say so.
+    const dependencyRoot = () => document.querySelector('[data-dependency-default-inbox]');
+    const { unmount } = render(<AgentEditorForm />);
+    expect(dependencyRoot()?.getAttribute('data-dependency-default-inbox')).toBe('false');
+    unmount();
+
+    formMock.value = { ...baseForm(), isCreate: false, systemKey: 'default-inbox' };
+    render(<AgentEditorForm />);
+    expect(dependencyRoot()?.getAttribute('data-dependency-default-inbox')).toBe('true');
   });
 
   it('keeps the default assistant’s presentation fully editable', () => {
