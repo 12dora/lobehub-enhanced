@@ -62,20 +62,12 @@ describe('Params', () => {
     expect(screen.getByTestId('params-action')).toHaveAttribute('data-disabled', 'true');
   });
 
-  it('renders nothing for a platform-managed agent, whose params the admin owns', () => {
+  it('keeps the action for a platform-managed agent, whose chat preferences stay editable', () => {
     mocks.isPlatformManaged = true;
 
-    const { container } = render(<Params />);
+    render(<Params />);
 
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it('withholds the action for a managed agent even while loading', () => {
-    mocks.isLoading = true;
-    mocks.isPlatformManaged = true;
-
-    const { container } = render(<Params />);
-
-    expect(container).toBeEmptyDOMElement();
+    // Only the model-params section inside Controls is withheld — see Controls.test.tsx.
+    expect(screen.getByTestId('params-action')).toHaveAttribute('data-disabled', 'false');
   });
 });

@@ -1,7 +1,7 @@
 import { ModelIcon } from '@lobehub/icons';
 import { Center, Tooltip } from '@lobehub/ui';
 import { createStaticStyles, cx } from 'antd-style';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useBusinessModelModeConfig } from '@/business/client/hooks/useBusinessAgentMode';
@@ -39,6 +39,35 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     cursor: default;
     border-radius: 24px;
   `,
+  /**
+   * The managed pill stays keyboard-reachable so its tooltip opens on focus and screen
+   * readers reach the explanation; only the edit affordance is gone, not the control.
+   */
+  managedTrigger: css`
+    position: relative;
+    display: inline-flex;
+    border-radius: 24px;
+
+    &:focus-visible {
+      outline: 1px solid ${cssVar.colorBorder};
+      outline-offset: 2px;
+    }
+  `,
+  visuallyHidden: css`
+    position: absolute;
+
+    overflow: hidden;
+
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+
+    white-space: nowrap;
+
+    clip-path: inset(50%);
+  `,
   model: css`
     cursor: pointer;
     border-radius: 24px;
@@ -57,6 +86,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
 const ModelSwitch = memo(() => {
   const { t } = useTranslation('chat');
+  const managedDescriptionId = useId();
   const { actionSize, dropdownPlacement } = useActionBarContext();
   const blockSize = actionSize?.blockSize ?? 32;
   const iconSize = actionSize?.size ?? 20;
@@ -82,7 +112,6 @@ const ModelSwitch = memo(() => {
 
   const trigger = (
     <Center
-      aria-disabled={canCreateContent && isPlatformManaged ? true : undefined}
       height={blockSize}
       width={blockSize}
       className={cx(
@@ -105,10 +134,24 @@ const ModelSwitch = memo(() => {
 
   // The admin owns the model of a platform-managed agent: the server overlays it on every
   // read and rejects user edits, so offering the switch panel would only revert visually.
+  // The pill stays focusable and named: keyboard users open the tooltip on focus, and the
+  // accessible name plus description carry the model and the reason it cannot be changed.
   if (isPlatformManaged)
     return (
       <Tooltip title={t('modelSwitch.managedByAdmin')}>
-        <div>{trigger}</div>
+        <span
+          aria-disabled
+          aria-describedby={managedDescriptionId}
+          aria-label={model}
+          className={styles.managedTrigger}
+          role={'button'}
+          tabIndex={0}
+        >
+          {trigger}
+          <span className={styles.visuallyHidden} id={managedDescriptionId}>
+            {t('modelSwitch.managedByAdmin')}
+          </span>
+        </span>
       </Tooltip>
     );
 

@@ -94,8 +94,8 @@ vi.mock('@lobehub/ui', async (importOriginal) => {
   };
 });
 
-/** The label element itself: model name -> the flex row -> the pill. */
-const pill = () => screen.getByText(mocks.displayName ?? mocks.model).parentElement?.parentElement;
+/** The managed label's focusable wrapper — the element a keyboard user lands on. */
+const managedTrigger = () => screen.getByRole('button');
 
 describe('ModelLabel', () => {
   beforeEach(() => {
@@ -117,7 +117,9 @@ describe('ModelLabel', () => {
       expect(panel).toHaveAttribute('data-model', 'gpt-5.5');
       expect(screen.getByText('GPT-5.5')).toBeInTheDocument();
       expect(container.querySelector('svg')).not.toBeNull();
-      expect(pill()).not.toHaveAttribute('aria-disabled');
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(container.querySelector('[aria-disabled]')).toBeNull();
+      expect(container.querySelector('[tabindex]')).toBeNull();
     });
   });
 
@@ -157,7 +159,7 @@ describe('ModelLabel', () => {
     it('marks the label as disabled for assistive technology and never writes the config', () => {
       render(<ModelLabel />);
 
-      expect(pill()).toHaveAttribute('aria-disabled', 'true');
+      expect(managedTrigger()).toHaveAttribute('aria-disabled', 'true');
       expect(mocks.updateAgentConfigById).not.toHaveBeenCalled();
     });
   });

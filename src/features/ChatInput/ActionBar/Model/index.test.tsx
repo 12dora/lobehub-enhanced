@@ -91,8 +91,8 @@ vi.mock('@lobehub/ui', async (importOriginal) => {
   };
 });
 
-// icon svg -> the scale wrapper -> the pill itself.
-const pill = () => screen.getByTestId('model-icon').parentElement?.parentElement;
+/** The managed pill's focusable wrapper — the element a keyboard user lands on. */
+const managedTrigger = () => screen.getByRole('button');
 
 describe('ModelSwitch', () => {
   beforeEach(() => {
@@ -112,11 +112,13 @@ describe('ModelSwitch', () => {
       expect(panel).toContainElement(screen.getByTestId('model-icon'));
     });
 
-    it('adds no managed tooltip and no aria-disabled', () => {
+    it('adds no managed tooltip, no aria-disabled and no extra tab stop', () => {
       render(<ModelSwitch />);
 
       expect(screen.queryByTestId('tooltip')).toBeNull();
-      expect(pill()).not.toHaveAttribute('aria-disabled');
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(document.querySelector('[aria-disabled]')).toBeNull();
+      expect(document.querySelector('[tabindex]')).toBeNull();
     });
   });
 
@@ -152,7 +154,7 @@ describe('ModelSwitch', () => {
     it('marks the pill as disabled for assistive technology', () => {
       render(<ModelSwitch />);
 
-      expect(pill()).toHaveAttribute('aria-disabled', 'true');
+      expect(managedTrigger()).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('never writes the agent config', () => {

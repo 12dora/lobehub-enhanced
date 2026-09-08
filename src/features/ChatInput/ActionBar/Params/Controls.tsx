@@ -122,6 +122,10 @@ const styles = createStaticStyles(({ css }) => ({
     line-height: 18px;
     color: ${cssVar.colorTextTertiary};
   `,
+  /** Replaces the model-params section when the admin owns those fields. */
+  managedHint: css`
+    padding-block: 12px;
+  `,
   form: css`
     margin: 0;
   `,
@@ -517,7 +521,8 @@ const SliderField = memo<SliderFieldProps>(
 );
 
 const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popover' }) => {
-  const { t } = useTranslation(['setting', 'components']);
+  // The managed-params hint lives in the `chat` namespace, shared with the model pill.
+  const { t } = useTranslation(['setting', 'components', 'chat']);
   const agentId = useAgentId();
   const { updateAgentConfig } = useUpdateAgentConfig();
   const { allowed: canCreate } = usePermission('create_content');
@@ -531,6 +536,13 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
     agentByIdSelectors.getAgentModelProviderById(agentId)(s),
   );
   const enableAgentMode = useAgentStore(agentByIdSelectors.getAgentEnableModeById(agentId));
+  /**
+   * Admin-owned on a platform-managed agent: `params` (temperature, top_p, penalties,
+   * max_tokens, reasoning_effort) is overlaid on every read and rejected on write. Every
+   * other control on this panel writes `chatConfig`, which stays the user's own, so only
+   * the params section is withheld.
+   */
+  const isPlatformManaged = useAgentStore(agentByIdSelectors.isAgentPlatformManagedById(agentId));
   const hasModelConfig = useAiInfraStore(
     aiModelSelectors.isModelHasExtendParams(agentModel ?? '', agentProvider ?? ''),
   );
@@ -867,7 +879,15 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
               )}
             </>
           )}
-          {!enableAgentMode && (
+          {!enableAgentMode && isPlatformManaged && (
+            <>
+              <div className={styles.divider} />
+              <div className={cx(styles.hint, styles.managedHint)}>
+                {t('modelSwitch.managedByAdmin', { ns: 'chat' })}
+              </div>
+            </>
+          )}
+          {!enableAgentMode && !isPlatformManaged && (
             <>
               <div className={styles.divider} />
               <SectionHeader

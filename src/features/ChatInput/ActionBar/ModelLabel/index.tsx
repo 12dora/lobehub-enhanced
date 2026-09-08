@@ -1,7 +1,7 @@
 import { Center, Flexbox, Tooltip } from '@lobehub/ui';
 import { createStaticStyles, cx } from 'antd-style';
 import { ChevronDownIcon } from 'lucide-react';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useBusinessModelModeConfig } from '@/business/client/hooks/useBusinessAgentMode';
@@ -52,10 +52,40 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     cursor: default;
     border-radius: 6px;
   `,
+  /**
+   * The managed label stays keyboard-reachable so its tooltip opens on focus and screen
+   * readers reach the explanation; only the edit affordance is gone, not the control.
+   */
+  managedTrigger: css`
+    position: relative;
+    display: inline-flex;
+    border-radius: 6px;
+
+    &:focus-visible {
+      outline: 1px solid ${cssVar.colorBorder};
+      outline-offset: 2px;
+    }
+  `,
+  visuallyHidden: css`
+    position: absolute;
+
+    overflow: hidden;
+
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+
+    white-space: nowrap;
+
+    clip-path: inset(50%);
+  `,
 }));
 
 const ModelLabel = memo(() => {
   const { t } = useTranslation('chat');
+  const managedDescriptionId = useId();
   const { dropdownPlacement } = useActionBarContext();
   const { allowed: canCreateContent, reason } = usePermission('create_content');
 
@@ -85,7 +115,6 @@ const ModelLabel = memo(() => {
   const trigger = (
     <Center
       horizontal
-      aria-disabled={isManaged ? true : undefined}
       height={28}
       paddingInline={6}
       className={cx(
@@ -110,10 +139,24 @@ const ModelLabel = memo(() => {
 
   // The admin owns the model of a platform-managed agent: the server overlays it on every
   // read and rejects user edits, so offering the switch panel would only revert visually.
+  // The label stays focusable and named: keyboard users open the tooltip on focus, and the
+  // accessible name plus description carry the model and the reason it cannot be changed.
   if (isManaged)
     return (
       <Tooltip title={t('modelSwitch.managedByAdmin')}>
-        <div>{trigger}</div>
+        <span
+          aria-disabled
+          aria-describedby={managedDescriptionId}
+          aria-label={displayName}
+          className={styles.managedTrigger}
+          role={'button'}
+          tabIndex={0}
+        >
+          {trigger}
+          <span className={styles.visuallyHidden} id={managedDescriptionId}>
+            {t('modelSwitch.managedByAdmin')}
+          </span>
+        </span>
       </Tooltip>
     );
 
