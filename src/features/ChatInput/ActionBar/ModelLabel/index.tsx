@@ -18,6 +18,23 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   chevron: css`
     color: ${cssVar.colorTextQuaternary};
   `,
+  /**
+   * The managed label has no chevron, but it must not be *narrower* than the
+   * interactive one: this pill sits in the send row, so dropping 12px + the 2px
+   * gap would slide the send button sideways the moment the managed flag
+   * resolves (or the composer switches between a managed and a personal agent).
+   * The slot is always rendered and always the icon's size; only its content is
+   * conditional, so the pill's box never changes.
+   */
+  chevronSlot: css`
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+
+    inline-size: 12px;
+    block-size: 12px;
+  `,
   name: css`
     overflow: hidden;
 
@@ -124,8 +141,12 @@ const ModelLabel = memo(() => {
     >
       <Flexbox horizontal align={'center'} gap={2}>
         <span className={styles.name}>{displayName}</span>
-        {/* The chevron promises a menu; a managed model has none to open. */}
-        {!isManaged && <ChevronDownIcon className={styles.chevron} size={12} />}
+        {/* The chevron promises a menu; a managed model has none to open. The
+            slot around it stays, so the pill — and the send row it sits in —
+            keeps the same width in both states and never re-flows. */}
+        <span aria-hidden className={styles.chevronSlot} data-testid={'model-label-chevron-slot'}>
+          {!isManaged && <ChevronDownIcon className={styles.chevron} size={12} />}
+        </span>
       </Flexbox>
     </Center>
   );

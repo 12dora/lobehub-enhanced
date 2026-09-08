@@ -164,6 +164,34 @@ describe('ModelSwitch', () => {
     });
   });
 
+  /**
+   * Sibling invariant to ModelLabel's: the managed state may drop affordances but must
+   * never change the pill's metrics, or the action bar re-flows the moment the agent's
+   * config resolves and marks it managed.
+   */
+  describe('stable box across the managed flag', () => {
+    it('keeps the same pill metrics when the flag flips', () => {
+      mocks.isPlatformManaged = false;
+
+      // `ModelSwitch` is memoised and takes no props, so a `rerender` would bail out —
+      // the flag has to be flipped across two mounts to be observed at all.
+      const unmanaged = render(<ModelSwitch />);
+
+      const unmanagedPill = screen.getByTestId('model-icon').parentElement!.parentElement!;
+      const unmanagedStyle = unmanagedPill.getAttribute('style');
+      const unmanagedTag = unmanagedPill.tagName;
+
+      unmanaged.unmount();
+      mocks.isPlatformManaged = true;
+      render(<ModelSwitch />);
+
+      const managedPill = screen.getByTestId('model-icon').parentElement!.parentElement!;
+
+      expect(managedPill.tagName).toBe(unmanagedTag);
+      expect(managedPill.getAttribute('style')).toBe(unmanagedStyle);
+    });
+  });
+
   describe('permission denial', () => {
     it('keeps the denial reason and drops the panel, managed or not', () => {
       mocks.isPlatformManaged = true;

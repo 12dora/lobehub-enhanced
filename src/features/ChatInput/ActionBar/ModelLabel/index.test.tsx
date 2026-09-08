@@ -164,6 +164,62 @@ describe('ModelLabel', () => {
     });
   });
 
+  /**
+   * The label lives in the send row of the home composer. Anything that changes its
+   * measured width when the managed flag resolves (the inbox agent's config lands, or
+   * the composer switches between a managed and a personal agent) slides the send
+   * button sideways — the "input flickers when the conversation starts" report.
+   */
+  describe('stable box across the managed flag', () => {
+    const chevronSlot = () => screen.getByTestId('model-label-chevron-slot');
+    const shapeOf = (element: Element) =>
+      [...element.children].map((child) => child.tagName).join(',');
+
+    it('keeps the chevron slot, and only its content, when the flag flips', () => {
+      mocks.displayName = 'GPT-5.5';
+      mocks.isPlatformManaged = false;
+
+      // `ModelLabel` is memoised and takes no props, so a `rerender` would bail out —
+      // the flag has to be flipped across two mounts to be observed at all.
+      const unmanaged = render(<ModelLabel />);
+      const unmanagedSlot = chevronSlot();
+      const unmanagedRow = unmanagedSlot.parentElement!;
+      const unmanagedPill = unmanagedRow.parentElement!;
+      const unmanagedSlotClass = unmanagedSlot.className;
+      const unmanagedRowShape = shapeOf(unmanagedRow);
+      const unmanagedPillStyle = unmanagedPill.getAttribute('style');
+
+      expect(unmanagedSlot.querySelector('svg')).not.toBeNull();
+
+      unmanaged.unmount();
+      mocks.isPlatformManaged = true;
+      render(<ModelLabel />);
+
+      const managedSlot = chevronSlot();
+      const managedRow = managedSlot.parentElement!;
+      const managedPill = managedRow.parentElement!;
+
+      // The chevron itself is gone — it promises a menu a managed model has none of…
+      expect(managedSlot.querySelector('svg')).toBeNull();
+      // …but its box, the row around it and the pill's own metrics are untouched, so
+      // nothing in the send row re-flows.
+      expect(managedSlot.className).toBe(unmanagedSlotClass);
+      expect(shapeOf(managedRow)).toBe(unmanagedRowShape);
+      expect(managedPill.getAttribute('style')).toBe(unmanagedPillStyle);
+    });
+
+    it('hides the chevron slot from assistive technology in both states', () => {
+      mocks.isPlatformManaged = false;
+      const unmanaged = render(<ModelLabel />);
+      expect(chevronSlot()).toHaveAttribute('aria-hidden');
+
+      unmanaged.unmount();
+      mocks.isPlatformManaged = true;
+      render(<ModelLabel />);
+      expect(chevronSlot()).toHaveAttribute('aria-hidden');
+    });
+  });
+
   describe('permission denial', () => {
     it('keeps the denial reason and drops the panel, managed or not', () => {
       mocks.isPlatformManaged = true;
