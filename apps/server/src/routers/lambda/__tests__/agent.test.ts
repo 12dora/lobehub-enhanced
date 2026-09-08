@@ -473,8 +473,8 @@ describe('agentRouter', () => {
           model: 'x',
           provider: 'admin-provider',
         });
-        expect(result.agent.model).toBe('x');
-        expect(result.agent.provider).toBe('admin-provider');
+        expect(result.agent?.model).toBe('x');
+        expect(result.agent?.provider).toBe('admin-provider');
       });
 
       it('does not complete a model-only write on a non-inbox agent', async () => {

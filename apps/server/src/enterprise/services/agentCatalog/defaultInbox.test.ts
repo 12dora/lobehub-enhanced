@@ -46,7 +46,7 @@ const snapshot = (versionId: string, displayName = `Inbox ${versionId}`) =>
       backgroundColor: '#123456',
       description: 'Managed description',
       displayName,
-      modelParameters: { temperature: 0.2 },
+      modelParameters: { temperature: 0.2 } as PlatformAgentVersionConfig['modelParameters'],
       openingMessage: 'Managed welcome',
       openingQuestions: ['Managed question'],
       systemRole: `Managed prompt ${versionId}`,
