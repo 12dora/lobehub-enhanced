@@ -580,4 +580,71 @@ describe('PlatformDefaultInboxService', () => {
     });
     expect(userWins.params).toEqual({ temperature: 0.2, top_p: 0.5 });
   });
+
+  describe('getPublishedIdentity', () => {
+    it('returns null with zero platform IO while the flag is off', async () => {
+      const beginSystemOperation = vi.fn();
+      const resolveForExistingAgent = vi.fn();
+      const service = new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOff,
+        materializationService: { resolveForExistingAgent },
+        resolver: { beginSystemOperation },
+      });
+
+      await expect(service.getPublishedIdentity()).resolves.toBeNull();
+      expect(beginSystemOperation).not.toHaveBeenCalled();
+      expect(resolveForExistingAgent).not.toHaveBeenCalled();
+    });
+
+    it('returns null when there is no published default', async () => {
+      const beginSystemOperation = vi.fn(async () => null);
+      const resolveForExistingAgent = vi.fn();
+      const service = new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOn,
+        materializationService: { resolveForExistingAgent },
+        resolver: { beginSystemOperation },
+      });
+
+      await expect(service.getPublishedIdentity()).resolves.toBeNull();
+      expect(beginSystemOperation).toHaveBeenCalledWith(
+        'user',
+        PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
+      );
+      expect(resolveForExistingAgent).not.toHaveBeenCalled();
+    });
+
+    it('returns catalog display fields without materializing', async () => {
+      const captured = snapshot('v2', 'Published inbox');
+      const resolveForExistingAgent = vi.fn();
+      const validateDependencies = vi.fn();
+      const service = new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOn,
+        materializationService: { resolveForExistingAgent },
+        resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+        validateDependencies,
+      });
+
+      await expect(service.getPublishedIdentity()).resolves.toEqual({
+        avatar: 'managed-avatar',
+        backgroundColor: '#123456',
+        title: 'Published inbox',
+      });
+      expect(resolveForExistingAgent).not.toHaveBeenCalled();
+      expect(validateDependencies).not.toHaveBeenCalled();
+    });
+
+    it('propagates resolver failures instead of treating errors as absence', async () => {
+      const unavailable = new Error('stable resolver failure');
+      const service = new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOn,
+        resolver: {
+          beginSystemOperation: vi.fn(async () => {
+            throw unavailable;
+          }),
+        },
+      });
+
+      await expect(service.getPublishedIdentity()).rejects.toBe(unavailable);
+    });
+  });
 });

@@ -20,6 +20,7 @@ import {
   withPlatformPermission,
 } from '../../guards/platformPermission';
 import { assertConversationAccessEnabled } from '../../services/audit/contentPolicy';
+import { overlayInboxAgentRank } from './stats.rankIdentity';
 import {
   activitySeriesInput,
   activitySeriesOutput,
@@ -110,7 +111,8 @@ export const adminStatsRouter = router({
 
   rankAgents: statsProcedure.input(rankInput).query(async ({ ctx, input }) => {
     const model = new PlatformGlobalStatsModel(ctx.serverDB);
-    return withRangeErrors(() => model.rankAgents(input?.limit, input));
+    const rows = await withRangeErrors(() => model.rankAgents(input?.limit, input));
+    return overlayInboxAgentRank(ctx.serverDB, ctx.userId, rows);
   }),
 
   rankModels: statsProcedure.input(rankInput).query(async ({ ctx, input }) => {

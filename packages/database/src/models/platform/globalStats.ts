@@ -5,10 +5,25 @@
  * AgentOperationModel / UsageRecordService stats methods, without
  * `buildWorkspaceWhere`. Used only by admin.stats (platform_stats:read:all).
  */
+import { INBOX_SESSION_ID } from '@lobechat/const';
 import type { AgentRankItem, ModelRankItem, TopicRankItem } from '@lobechat/types';
 import type { HeatmapsProps } from '@lobehub/charts';
 import dayjs from 'dayjs';
-import { and, asc, count, desc, eq, gt, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  isNotNull,
+  isNull,
+  lt,
+  max,
+  or,
+  sql,
+} from 'drizzle-orm';
 
 import { today } from '@/utils/time';
 
@@ -338,6 +353,10 @@ export class PlatformGlobalStatsModel {
   /**
    * Ranks assistants by the topics opened on them. The window / user filter applies to
    * the counted rows (topics), so an assistant only ranks for what happened in-window.
+   *
+   * Every member inbox (`slug = inbox`) is one platform default assistant: those rows
+   * collapse to a single entry (`id = inbox`, count = sum) **before** `limit`, so a
+   * popular default cannot fall out of the top-N because each member's copy is small.
    */
   rankAgents = async (
     limit: number = 10,
@@ -349,25 +368,31 @@ export class PlatformGlobalStatsModel {
       options?.userId ? eq(topics.userId, options.userId) : undefined,
     ]);
 
+    // First selected column is the rank key — GROUP BY 1 reuses it without re-binding
+    // the CASE parameters (same pattern as findActivitySeries).
     const rows = await this.db
       .select({
-        avatar: agents.avatar,
-        backgroundColor: agents.backgroundColor,
+        id: sql<string>`CASE WHEN ${agents.slug} = ${INBOX_SESSION_ID} THEN ${INBOX_SESSION_ID} ELSE ${agents.id} END`.as(
+          'id',
+        ),
+        avatar: max(agents.avatar),
+        backgroundColor: max(agents.backgroundColor),
         count: count(topics.id).as('count'),
-        id: agents.id,
-        slug: agents.slug,
-        title: agents.title,
+        slug: max(agents.slug),
+        title: max(agents.title),
       })
       .from(agents)
       .leftJoin(topics, joinWhere)
       // Same legacy population as countAgents (virtual=false OR NULL) + inbox (DB-009).
       .where(isNonVirtualAgentSql())
-      .groupBy(agents.id)
+      .groupBy(sql`1`)
       .having(({ count: c }) => gt(c, 0))
       .orderBy(desc(sql`count`))
       .limit(limit);
 
-    return rows.map(({ slug, ...row }) => normalizeInboxAgentMeta(row, { slug }));
+    return rows.map(({ slug, ...row }) =>
+      normalizeInboxAgentMeta(row, { slug: slug ?? undefined }),
+    );
   };
 
   /** Ranks topics by in-window message volume; the user filter scopes topic ownership. */

@@ -1401,12 +1401,70 @@ describe('PlatformGlobalStatsModel', () => {
       const ids = rank.map((r) => r.id);
       expect(ids).toContain('ag-null');
       expect(ids).toContain('ag-false');
-      expect(ids).toContain('ag-inbox');
+      expect(ids).toContain('inbox');
+      expect(ids).not.toContain('ag-inbox');
       expect(ids).not.toContain('ag-true');
 
       // Highest topic count among non-virtual is ag-null (2 topics).
       expect(rank[0]?.id).toBe('ag-null');
       expect(rank[0]?.count).toBe(2);
+      expect(rank.find((row) => row.id === 'inbox')?.count).toBe(1);
+    });
+  });
+
+  describe('rankAgents inbox merge', () => {
+    const USER_C = 'global-stats-user-c';
+
+    const insertTopics = async (agentId: string, userId: string, count: number, prefix: string) => {
+      await serverDB.insert(topics).values(
+        Array.from({ length: count }, (_, index) => ({
+          agentId,
+          id: `${prefix}-${index}`,
+          title: `${prefix}-${index}`,
+          userId,
+        })),
+      );
+    };
+
+    it('merges every inbox slug into one entry ranked by the summed count', async () => {
+      await serverDB.insert(agents).values([
+        { id: 'ag-local', title: 'Local', userId: USER_A, virtual: false },
+        { id: 'inbox-a', slug: 'inbox', userId: USER_A, virtual: true },
+        { id: 'inbox-b', slug: 'inbox', userId: USER_B, virtual: true },
+      ]);
+      await insertTopics('ag-local', USER_A, 3, 't-local');
+      await insertTopics('inbox-a', USER_A, 2, 't-inbox-a');
+      await insertTopics('inbox-b', USER_B, 3, 't-inbox-b');
+
+      const rank = await globalStats.rankAgents(10);
+      expect(rank.map((row) => row.id)).toEqual(['inbox', 'ag-local']);
+      expect(rank[0]).toMatchObject({ count: 5, id: 'inbox' });
+      expect(rank.filter((row) => row.id === 'inbox')).toHaveLength(1);
+    });
+
+    it('applies limit after merging inbox rows so the default assistant can enter the top-N', async () => {
+      await serverDB.insert(users).values({ id: USER_C, username: 'carol' });
+      await serverDB.insert(agents).values([
+        { id: 'ag-1', title: 'One', userId: USER_A, virtual: false },
+        { id: 'ag-2', title: 'Two', userId: USER_A, virtual: false },
+        { id: 'ag-3', title: 'Three', userId: USER_A, virtual: false },
+        { id: 'inbox-a', slug: 'inbox', userId: USER_A, virtual: true },
+        { id: 'inbox-b', slug: 'inbox', userId: USER_B, virtual: true },
+        { id: 'inbox-c', slug: 'inbox', userId: USER_C, virtual: true },
+      ]);
+      // Each local assistant has more topics than any single inbox copy, but the
+      // merged inbox total (6) beats every local (3). Limit 2 must still include inbox.
+      await insertTopics('ag-1', USER_A, 3, 't-1');
+      await insertTopics('ag-2', USER_A, 3, 't-2');
+      await insertTopics('ag-3', USER_A, 3, 't-3');
+      await insertTopics('inbox-a', USER_A, 2, 't-ia');
+      await insertTopics('inbox-b', USER_B, 2, 't-ib');
+      await insertTopics('inbox-c', USER_C, 2, 't-ic');
+
+      const rank = await globalStats.rankAgents(2);
+      expect(rank).toHaveLength(2);
+      expect(rank[0]).toMatchObject({ count: 6, id: 'inbox' });
+      expect(rank.map((row) => row.id)).not.toContain('inbox-a');
     });
   });
 });

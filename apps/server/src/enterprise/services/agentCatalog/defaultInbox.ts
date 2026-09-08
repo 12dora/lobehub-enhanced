@@ -50,6 +50,13 @@ export interface GetEffectiveBuiltinConfigOptions {
   userRow?: DefaultInboxUserRow;
 }
 
+/** Display fields from the published default-inbox catalog version. */
+export interface PublishedInboxIdentity {
+  avatar: string | null;
+  backgroundColor: string | null;
+  title: string | null;
+}
+
 /**
  * Narrow adapter that maps the stable `default-inbox` platform role onto the existing builtin
  * `inbox` identity. It never creates/replaces an inbox row and never rewrites history.
@@ -78,6 +85,22 @@ export class PlatformDefaultInboxService {
         repository: this.options.repository,
       });
     return resolver.beginSystemOperation(this.userId, PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY);
+  }
+
+  /**
+   * Published default-inbox display identity (`displayName` / `avatar` / `backgroundColor`)
+   * without materializing an agent row. Null when the catalog is off or unpublished.
+   * Resolver errors propagate — same as {@link getEffectiveBuiltinConfig}.
+   */
+  async getPublishedIdentity(): Promise<PublishedInboxIdentity | null> {
+    const handle = await this.capture();
+    if (!handle) return null;
+    const { avatar, backgroundColor, displayName } = handle.getSnapshot().config;
+    return {
+      avatar,
+      backgroundColor,
+      title: displayName,
+    };
   }
 
   /**
