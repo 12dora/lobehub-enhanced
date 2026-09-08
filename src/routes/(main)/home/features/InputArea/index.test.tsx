@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import InputArea from './index';
 
 const prefetchAgentSurfaceMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  isAgentConfigLoading: false,
+  lastSendButtonProps: undefined as Record<string, unknown> | undefined,
+}));
 
 vi.mock('@/features/HomeConversation', () => ({
   prefetchAgentSurface: prefetchAgentSurfaceMock,
@@ -25,8 +29,19 @@ vi.mock('@/components/DragUploadZone', () => ({
 }));
 
 vi.mock('@/features/ChatInput', () => ({
-  ChatInputProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DesktopChatInput: () => <textarea data-testid="composer" />,
+  ChatInputProvider: ({
+    children,
+    sendButtonProps,
+  }: {
+    children: React.ReactNode;
+    sendButtonProps?: Record<string, unknown>;
+  }) => {
+    mocks.lastSendButtonProps = sendButtonProps;
+    return <>{children}</>;
+  },
+  DesktopChatInput: ({ isConfigLoading }: { isConfigLoading?: boolean }) => (
+    <textarea data-config-loading={String(isConfigLoading)} data-testid="composer" />
+  ),
 }));
 
 vi.mock('@/hooks/useInitAgentConfig', () => ({ useInitAgentConfig: () => ({ isLoading: false }) }));
@@ -41,7 +56,7 @@ vi.mock('@/store/agent/selectors', () => ({
   agentByIdSelectors: {
     getAgentModelById: () => () => 'gpt-4o',
     getAgentModelProviderById: () => () => 'openai',
-    isAgentConfigLoadingById: () => () => false,
+    isAgentConfigLoadingById: () => () => mocks.isAgentConfigLoading,
   },
 }));
 vi.mock('@/store/chat', () => ({
@@ -53,6 +68,8 @@ vi.mock('@/store/chat', () => ({
 describe('Home InputArea', () => {
   beforeEach(() => {
     prefetchAgentSurfaceMock.mockReset();
+    mocks.isAgentConfigLoading = false;
+    mocks.lastSendButtonProps = undefined;
   });
 
   it('warms the lazy conversation chunk as soon as the composer takes focus', () => {
@@ -66,5 +83,27 @@ describe('Home InputArea', () => {
     fireEvent.focus(screen.getByTestId('composer'));
 
     expect(prefetchAgentSurfaceMock).toHaveBeenCalled();
+  });
+
+  /**
+   * The composer footer waits for the model catalogue too, but that wait lives inside
+   * `DesktopChatInput` (`useComposerFooterLoading`). The send button must never inherit
+   * it — only the agent config decides whether sending is possible.
+   */
+  describe('send button gating', () => {
+    it('disables the send button on the agent config alone', () => {
+      mocks.isAgentConfigLoading = true;
+      const { unmount } = render(<InputArea />);
+      expect(mocks.lastSendButtonProps?.disabled).toBe(true);
+      // The catalogue wait is the composer's business, not the caller's.
+      expect(screen.getByTestId('composer')).toHaveAttribute('data-config-loading', 'true');
+
+      unmount();
+      mocks.isAgentConfigLoading = false;
+      render(<InputArea />);
+
+      expect(mocks.lastSendButtonProps?.disabled).toBe(false);
+      expect(screen.getByTestId('composer')).toHaveAttribute('data-config-loading', 'false');
+    });
   });
 });

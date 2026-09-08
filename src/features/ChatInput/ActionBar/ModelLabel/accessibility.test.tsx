@@ -17,6 +17,7 @@ import ModelLabel from './index';
 const mocks = vi.hoisted(() => ({
   agentId: 'agent-1',
   displayName: 'GPT-5.5' as string | undefined,
+  isModelCatalogReady: true,
   isPlatformManaged: true,
   model: 'gpt-5.5',
   permission: { allowed: true, reason: undefined as string | undefined },
@@ -60,6 +61,9 @@ vi.mock('@/store/aiInfra', () => ({
     getEnabledModelById: () => () =>
       mocks.displayName ? { displayName: mocks.displayName } : undefined,
   },
+  aiProviderSelectors: {
+    isInitAiProviderRuntimeState: () => mocks.isModelCatalogReady,
+  },
   useAiInfraStore: (selector: (state: unknown) => unknown) => selector({}),
 }));
 
@@ -73,6 +77,7 @@ describe('ModelLabel managed accessibility', () => {
   beforeEach(() => {
     mocks.agentId = 'agent-1';
     mocks.displayName = 'GPT-5.5';
+    mocks.isModelCatalogReady = true;
     mocks.isPlatformManaged = true;
     mocks.model = 'gpt-5.5';
     mocks.permission = { allowed: true, reason: undefined };

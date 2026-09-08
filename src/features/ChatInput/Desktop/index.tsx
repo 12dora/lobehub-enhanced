@@ -21,6 +21,7 @@ import { systemStatusSelectors } from '@/store/global/selectors';
 import { type ActionToolbarProps } from '../ActionBar';
 import ActionBar from '../ActionBar';
 import ControlBar from '../ControlBar';
+import { useComposerFooterLoading } from '../hooks/useComposerFooterLoading';
 import InputEditor from '../InputEditor';
 import { useSkillDrop } from '../InputEditor/ActionTag/useSkillDrop';
 import { type PlaceholderVariant } from '../InputEditor/Placeholder';
@@ -95,6 +96,10 @@ interface DesktopChatInputProps extends ActionToolbarProps {
    * Swap the action bar and send area for skeleton placeholders while
    * the underlying agent / group / session config is still hydrating.
    * The editor itself stays usable. Wins over `leftContent` / `rightContent`.
+   *
+   * Pass the *agent config* state only — the footer additionally waits for the model
+   * catalogue on its own (`useComposerFooterLoading`), so callers must not fold that in
+   * (and must keep `sendButtonProps.disabled` free of it).
    */
   isConfigLoading?: boolean;
   leftContent?: ReactNode;
@@ -119,7 +124,7 @@ const DesktopChatInput = memo<DesktopChatInputProps>(
     extraActionItems,
     dropdownPlacement,
     hidden,
-    isConfigLoading = false,
+    isConfigLoading: isAgentConfigLoading = false,
     leftContent,
     placeholder,
     placeholderVariant,
@@ -127,6 +132,11 @@ const DesktopChatInput = memo<DesktopChatInputProps>(
     sendAreaPrefix,
   }) => {
     const { t } = useTranslation('chat');
+    // The footer reads two async sources — the agent config the caller tracks, and the
+    // model catalogue that names the model and decides whether the effort pill exists.
+    // Releasing the skeleton on the first alone makes the row re-flow when the second
+    // lands. The wait is deadline-bounded, so this can never strand the composer.
+    const isConfigLoading = useComposerFooterLoading(isAgentConfigLoading);
     const layoutContainerRef = use(LayoutContainerContext);
     const [chatInputHeight, updateSystemStatus] = useGlobalStore((s) => [
       systemStatusSelectors.chatInputHeight(s),

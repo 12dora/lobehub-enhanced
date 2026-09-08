@@ -12,6 +12,7 @@ import ModelLabel from './index';
 const mocks = vi.hoisted(() => ({
   agentId: 'agent-1',
   displayName: undefined as string | undefined,
+  isModelCatalogReady: true,
   isPlatformManaged: false,
   model: 'gpt-5.5',
   permission: { allowed: true, reason: undefined as string | undefined },
@@ -66,6 +67,9 @@ vi.mock('@/store/aiInfra', () => ({
     getEnabledModelById: () => () =>
       mocks.displayName ? { displayName: mocks.displayName } : undefined,
   },
+  aiProviderSelectors: {
+    isInitAiProviderRuntimeState: () => mocks.isModelCatalogReady,
+  },
   useAiInfraStore: (selector: (state: unknown) => unknown) => selector({}),
 }));
 
@@ -101,6 +105,7 @@ describe('ModelLabel', () => {
   beforeEach(() => {
     mocks.agentId = 'agent-1';
     mocks.displayName = undefined;
+    mocks.isModelCatalogReady = true;
     mocks.isPlatformManaged = false;
     mocks.model = 'gpt-5.5';
     mocks.permission = { allowed: true, reason: undefined };
@@ -217,6 +222,41 @@ describe('ModelLabel', () => {
       mocks.isPlatformManaged = true;
       render(<ModelLabel />);
       expect(chevronSlot()).toHaveAttribute('aria-hidden');
+    });
+  });
+
+  /**
+   * The composer footer normally waits for the model catalogue too
+   * (`useComposerFooterLoading`), but that wait is deadline-bounded — so the label still
+   * has to behave when it is released before the catalogue lands.
+   */
+  describe('model catalogue not resolved yet', () => {
+    beforeEach(() => {
+      mocks.isModelCatalogReady = false;
+      mocks.displayName = undefined;
+    });
+
+    it('holds a fixed-width placeholder instead of painting the raw model id', () => {
+      const { container } = render(<ModelLabel />);
+
+      expect(screen.queryByText('gpt-5.5')).toBeNull();
+      expect(container.querySelector('[data-testid="model-label-chevron-slot"]')).not.toBeNull();
+    });
+
+    it('still names the managed label after the model for assistive technology', () => {
+      mocks.isPlatformManaged = true;
+
+      render(<ModelLabel />);
+
+      expect(managedTrigger()).toHaveAttribute('aria-label', 'gpt-5.5');
+    });
+
+    it('falls back to the raw model id once the catalogue says it has no name', () => {
+      mocks.isModelCatalogReady = true;
+
+      render(<ModelLabel />);
+
+      expect(screen.getByText('gpt-5.5')).toBeInTheDocument();
     });
   });
 

@@ -9,10 +9,10 @@ import ModelSwitchPanel from '@/features/ModelSwitchPanel';
 import { usePermission } from '@/hooks/usePermission';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
-import { aiModelSelectors, useAiInfraStore } from '@/store/aiInfra';
 
 import { useAgentId } from '../../hooks/useAgentId';
 import { useActionBarContext } from '../context';
+import { useModelDisplayName } from './useModelDisplayName';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   chevron: css`
@@ -34,6 +34,17 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
     inline-size: 12px;
     block-size: 12px;
+  `,
+  /**
+   * Shown instead of the raw model id while the model catalogue has not resolved yet —
+   * an internal id is developer noise, and painting it would only be replaced by the real
+   * display name a moment later. Fixed width so the swap costs no re-flow either.
+   */
+  namePlaceholder: css`
+    inline-size: 72px;
+    block-size: 12px;
+    border-radius: 4px;
+    background: ${cssVar.colorFillTertiary};
   `,
   name: css`
     overflow: hidden;
@@ -115,8 +126,8 @@ const ModelLabel = memo(() => {
   ]);
   const applyBusinessModelModeConfig = useBusinessModelModeConfig();
 
-  const enabledModel = useAiInfraStore(aiModelSelectors.getEnabledModelById(model, provider));
-  const displayName = enabledModel?.displayName || model;
+  // `undefined` while the model catalogue has not resolved the name yet — see the hook.
+  const displayName = useModelDisplayName(model, provider);
 
   const handleModelChange = useCallback(
     async (params: { model: string; provider: string }) => {
@@ -140,7 +151,11 @@ const ModelLabel = memo(() => {
       )}
     >
       <Flexbox horizontal align={'center'} gap={2}>
-        <span className={styles.name}>{displayName}</span>
+        {displayName ? (
+          <span className={styles.name}>{displayName}</span>
+        ) : (
+          <span aria-hidden className={styles.namePlaceholder} />
+        )}
         {/* The chevron promises a menu; a managed model has none to open. The
             slot around it stays, so the pill — and the send row it sits in —
             keeps the same width in both states and never re-flows. */}
@@ -168,7 +183,7 @@ const ModelLabel = memo(() => {
         <span
           aria-disabled
           aria-describedby={managedDescriptionId}
-          aria-label={displayName}
+          aria-label={displayName ?? model}
           className={styles.managedTrigger}
           role={'button'}
           tabIndex={0}
