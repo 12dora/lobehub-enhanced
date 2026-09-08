@@ -8,6 +8,7 @@ import { parseEnterpriseFeatureFlags } from '../../featureFlags';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
 import { assertDangerousReauthWithAudit } from '../../guards/reauth';
 import {
+  PlatformAgentAssetStorageUnavailableError,
   PlatformAgentDefaultRequiredError,
   PlatformAgentDependencyValidationError,
   PlatformAgentInvalidInputError,
@@ -69,6 +70,13 @@ export const mapAgentServiceError = (error: unknown): never => {
       code: PLATFORM_ERROR_CODES.PLATFORM_INVALID_INPUT,
       httpCode: 'BAD_REQUEST',
       message: error.message,
+    });
+  }
+  if (error instanceof PlatformAgentAssetStorageUnavailableError) {
+    return throwEnterpriseError({
+      code: PLATFORM_ERROR_CODES.PLATFORM_ASSET_STORAGE_UNAVAILABLE,
+      httpCode: 'PRECONDITION_FAILED',
+      message: 'Platform asset storage is not configured',
     });
   }
   // Already-redacted unknown read failure (REWORK-5). Surface a stable, detail-free 500 rather

@@ -107,14 +107,15 @@ describe('admin procedure authorization registry', () => {
     // +1 query since: admin.system.getSandboxPackageStats (sandbox pip/npm/apt ledger).
     // +1 mutation since: admin.agents.provisionDefaultInbox (bootstrap the default inbox).
     // +1 mutation since: admin.skills.setEnabled (org-wide catalog enable/disable).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(244);
+    // +1 mutation since: admin.agents.uploadAvatar (image avatar for the platform Agent editor).
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(245);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
     ).toHaveLength(109);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
-    ).toHaveLength(135);
-    expect(mutationPaths).toHaveLength(135);
+    ).toHaveLength(136);
+    expect(mutationPaths).toHaveLength(136);
     expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter((entry) => 'selfAccess' in entry)).toEqual(
       [{ kind: 'query', path: 'admin.auth.getMyAccess', selfAccess: true }],
     );

@@ -17,7 +17,8 @@ import { createdAt, timestamptz, updatedAt } from '../_helpers';
 import { users } from '../user';
 import type { PlatformResourceStatus } from './common';
 
-export type PlatformBrandingAssetKind = 'desktopIcon' | 'favicon' | 'icon' | 'logo' | 'ogImage';
+export type PlatformBrandingAssetKind =
+  'agentAvatar' | 'desktopIcon' | 'favicon' | 'icon' | 'logo' | 'ogImage';
 export type PlatformBrandingAssetStatus = 'orphaned' | 'ready' | 'uploading';
 export type PlatformBrandingOperationStatus = 'failed' | 'pending' | 'succeeded';
 export type PlatformBrandingOperationErrorCategory =

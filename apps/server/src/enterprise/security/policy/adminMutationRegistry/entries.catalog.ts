@@ -1,4 +1,5 @@
 import {
+  assetNoLkg,
   conditional,
   conditionalReauth,
   dangerousMutation,
@@ -163,6 +164,17 @@ export const ADMIN_MUTATION_ENTRIES_CATALOG = {
     'critical',
     'Replace the global default inbox agent.',
     { reason: optionalReasonInput, reauth: recentReauth },
+  ),
+  'admin.agents.uploadAvatar': regularMutation(
+    'admin.agents.uploadAvatar',
+    'medium',
+    'Upload and validate an image avatar for a platform agent.',
+    {
+      lastKnownGood: assetNoLkg,
+      reason: notApplicable(
+        'Avatar upload records a server-authored audit outcome; the procedure DTO has no operator reason.',
+      ),
+    },
   ),
   'admin.agents.validateDependencies': validationMutation(
     'admin.agents.validateDependencies',

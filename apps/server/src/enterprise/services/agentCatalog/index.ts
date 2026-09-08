@@ -1,4 +1,5 @@
 export * from './adminService';
+export * from './avatarUpload';
 export * from './defaultInbox';
 export * from './defaultInboxProvision';
 export * from './dependencyValidator';

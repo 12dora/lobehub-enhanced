@@ -515,6 +515,39 @@ describe('adminAgentsRouter security gates', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('gates uploadAvatar by AGENT_UPDATE and the managed-agents flag', async () => {
+    const input = {
+      bytesBase64: 'AAAA',
+      fileName: 'avatar.png',
+      requestId: crypto.randomUUID(),
+    };
+    await expect((await callerFor({})).uploadAvatar(input)).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    await expect(
+      (await callerFor({ authenticatedAt: new Date(), userId: ids.reader })).uploadAvatar(input),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await callerFor({ authenticatedAt: new Date(), userId: ids.creator })).uploadAvatar(input),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const updater = await callerFor({ authenticatedAt: new Date(), userId: ids.updater });
+    let updaterCode: string | undefined;
+    try {
+      await updater.uploadAvatar(input);
+    } catch (error) {
+      updaterCode = (error as { code?: string }).code;
+    }
+    expect(updaterCode).toBeDefined();
+    expect(updaterCode).not.toBe('FORBIDDEN');
+    expect(updaterCode).not.toBe('UNAUTHORIZED');
+
+    vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '0');
+    await expect(updater.uploadAvatar(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
   it('gates Rollout before serverDatabase, active-user and RBAC when only Admin is enabled', async () => {
     vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '0');
     databaseMocks.getServerDB.mockClear();

@@ -22,6 +22,8 @@ import {
   adminPlatformAgentSaveOutputSchema,
   adminPlatformAgentSetDefaultInboxInputSchema,
   adminPlatformAgentSetDefaultInboxOutputSchema,
+  adminPlatformAgentUploadAvatarInputSchema,
+  adminPlatformAgentUploadAvatarOutputSchema,
   adminPlatformAgentValidateDependenciesInputSchema,
   adminPlatformAgentValidateDependenciesOutputSchema,
   adminPlatformAgentVersionsListInputSchema,
@@ -34,6 +36,7 @@ import {
 import {
   ensureDefaultInboxProvisioned,
   PlatformAgentAdminService,
+  PlatformAgentAvatarUploadService,
   PlatformAgentPublicationService,
   validateExactPlatformAgentDependencies,
 } from '../../services/agentCatalog';
@@ -273,6 +276,23 @@ export const adminAgentsRouter = router({
           ctx.userId!,
           input,
         );
+      } catch (error) {
+        return mapAgentServiceError(error);
+      }
+    }),
+
+  /**
+   * Image avatar upload for the Agent editor. Not destructive — no dangerous-mutation reauth.
+   * Requires AGENT_UPDATE (`withAnyPlatformPermission` does not exist on this tree).
+   */
+  uploadAvatar: adminBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.AGENT_UPDATE))
+    .input(adminPlatformAgentUploadAvatarInputSchema)
+    .output(adminPlatformAgentUploadAvatarOutputSchema)
+    .mutation(async ({ ctx, input }) => {
+      assertAgentFeatureEnabled();
+      try {
+        return await new PlatformAgentAvatarUploadService(ctx.serverDB).upload(ctx.userId!, input);
       } catch (error) {
         return mapAgentServiceError(error);
       }

@@ -76,6 +76,18 @@ export class PlatformAgentUnavailableError extends Error {
   }
 }
 
+/**
+ * Object storage is not configured for platform Agent avatar uploads. Reuses the shared
+ * `PLATFORM_ASSET_STORAGE_UNAVAILABLE` code so the client mapper stays a single code.
+ */
+export class PlatformAgentAssetStorageUnavailableError extends Error {
+  readonly code = 'PLATFORM_ASSET_STORAGE_UNAVAILABLE';
+
+  constructor() {
+    super('PLATFORM_ASSET_STORAGE_UNAVAILABLE');
+  }
+}
+
 /** The stable, already-redacted platform Agent errors that are safe to surface verbatim. */
 const REDACTED_PLATFORM_ERRORS = [
   PlatformAgentNotFoundError,

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { and, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 
 import { checksumPayload, type PlatformAuditLogItem } from '@/database/models/platform';
 import { platformBrandingAssets } from '@/database/schemas/platform';
@@ -508,6 +508,8 @@ export class AdminBrandingAssetService {
         .from(platformBrandingAssets)
         .where(
           and(
+            // Agent avatars are referenced by immutable platform_agent_versions forever.
+            ne(platformBrandingAssets.kind, 'agentAvatar'),
             lte(platformBrandingAssets.cleanupAfter, now),
             isNull(platformBrandingAssets.objectDeletedAt),
             eq(platformBrandingAssets.draftPinned, false),
@@ -548,6 +550,7 @@ export class AdminBrandingAssetService {
           .where(
             and(
               eq(platformBrandingAssets.id, candidate.id),
+              ne(platformBrandingAssets.kind, 'agentAvatar'),
               lte(platformBrandingAssets.cleanupAfter, now),
               isNull(platformBrandingAssets.objectDeletedAt),
               eq(platformBrandingAssets.draftPinned, false),

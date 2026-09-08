@@ -33,6 +33,7 @@ export const AUDIT_ACTIONS = [
   'admin.agents.save',
   'admin.agents.setDefaultInbox',
   'admin.agents.updateDraft',
+  'admin.agents.uploadAvatar',
   'admin.agents.validateDependencies',
   'admin.aiModels.applyImmediate',
   'admin.aiModels.batchToggle',

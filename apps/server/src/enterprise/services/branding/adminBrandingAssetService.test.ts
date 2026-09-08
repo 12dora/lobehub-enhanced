@@ -295,6 +295,50 @@ describe('AdminBrandingAssetService', () => {
     expect(storage.delete).not.toHaveBeenCalledWith(expect.stringContaining(publishedId));
   });
 
+  it('never sweeps agentAvatar rows even after cleanupAfter elapses', async () => {
+    let now = new Date('2026-07-19T00:00:00.000Z');
+    const storage = {
+      delete: vi.fn(async () => {}),
+      isConfigured: () => true,
+      upload: vi.fn(async () => {}),
+    };
+    const service = new AdminBrandingAssetService(db, { now: () => now, storage });
+    const logo = await service.upload(actorUserId, await input());
+    const avatarId = `pba_${crypto.randomUUID()}`;
+    await db.insert(platformBrandingAssets).values({
+      cleanupAfter: new Date('2020-01-01T00:00:00.000Z'),
+      createdBy: actorUserId,
+      height: 16,
+      id: avatarId,
+      kind: 'agentAvatar',
+      mimeType: 'image/png',
+      objectKey: `platform-agents/avatars/${avatarId}.png`,
+      operation: 'admin.agents.uploadAvatar',
+      requestActorId: actorUserId,
+      requestFingerprint: 'a'.repeat(64),
+      requestId: crypto.randomUUID(),
+      sha256: 'b'.repeat(64),
+      size: 32,
+      status: 'ready',
+      width: 16,
+    });
+    const rows = await db.select().from(platformBrandingAssets);
+    now = new Date(Math.max(...rows.map((row) => row.cleanupAfter.getTime())) + 1);
+
+    await expect(service.sweep({ limit: 1000 })).resolves.toEqual({
+      deleted: 1,
+      failed: 0,
+      scanned: 1,
+    });
+    expect(storage.delete).toHaveBeenCalledWith(
+      expect.stringContaining(logo.url.slice('/f/'.length)),
+    );
+    expect(storage.delete).not.toHaveBeenCalledWith(expect.stringContaining(avatarId));
+    expect(
+      (await db.select().from(platformBrandingAssets)).find((row) => row.id === avatarId),
+    ).toMatchObject({ objectDeletedAt: null, status: 'ready' });
+  });
+
   it('rejects a draft pin after cleanup has atomically claimed the asset', async () => {
     let now = new Date('2026-07-19T00:00:00.000Z');
     let deleteEntered!: () => void;
