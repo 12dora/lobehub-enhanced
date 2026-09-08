@@ -34,6 +34,7 @@ import {
   PlatformAgentEffectiveResolver,
   type PlatformAgentOperationHandle,
 } from './effectiveResolver';
+import { isPlatformAgentTakeoverActive } from './enforcement';
 import {
   PlatformAgentDependencyValidationError,
   PlatformAgentMaterializationError,
@@ -109,6 +110,11 @@ export interface PlatformAgentExecutionResolverDeps {
   createEffectiveResolver?: (db: LobeChatDatabase) => EffectiveResolverSurface;
   createMaterializationService?: (db: LobeChatDatabase, userId: string) => MaterializationSurface;
   db: LobeChatDatabase;
+  /**
+   * Override for tests. Production default is {@link isPlatformAgentTakeoverActive}.
+   * When false, the builtin inbox is not a platform execution plan (legacy overlay path).
+   */
+  isTakeoverActive?: () => Promise<boolean>;
   messageModel: Pick<MessageModel, 'findById' | 'findMessagePlugin'>;
   userId: string;
   validateDependencies?: typeof validateExactPlatformAgentDependencies;
@@ -123,6 +129,7 @@ export class PlatformAgentExecutionResolver {
     userId: string,
   ) => MaterializationSurface;
   private readonly db: LobeChatDatabase;
+  private readonly isTakeoverActive: () => Promise<boolean>;
   private readonly messageModel: PlatformAgentExecutionResolverDeps['messageModel'];
   private readonly userId: string;
   private readonly validateDependencies: typeof validateExactPlatformAgentDependencies;
@@ -136,6 +143,7 @@ export class PlatformAgentExecutionResolver {
       deps.createMaterializationService ??
       ((db, userId) => new PlatformAgentMaterializationService(db, userId));
     this.db = deps.db;
+    this.isTakeoverActive = deps.isTakeoverActive ?? (() => isPlatformAgentTakeoverActive(this.db));
     this.messageModel = deps.messageModel;
     this.userId = deps.userId;
     this.validateDependencies = deps.validateDependencies ?? validateExactPlatformAgentDependencies;
@@ -168,6 +176,10 @@ export class PlatformAgentExecutionResolver {
       if (candidate?.slug === INBOX_SESSION_ID) inboxAgentId = candidate.id;
     }
     if (inboxAgentId) {
+      // Observe / unmanaged: inbox stays on the legacy overlay path (user
+      // chatConfig, plugins, skills). A stale resume pin must not throw.
+      if (!(await this.isTakeoverActive())) return null;
+
       if (pausedResume) {
         const pin = await this.resolveResumePlatformPin(
           pausedResume.anchorMessageId,

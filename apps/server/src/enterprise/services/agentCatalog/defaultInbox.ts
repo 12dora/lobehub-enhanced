@@ -13,11 +13,17 @@ import {
   PlatformAgentEffectiveResolver,
   type PlatformAgentOperationHandle,
 } from './effectiveResolver';
+import { isPlatformAgentTakeoverActive } from './enforcement';
 import { PlatformAgentMaterializationService } from './materialization';
 import { resolveThinkingEffortChatConfigPatch } from './thinkingEffort';
 
 interface PlatformDefaultInboxServiceOptions {
   flags?: EnterpriseFeatureFlags;
+  /**
+   * Override for tests. Production default is {@link isPlatformAgentTakeoverActive}.
+   * When false, user plugin toggles stay on the overlay; when true they are blanked.
+   */
+  isTakeoverActive?: () => Promise<boolean>;
   materializationService?: Pick<PlatformAgentMaterializationService, 'resolveForExistingAgent'>;
   policyModel?: Pick<PlatformManagedResourcePolicyModel, 'getSnapshot'>;
   repository?: PlatformAgentCatalogRepository;
@@ -41,6 +47,9 @@ export class PlatformDefaultInboxService {
   private flags = (): EnterpriseFeatureFlags =>
     this.options.flags ?? parseEnterpriseFeatureFlags(process.env);
 
+  private isTakeoverActive = (): Promise<boolean> =>
+    this.options.isTakeoverActive?.() ?? isPlatformAgentTakeoverActive(this.db, this.flags());
+
   /** Flag-off short-circuits before policy/catalog IO. Null means genuinely not managed. */
   async capture(): Promise<PlatformAgentOperationHandle | null> {
     if (!this.flags().ENABLE_PLATFORM_MANAGED_AGENTS) return null;
@@ -56,7 +65,8 @@ export class PlatformDefaultInboxService {
 
   /**
    * Overlay only the fields owned by the immutable platform version. Internal id/slug and the
-   * existing non-managed chat/TTS/agency fields remain intact. A version thinking-effort pin is a
+   * existing non-managed chat/TTS/agency fields remain intact. User plugin toggles stay unless
+   * catalog takeover is active (then plugins are blanked). A version thinking-effort pin is a
    * default, not a lock: it fills chatConfig only when the user has not set that key.
    * Resolver/exact-version/dependency errors propagate (never masquerade as "no default"); only a
    * real null capture falls back.
@@ -76,6 +86,7 @@ export class PlatformDefaultInboxService {
     );
 
     const effortPatch = resolveThinkingEffortChatConfigPatch(snapshot.config);
+    const takeover = await this.isTakeoverActive();
 
     return {
       ...base,
@@ -91,7 +102,7 @@ export class PlatformDefaultInboxService {
         managed: true,
         source: 'platform',
       },
-      plugins: [],
+      plugins: takeover ? [] : base.plugins,
       provider: resolved.config.provider,
       slug: INBOX_SESSION_ID,
       systemRole: snapshot.config.systemRole,

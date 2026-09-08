@@ -50,7 +50,8 @@ export const INBOX_PLATFORM_MANAGED_FIELDS = [
   'openingMessage',
   'openingQuestions',
   'params',
-  'plugins',
+  // `plugins` is deliberately NOT here: tool toggles stay per-user while the catalog takeover is
+  // off (the read overlay keeps `base.plugins`); under enforced takeover the overlay blanks them.
   'provider',
   // Identity: renaming the slug would detach the row from the inbox overlay and every guard.
   'slug',

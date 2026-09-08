@@ -88,7 +88,7 @@ const dependencySnapshot = {
   skills: [],
 };
 
-const buildResolver = () =>
+const buildResolver = (isTakeoverActive: () => Promise<boolean> = async () => true) =>
   new PlatformAgentExecutionResolver({
     agentModel: { getAgentConfigById, getBuiltinAgent },
     agentOperationModel: { findResumablePlatformOperationPin },
@@ -100,6 +100,7 @@ const buildResolver = () =>
       resolveFromPinForExistingAgent,
     }),
     db: {} as never,
+    isTakeoverActive,
     messageModel: { findById: messageFindById, findMessagePlugin: messageFindPlugin },
     userId: 'user-a',
     validateDependencies,
@@ -165,6 +166,36 @@ describe('PlatformAgentExecutionResolver.resolveIdentity', () => {
       handle: { platformAgentId: 'pagt_inbox' },
       platformAgentId: 'pagt_inbox',
     });
+  });
+
+  it('observe mode: inbox identity is null even when capture would bind a handle', async () => {
+    getBuiltinAgent.mockResolvedValue({ id: 'inbox-agt' });
+    captureInbox.mockResolvedValue({ platformAgentId: 'pagt_inbox' });
+    const result = await buildResolver(async () => false).resolveIdentity(
+      INBOX_SESSION_ID,
+      undefined,
+    );
+    expect(result).toBeNull();
+    expect(captureInbox).not.toHaveBeenCalled();
+  });
+
+  it('observe mode: stale inbox resume pin falls through to null instead of throwing', async () => {
+    getBuiltinAgent.mockResolvedValue({ id: 'inbox-agt' });
+    findResumablePlatformOperationPin.mockResolvedValue(pin);
+    const result = await buildResolver(async () => false).resolveIdentity(
+      INBOX_SESSION_ID,
+      undefined,
+      {
+        anchorMessageId: 'msg-1',
+        kind: 'approval',
+        threadId: null,
+        toolCallId: 'tc-1',
+        topicId: 'topic-1',
+      },
+    );
+    expect(result).toBeNull();
+    expect(findResumablePlatformOperationPin).not.toHaveBeenCalled();
+    expect(captureInbox).not.toHaveBeenCalled();
   });
 
   it('inbox without capture falls through to null', async () => {

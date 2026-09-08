@@ -118,6 +118,7 @@ describe('PlatformDefaultInboxService', () => {
     const beginSystemOperation = vi.fn(async () => null);
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       resolver: { beginSystemOperation },
     });
 
@@ -138,6 +139,7 @@ describe('PlatformDefaultInboxService', () => {
     }));
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: { resolveForExistingAgent },
       resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
       validateDependencies,
@@ -167,11 +169,45 @@ describe('PlatformDefaultInboxService', () => {
     expect(validateDependencies).toHaveBeenCalledWith(db, dependencySnapshot);
   });
 
+  it.each([
+    { expectedPlugins: ['legacy-tool'], takeover: false },
+    { expectedPlugins: [] as string[], takeover: true },
+  ])(
+    'plugins overlay: takeover=$takeover keeps vs blanks user tool toggles',
+    async ({ expectedPlugins, takeover }) => {
+      const captured = snapshot('v2');
+      const service = new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOn,
+        isTakeoverActive: async () => takeover,
+        materializationService: {
+          resolveForExistingAgent: vi.fn(async () => ({
+            agentId: 'builtin-inbox-id',
+            config: resolvedConfig(captured),
+            dependencySnapshot,
+          })),
+        },
+        resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+        validateDependencies: vi.fn(async () => ({ valid: true as const })),
+      });
+
+      const result = await service.getEffectiveBuiltinConfig(base());
+      expect(result.plugins).toEqual(expectedPlugins);
+      expect(result.platform).toEqual({
+        distribution: 'mandatory',
+        managed: true,
+        source: 'platform',
+      });
+      expect(result.model).toBe('managed-model');
+      expect(result.systemRole).toBe('Managed prompt v2');
+    },
+  );
+
   it('overlays a provision-shaped published version onto the builtin inbox', async () => {
     const captured = snapshot('v1', 'Lobe AI');
     captured.config.avatar = DEFAULT_INBOX_AVATAR;
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: {
         resolveForExistingAgent: vi.fn(async () => ({
           agentId: 'builtin-inbox-id',
@@ -204,6 +240,7 @@ describe('PlatformDefaultInboxService', () => {
     }));
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: { resolveForExistingAgent },
       resolver: { beginSystemOperation },
       validateDependencies: vi.fn(async () => ({ valid: true as const })),
@@ -220,6 +257,7 @@ describe('PlatformDefaultInboxService', () => {
     captured.config.thinkingEffort = { controlKey: 'reasoningEffort', level: 'high' };
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: {
         resolveForExistingAgent: vi.fn(async () => ({
           agentId: 'builtin-inbox-id',
@@ -246,6 +284,7 @@ describe('PlatformDefaultInboxService', () => {
     const captured = snapshot('v2');
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: {
         resolveForExistingAgent: vi.fn(async () => ({
           agentId: 'builtin-inbox-id',
@@ -270,6 +309,7 @@ describe('PlatformDefaultInboxService', () => {
     };
     const service = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: {
         resolveForExistingAgent: vi.fn(async () => ({
           agentId: 'builtin-inbox-id',
@@ -288,6 +328,7 @@ describe('PlatformDefaultInboxService', () => {
     const unavailable = new Error('stable resolver failure');
     const resolverFailure = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       resolver: {
         beginSystemOperation: vi.fn(async () => {
           throw unavailable;
@@ -300,6 +341,7 @@ describe('PlatformDefaultInboxService', () => {
     const captured = snapshot('v2');
     const dependencyFailure = new PlatformDefaultInboxService(db, 'user', {
       flags: flagsOn,
+      isTakeoverActive: async () => true,
       materializationService: {
         resolveForExistingAgent: vi.fn(async () => ({
           agentId: 'builtin-inbox-id',
