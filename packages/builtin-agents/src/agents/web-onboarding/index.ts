@@ -26,7 +26,10 @@ export const WEB_ONBOARDING: BuiltinAgentDefinition = {
       skillActivateMode: 'manual',
     },
     plugins: [WebOnboardingIdentifier, UserInteractionIdentifier, ...(ctx.plugins || [])],
-    systemRole: createSystemRole(ctx.userLocale, { isDev: ctx.isDev }),
+    systemRole: createSystemRole(ctx.userLocale, {
+      isDev: ctx.isDev,
+      isManagedInbox: Boolean(ctx.isManagedInbox),
+    }),
   }),
   slug: BUILTIN_AGENT_SLUGS.webOnboarding,
 };

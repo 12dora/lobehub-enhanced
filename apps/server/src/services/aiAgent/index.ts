@@ -110,6 +110,7 @@ import type {
   PlatformAgentExecutionPlan,
   PlatformAgentOperationHandle,
 } from '@/server/enterprise/services/agentCatalog';
+import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
 import {
   type ConnectorApprovalReceipt,
   ConnectorOperationProofSigner,
@@ -1377,7 +1378,13 @@ export class AiAgentService {
         log('execAgent: failed to load user locale for builtin runtime config: %O', error);
       }
 
+      // Web onboarding must not ask the model to persist SOUL.md when the inbox is admin-managed.
+      const isManagedInbox =
+        agentSlug === BUILTIN_AGENT_SLUGS.webOnboarding
+          ? Boolean(await new PlatformDefaultInboxService(this.db, this.userId).capture())
+          : undefined;
       const runtimeConfig = getAgentRuntimeConfig(agentSlug, {
+        isManagedInbox,
         model: agentConfig.model,
         plugins: activePluginIds,
         userLocale,

@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +10,7 @@ import { platformAuditLogs, platformBrandingAssets, users } from '@/database/sch
 import type { LobeChatDatabase } from '@/database/type';
 
 import { deletePlatformAuditLogsForTest } from '../../testing/deletePlatformAuditLogs';
-import { PlatformAgentAvatarUploadService } from './avatarUpload';
+import { AVATAR_UPLOAD_LEASE_MS, PlatformAgentAvatarUploadService } from './avatarUpload';
 import {
   PlatformAgentAssetStorageUnavailableError,
   PlatformAgentInvalidInputError,
@@ -118,5 +120,124 @@ describe('PlatformAgentAvatarUploadService', () => {
     });
     expect(replayed).toEqual(result);
     expect(storage.upload).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a retry’s published object when the stalled first attempt later fails', async () => {
+    let clock = new Date('2026-09-08T00:00:00.000Z');
+    let failStalled!: (error: Error) => void;
+    const stalled = new Promise<void>((_resolve, reject) => {
+      failStalled = reject;
+    });
+    const storage = {
+      delete: vi.fn(async () => {}),
+      isConfigured: () => true,
+      upload: vi.fn(async () => stalled),
+    };
+    const service = new PlatformAgentAvatarUploadService(db, { now: () => clock, storage });
+    const bytes = await png();
+    const request = {
+      bytesBase64: bytes.toString('base64'),
+      fileName: 'avatar.png',
+      requestId: crypto.randomUUID(),
+    };
+
+    const stalledUpload = service.upload(actorUserId, request);
+    await vi.waitFor(() => expect(storage.upload).toHaveBeenCalledOnce());
+
+    clock = new Date(clock.getTime() + AVATAR_UPLOAD_LEASE_MS + 1);
+    storage.upload.mockImplementation(async () => {});
+    const retry = new PlatformAgentAvatarUploadService(db, { now: () => clock, storage });
+    const published = await retry.upload(actorUserId, request);
+
+    failStalled(new Error('stalled first attempt'));
+    await expect(stalledUpload).rejects.toThrow('stalled first attempt');
+
+    expect(storage.delete).not.toHaveBeenCalled();
+    const [row] = await db.select().from(platformBrandingAssets);
+    expect(row).toMatchObject({ id: published.url.slice('/f/'.length), status: 'ready' });
+    expect(row.objectDeletedAt).toBeNull();
+  });
+
+  it('treats a concurrent first insert unique violation as wait/replay', async () => {
+    const storage = {
+      delete: vi.fn(async () => {}),
+      isConfigured: () => true,
+      upload: vi.fn(async () => {}),
+    };
+    const service = new PlatformAgentAvatarUploadService(db, { storage });
+    const bytes = await png();
+    const request = {
+      bytesBase64: bytes.toString('base64'),
+      fileName: 'avatar.png',
+      requestId: crypto.randomUUID(),
+    };
+
+    const [first, second] = await Promise.all([
+      service.upload(actorUserId, request),
+      service.upload(actorUserId, request),
+    ]);
+
+    expect(second).toEqual(first);
+    expect(await db.select().from(platformBrandingAssets)).toEqual([
+      expect.objectContaining({ id: first.url.slice('/f/'.length), status: 'ready' }),
+    ]);
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('lets a retry take over the lane after the upload lease expires', async () => {
+    const bytes = await png(16, 16);
+    const requestId = crypto.randomUUID();
+    const objectUuid = crypto.randomUUID();
+    const fingerprint = createHash('sha256')
+      .update(bytes)
+      .update('\0')
+      .update('avatar.png')
+      .digest('hex');
+    await db.insert(platformBrandingAssets).values({
+      cleanupAfter: new Date('9999-12-31T00:00:00.000Z'),
+      createdBy: actorUserId,
+      height: 16,
+      id: `pba_${objectUuid}`,
+      kind: 'agentAvatar',
+      mimeType: 'image/png',
+      objectKey: `platform-agents/avatars/${objectUuid}.png`,
+      operation: 'admin.agents.uploadAvatar',
+      requestActorId: actorUserId,
+      requestFingerprint: fingerprint,
+      requestId,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: bytes.length,
+      status: 'uploading',
+      uploadLeaseUntil: new Date('2020-01-01T00:00:00.000Z'),
+      uploadOwner: crypto.randomUUID(),
+      width: 16,
+    });
+
+    const storage = {
+      delete: vi.fn(async () => {}),
+      isConfigured: () => true,
+      upload: vi.fn(async () => {}),
+    };
+    const service = new PlatformAgentAvatarUploadService(db, {
+      now: () => new Date('2026-09-08T00:00:00.000Z'),
+      storage,
+    });
+    const result = await service.upload(actorUserId, {
+      bytesBase64: bytes.toString('base64'),
+      fileName: 'avatar.png',
+      requestId,
+    });
+
+    expect(result.url).toBe(`/f/pba_${objectUuid}`);
+    expect(storage.upload).toHaveBeenCalledWith(
+      expect.objectContaining({ objectKey: `platform-agents/avatars/${objectUuid}.png` }),
+    );
+    const [row] = await db.select().from(platformBrandingAssets);
+    expect(row).toMatchObject({
+      id: `pba_${objectUuid}`,
+      status: 'ready',
+      uploadOwner: null,
+    });
+    expect(storage.delete).not.toHaveBeenCalled();
   });
 });

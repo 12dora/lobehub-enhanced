@@ -154,6 +154,10 @@ export class OnboardingService {
     return inboxAgent.id;
   };
 
+  /** True when the platform default-inbox overlay is bound for this user. */
+  isManagedInbox = async (): Promise<boolean> =>
+    Boolean(await new PlatformDefaultInboxService(this.db, this.userId).capture());
+
   private ensureInboxDocuments = async (inboxAgentId: string): Promise<void> => {
     if (this.inboxDocumentsInitialized) return;
 
@@ -296,10 +300,13 @@ export class OnboardingService {
     const userState = await this.getUserState();
     const missingFields: AgentOnboardingStructuredField[] = [];
 
-    // Agent identity fields — stored on inbox agent
-    const inboxAgent = await this.agentModel.getBuiltinAgent(BUILTIN_AGENT_SLUGS.inbox);
-    if (!inboxAgent?.title?.trim()) missingFields.push('agentName');
-    if (!inboxAgent?.avatar?.trim()) missingFields.push('agentEmoji');
+    // Agent identity is organisation-owned under a managed inbox — do not stall
+    // onboarding in agent_identity waiting for a name/emoji the user cannot set.
+    if (!(await this.isManagedInbox())) {
+      const inboxAgent = await this.agentModel.getBuiltinAgent(BUILTIN_AGENT_SLUGS.inbox);
+      if (!inboxAgent?.title?.trim()) missingFields.push('agentName');
+      if (!inboxAgent?.avatar?.trim()) missingFields.push('agentEmoji');
+    }
 
     // User fields
     if (!userState.fullName?.trim()) missingFields.push('fullName');
@@ -727,10 +734,7 @@ export class OnboardingService {
         : undefined;
     // Capture before any User/Agent/document write. A resolver/catalog failure must leave the
     // onboarding mutation with zero partial writes.
-    const isManagedInbox =
-      agentName || agentEmoji
-        ? Boolean(await new PlatformDefaultInboxService(this.db, this.userId).capture())
-        : false;
+    const isManagedInbox = agentName || agentEmoji ? await this.isManagedInbox() : false;
     const userState = await this.getUserState();
     const userPatch: { fullName?: string; interests?: string[] } = {};
 
@@ -935,9 +939,7 @@ export class OnboardingService {
     const state = defaultAgentOnboardingState();
     // Resolve before any mutation: active management skips inbox-owned fields, while a resolver/DB
     // error fails closed and leaves the onboarding state untouched.
-    const isManagedInbox = Boolean(
-      await new PlatformDefaultInboxService(this.db, this.userId).capture(),
-    );
+    const isManagedInbox = await this.isManagedInbox();
 
     // Preserve users.full_name and users.username on reset.
     // Why: fullName/username are usually seeded from OAuth at signup, and we

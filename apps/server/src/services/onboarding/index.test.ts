@@ -275,6 +275,16 @@ describe('OnboardingService', () => {
     expect(mockAgentModel.update).not.toHaveBeenCalled();
   });
 
+  it('skips agent identity fields when the inbox is platform-managed', async () => {
+    vi.spyOn(PlatformDefaultInboxService.prototype, 'capture').mockResolvedValue({} as never);
+    const service = new OnboardingService(mockDb, userId);
+    const context = await service.getState();
+
+    expect(context.missingStructuredFields).toEqual(['fullName']);
+    expect(context.phase).toBe('user_identity');
+    expect(mockAgentModel.getBuiltinAgent).not.toHaveBeenCalled();
+  });
+
   it('does not let onboarding overwrite a platform-managed inbox identity', async () => {
     vi.spyOn(PlatformDefaultInboxService.prototype, 'capture').mockResolvedValue({} as never);
     const service = new OnboardingService(mockDb, userId);

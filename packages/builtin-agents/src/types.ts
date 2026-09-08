@@ -1,8 +1,4 @@
-import type {
-  LobeAgentAgencyConfig,
-  LobeAgentChatConfig,
-  LobeAgentConfig,
-} from '@lobechat/types';
+import type { LobeAgentAgencyConfig, LobeAgentChatConfig, LobeAgentConfig } from '@lobechat/types';
 
 import type { GroupSupervisorContext } from './agents/group-supervisor/type';
 
@@ -68,6 +64,9 @@ export interface RuntimeContext {
   /** Whether running in development mode */
   isDev?: boolean;
 
+  /** The user's inbox is platform-managed: the web-onboarding prompt must not require a SOUL.md write. */
+  isManagedInbox?: boolean;
+
   /** Current model being used */
   model?: string;
 
@@ -87,8 +86,7 @@ export interface RuntimeContext {
  * - Object: BuiltinAgentRuntimeResult (static config)
  */
 export type BuiltinAgentRuntimeConfig =
-  | ((ctx: RuntimeContext) => BuiltinAgentRuntimeResult)
-  | BuiltinAgentRuntimeResult;
+  ((ctx: RuntimeContext) => BuiltinAgentRuntimeResult) | BuiltinAgentRuntimeResult;
 
 /**
  * Builtin Agent Definition - complete definition with persist and runtime parts
