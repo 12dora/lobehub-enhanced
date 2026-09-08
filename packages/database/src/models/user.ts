@@ -34,18 +34,44 @@ const USER_SETTINGS_JSON_KEYS = [
   'tts',
 ] as const satisfies ReadonlyArray<keyof UserSettingsItem>;
 
+/** Prototype-polluting keys must never be copied or assigned during JSON merge. */
+const FORBIDDEN_SETTING_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+const assignOwnJsonKey = (target: Record<string, unknown>, key: string, value: unknown) => {
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+};
+
 /**
  * Deep-merge settings JSON: objects merge, arrays replace (never concatenate),
  * scalars / null replace. Keys omitted from `incoming` stay on `stored`.
  */
 const mergeSettingJson = (stored: unknown, incoming: unknown): unknown => {
   if (Array.isArray(incoming) || !isRecord(incoming)) return incoming;
-  if (!isRecord(stored)) return incoming;
 
-  const next: Record<string, unknown> = { ...stored };
-  for (const [key, value] of Object.entries(incoming)) {
-    next[key] = mergeSettingJson(stored[key], value);
+  const storedRecord = isRecord(stored) ? stored : undefined;
+  // Plain `{}` so Drizzle can read `.constructor`; assign via defineProperty so
+  // a `"__proto__"` key cannot mutate Object.prototype.
+  const next: Record<string, unknown> = {};
+
+  if (storedRecord) {
+    for (const key of Object.keys(storedRecord)) {
+      if (FORBIDDEN_SETTING_JSON_KEYS.has(key) || !Object.hasOwn(storedRecord, key)) continue;
+      assignOwnJsonKey(next, key, storedRecord[key]);
+    }
   }
+
+  for (const key of Object.keys(incoming)) {
+    if (FORBIDDEN_SETTING_JSON_KEYS.has(key)) continue;
+    const storedValue =
+      storedRecord && Object.hasOwn(storedRecord, key) ? storedRecord[key] : undefined;
+    assignOwnJsonKey(next, key, mergeSettingJson(storedValue, incoming[key]));
+  }
+
   return next;
 };
 
@@ -53,17 +79,13 @@ const mergeSettingPatch = (
   existing: UserSettingsItem | undefined,
   patch: Partial<UserSettingsItem>,
 ): Partial<UserSettingsItem> => {
-  if (!existing) return patch;
-
   const next: Partial<UserSettingsItem> = { ...patch };
   const nextRecord = next as Record<string, unknown>;
   for (const key of USER_SETTINGS_JSON_KEYS) {
     if (!Object.hasOwn(patch, key)) continue;
     const incoming = patch[key];
-    const stored = existing[key];
-    if (isRecord(incoming) && isRecord(stored)) {
-      nextRecord[key] = mergeSettingJson(stored, incoming);
-    }
+    if (!isRecord(incoming)) continue;
+    nextRecord[key] = mergeSettingJson(existing?.[key], incoming);
   }
   return next;
 };

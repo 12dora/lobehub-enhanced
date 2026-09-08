@@ -587,6 +587,26 @@ describe('EffectiveSettingsService (flag ON)', () => {
     });
   });
 
+  it('writes an explicit default-valued general leaf without dropping sibling overrides', async () => {
+    await publishDefault();
+    const userModel = new UserModel(serverDB, 'u1');
+    await userModel.deleteSetting();
+    await userModel.updateSetting({
+      general: { highlighterTheme: 'github-dark', mermaidTheme: 'dark' },
+    });
+
+    await service.applyLegacyUpdateSettings({
+      input: { general: { highlighterTheme: 'lobe-theme' } },
+      userId: 'u1',
+    });
+
+    const row = await userModel.getUserSettings();
+    expect(row?.general).toEqual({
+      highlighterTheme: 'lobe-theme',
+      mermaidTheme: 'dark',
+    });
+  });
+
   it('mixed locked tool update fails without writing skill lists, overrides, or revisions', async () => {
     const base = await admin.getDraft();
     await admin.save({
@@ -714,6 +734,24 @@ describe('EffectiveSettingsService flag OFF parity', () => {
     expect(row?.tool).toEqual({
       disabledSkillIdentifiers: ['skill'],
       humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+    });
+  });
+
+  it('writes an explicit default-valued general leaf without dropping sibling overrides', async () => {
+    const userModel = new UserModel(serverDB, 'u1');
+    await userModel.deleteSetting();
+    await userModel.updateSetting({
+      general: { highlighterTheme: 'github-dark', mermaidTheme: 'dark' },
+    });
+
+    await userModel.updateSetting({
+      general: { highlighterTheme: 'lobe-theme' },
+    });
+
+    const row = await userModel.getUserSettings();
+    expect(row?.general).toEqual({
+      highlighterTheme: 'lobe-theme',
+      mermaidTheme: 'dark',
     });
   });
 });

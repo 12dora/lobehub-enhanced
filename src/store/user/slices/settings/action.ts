@@ -1,3 +1,4 @@
+import { isRecord } from '@lobechat/utils/object';
 import isEqual from 'fast-deep-equal';
 import type { PartialDeep } from 'type-fest';
 
@@ -23,6 +24,47 @@ import { settingsSelectors } from './selectors/settings';
 type Setter = StoreSetter<UserStore>;
 
 type SystemAgentDiff = Partial<Record<string, unknown>>;
+
+const isEmptyObjectDiff = (value: unknown): boolean =>
+  !!value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  Object.keys(value as object).length === 0;
+
+/**
+ * `difference(next, defaults)` drops leaves that equal the default. Overlay
+ * explicitly changed leaves so a reset-to-default still reaches the server;
+ * JSON deep-merge would otherwise keep the stored override when the leaf is omitted.
+ */
+const overlayExplicitSettingChanges = (
+  diffs: unknown,
+  changed: unknown,
+  previous: unknown,
+): Record<string, unknown> => {
+  const base = isRecord(diffs) ? diffs : {};
+  if (!isRecord(changed)) return { ...base };
+
+  const next: Record<string, unknown> = { ...base };
+
+  for (const key of Object.keys(changed)) {
+    if (!isRecord(previous) || !Object.hasOwn(previous, key)) continue;
+
+    const changedVal = changed[key];
+    const previousVal = previous[key];
+    const diffVal = Object.hasOwn(base, key) ? base[key] : undefined;
+
+    if (isRecord(changedVal) && (diffVal === undefined || isRecord(diffVal))) {
+      next[key] = overlayExplicitSettingChanges(diffVal, changedVal, previousVal);
+      continue;
+    }
+
+    if (diffVal === undefined || isEmptyObjectDiff(diffVal)) {
+      next[key] = changedVal;
+    }
+  }
+
+  return next;
+};
 
 export const createSettingsSlice = (set: Setter, get: () => UserStore, _api?: unknown) =>
   new UserSettingsActionImpl(set, get, _api);
@@ -192,23 +234,12 @@ export class UserSettingsActionImpl {
 
     if (isEqual(prevSetting, nextSettings)) return;
 
-    const diffs = difference(nextSettings, defaultSettings);
-    const isEmptyObjectDiff = (value: unknown): boolean =>
-      !!value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      Object.keys(value as object).length === 0;
-
-    // When user resets a field to default value, we need to explicitly include it in diffs
-    // to override the previously saved non-default value in the backend
     const changedFields = difference(nextSettings, prevSetting);
-    for (const key of Object.keys(changedFields)) {
-      // Only handle fields that were previously set by user (exist in prevSetting)
-      const keyDiff = (diffs as any)[key];
-      if (key in prevSetting && (!(key in diffs) || isEmptyObjectDiff(keyDiff))) {
-        (diffs as any)[key] = (changedFields as any)[key];
-      }
-    }
+    const diffs = overlayExplicitSettingChanges(
+      difference(nextSettings, defaultSettings),
+      changedFields,
+      prevSetting,
+    ) as PartialDeep<UserSettings>;
 
     const nextDefaultAgentConfig = nextSettings.defaultAgent?.config;
     const changedDefaultAgentConfig = changedFields.defaultAgent?.config;

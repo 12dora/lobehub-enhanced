@@ -722,6 +722,39 @@ describe('SettingsAction', () => {
       );
     });
 
+    it('sends a reset-to-default leaf while keeping other overrides in the same group', async () => {
+      const { result } = renderHook(() => useUserStore());
+      const defaultHighlighter = DEFAULT_SETTINGS.general.highlighterTheme;
+      const refreshUserStateSpy = vi
+        .spyOn(result.current, 'refreshUserState')
+        .mockResolvedValue(undefined);
+
+      act(() => {
+        useUserStore.setState({
+          settings: {
+            general: { highlighterTheme: 'github-dark', mermaidTheme: 'dark' },
+          },
+        });
+      });
+
+      await act(async () => {
+        await result.current.setSettings({
+          general: { highlighterTheme: defaultHighlighter },
+        });
+      });
+
+      expect(userService.updateUserSettings).toHaveBeenLastCalledWith(
+        {
+          general: {
+            highlighterTheme: defaultHighlighter,
+            mermaidTheme: 'dark',
+          },
+        },
+        expect.any(AbortSignal),
+      );
+      refreshUserStateSpy.mockRestore();
+    });
+
     it('should keep legacy scalar system agent fields unchanged', async () => {
       const { result } = renderHook(() => useUserStore());
       const settingsWithLegacySystemAgent = {

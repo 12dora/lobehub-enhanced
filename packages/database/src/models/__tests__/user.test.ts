@@ -373,6 +373,61 @@ describe('UserModel', () => {
       });
     });
 
+    it('writes an explicit default-valued leaf without dropping sibling overrides', async () => {
+      await userModel.updateSetting({
+        general: { highlighterTheme: 'github-dark', mermaidTheme: 'dark' },
+      });
+
+      await userModel.updateSetting({
+        general: { highlighterTheme: 'lobe-theme' },
+      });
+
+      const settings = await serverDB.query.userSettings.findFirst({
+        where: eq(userSettings.id, userId),
+      });
+
+      expect(settings?.general).toEqual({
+        highlighterTheme: 'lobe-theme',
+        mermaidTheme: 'dark',
+      });
+    });
+
+    it('replaceJson clears omitted nested keys for an intentional subtree reset', async () => {
+      await userModel.updateSetting({
+        general: { highlighterTheme: 'github-dark', mermaidTheme: 'dark' },
+      });
+
+      await userModel.updateSetting({ general: { mermaidTheme: 'dark' } }, { replaceJson: true });
+
+      const settings = await serverDB.query.userSettings.findFirst({
+        where: eq(userSettings.id, userId),
+      });
+
+      expect(settings?.general).toEqual({ mermaidTheme: 'dark' });
+    });
+
+    it('does not pollute Object.prototype from a JSON __proto__ payload', async () => {
+      await userModel.updateSetting({
+        general: { fontSize: 14, mermaidTheme: 'dark' },
+      });
+
+      const payload = JSON.parse(
+        '{"__proto__": {"polluted": true}, "constructor": {"foo": 1}, "prototype": {"bar": 1}, "fontSize": 16}',
+      ) as { fontSize: number };
+
+      await userModel.updateSetting({ general: payload });
+
+      expect(Object.hasOwn(Object.prototype, 'polluted')).toBe(false);
+      expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+
+      const settings = await serverDB.query.userSettings.findFirst({
+        where: eq(userSettings.id, userId),
+      });
+
+      expect(settings?.general).toEqual({ fontSize: 16, mermaidTheme: 'dark' });
+      expect(Object.hasOwn(settings?.general as object, '__proto__')).toBe(false);
+    });
+
     it('replaceJson overwrites a JSON column without nested merge', async () => {
       await userModel.updateSetting({
         tool: {
