@@ -30,6 +30,7 @@ import {
   PlatformAgentUserListService,
   resolveTakeoverVisibleLocalAgentIds,
 } from '@/server/enterprise/services/agentCatalog';
+import type { GetEffectiveBuiltinConfigOptions } from '@/server/enterprise/services/agentCatalog/defaultInbox';
 import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
 import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
 import { getEffectiveDefaultAgentConfig } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
@@ -49,6 +50,27 @@ interface AgentWelcomeData {
   openQuestions: string[];
   welcomeMessage: string;
 }
+
+/** Raw inbox row (pre-mergeDefaultConfig) so light-mode overlay does not treat filled defaults as a user choice. */
+const inboxUserRowOptions = (
+  agent:
+    | {
+        model?: string | null;
+        params?: unknown;
+        provider?: string | null;
+      }
+    | null
+    | undefined,
+): GetEffectiveBuiltinConfigOptions | undefined => {
+  if (!agent) return undefined;
+  return {
+    userRow: {
+      model: agent.model,
+      params: (agent.params ?? null) as Record<string, unknown> | null,
+      provider: agent.provider,
+    },
+  };
+};
 
 /**
  * Agent Service
@@ -124,11 +146,14 @@ export class AgentService {
     // absence falls back to legacy; resolver/DB/dependency errors propagate instead of pretending
     // there is no managed default. Flag off performs zero platform IO inside the adapter.
     if (slug === INBOX_SESSION_ID) {
-      return this.applyDefaultInboxTakeover({
-        ...withBuiltinAvatar,
-        avatar: withBuiltinAvatar.avatar ?? undefined,
-        title: withBuiltinAvatar.title ?? undefined,
-      });
+      return this.applyDefaultInboxTakeover(
+        {
+          ...withBuiltinAvatar,
+          avatar: withBuiltinAvatar.avatar ?? undefined,
+          title: withBuiltinAvatar.title ?? undefined,
+        },
+        inboxUserRowOptions(agent),
+      );
     }
 
     return withBuiltinAvatar;
@@ -160,7 +185,12 @@ export class AgentService {
     const normalizedAgent = await this.applyRuntimeInboxTitleFallback(agent);
     const config = this.mergeDefaultConfig(normalizedAgent, defaultAgentConfig);
 
-    return config ? ((await this.applyDefaultInboxTakeover(config)) as AgentConfigWithId) : null;
+    return config
+      ? ((await this.applyDefaultInboxTakeover(
+          config,
+          inboxUserRowOptions(agent),
+        )) as AgentConfigWithId)
+      : null;
   }
 
   /**
@@ -188,29 +218,40 @@ export class AgentService {
     const config = this.mergeDefaultConfig(normalizedAgent, defaultAgentConfig);
     if (!config) return null;
 
+    const takeoverOptions = inboxUserRowOptions(agent);
+
     // Merge AI-generated welcome data if available
     if (welcomeData) {
-      return this.applyDefaultInboxTakeover({
-        ...config,
-        openingMessage: welcomeData.welcomeMessage,
-        openingQuestions: welcomeData.openQuestions,
-      });
+      return this.applyDefaultInboxTakeover(
+        {
+          ...config,
+          openingMessage: welcomeData.welcomeMessage,
+          openingQuestions: welcomeData.openQuestions,
+        },
+        takeoverOptions,
+      );
     }
 
-    return this.applyDefaultInboxTakeover(config);
+    return this.applyDefaultInboxTakeover(config, takeoverOptions);
   }
 
-  private applyDefaultInboxTakeover = async (config: LobeAgentConfig) => {
+  private applyDefaultInboxTakeover = async (
+    config: LobeAgentConfig,
+    options?: GetEffectiveBuiltinConfigOptions,
+  ) => {
     const candidate = config as AgentConfigWithId & {
       description?: string | null;
       slug?: string | null;
       tags?: string[];
     };
     if (candidate.slug !== INBOX_SESSION_ID) return config;
-    return new PlatformDefaultInboxService(this.db, this.userId).getEffectiveBuiltinConfig({
-      ...candidate,
-      slug: candidate.slug,
-    });
+    return new PlatformDefaultInboxService(this.db, this.userId).getEffectiveBuiltinConfig(
+      {
+        ...candidate,
+        slug: candidate.slug,
+      },
+      options,
+    );
   };
 
   private applyRuntimeInboxTitleFallback = async <

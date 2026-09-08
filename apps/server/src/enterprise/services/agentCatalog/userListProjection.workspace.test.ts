@@ -140,4 +140,47 @@ describe('PlatformAgentUserListService — real DB workspace scope', () => {
     expect(workspacePicker).toHaveLength(1);
     expect(personalPicker[0].id).not.toBe(workspacePicker[0].id);
   });
+
+  it('propagates overlay modelLocked onto workspace-scoped picker, sidebar, and search', async () => {
+    const unlockedPlatform = {
+      distribution: 'mandatory' as const,
+      managed: true as const,
+      modelLocked: false,
+      source: 'platform' as const,
+    };
+    const loadBuiltinInbox = vi.fn(async () => ({
+      avatar: null,
+      backgroundColor: null,
+      description: null,
+      id: 'ws-inbox-id',
+      platform: unlockedPlatform,
+      title: 'Workspace inbox',
+    }));
+    const service = new PlatformAgentUserListService(db, workspaceId, {
+      ...options(),
+      loadBuiltinInbox,
+    });
+
+    const picker = await service.mergeAvailableAgents(
+      userId,
+      { limit: 20, offset: 0 },
+      async () => [],
+      async () => [],
+    );
+    expect(loadBuiltinInbox).toHaveBeenCalledWith(userId, workspaceId);
+    expect(picker[0]?.id).toBe('ws-inbox-id');
+    expect(picker[0]?.platform).toEqual(unlockedPlatform);
+
+    const sidebar = await service.mergeSidebarList(userId, {
+      groups: [],
+      pinned: [],
+      privateGroups: [],
+      privateUngrouped: [],
+      ungrouped: [],
+    });
+    expect(sidebar.ungrouped[0]?.platform).toEqual(unlockedPlatform);
+
+    const search = await service.mergeSearchResults(userId, [], 'workspace');
+    expect(search[0]?.platform).toEqual(unlockedPlatform);
+  });
 });

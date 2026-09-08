@@ -1,5 +1,6 @@
 import type {
   PlatformAgentAssignmentMode,
+  PlatformAgentConfigMeta,
   PlatformAgentSystemKey,
   SidebarAgentItem,
 } from '@lobechat/types';
@@ -47,6 +48,7 @@ const effectiveAgent = (
 
 const makeService = (params: {
   builtinInboxId?: string;
+  builtinPlatform?: PlatformAgentConfigMeta;
   effective?: ReturnType<typeof effectiveAgent>[];
   flags?: typeof flagsOn;
   isTakeoverActive?: boolean;
@@ -65,13 +67,15 @@ const makeService = (params: {
     backgroundColor: defaultInbox?.config.backgroundColor ?? null,
     description: defaultInbox?.config.description ?? 'Legacy description',
     id: builtinInboxId,
-    platform: defaultInbox
-      ? {
-          distribution: defaultInbox.distribution,
-          managed: true as const,
-          source: 'platform' as const,
-        }
-      : undefined,
+    platform:
+      params.builtinPlatform ??
+      (defaultInbox
+        ? {
+            distribution: defaultInbox.distribution,
+            managed: true as const,
+            source: 'platform' as const,
+          }
+        : undefined),
     title: defaultInbox?.config.displayName ?? 'Legacy inbox',
   }));
   const service = new PlatformAgentUserListService({} as LobeChatDatabase, params.workspaceId, {
@@ -190,6 +194,68 @@ describe('PlatformAgentUserListService', () => {
       });
 
       expect(loadBuiltinInbox).toHaveBeenCalledWith('user-a', 'workspace-a');
+    });
+  });
+
+  describe('modelLocked propagation', () => {
+    const unlockedPlatform = {
+      distribution: 'mandatory' as const,
+      managed: true as const,
+      modelLocked: false,
+      source: 'platform' as const,
+    };
+
+    it('copies overlay modelLocked onto picker, sidebar, and search inbox items', async () => {
+      const { service } = makeService({ builtinPlatform: unlockedPlatform });
+
+      const picker = await service.mergeAvailableAgents(
+        'user-a',
+        { limit: 10, offset: 0 },
+        localLoader([]),
+        unusedLegacyLoader,
+      );
+      expect(picker[0]?.platform).toEqual(unlockedPlatform);
+
+      const sidebar = await service.mergeSidebarList('user-a', {
+        groups: [],
+        pinned: [],
+        privateGroups: [],
+        privateUngrouped: [],
+        ungrouped: [],
+      });
+      expect(sidebar.ungrouped[0]?.platform).toEqual(unlockedPlatform);
+
+      const search = await service.mergeSearchResults('user-a', [], 'legacy');
+      expect(search[0]?.platform).toEqual(unlockedPlatform);
+    });
+
+    it('copies overlay modelLocked onto workspace-scoped picker inbox items', async () => {
+      const { service, loadBuiltinInbox } = makeService({
+        builtinPlatform: unlockedPlatform,
+        workspaceId: 'workspace-a',
+      });
+
+      const picker = await service.mergeAvailableAgents(
+        'user-a',
+        { limit: 10, offset: 0 },
+        localLoader([]),
+        unusedLegacyLoader,
+      );
+
+      expect(loadBuiltinInbox).toHaveBeenCalledWith('user-a', 'workspace-a');
+      expect(picker[0]?.platform).toEqual(unlockedPlatform);
+    });
+
+    it('propagates modelLocked true when the overlay pins the model', async () => {
+      const lockedPlatform = { ...unlockedPlatform, modelLocked: true };
+      const { service } = makeService({ builtinPlatform: lockedPlatform });
+      const picker = await service.mergeAvailableAgents(
+        'user-a',
+        { limit: 10, offset: 0 },
+        localLoader([]),
+        unusedLegacyLoader,
+      );
+      expect(picker[0]?.platform).toEqual(lockedPlatform);
     });
   });
 

@@ -41,7 +41,8 @@ export interface UnifiedAvailableAgentItem {
   description: string | null;
   heteroType?: string;
   id: string;
-  platform?: PlatformAgentUserListMeta;
+  /** List meta plus optional `modelLocked` from the overlay (light-mode inbox is `false`). */
+  platform?: PlatformAgentUserListMeta & Pick<PlatformAgentConfigMeta, 'modelLocked'>;
   title: string | null;
 }
 
@@ -148,6 +149,7 @@ export class PlatformAgentUserListService {
           ? {
               distribution: inbox.platform.distribution,
               managed: true,
+              modelLocked: inbox.platform.modelLocked,
               source: 'platform',
             }
           : undefined,

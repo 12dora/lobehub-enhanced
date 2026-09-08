@@ -430,4 +430,109 @@ describe('PlatformDefaultInboxService', () => {
       expect(result.plugins).toEqual(['legacy-tool']);
     },
   );
+
+  const lightOverlay = () => {
+    const captured = snapshot('v2');
+    const adminResolved = {
+      ...resolvedConfig(captured),
+      model: 'gpt-6-astra',
+      params: { max_tokens: 4096, temperature: 0.2 },
+      provider: 'openai',
+    };
+    const service = new PlatformDefaultInboxService(db, 'user', {
+      flags: flagsOn,
+      isTakeoverActive: async () => false,
+      materializationService: {
+        resolveForExistingAgent: vi.fn(async () => ({
+          agentId: 'builtin-inbox-id',
+          config: adminResolved,
+          dependencySnapshot,
+        })),
+      },
+      resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+      validateDependencies: vi.fn(async () => ({ valid: true as const })),
+    });
+    return service;
+  };
+
+  it('userRow null/empty follows the admin pair even when base already has merged defaults', async () => {
+    const row = base();
+    row.model = 'deepseek-chat';
+    row.params = { ...DEFAULT_AGENT_CONFIG.params };
+    row.provider = 'deepseek';
+
+    const result = await lightOverlay().getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, params: null, provider: null },
+    });
+
+    expect(result.model).toBe('gpt-6-astra');
+    expect(result.provider).toBe('openai');
+    expect(result.params).toMatchObject({
+      ...DEFAULT_AGENT_CONFIG.params,
+      max_tokens: 4096,
+      temperature: 0.2,
+    });
+    expect(result.platform).toEqual({
+      distribution: 'mandatory',
+      managed: true,
+      modelLocked: false,
+      source: 'platform',
+    });
+  });
+
+  it('userRow with both provider and model keeps the user pair', async () => {
+    const row = base();
+    row.model = 'deepseek-chat';
+    row.provider = 'deepseek';
+
+    const result = await lightOverlay().getEffectiveBuiltinConfig(row, {
+      userRow: { model: 'gpt-5.6-sol', params: {}, provider: 'chatgpt' },
+    });
+
+    expect(result.model).toBe('gpt-5.6-sol');
+    expect(result.provider).toBe('chatgpt');
+  });
+
+  it('userRow with provider only never mixes pairs and uses the admin pair', async () => {
+    const row = base();
+    row.model = 'deepseek-chat';
+    row.provider = 'deepseek';
+
+    const result = await lightOverlay().getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, provider: 'chatgpt' },
+    });
+
+    expect(result.model).toBe('gpt-6-astra');
+    expect(result.provider).toBe('openai');
+  });
+
+  it('light-mode params: merged DEFAULT_AGENT_CONFIG does not shadow admin; userRow keys win', async () => {
+    const row = base();
+    row.model = 'deepseek-chat';
+    row.params = { ...DEFAULT_AGENT_CONFIG.params };
+    row.provider = 'deepseek';
+    const service = lightOverlay();
+
+    const fromEmptyRow = await service.getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, params: {}, provider: null },
+    });
+    expect(fromEmptyRow.params).toMatchObject({
+      frequency_penalty: 0,
+      max_tokens: 4096,
+      presence_penalty: 0,
+      temperature: 0.2,
+      top_p: 1,
+    });
+
+    const fromUserKeys = await service.getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, params: { temperature: 0.9 }, provider: null },
+    });
+    expect(fromUserKeys.params).toMatchObject({
+      frequency_penalty: 0,
+      max_tokens: 4096,
+      presence_penalty: 0,
+      temperature: 0.9,
+      top_p: 1,
+    });
+  });
 });

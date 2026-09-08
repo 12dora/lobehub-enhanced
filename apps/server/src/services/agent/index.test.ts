@@ -38,7 +38,8 @@ vi.mock('@/server/enterprise/services/agentCatalog/defaultInbox', () => ({
   PlatformDefaultInboxService: class PlatformDefaultInboxService {
     getEffectiveBuiltinConfig = (
       base: Parameters<PlatformDefaultInboxServiceContract['getEffectiveBuiltinConfig']>[0],
-    ) => mockGetEffectiveBuiltinConfig(base);
+      options?: Parameters<PlatformDefaultInboxServiceContract['getEffectiveBuiltinConfig']>[1],
+    ) => mockGetEffectiveBuiltinConfig(base, options);
   },
 }));
 
@@ -343,6 +344,41 @@ describe('AgentService', () => {
       expect(result?.model).toBe('user-preferred-model');
       expect(result?.provider).toBe('user-provider');
     });
+
+    it('passes the raw inbox row into the overlay so merged deepseek defaults do not count as a user choice', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        model: null,
+        params: null,
+        provider: null,
+        slug: 'inbox',
+      };
+      const mockAgentModel = {
+        getBuiltinAgent: vi.fn().mockResolvedValue(mockAgent),
+      };
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({
+        model: 'deepseek-chat',
+        params: { temperature: 1 },
+        provider: 'deepseek',
+      });
+      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base, options) => {
+        const row = options?.userRow;
+        if (!row?.model && !row?.provider) {
+          return { ...base, model: 'admin-inbox-model', provider: 'admin-provider' };
+        }
+        return base;
+      });
+
+      const result = await new AgentService(mockDb, mockUserId).getBuiltinAgent('inbox');
+
+      expect(mockGetEffectiveBuiltinConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'deepseek-chat', provider: 'deepseek' }),
+        { userRow: { model: null, params: null, provider: null } },
+      );
+      expect(result?.model).toBe('admin-inbox-model');
+      expect(result?.provider).toBe('admin-provider');
+    });
   });
 
   describe('getAgentConfig', () => {
@@ -433,6 +469,41 @@ describe('AgentService', () => {
         id: 'agent-1',
         systemRole: 'Custom system role',
       });
+    });
+
+    it('passes the raw inbox row into the overlay so merged deepseek defaults do not count as a user choice', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        model: null,
+        params: null,
+        provider: null,
+        slug: 'inbox',
+      };
+      const mockAgentModel = {
+        getAgentConfig: vi.fn().mockResolvedValue(mockAgent),
+      };
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({
+        model: 'deepseek-chat',
+        params: { temperature: 1 },
+        provider: 'deepseek',
+      });
+      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base, options) => {
+        const row = options?.userRow;
+        if (!row?.model && !row?.provider) {
+          return { ...base, model: 'admin-inbox-model', provider: 'admin-provider' };
+        }
+        return base;
+      });
+
+      const result = await new AgentService(mockDb, mockUserId).getAgentConfig('inbox');
+
+      expect(mockGetEffectiveBuiltinConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'deepseek-chat', provider: 'deepseek', slug: 'inbox' }),
+        { userRow: { model: null, params: null, provider: null } },
+      );
+      expect(result?.model).toBe('admin-inbox-model');
+      expect(result?.provider).toBe('admin-provider');
     });
 
     it('should use default model/provider when agent has none', async () => {
@@ -597,8 +668,47 @@ describe('AgentService', () => {
 
       expect(mockGetEffectiveBuiltinConfig).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'AIHub AI' }),
+        expect.objectContaining({
+          userRow: expect.objectContaining({ model: undefined, provider: undefined }),
+        }),
       );
       expect(result?.title).toBe('Managed Inbox');
+    });
+
+    it('passes the raw inbox row into the overlay so merged deepseek defaults do not count as a user choice', async () => {
+      const mockAgent = {
+        id: 'inbox-agent',
+        model: null,
+        params: null,
+        provider: null,
+        slug: 'inbox',
+      };
+      const mockAgentModel = {
+        getAgentConfigById: vi.fn().mockResolvedValue(mockAgent),
+      };
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({
+        model: 'deepseek-chat',
+        params: { temperature: 1 },
+        provider: 'deepseek',
+      });
+      vi.mocked(isRedisEnabled).mockReturnValue(false);
+      mockGetEffectiveBuiltinConfig.mockImplementationOnce(async (base, options) => {
+        const row = options?.userRow;
+        if (!row?.model && !row?.provider) {
+          return { ...base, model: 'admin-inbox-model', provider: 'admin-provider' };
+        }
+        return base;
+      });
+
+      const result = await new AgentService(mockDb, mockUserId).getAgentConfigById('inbox-agent');
+
+      expect(mockGetEffectiveBuiltinConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'deepseek-chat', provider: 'deepseek' }),
+        { userRow: { model: null, params: null, provider: null } },
+      );
+      expect(result?.model).toBe('admin-inbox-model');
+      expect(result?.provider).toBe('admin-provider');
     });
 
     describe('Redis welcome data integration', () => {

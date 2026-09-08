@@ -51,6 +51,8 @@ export interface PlatformAgentUserListMeta {
   distribution: PlatformAgentAssignmentMode;
   /** Always true — a platform item is managed, so the client hides edit/delete affordances. */
   managed: true;
+  /** See {@link PlatformAgentConfigMeta.modelLocked}; only the builtin inbox item carries it. */
+  modelLocked?: boolean;
   source: 'platform';
 }
 

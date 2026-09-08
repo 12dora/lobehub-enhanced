@@ -34,6 +34,22 @@ interface PlatformDefaultInboxServiceOptions {
 
 type BuiltinInboxConfig = AgentConfigWithId & Pick<AgentItem, 'description' | 'slug' | 'tags'>;
 
+/** Raw `agents` row fields used for light-mode model/provider/params defaults. */
+export interface DefaultInboxUserRow {
+  model?: string | null;
+  params?: Record<string, unknown> | null;
+  provider?: string | null;
+}
+
+export interface GetEffectiveBuiltinConfigOptions {
+  /**
+   * Unmerged DB row. When present, light-mode "did the user pick a model?" uses these
+   * values (null/empty = follow the admin default) instead of `base`, which may already
+   * contain DEFAULT_AGENT_CONFIG / server / user-settings fills.
+   */
+  userRow?: DefaultInboxUserRow;
+}
+
 /**
  * Narrow adapter that maps the stable `default-inbox` platform role onto the existing builtin
  * `inbox` identity. It never creates/replaces an inbox row and never rewrites history.
@@ -70,14 +86,20 @@ export class PlatformDefaultInboxService {
    * catalog takeover is active (then plugins are blanked).
    *
    * In light mode (takeover off) model/provider/params are DEFAULTS: a user pair is kept only
-   * when both `base.provider` and `base.model` are non-empty (never mixed with the admin pair);
-   * params merge admin defaults under the user row. Enforced takeover pins the admin pair and
-   * lets admin params win. A version thinking-effort pin is always a default, not a lock: it
-   * fills chatConfig only when the user has not set that key.
+   * when both provider and model are non-empty on the raw row (never mixed with the admin pair).
+   * Pass `options.userRow` for that decision — `base` is the merged config and is always populated
+   * by DEFAULT_AGENT_CONFIG. When `userRow` is omitted, fall back to `base` (back-compat).
+   * Light-mode params: `{ ...base.params, ...admin params, ...userRow.params }` so system defaults
+   * stay complete, admin params are not shadowed by merge fills, and only persisted user keys win.
+   * Enforced takeover pins the admin pair and lets admin params win. A version thinking-effort pin
+   * is always a default, not a lock: it fills chatConfig only when the user has not set that key.
    * Resolver/exact-version/dependency errors propagate (never masquerade as "no default"); only a
    * real null capture falls back.
    */
-  getEffectiveBuiltinConfig = async (base: BuiltinInboxConfig): Promise<BuiltinInboxConfig> => {
+  getEffectiveBuiltinConfig = async (
+    base: BuiltinInboxConfig,
+    options?: GetEffectiveBuiltinConfigOptions,
+  ): Promise<BuiltinInboxConfig> => {
     if (base.slug !== INBOX_SESSION_ID) return base;
     const handle = await this.capture();
     if (!handle) return base;
@@ -93,20 +115,28 @@ export class PlatformDefaultInboxService {
 
     const effortPatch = resolveThinkingEffortChatConfigPatch(snapshot.config);
     const takeover = await this.isTakeoverActive();
-    const userOwnsModelPair =
-      !takeover && isNonEmptyString(base.provider) && isNonEmptyString(base.model);
+    const modelSource = options?.userRow ?? base;
+    const userModel = isNonEmptyString(modelSource.model) ? modelSource.model : undefined;
+    const userProvider = isNonEmptyString(modelSource.provider) ? modelSource.provider : undefined;
+    const userOwnsModelPair = !takeover && userModel !== undefined && userProvider !== undefined;
+
+    const lightParams = options?.userRow
+      ? {
+          ...base.params,
+          ...resolved.config.params,
+          ...options.userRow.params,
+        }
+      : { ...resolved.config.params, ...base.params };
 
     return {
       ...base,
       avatar: snapshot.config.avatar,
       backgroundColor: snapshot.config.backgroundColor ?? undefined,
       description: snapshot.config.description ?? undefined,
-      model: userOwnsModelPair ? base.model : resolved.config.model,
+      model: userOwnsModelPair ? userModel : resolved.config.model,
       openingMessage: snapshot.config.openingMessage ?? undefined,
       openingQuestions: snapshot.config.openingQuestions,
-      params: takeover
-        ? { ...base.params, ...resolved.config.params }
-        : { ...resolved.config.params, ...base.params },
+      params: takeover ? { ...base.params, ...resolved.config.params } : lightParams,
       platform: {
         distribution: handle.distribution,
         managed: true,
@@ -114,7 +144,7 @@ export class PlatformDefaultInboxService {
         source: 'platform',
       },
       plugins: takeover ? [] : base.plugins,
-      provider: userOwnsModelPair ? base.provider : resolved.config.provider,
+      provider: userOwnsModelPair ? userProvider : resolved.config.provider,
       slug: INBOX_SESSION_ID,
       systemRole: snapshot.config.systemRole,
       tags: snapshot.config.tags,
