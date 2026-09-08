@@ -222,9 +222,12 @@ export class EffectiveSettingsService {
           const blob = (row as Record<string, unknown>)[top];
           if (blob !== null && blob !== undefined && typeof blob === 'object') {
             const stripped = deleteByPath({ [top]: blob } as Record<string, unknown>, params.path);
-            await userModel.updateSetting({
-              [top]: stripped[top] ?? null,
-            } as Parameters<UserModel['updateSetting']>[0]);
+            await userModel.updateSetting(
+              {
+                [top]: stripped[top] ?? null,
+              } as Parameters<UserModel['updateSetting']>[0],
+              { replaceJson: true },
+            );
           }
         }
       }

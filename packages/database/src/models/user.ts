@@ -6,6 +6,7 @@ import type {
   UserPreference,
   UserSettings,
 } from '@lobechat/types';
+import { isRecord } from '@lobechat/utils/object';
 import { TRPCError } from '@trpc/server';
 import dayjs from 'dayjs';
 import { and, asc, eq, gt, inArray, isNull, max, or, sql } from 'drizzle-orm';
@@ -16,7 +17,64 @@ import { today } from '@/utils/time';
 
 import type { NewUser, UserItem, UserSettingsItem } from '../schemas';
 import { messages, nextauthAccounts, sessions, topics, users, userSettings } from '../schemas';
-import type { LobeChatDatabase } from '../type';
+import type { LobeChatDatabase, Transaction } from '../type';
+
+/** JSONB user-settings columns. Nested objects merge; arrays replace wholesale. */
+const USER_SETTINGS_JSON_KEYS = [
+  'defaultAgent',
+  'general',
+  'hotkey',
+  'image',
+  'languageModel',
+  'market',
+  'memory',
+  'notification',
+  'systemAgent',
+  'tool',
+  'tts',
+] as const satisfies ReadonlyArray<keyof UserSettingsItem>;
+
+/**
+ * Deep-merge settings JSON: objects merge, arrays replace (never concatenate),
+ * scalars / null replace. Keys omitted from `incoming` stay on `stored`.
+ */
+const mergeSettingJson = (stored: unknown, incoming: unknown): unknown => {
+  if (Array.isArray(incoming) || !isRecord(incoming)) return incoming;
+  if (!isRecord(stored)) return incoming;
+
+  const next: Record<string, unknown> = { ...stored };
+  for (const [key, value] of Object.entries(incoming)) {
+    next[key] = mergeSettingJson(stored[key], value);
+  }
+  return next;
+};
+
+const mergeSettingPatch = (
+  existing: UserSettingsItem | undefined,
+  patch: Partial<UserSettingsItem>,
+): Partial<UserSettingsItem> => {
+  if (!existing) return patch;
+
+  const next: Partial<UserSettingsItem> = { ...patch };
+  const nextRecord = next as Record<string, unknown>;
+  for (const key of USER_SETTINGS_JSON_KEYS) {
+    if (!Object.hasOwn(patch, key)) continue;
+    const incoming = patch[key];
+    const stored = existing[key];
+    if (isRecord(incoming) && isRecord(stored)) {
+      nextRecord[key] = mergeSettingJson(stored, incoming);
+    }
+  }
+  return next;
+};
+
+export interface UpdateUserSettingOptions {
+  /**
+   * Write supplied JSON columns as-is. Reset / backfill strip already computed
+   * a full column snapshot and must be able to delete omitted nested keys.
+   */
+  replaceJson?: boolean;
+}
 
 type DecryptUserKeyVaults = (
   encryptKeyVaultsStr: string | null,
@@ -363,17 +421,31 @@ export class UserModel {
     return this.db.delete(userSettings).where(eq(userSettings.id, this.userId));
   };
 
-  updateSetting = async (value: Partial<UserSettingsItem>) => {
-    return this.db
-      .insert(userSettings)
-      .values({
-        id: this.userId,
-        ...value,
-      })
-      .onConflictDoUpdate({
-        set: value,
-        target: userSettings.id,
-      });
+  updateSetting = async (value: Partial<UserSettingsItem>, options?: UpdateUserSettingOptions) => {
+    const write = (db: LobeChatDatabase | Transaction, patch: Partial<UserSettingsItem>) =>
+      db
+        .insert(userSettings)
+        .values({
+          id: this.userId,
+          ...patch,
+        })
+        .onConflictDoUpdate({
+          set: patch,
+          target: userSettings.id,
+        });
+
+    if (options?.replaceJson) return write(this.db, value);
+
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.id, this.userId))
+        .for('update')
+        .limit(1);
+
+      return write(tx, mergeSettingPatch(existing, value));
+    });
   };
 
   updatePreference = async (value: Partial<UserPreference>) => {

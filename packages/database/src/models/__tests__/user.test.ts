@@ -345,6 +345,75 @@ describe('UserModel', () => {
 
       expect(settings?.general).toEqual({ fontSize: 18 });
     });
+
+    it('preserves omitted tool fields and replaces skill arrays wholesale', async () => {
+      await userModel.updateSetting({
+        tool: {
+          disabledSkillIdentifiers: ['old-a', 'old-b'],
+          humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+          uninstalledBuiltinToolsByWorkspace: { 'ws-1': ['a', 'b'], 'ws-2': ['c'] },
+        },
+      });
+
+      await userModel.updateSetting({
+        tool: {
+          disabledSkillIdentifiers: ['skill'],
+          uninstalledBuiltinToolsByWorkspace: { 'ws-1': ['z'] },
+        },
+      });
+
+      const settings = await serverDB.query.userSettings.findFirst({
+        where: eq(userSettings.id, userId),
+      });
+
+      expect(settings?.tool).toEqual({
+        disabledSkillIdentifiers: ['skill'],
+        humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+        uninstalledBuiltinToolsByWorkspace: { 'ws-1': ['z'], 'ws-2': ['c'] },
+      });
+    });
+
+    it('replaceJson overwrites a JSON column without nested merge', async () => {
+      await userModel.updateSetting({
+        tool: {
+          disabledSkillIdentifiers: ['keep'],
+          humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+        },
+      });
+
+      await userModel.updateSetting(
+        { tool: { disabledSkillIdentifiers: ['stripped'] } },
+        { replaceJson: true },
+      );
+
+      const settings = await serverDB.query.userSettings.findFirst({
+        where: eq(userSettings.id, userId),
+      });
+
+      expect(settings?.tool).toEqual({ disabledSkillIdentifiers: ['stripped'] });
+    });
+
+    it('does not merge another user tool settings', async () => {
+      const otherModel = new UserModel(serverDB, otherUserId);
+      await userModel.updateSetting({
+        tool: {
+          disabledSkillIdentifiers: ['mine'],
+          humanIntervention: { allowList: ['tool/api'] },
+        },
+      });
+      await otherModel.updateSetting({
+        tool: { disabledSkillIdentifiers: ['theirs'] },
+      });
+
+      const mine = await userModel.getUserSettings();
+      const theirs = await otherModel.getUserSettings();
+
+      expect(mine?.tool).toEqual({
+        disabledSkillIdentifiers: ['mine'],
+        humanIntervention: { allowList: ['tool/api'] },
+      });
+      expect(theirs?.tool).toEqual({ disabledSkillIdentifiers: ['theirs'] });
+    });
   });
 
   describe('updatePreference', () => {

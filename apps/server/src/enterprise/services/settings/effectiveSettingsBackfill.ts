@@ -36,7 +36,9 @@ export async function stripRegisteredLegacyLeaves(params: {
   for (const top of touchedTops) {
     patch[top] = tree[top] ?? null;
   }
-  await userModel.updateSetting(patch as Parameters<UserModel['updateSetting']>[0]);
+  await userModel.updateSetting(patch as Parameters<UserModel['updateSetting']>[0], {
+    replaceJson: true,
+  });
 }
 
 /**

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '@/database/core/getTestDB';
+import { PlatformSettingsModel } from '@/database/models/platform';
 import { UserModel } from '@/database/models/user';
 import { users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
@@ -563,6 +564,94 @@ describe('EffectiveSettingsService (flag ON)', () => {
     ).rejects.toMatchObject({ code: 'MANAGED_SETTING_BY_ADMIN' });
   });
 
+  it('partial tool update preserves stored allowList and replaces skill arrays', async () => {
+    await publishDefault();
+    const userModel = new UserModel(serverDB, 'u1');
+    await userModel.deleteSetting();
+    await userModel.updateSetting({
+      tool: {
+        disabledSkillIdentifiers: ['old-a', 'old-b'],
+        humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+      },
+    });
+
+    await service.applyLegacyUpdateSettings({
+      input: { tool: { disabledSkillIdentifiers: ['skill'] } },
+      userId: 'u1',
+    });
+
+    const row = await userModel.getUserSettings();
+    expect(row?.tool).toEqual({
+      disabledSkillIdentifiers: ['skill'],
+      humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+    });
+  });
+
+  it('mixed locked tool update fails without writing skill lists, overrides, or revisions', async () => {
+    const base = await admin.getDraft();
+    await admin.save({
+      actorUserId: 'admin',
+      expectedDraftToken: base.draftToken,
+      expectedRevision: base.baseRevision,
+      policies: {
+        'general.fontSize': {
+          mode: 'default',
+          schemaVersion: 1,
+          value: 18,
+          visibility: 'visible',
+        },
+        'tool.humanIntervention.approvalMode': {
+          mode: 'locked',
+          schemaVersion: 1,
+          value: 'manual',
+          visibility: 'visible',
+        },
+      },
+      reason: 'lock approvalMode for mixed write',
+    });
+
+    const userModel = new UserModel(serverDB, 'u1');
+    await userModel.deleteSetting();
+    await userModel.updateSetting({
+      tool: {
+        disabledSkillIdentifiers: ['keep-me'],
+        humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+      },
+    });
+    await service.patchSettingOverride({ path: 'general.fontSize', userId: 'u1', value: 16 });
+
+    const platform = new PlatformSettingsModel(serverDB);
+    const revisionBefore = await platform.getUserOverrideRevision('u1');
+    const fontSizeBefore = await platform.getUserOverride('u1', 'general.fontSize');
+    const approvalOverrideBefore = await platform.getUserOverride(
+      'u1',
+      'tool.humanIntervention.approvalMode',
+    );
+
+    await expect(
+      service.applyLegacyUpdateSettings({
+        input: {
+          tool: {
+            disabledSkillIdentifiers: ['other'],
+            humanIntervention: { approvalMode: 'auto-run' },
+          },
+        },
+        userId: 'u1',
+      }),
+    ).rejects.toMatchObject({ code: 'MANAGED_SETTING_BY_ADMIN' });
+
+    const row = await userModel.getUserSettings();
+    expect(row?.tool).toEqual({
+      disabledSkillIdentifiers: ['keep-me'],
+      humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+    });
+    expect(await platform.getUserOverrideRevision('u1')).toBe(revisionBefore);
+    expect(await platform.getUserOverride('u1', 'general.fontSize')).toEqual(fontSizeBefore);
+    expect(await platform.getUserOverride('u1', 'tool.humanIntervention.approvalMode')).toEqual(
+      approvalOverrideBefore,
+    );
+  });
+
   it('user isolation', async () => {
     await publishDefault();
     await service.patchSettingOverride({ path: 'general.fontSize', userId: 'u1', value: 12 });
@@ -605,5 +694,26 @@ describe('EffectiveSettingsService flag OFF parity', () => {
     await expect(
       offService.patchSettingOverride({ path: 'general.fontSize', userId: 'u1', value: 16 }),
     ).rejects.toMatchObject({ code: 'PLATFORM_FEATURE_DISABLED' });
+  });
+
+  it('partial tool update preserves stored allowList and replaces skill arrays', async () => {
+    const userModel = new UserModel(serverDB, 'u1');
+    await userModel.deleteSetting();
+    await userModel.updateSetting({
+      tool: {
+        disabledSkillIdentifiers: ['old-a', 'old-b'],
+        humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+      },
+    });
+
+    await userModel.updateSetting({
+      tool: { disabledSkillIdentifiers: ['skill'] },
+    });
+
+    const row = await userModel.getUserSettings();
+    expect(row?.tool).toEqual({
+      disabledSkillIdentifiers: ['skill'],
+      humanIntervention: { allowList: ['tool/api'], approvalMode: 'allow-list' },
+    });
   });
 });
