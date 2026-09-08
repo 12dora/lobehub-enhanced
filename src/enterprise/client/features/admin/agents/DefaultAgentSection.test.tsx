@@ -1,12 +1,21 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DefaultAgentSection, type DefaultAgentSectionProps } from './DefaultAgentSection';
 import type { AdminDefaultAgentSnapshot } from './useAdminAgents';
 
+const brandingMock = vi.hoisted(() => ({
+  value: { iconUrl: null, logoUrl: null, publishedRevision: null } as Record<string, unknown>,
+}));
+
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// The real avatar resolver runs; only the published brand it reads is supplied here.
+vi.mock('@/enterprise/client/providers/RuntimeBrandingProvider', () => ({
+  useBranding: () => brandingMock.value,
+}));
+vi.mock('@/hooks/useCurrentInboxAgent', () => ({ useCurrentInboxAgentMeta: () => undefined }));
 vi.mock('antd-style', () => ({
   createStaticStyles: () => new Proxy({}, { get: (_t, key) => String(key) }),
   cssVar: new Proxy({}, { get: (_t, key) => `var(--${String(key)})` }),
@@ -28,13 +37,13 @@ vi.mock('@lobehub/ui/base-ui', () => ({
 }));
 vi.mock('../primitives/StatusBadge', () => ({ default: () => <span>status</span> }));
 
-const snapshot = (): AdminDefaultAgentSnapshot =>
+const snapshot = (avatar: string | null = '🤖'): AdminDefaultAgentSnapshot =>
   ({
     detail: {
       identity: { currentVersionId: 'version-1', id: 'agent-inbox' },
       versions: [
         {
-          config: { avatar: '🤖', backgroundColor: '#222' },
+          config: { avatar, backgroundColor: '#222' },
           dependencySnapshot: { model: { modelKey: 'gpt-4o-mini', providerKey: 'openai' } },
           id: 'version-1',
         },
@@ -64,6 +73,33 @@ const renderSection = (over: Partial<DefaultAgentSectionProps> = {}) =>
   );
 
 describe('DefaultAgentSection', () => {
+  beforeEach(() => {
+    brandingMock.value = { iconUrl: null, logoUrl: null, publishedRevision: null };
+  });
+
+  // The card must agree with what members are actually shown, not with the raw stored value.
+  it('renders the built-in avatar the way members see it', () => {
+    brandingMock.value = {
+      iconUrl: 'https://brand.example.com/icon.png',
+      logoUrl: null,
+      publishedRevision: 4,
+    };
+    const { unmount } = renderSection({ snapshot: snapshot('/avatars/lobe-ai.png') });
+    expect(screen.getByAltText('avatar').getAttribute('src')).toBe(
+      'https://brand.example.com/icon.png',
+    );
+    unmount();
+
+    // An avatar the admin chose is never replaced by the brand.
+    renderSection({ snapshot: snapshot('🤖') });
+    expect(screen.getByAltText('avatar').getAttribute('src')).toBe('🤖');
+  });
+
+  it('falls back to the built-in inbox image when nothing is set and no brand is published', () => {
+    renderSection({ snapshot: snapshot(null) });
+    expect(screen.getByAltText('avatar').getAttribute('src')).toBe('/avatars/lobe-ai.png');
+  });
+
   it('renders the assistant without a version anywhere on the card', () => {
     renderSection();
 

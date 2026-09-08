@@ -202,8 +202,28 @@ describe('seedAgentEditorValue', () => {
         openingQuestions: [],
         systemRole: '',
         tags: [],
+        thinkingEffort: null,
       },
       dependencies: { connectors: [], model: null, skills: [] },
+    });
+  });
+
+  // Versions published before the field existed carry no key at all.
+  it('reads a missing thinking effort as “follow the model default”', () => {
+    expect(seedAgentEditorValue(agent).config.thinkingEffort).toBeNull();
+
+    const withEffort = {
+      ...agent,
+      versions: [
+        {
+          ...agent.versions[0],
+          config: { ...config, thinkingEffort: { controlKey: 'reasoningEffort', level: 'high' } },
+        },
+      ],
+    } as unknown as AdminAgentDetailOutput;
+    expect(seedAgentEditorValue(withEffort).config.thinkingEffort).toEqual({
+      controlKey: 'reasoningEffort',
+      level: 'high',
     });
   });
 });
@@ -360,6 +380,32 @@ describe('useAgentEditorForm create', () => {
         config: expect.objectContaining({ displayName: 'Support Agent', systemRole: '' }),
       }),
     );
+  });
+
+  it('always states the thinking effort it publishes, cleared as well as chosen', async () => {
+    const { result } = renderHook(() => useAgentEditorForm({}));
+    act(() => result.current.setDisplayName('Support Agent'));
+    act(() => result.current.setDependencies({ connectors: [], model, skills: [] }));
+    act(() => result.current.setDepValidity(READY));
+
+    // Never omitted: an unset effort is a value the server can see, not a missing key.
+    await act(async () => {
+      await result.current.submit();
+    });
+    expect(mocks.create.mock.calls.at(-1)![0].config).toMatchObject({ thinkingEffort: null });
+
+    act(() =>
+      result.current.patchConfig('thinkingEffort', {
+        controlKey: 'reasoningEffort',
+        level: 'high',
+      }),
+    );
+    await act(async () => {
+      await result.current.submit();
+    });
+    expect(mocks.save.mock.calls.at(-1)![0].config).toMatchObject({
+      thinkingEffort: { controlKey: 'reasoningEffort', level: 'high' },
+    });
   });
 
   it('refuses an identifier the contract would reject', () => {

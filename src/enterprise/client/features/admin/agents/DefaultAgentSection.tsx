@@ -6,7 +6,7 @@ import { createStaticStyles, cssVar } from 'antd-style';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { DEFAULT_AVATAR } from '@/const/meta';
+import { useDefaultInboxAvatar } from '@/hooks/useDefaultInboxAvatar';
 
 import StatusBadge from '../primitives/StatusBadge';
 import type { AdminDefaultAgentSnapshot } from './useAdminAgents';
@@ -75,6 +75,14 @@ export const DefaultAgentSection = memo<DefaultAgentSectionProps>(
     snapshot,
   }) => {
     const { t } = useTranslation('admin');
+    // Avatar and model live on the current version, not on the list row. The version itself is
+    // never shown: saving IS publishing here, so there is no version for an admin to reason about.
+    const version = snapshot?.detail?.versions.find(
+      ({ id }) => id === snapshot.item.identity.currentVersionId,
+    );
+    // This card is always the default assistant, whose built-in avatar members see as the
+    // published brand icon — the card must not claim otherwise. Display only; nothing is stored.
+    const avatar = useDefaultInboxAvatar(version?.config.avatar);
 
     // A failed revalidation on top of a settled read is no reason to hide the assistant every
     // member is already talking to: keep the last known state, say it may be behind, and offer the
@@ -108,17 +116,14 @@ export const DefaultAgentSection = memo<DefaultAgentSectionProps>(
         return <Text type={'secondary'}>{t('agentCatalog.defaultAgent.preparing')}</Text>;
       }
 
-      const { detail, item } = snapshot;
-      // Avatar and model live on the current version, not on the list row. The version itself is
-      // never shown: saving IS publishing here, so there is no version for an admin to reason about.
-      const version = detail?.versions.find(({ id }) => id === item.identity.currentVersionId);
+      const { item } = snapshot;
       const model = version?.dependencySnapshot.model;
 
       return (
         <Flexbox horizontal align={'center'} gap={16} justify={'space-between'} wrap={'wrap'}>
           <Flexbox horizontal align={'center'} gap={12} style={{ minWidth: 0 }}>
             <Avatar
-              avatar={version?.config.avatar ?? DEFAULT_AVATAR}
+              avatar={avatar}
               background={version?.config.backgroundColor ?? undefined}
               shape={'square'}
               size={44}

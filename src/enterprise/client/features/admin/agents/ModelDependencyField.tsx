@@ -1,10 +1,13 @@
 'use client';
 
-import type { PlatformAgentModelDependencyRef } from '@lobechat/types';
+import { findEffortControl } from '@lobechat/model-runtime';
+import type { PlatformAgentModelDependencyRef, PlatformAgentThinkingEffort } from '@lobechat/types';
 import { Alert, Flexbox, Tag, Text } from '@lobehub/ui';
 import { Button, Input, Select } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import { useTranslation } from 'react-i18next';
+
+import { effortLevelLabelKey } from '@/features/ServiceModel/effortLevelLabel';
 
 import type { PublishedProviderSummary, ResolvedProviderModelSource } from './dependencyCatalog';
 import {
@@ -41,6 +44,10 @@ const PROVIDER_CATALOG_PATH = '/admin/ai/providers';
 const PROVIDER_SEARCH_ID = 'admin-agent-editor-provider-search';
 const PROVIDER_SELECT_ID = 'admin-agent-editor-provider';
 const MODEL_SELECT_ID = 'admin-agent-editor-model';
+const THINKING_EFFORT_SELECT_ID = 'admin-agent-editor-thinking-effort';
+
+/** base-ui's Select cannot carry `undefined` as a value, so "follow the model default" is an option. */
+const THINKING_EFFORT_UNSET = '__model_default__';
 
 interface SwrSlice<T> {
   data?: T;
@@ -59,6 +66,8 @@ export interface ModelDependencyFieldProps {
   model: PlatformAgentModelDependencyRef | null;
   onChooseModel: (modelKey: string | undefined) => void;
   onChooseProvider: (providerId: string | undefined) => void;
+  /** `null` clears the default back to whatever the model itself uses. */
+  onChooseThinkingEffort?: (level: string | null) => void;
   /** Debounced by the owner into the catalog SWR key — this is a server search, not a local filter. */
   onProviderSearchChange: (query: string) => void;
   providerId: string | undefined;
@@ -67,6 +76,8 @@ export interface ModelDependencyFieldProps {
   providersUsable: boolean;
   source: SwrSlice<ResolvedProviderModelSource | null>;
   sourceSettled: boolean;
+  /** The published default effort, or `null` to follow the model's own default. */
+  thinkingEffort?: PlatformAgentThinkingEffort | null;
 }
 
 /**
@@ -211,12 +222,77 @@ const ModelPicker = ({
   );
 };
 
+/**
+ * The default thinking effort for the chosen model. Which levels exist is decided by the model's
+ * own `extendParams`, so the control is offered exactly when the selected model has one — and the
+ * stored level is shown only while it still belongs to that control.
+ */
+const ThinkingEffortPicker = ({
+  editable,
+  model,
+  onChooseThinkingEffort,
+  source,
+  thinkingEffort,
+}: Pick<
+  ModelDependencyFieldProps,
+  'editable' | 'model' | 'onChooseThinkingEffort' | 'source' | 'thinkingEffort'
+>) => {
+  const { t } = useTranslation(['admin', 'setting']);
+  const option = model
+    ? source.data?.chatModels.find((entry) => entry.modelKey === model.modelKey)
+    : undefined;
+  const control = findEffortControl(option?.extendParams);
+  const level =
+    control && thinkingEffort?.controlKey === control.key ? thinkingEffort.level : undefined;
+
+  return (
+    <div className={styles.field}>
+      <FieldLabel
+        help={t('agentCatalog.editor.thinkingEffortDesc')}
+        htmlFor={THINKING_EFFORT_SELECT_ID}
+      >
+        {t('agentCatalog.editor.thinkingEffort')}
+      </FieldLabel>
+      <Select
+        aria-label={t('agentCatalog.editor.thinkingEffort')}
+        disabled={!editable || !control}
+        id={THINKING_EFFORT_SELECT_ID}
+        value={control ? (level ?? THINKING_EFFORT_UNSET) : undefined}
+        options={
+          control
+            ? [
+                {
+                  label: t('agentCatalog.editor.thinkingEffortDefault'),
+                  value: THINKING_EFFORT_UNSET,
+                },
+                // Values stay the raw registry levels; only the label is localized.
+                ...control.definition.levels.map((entry) => ({
+                  label: t(effortLevelLabelKey(entry), { ns: 'setting' }),
+                  value: entry,
+                })),
+              ]
+            : []
+        }
+        placeholder={t(
+          control
+            ? 'agentCatalog.editor.thinkingEffortDefault'
+            : 'agentCatalog.editor.thinkingEffortUnsupported',
+        )}
+        onChange={(value) =>
+          onChooseThinkingEffort?.(!value || value === THINKING_EFFORT_UNSET ? null : String(value))
+        }
+      />
+    </div>
+  );
+};
+
 export const ModelDependencyField = ({
   displayModelStale,
   editable,
   hideTitle = false,
   model,
   onChooseModel,
+  onChooseThinkingEffort,
   onChooseProvider,
   onProviderSearchChange,
   providerId,
@@ -225,6 +301,7 @@ export const ModelDependencyField = ({
   providersUsable,
   source,
   sourceSettled,
+  thinkingEffort,
 }: ModelDependencyFieldProps) => {
   const { t } = useTranslation('admin');
 
@@ -282,14 +359,20 @@ export const ModelDependencyField = ({
               sourceSettled={sourceSettled}
               onChooseModel={onChooseModel}
             />
+
+            {/* The effort belongs to the model, so it is picked in the same row, not a section away. */}
+            <ThinkingEffortPicker
+              editable={editable}
+              model={model}
+              source={source}
+              thinkingEffort={thinkingEffort}
+              onChooseThinkingEffort={onChooseThinkingEffort}
+            />
           </div>
 
-          {/* What was chosen, echoed once. Why it is needed lives in the label's help. */}
-          {model ? (
+          {/* Only what the admin has to act on: the selection itself is already on the controls. */}
+          {displayModelStale || (source.isValidating && source.data) ? (
             <Flexbox horizontal align="center" gap={8} wrap="wrap">
-              <Tag>
-                {model.providerKey}/{model.modelKey}
-              </Tag>
               {displayModelStale ? (
                 <Tag color="warning">{t('agentCatalog.dependency.stale')}</Tag>
               ) : null}

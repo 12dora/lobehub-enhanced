@@ -131,6 +131,8 @@ export default {
   'agentCatalog.errors.generic':
     'The action failed. Your input is kept; check your connection and retry.',
   'agentCatalog.editor.avatar': 'Avatar',
+  'agentCatalog.editor.avatarUpload': 'Upload image',
+  'agentCatalog.editor.avatarUploadFailed': 'Avatar upload failed.',
   'agentCatalog.editor.background': 'Background',
   'agentCatalog.editor.blocked.connectorCatalog':
     'Checking platform connectors… Saving is unavailable until this finishes.',
@@ -192,6 +194,11 @@ export default {
     'You are a research assistant for the product team. Cite your sources and flag anything uncertain.',
   'agentCatalog.editor.tags': 'Tags',
   'agentCatalog.editor.tagsPlaceholder': 'Add a tag and press Enter',
+  'agentCatalog.editor.thinkingEffort': 'Thinking effort',
+  'agentCatalog.editor.thinkingEffortDefault': 'Model default',
+  'agentCatalog.editor.thinkingEffortDesc':
+    'Unset follows the model default. Members can adjust it in chat.',
+  'agentCatalog.editor.thinkingEffortUnsupported': 'Not supported by this model',
   'agentCatalog.editor.title.create': 'New assistant',
   'agentCatalog.editor.title.edit': 'Edit assistant',
   'agentCatalog.list.bulk.actions': 'Actions',
@@ -2669,6 +2676,7 @@ export default {
   'audit.logs.action.admin.agents.save': 'Save agent',
   'audit.logs.action.admin.agents.setDefaultInbox': 'Set default agent',
   'audit.logs.action.admin.agents.updateDraft': 'Update agent draft',
+  'audit.logs.action.admin.agents.uploadAvatar': 'Upload agent avatar',
   'audit.logs.action.admin.agents.validateDependencies': 'Validate agent dependencies',
   'audit.logs.action.admin.aiModels.applyImmediate': 'Apply model changes immediately',
   'audit.logs.action.admin.aiModels.batchToggle': 'Batch enable or disable models',

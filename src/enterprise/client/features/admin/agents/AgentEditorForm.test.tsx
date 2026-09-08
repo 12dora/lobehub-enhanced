@@ -9,6 +9,13 @@ const formMock = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
 
+const avatarMock = vi.hoisted(() => ({
+  branding: { iconUrl: null, logoUrl: null, publishedRevision: null } as Record<string, unknown>,
+  onUploaded: (_url: string) => {},
+  upload: vi.fn(),
+  uploading: false,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     // Keys pass through; interpolated values are appended so the composed line stays assertable.
@@ -39,6 +46,7 @@ vi.mock('@lobehub/ui', () => ({
   Tooltip: ({ children, title }: any) => <span data-tooltip={String(title)}>{children}</span>,
 }));
 vi.mock('@lobehub/ui/base-ui', () => ({
+  Avatar: ({ avatar }: any) => <img alt="agent-avatar" src={avatar} />,
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
   FormGroup: ({ children, collapsible, defaultActive, extra, title }: any) => (
     <section
@@ -76,7 +84,42 @@ vi.mock('@lobehub/ui/base-ui', () => ({
     />
   ),
 }));
-vi.mock('@/components/EmojiPicker', () => ({ default: () => <div>emoji-picker</div> }));
+vi.mock('@/components/EmojiPicker', () => ({
+  default: ({ allowDelete, allowUpload, loading, value, onChange, onDelete, onUpload }: any) => (
+    <div
+      data-allow-delete={String(Boolean(allowDelete))}
+      data-allow-upload={String(Boolean(allowUpload))}
+      data-avatar={value}
+      data-loading={String(Boolean(loading))}
+    >
+      <span>emoji-picker</span>
+      <button type="button" onClick={() => onChange?.('🤖')}>
+        pick-emoji
+      </button>
+      <button type="button" onClick={() => onChange?.('data:image/webp;base64,AAAA')}>
+        pick-data-url
+      </button>
+      <button type="button" onClick={() => onUpload?.(new File([], 'avatar.webp'))}>
+        pick-upload
+      </button>
+      <button type="button" onClick={() => onDelete?.()}>
+        pick-delete
+      </button>
+    </div>
+  ),
+}));
+// The real hook is covered by its own test; here only the wiring around it is in scope.
+vi.mock('./useAgentAvatarUpload', () => ({
+  useAgentAvatarUpload: ({ onUploaded }: { onUploaded: (url: string) => void }) => {
+    avatarMock.onUploaded = onUploaded;
+    return { upload: avatarMock.upload, uploading: avatarMock.uploading };
+  },
+}));
+// The real resolver runs; only the published brand it reads is supplied here.
+vi.mock('@/enterprise/client/providers/RuntimeBrandingProvider', () => ({
+  useBranding: () => avatarMock.branding,
+}));
+vi.mock('@/hooks/useCurrentInboxAgent', () => ({ useCurrentInboxAgentMeta: () => undefined }));
 vi.mock('@/features/AgentSetting/AgentMeta/BackgroundSwatches', () => ({
   default: () => <div>background-swatches</div>,
 }));
@@ -161,7 +204,20 @@ const helpFor = (key: string) => document.querySelector(`[data-tooltip="${key}"]
 
 beforeEach(() => {
   formMock.value = baseForm();
+  avatarMock.branding = { iconUrl: null, logoUrl: null, publishedRevision: null };
+  avatarMock.upload = vi.fn();
+  avatarMock.uploading = false;
 });
+
+const picker = () => screen.getByText('emoji-picker').parentElement!;
+const withAvatar = (avatar: string | null, over: Record<string, unknown> = {}) => {
+  const form = baseForm();
+  return {
+    ...form,
+    ...over,
+    value: { ...form.value, config: { ...form.value.config, avatar } },
+  };
+};
 
 describe('AgentEditorForm layout', () => {
   it('lays the editor out as basics → role → parameters → more', () => {
@@ -277,6 +333,82 @@ describe('AgentEditorForm layout', () => {
     expect(identity).toContainElement(screen.getByText('background-swatches'));
     expect(identity).toContainElement(screen.getByLabelText('agentCatalog.editor.name'));
     expect(identity).toContainElement(screen.getByLabelText('agentCatalog.editor.key'));
+  });
+
+  it('stores an uploaded image by its URL and never inlines it into the configuration', () => {
+    const form = withAvatar(null);
+    formMock.value = form;
+    render(<AgentEditorForm />);
+
+    fireEvent.click(screen.getByText('pick-upload'));
+    expect(avatarMock.upload).toHaveBeenCalledWith(expect.any(File));
+
+    // The cropped image also arrives as a data URL; only the hosted URL may be published.
+    fireEvent.click(screen.getByText('pick-data-url'));
+    expect(form.patchConfig).not.toHaveBeenCalled();
+
+    avatarMock.onUploaded('https://files.example.com/avatar.webp');
+    expect(form.patchConfig).toHaveBeenCalledWith(
+      'avatar',
+      'https://files.example.com/avatar.webp',
+    );
+  });
+
+  it('offers a clear back to the default only once an avatar is set', () => {
+    formMock.value = withAvatar(null);
+    const { unmount } = render(<AgentEditorForm />);
+    expect(picker().dataset.allowUpload).toBe('true');
+    expect(picker().dataset.allowDelete).toBe('false');
+    unmount();
+
+    const form = withAvatar('https://files.example.com/avatar.webp');
+    formMock.value = form;
+    render(<AgentEditorForm />);
+    expect(picker().dataset.allowDelete).toBe('true');
+    fireEvent.click(screen.getByText('pick-delete'));
+    expect(form.patchConfig).toHaveBeenCalledWith('avatar', null);
+  });
+
+  it('shows the upload in flight on the avatar itself', () => {
+    avatarMock.uploading = true;
+    formMock.value = withAvatar(null);
+    render(<AgentEditorForm />);
+    expect(picker().dataset.loading).toBe('true');
+  });
+
+  it('shows the default assistant’s avatar exactly as members see it', () => {
+    avatarMock.branding = {
+      iconUrl: 'https://brand.example.com/icon.png',
+      logoUrl: null,
+      publishedRevision: 3,
+    };
+    formMock.value = withAvatar('/avatars/lobe-ai.png', {
+      isCreate: false,
+      systemKey: 'default-inbox',
+    });
+    const { unmount } = render(<AgentEditorForm />);
+    // The built-in image is what the brand replaces — the stored value itself never changes.
+    expect(picker().dataset.avatar).toBe('https://brand.example.com/icon.png');
+    unmount();
+
+    // An avatar the admin actually chose outranks the brand.
+    formMock.value = withAvatar('🤖', { isCreate: false, systemKey: 'default-inbox' });
+    const chosen = render(<AgentEditorForm />);
+    expect(picker().dataset.avatar).toBe('🤖');
+    chosen.unmount();
+
+    // …and an ordinary assistant is never brand-resolved at all.
+    formMock.value = withAvatar('/avatars/lobe-ai.png', { isCreate: false });
+    render(<AgentEditorForm />);
+    expect(picker().dataset.avatar).toBe('/avatars/lobe-ai.png');
+  });
+
+  it('shows a read-only operator the avatar without an editor for it', () => {
+    formMock.value = withAvatar('🤖', { configEditable: false, isCreate: false });
+    render(<AgentEditorForm />);
+
+    expect(screen.queryByText('emoji-picker')).toBeNull();
+    expect(screen.getByAltText('agent-avatar').getAttribute('src')).toBe('🤖');
   });
 
   it('puts the identifier beside the name, with the swatch strip in the name column', () => {

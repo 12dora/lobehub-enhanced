@@ -1,7 +1,7 @@
 'use client';
 
 import type { PlatformAgentVersionConfig } from '@lobechat/types';
-import { Input, InputNumber, Select, TextArea } from '@lobehub/ui/base-ui';
+import { Avatar, Input, InputNumber, Select, TextArea } from '@lobehub/ui/base-ui';
 import { cx } from 'antd-style';
 import type { ReactNode } from 'react';
 import { memo } from 'react';
@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import EmojiPicker from '@/components/EmojiPicker';
 import { DEFAULT_AVATAR } from '@/const/meta';
 import BackgroundSwatches from '@/features/AgentSetting/AgentMeta/BackgroundSwatches';
+import { useDefaultInboxAvatar } from '@/hooks/useDefaultInboxAvatar';
 
 import {
   DESCRIPTION_ID,
@@ -23,6 +24,7 @@ import {
   TAGS_ID,
 } from './agentEditorForm.styles';
 import { FieldLabel } from './dependencyEditorShared';
+import { useAgentAvatarUpload } from './useAgentAvatarUpload';
 import { AGENT_KEY_MAX_LENGTH } from './useAgentEditorForm';
 
 type PatchConfig = <Key extends keyof PlatformAgentVersionConfig>(
@@ -59,6 +61,15 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
   }) => {
     const { t } = useTranslation('admin');
     const background = config.backgroundColor ?? undefined;
+    const { upload, uploading } = useAgentAvatarUpload({
+      onUploaded: (url) => patchConfig('avatar', url),
+    });
+    // Members see the default assistant's built-in avatar as the published brand icon, so the
+    // editor shows exactly that. What is stored never changes — this is display only.
+    const inboxAvatar = useDefaultInboxAvatar(config.avatar);
+    // Display-only fallback: an unset avatar must not render as the text "NU" (`String(null)`);
+    // the platform default stays out of the persisted config.
+    const avatar = isDefaultInbox ? inboxAvatar : (config.avatar ?? DEFAULT_AVATAR);
 
     return (
       <>
@@ -69,14 +80,31 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
         >
           <div className={cx(styles.field, styles.identityAvatar)}>
             <FieldLabel>{t('agentCatalog.editor.avatar')}</FieldLabel>
-            <EmojiPicker
-              background={background}
-              size={48}
-              // Display-only fallback: an unset avatar must not render as the text "NU"
-              // (`String(null)`); the platform default stays out of the persisted config.
-              value={config.avatar ?? DEFAULT_AVATAR}
-              onChange={(next: string) => patchConfig('avatar', next || null)}
-            />
+            {readOnly ? (
+              <Avatar avatar={avatar} background={background} shape={'square'} size={48} />
+            ) : (
+              <EmojiPicker
+                allowUpload
+                allowDelete={Boolean(config.avatar)}
+                background={background}
+                loading={uploading}
+                size={48}
+                value={avatar}
+                texts={{
+                  upload: t('agentCatalog.editor.avatarUpload'),
+                  uploadBtn: t('agentCatalog.editor.avatarUpload'),
+                }}
+                onDelete={() => patchConfig('avatar', null)}
+                onUpload={(file) => void upload(file)}
+                onChange={(next: string) => {
+                  // The uploader also emits its cropped image as a data URL. That path is owned by
+                  // `onUpload`, which stores the image and writes the hosted URL instead — an inline
+                  // data URL would be republished to every assigned member on every save.
+                  if (typeof next === 'string' && next.startsWith('data:')) return;
+                  patchConfig('avatar', next || null);
+                }}
+              />
+            )}
           </div>
 
           {/* One column: the swatch strip is part of the name box, ending exactly where it ends. */}

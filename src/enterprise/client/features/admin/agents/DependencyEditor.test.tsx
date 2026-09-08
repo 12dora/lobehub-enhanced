@@ -91,6 +91,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
   }: any) => (
     <select
       aria-label={label}
+      data-value={Array.isArray(value) ? value.join(',') : (value ?? '')}
       disabled={disabled}
       id={id}
       required={required}
@@ -1334,5 +1335,150 @@ describe('DependencyEditor provider search reaches the server', () => {
       expect(label!.getAttribute('for')).toBe(control.id);
       expect(control).toBeRequired();
     }
+  });
+});
+
+describe('DependencyEditor thinking effort', () => {
+  const MODEL_REF = {
+    modelKey: 'gpt-4.1',
+    providerChecksum: 'a'.repeat(64),
+    providerKey: 'openai',
+    providerRevision: 4,
+  };
+
+  /** A provider whose published models differ ONLY in the effort control they expose. */
+  const publishEffortModels = (extendParams: string[]) => {
+    hooks.providers = {
+      ...idle,
+      data: page([{ displayName: 'OpenAI', id: 'p1', providerKey: 'openai' }]),
+    };
+    hooks.source = {
+      ...idle,
+      data: {
+        chatModels: [
+          { displayName: 'GPT-4.1', extendParams, modelKey: 'gpt-4.1', type: 'chat' },
+          { displayName: 'GPT-4.5', extendParams, modelKey: 'gpt-4.5', type: 'chat' },
+          {
+            displayName: 'GPT-5.2',
+            extendParams: ['gpt5_2ReasoningEffort'],
+            modelKey: 'gpt-5.2',
+            type: 'chat',
+          },
+        ],
+        providerChecksum: 'a'.repeat(64),
+        providerKey: 'openai',
+        providerRevision: 4,
+      },
+    };
+  };
+
+  const renderWithEffort = (
+    thinkingEffort: { controlKey: string; level: string } | null,
+    onThinkingEffortChange = vi.fn(),
+  ) => {
+    const { unmount } = render(
+      <DependencyEditor
+        editable
+        enabled
+        agentId="agent-1"
+        dependencies={{ connectors: [], model: MODEL_REF, skills: [] }}
+        thinkingEffort={thinkingEffort}
+        onChange={vi.fn()}
+        onThinkingEffortChange={onThinkingEffortChange}
+        onValidityChange={vi.fn()}
+      />,
+    );
+    return {
+      effort: screen.getByLabelText('agentCatalog.editor.thinkingEffort'),
+      onThinkingEffortChange,
+      unmount,
+    };
+  };
+
+  it('offers exactly the levels the chosen model exposes, plus the model default', () => {
+    publishEffortModels(['reasoningEffort']);
+    const { effort } = renderWithEffort(null);
+
+    expect(effort).not.toBeDisabled();
+    expect([...effort.querySelectorAll('option')].map((option) => option.textContent)).toEqual([
+      '--',
+      'agentCatalog.editor.thinkingEffortDefault',
+      'serviceModel.reasoningEffort.options.low',
+      'serviceModel.reasoningEffort.options.medium',
+      'serviceModel.reasoningEffort.options.high',
+    ]);
+  });
+
+  it('offers nothing for a model with no effort control instead of a dead dropdown', () => {
+    publishEffortModels([]);
+    const { effort } = renderWithEffort(null);
+
+    expect(effort).toBeDisabled();
+    expect([...effort.querySelectorAll('option')].map((option) => option.textContent)).toEqual([
+      '--',
+    ]);
+  });
+
+  it('authors the control/level pair, and clears it back to the model default', () => {
+    publishEffortModels(['reasoningEffort']);
+    const { effort, onThinkingEffortChange } = renderWithEffort(null);
+
+    fireEvent.change(effort, { target: { value: 'medium' } });
+    expect(onThinkingEffortChange).toHaveBeenCalledWith({
+      controlKey: 'reasoningEffort',
+      level: 'medium',
+    });
+
+    fireEvent.change(effort, { target: { value: '__model_default__' } });
+    expect(onThinkingEffortChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('shows a stored level only while it still belongs to the model’s control', () => {
+    publishEffortModels(['reasoningEffort']);
+    const stored = renderWithEffort({ controlKey: 'reasoningEffort', level: 'high' });
+    expect(stored.effort.dataset.value).toBe('high');
+    stored.unmount();
+
+    // A level stored against a control this model does not offer reads as the model default.
+    const foreign = renderWithEffort({ controlKey: 'gpt5_2ReasoningEffort', level: 'xhigh' });
+    expect(foreign.effort.dataset.value).toBe('__model_default__');
+  });
+
+  it('drops a stored effort when the new model offers a different control, and keeps it otherwise', () => {
+    publishEffortModels(['reasoningEffort']);
+    const { onThinkingEffortChange } = renderWithEffort({
+      controlKey: 'reasoningEffort',
+      level: 'high',
+    });
+
+    fireEvent.change(screen.getByLabelText('agentCatalog.dependency.model.model'), {
+      target: { value: 'gpt-4.5' },
+    });
+    expect(onThinkingEffortChange).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('agentCatalog.dependency.model.model'), {
+      target: { value: 'gpt-5.2' },
+    });
+    expect(onThinkingEffortChange).toHaveBeenCalledWith(null);
+  });
+
+  it('drops a stored effort when the provider changes and the model goes with it', () => {
+    publishEffortModels(['reasoningEffort']);
+    hooks.providers = {
+      ...idle,
+      data: page([
+        { displayName: 'OpenAI', id: 'p1', providerKey: 'openai' },
+        { displayName: 'Anthropic', id: 'p2', providerKey: 'anthropic' },
+      ]),
+    };
+    const { onThinkingEffortChange } = renderWithEffort({
+      controlKey: 'reasoningEffort',
+      level: 'high',
+    });
+
+    fireEvent.change(screen.getByLabelText('agentCatalog.dependency.model.provider'), {
+      target: { value: 'p2' },
+    });
+    expect(onThinkingEffortChange).toHaveBeenCalledWith(null);
   });
 });

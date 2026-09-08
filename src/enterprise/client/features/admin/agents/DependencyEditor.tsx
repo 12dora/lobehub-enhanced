@@ -1,5 +1,7 @@
 'use client';
 
+import { findEffortControl } from '@lobechat/model-runtime';
+import type { PlatformAgentThinkingEffort } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
@@ -42,7 +44,13 @@ interface DependencyEditorProps {
   editable: boolean;
   enabled: boolean;
   onChange: (next: AdminAgentDraftDependencies) => void;
+  /**
+   * The thinking effort lives on the version config, not on the dependency snapshot, but it is
+   * authored here because only this component knows which control the chosen model offers.
+   */
+  onThinkingEffortChange?: (next: PlatformAgentThinkingEffort | null) => void;
   onValidityChange?: (validity: DependencyValidity) => void;
+  thinkingEffort?: PlatformAgentThinkingEffort | null;
 }
 
 export const DependencyEditor = ({
@@ -52,7 +60,9 @@ export const DependencyEditor = ({
   editable,
   enabled,
   onChange,
+  onThinkingEffortChange,
   onValidityChange,
+  thinkingEffort,
 }: DependencyEditorProps) => {
   const { clearQueue, connectorId, ownerAgentId, pendingConnectorIds, updatePendingConnectorIds } =
     useConnectorPickQueue(agentId);
@@ -134,16 +144,36 @@ export const DependencyEditor = ({
       sourceSettled,
     });
 
+  /** Which thinking-effort control a published model offers, from its own `extendParams`. */
+  const effortControlKeyOf = (modelKey: string | undefined): string | undefined =>
+    findEffortControl(
+      modelKey
+        ? source.data?.chatModels.find((entry) => entry.modelKey === modelKey)?.extendParams
+        : undefined,
+    )?.key;
+
+  /**
+   * A stored effort belongs to ONE control, and which control applies is a property of the model.
+   * Whenever the new model does not offer that same control the stored pair is dropped rather than
+   * carried over: a level the model cannot honour would be published as a promise nothing keeps.
+   */
+  const retainThinkingEffort = (modelKey: string | undefined) => {
+    if (!thinkingEffort || !onThinkingEffortChange) return;
+    if (effortControlKeyOf(modelKey) !== thinkingEffort.controlKey) onThinkingEffortChange(null);
+  };
+
   const chooseProvider = (nextId: string | undefined) => {
     if (!providersUsable) return; // never select against a loading/revalidating/errored provider list
     setProviderId(nextId);
     if (dependencies.model) onChange(withModel(dependencies, null));
+    retainThinkingEffort(undefined);
   };
 
   const chooseModel = (modelKey: string | undefined) => {
     // Fail closed: never author a model ref from a loading/revalidating/errored source snapshot.
     if (!modelKey || !sourceSettled || !source.data) return;
     onChange(withModel(dependencies, buildModelDependency(source.data, modelKey)));
+    retainThinkingEffort(modelKey);
   };
 
   // Every published Skill, plus the referenced ones the catalog no longer offers: a ref that is
@@ -283,8 +313,13 @@ export const DependencyEditor = ({
         providersUsable={providersUsable}
         source={source}
         sourceSettled={sourceSettled}
+        thinkingEffort={thinkingEffort}
         onChooseModel={chooseModel}
         onChooseProvider={chooseProvider}
+        onChooseThinkingEffort={(level) => {
+          const controlKey = effortControlKeyOf(model?.modelKey);
+          onThinkingEffortChange?.(level && controlKey ? { controlKey, level } : null);
+        }}
         onProviderSearchChange={(next) => {
           setProviderSearch(next);
           setProviderHydrateQuery('');

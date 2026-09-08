@@ -23,19 +23,45 @@ export interface PublishedProviderSummary {
   providerKey: string;
 }
 
+/** A published model row exactly as the AI catalog returns it (`settings` is free-form json). */
+export interface ProviderPublishedModel {
+  displayName: string | null;
+  modelKey: string;
+  /** Published model settings json; only `extendParams` is read here. */
+  settings?: unknown;
+  type: string;
+}
+
 /** A published model option (from admin.aiProviders.get → published.models). */
 export interface PublishedModelOption {
   displayName: string | null;
+  /**
+   * `settings.extendParams` of the published model — the only input that decides which
+   * thinking-effort control (if any) the model offers.
+   */
+  extendParams: string[];
   modelKey: string;
   type: string;
 }
 
 /** The published provider detail we consume (admin.aiProviders.get → published). */
 export interface ProviderPublishedDetail {
-  models: PublishedModelOption[];
+  models: ProviderPublishedModel[];
   providerKey: string;
   revision: number;
 }
+
+/**
+ * `settings.extendParams` of a published model, defaulting to an empty list. The catalog stores
+ * settings as free-form json, so anything that is not a list of strings means "no extend params"
+ * rather than an error the picker could not act on.
+ */
+export const readModelExtendParams = (settings: unknown): string[] => {
+  if (!settings || typeof settings !== 'object') return [];
+  const value = (settings as { extendParams?: unknown }).extendParams;
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string');
+};
 
 /** A provider revision-history row (from admin.aiProviders.listRevisions). */
 export interface ProviderRevisionRef {
@@ -75,7 +101,14 @@ export const resolveProviderModelSource = (
   const match = revisions.find((r) => r.revision === detail.revision && r.status === 'published');
   if (!match) return null;
   return {
-    chatModels: detail.models.filter((model) => model.type === 'chat'),
+    chatModels: detail.models
+      .filter((model) => model.type === 'chat')
+      .map((model) => ({
+        displayName: model.displayName,
+        extendParams: readModelExtendParams(model.settings),
+        modelKey: model.modelKey,
+        type: model.type,
+      })),
     providerChecksum: match.checksum,
     providerKey: detail.providerKey,
     providerRevision: detail.revision,

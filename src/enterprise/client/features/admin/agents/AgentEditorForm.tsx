@@ -93,7 +93,9 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
             agentId={agent?.identity.id ?? 'new-platform-agent'}
             dependencies={form.value.dependencies}
             editable={!readOnly}
+            thinkingEffort={config.thinkingEffort ?? null}
             onChange={form.setDependencies}
+            onThinkingEffortChange={(next) => form.patchConfig('thinkingEffort', next)}
             onValidityChange={form.setDepValidity}
           >
             {(slots) => (

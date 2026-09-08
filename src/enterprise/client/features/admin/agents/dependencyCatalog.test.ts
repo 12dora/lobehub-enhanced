@@ -24,7 +24,12 @@ import type { AdminAgentDraftDependencies } from './types';
 
 const detail: ProviderPublishedDetail = {
   models: [
-    { displayName: 'GPT-4.1', modelKey: 'gpt-4.1', type: 'chat' },
+    {
+      displayName: 'GPT-4.1',
+      modelKey: 'gpt-4.1',
+      settings: { extendParams: ['reasoningEffort'] },
+      type: 'chat',
+    },
     { displayName: 'Embed', modelKey: 'text-embedding', type: 'embedding' },
   ],
   providerKey: 'openai',
@@ -43,11 +48,44 @@ describe('dependencyCatalog exact resolution', () => {
   it('resolves the exact provider revision + checksum and filters to chat models', () => {
     const source = resolveProviderModelSource(detail, revisions);
     expect(source).toEqual({
-      chatModels: [{ displayName: 'GPT-4.1', modelKey: 'gpt-4.1', type: 'chat' }],
+      chatModels: [
+        {
+          displayName: 'GPT-4.1',
+          extendParams: ['reasoningEffort'],
+          modelKey: 'gpt-4.1',
+          type: 'chat',
+        },
+      ],
       providerChecksum: 'a'.repeat(64),
       providerKey: 'openai',
       providerRevision: 4,
     });
+  });
+
+  // The thinking-effort picker is driven entirely by these, and `settings` is free-form json.
+  it('derives each model’s extend params from its settings, defaulting to none', () => {
+    const source = resolveProviderModelSource(
+      {
+        models: [
+          {
+            displayName: null,
+            modelKey: 'a',
+            settings: { extendParams: ['reasoningEffort', 7] },
+            type: 'chat',
+          },
+          { displayName: null, modelKey: 'b', settings: null, type: 'chat' },
+          { displayName: null, modelKey: 'c', type: 'chat' },
+        ],
+        providerKey: 'openai',
+        revision: 4,
+      },
+      revisions,
+    )!;
+    expect(source.chatModels.map((model) => model.extendParams)).toEqual([
+      ['reasoningEffort'],
+      [],
+      [],
+    ]);
   });
 
   it('returns null when the published revision has no matching published checksum', () => {

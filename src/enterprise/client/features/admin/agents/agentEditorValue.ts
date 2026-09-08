@@ -61,6 +61,7 @@ const EMPTY_CONFIG: PlatformAgentVersionConfig = {
   openingQuestions: [],
   systemRole: '',
   tags: [],
+  thinkingEffort: null,
 };
 
 const EMPTY_DEPENDENCIES: AdminAgentDraftDependencies = {
@@ -95,8 +96,12 @@ export const seedAgentEditorValue = (
       dependencies: { ...EMPTY_DEPENDENCIES },
     };
   }
+  const config = structuredClone(version.config);
+  // Versions published before the field existed carry no key at all — both spellings of "follow
+  // the model default" are seeded as `null` so the editor has exactly one value to reason about.
+  config.thinkingEffort = config.thinkingEffort ?? null;
   return {
-    config: structuredClone(version.config),
+    config,
     // Carry the previous version's exact model/skill/connector refs; re-picking one replaces the
     // whole ref with fresh catalog metadata.
     dependencies: {
@@ -122,6 +127,8 @@ export const buildAgentConfig = (
     openingQuestions: normalizeList(value.config.openingQuestions),
     systemRole: value.config.systemRole.trim(),
     tags: normalizeList(value.config.tags),
+    // Always sent, never omitted: clearing back to the model default is an explicit `null`.
+    thinkingEffort: value.config.thinkingEffort ?? null,
   };
   const parsed = platformAgentVersionConfigSchema.safeParse(candidate);
   return parsed.success ? (parsed.data as PlatformAgentVersionConfig) : null;
