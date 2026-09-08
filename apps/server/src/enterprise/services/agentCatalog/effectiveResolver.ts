@@ -199,6 +199,14 @@ export class PlatformAgentEffectiveResolver {
    * Pass `filter` for single-agent / system-key lookups so the repository never scans the full
    * assignment catalog. Full-list callers pass a SQL `limit` (and optional keyset `cursor`) so the
    * repository never loads an unbounded assignment set.
+   *
+   * The default assistant (`filter.systemKey === 'default-inbox'`, or a `platformAgentId` whose
+   * resolved row has `agent.systemKey === 'default-inbox'`) bypasses {@link isAgentRuntimeManaged}.
+   * It is a fixed system role edited on its own admin page where "save = publish", so overlay and
+   * paused-resume entitlement must not depend on the catalog takeover switch (observe / ui-only /
+   * enforced). Other `platformAgentId` lookups stay gated. `getEffectiveList` keeps its own
+   * `managed && enforced` gate and never uses this method. The feature flag still applies to every
+   * path.
    */
   private resolveAuthorized = async (
     userId: string,
@@ -207,13 +215,23 @@ export class PlatformAgentEffectiveResolver {
     const flags = this.options.flags ?? parseEnterpriseFeatureFlags(process.env);
     if (!flags.ENABLE_PLATFORM_MANAGED_AGENTS) return [];
 
-    const policy = await (
-      this.options.policyModel ?? new PlatformManagedResourcePolicyModel(this.db)
-    ).getSnapshot();
-    if (!isAgentRuntimeManaged(policy)) return [];
+    // Default-inbox system-key lookup skips the catalog policy entirely (flag still required).
+    const skipCatalogPolicy = filter?.systemKey === 'default-inbox';
+    let runtimeManaged = skipCatalogPolicy;
+    if (!skipCatalogPolicy) {
+      const policy = await (
+        this.options.policyModel ?? new PlatformManagedResourcePolicyModel(this.db)
+      ).getSnapshot();
+      runtimeManaged = isAgentRuntimeManaged(policy);
+      // Policy-off full-list never belongs here (getEffectiveList has its own gate). A targeted
+      // platformAgentId lookup may still be the default inbox (resume `isEntitled` / `beginOperation`).
+      if (!runtimeManaged && !filter?.platformAgentId) return [];
+    }
 
     const rows = await this.listEffectiveInputPage(userId, filter);
-    return this.projectAuthorizedRows(rows);
+    const authorized = this.projectAuthorizedRows(rows);
+    if (runtimeManaged) return authorized;
+    return authorized.filter((agent) => agent.systemKey === 'default-inbox');
   };
 
   getEffectiveList = async (userId: string): Promise<EffectiveList> => {
@@ -349,9 +367,17 @@ export class PlatformAgentEffectiveResolver {
 
   /**
    * Capture the exact effective Agent assigned to a stable system role (PR-051 default inbox).
-   * This uses the same authorized set as {@link beginOperation}, but ignores the list-only hidden
-   * preference: hiding a catalog tile must never turn the fixed inbox into an unmanaged bypass.
-   * A genuinely absent assigned/published system Agent returns null; resolver/DB failures throw.
+   * This uses the same authorized assignment set as {@link beginOperation}, but ignores the
+   * list-only hidden preference: hiding a catalog tile must never turn the fixed inbox into an
+   * unmanaged bypass. A genuinely absent assigned/published system Agent returns null;
+   * resolver/DB failures throw.
+   *
+   * Default-inbox resolution does **not** require the catalog takeover policy
+   * (`agents.managed && enforcementMode === 'enforced'`). The default assistant is a fixed
+   * system role whose admin editor treats save as publish; it must overlay the builtin inbox
+   * whenever `ENABLE_PLATFORM_MANAGED_AGENTS` is on and an eligible published assignment exists,
+   * in any policy mode (observe / ui-only / enforced). Catalog list, takeover, and
+   * materialization of non-system agents stay gated by that policy.
    */
   beginSystemOperation = async (
     userId: string,
@@ -377,8 +403,12 @@ export class PlatformAgentEffectiveResolver {
 
   /**
    * Snapshot-free entitlement re-check (M10 PR-049 · RR3-1). Returns whether `userId` is CURRENTLY
-   * entitled to `platformAgentId`, using the exact same owner-scoped assignment + managed-policy +
-   * flag resolution as {@link beginOperation}, but WITHOUT capturing the latest version snapshot.
+   * entitled to `platformAgentId`, using the same owner-scoped assignment + flag resolution as
+   * {@link beginOperation}, but WITHOUT capturing the latest version snapshot.
+   *
+   * Catalog agents additionally require the managed-policy gate. The default-inbox identity is
+   * exempt: a paused inbox resume must still pass when the catalog takeover switch is observe /
+   * ui-only, as long as the feature flag is on and the published assignment remains eligible.
    *
    * A resume uses this to verify LIVE entitlement (so a revoked / no-longer-assigned user fails
    * closed) while still replaying its OWN exact pinned version via `materializeFromPin` — entitlement

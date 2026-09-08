@@ -45,6 +45,35 @@ const managedPolicy = (): ManagedResourcePolicySnapshot => {
   };
 };
 
+/** Production default: catalog takeover OFF (observe / managed=false). */
+const observePolicy = (): ManagedResourcePolicySnapshot => ({
+  draft: createUnmanagedResourcePolicyMap(),
+  published: createUnmanagedResourcePolicyMap(),
+  revision: 1,
+  status: 'published',
+});
+
+const uiOnlyPolicy = (): ManagedResourcePolicySnapshot => {
+  const published = createUnmanagedResourcePolicyMap();
+  published.agents = { enforcementMode: 'ui-only', managed: true };
+  return {
+    draft: createUnmanagedResourcePolicyMap(),
+    published,
+    revision: 1,
+    status: 'published',
+  };
+};
+
+const defaultInboxRow = () =>
+  row({
+    agentId: 'inbox',
+    agentKey: 'inbox',
+    assignmentId: 'asg-inbox',
+    mode: 'default',
+    priority: 1,
+    systemKey: 'default-inbox',
+  });
+
 const row = (params: {
   agentId: string;
   agentKey: string;
@@ -698,6 +727,70 @@ describe('PlatformAgentEffectiveResolver', () => {
 
       expect(oldOperation?.getSnapshot().versionId).toBe('v2');
       expect(newOperation?.getSnapshot().versionId).toBe('v1');
+    });
+
+    it('resolves default-inbox under observe policy when filtered by systemKey', async () => {
+      getSnapshot.mockResolvedValue(observePolicy());
+      listEffectiveInputs.mockResolvedValue([defaultInboxRow()]);
+
+      const handle = await createResolver().beginSystemOperation('user', 'default-inbox');
+      expect(handle?.getSnapshot()).toMatchObject({ platformAgentId: 'inbox' });
+      expect(getSnapshot).not.toHaveBeenCalled();
+      expect(listEffectiveInputs).toHaveBeenCalledWith('user', { systemKey: 'default-inbox' });
+    });
+
+    it('resolves default-inbox under ui-only policy when filtered by systemKey', async () => {
+      getSnapshot.mockResolvedValue(uiOnlyPolicy());
+      listEffectiveInputs.mockResolvedValue([defaultInboxRow()]);
+
+      const handle = await createResolver().beginSystemOperation('user', 'default-inbox');
+      expect(handle?.getSnapshot()).toMatchObject({ platformAgentId: 'inbox' });
+      expect(getSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('keeps the full catalog list empty under observe policy', async () => {
+      getSnapshot.mockResolvedValue(observePolicy());
+      queryEffectiveInputsPage.mockResolvedValue([defaultInboxRow()]);
+
+      expect((await createResolver().getEffectiveList('user')).agents).toEqual([]);
+      expect(queryEffectiveInputsPage).not.toHaveBeenCalled();
+      expect(listEffectiveInputs).not.toHaveBeenCalled();
+    });
+
+    it('returns null for default-inbox when the feature flag is off', async () => {
+      listEffectiveInputs.mockResolvedValue([defaultInboxRow()]);
+      const result = await createResolver(DISABLED_ENTERPRISE_FEATURE_FLAGS).beginSystemOperation(
+        'user',
+        'default-inbox',
+      );
+      expect(result).toBeNull();
+      expect(getSnapshot).not.toHaveBeenCalled();
+      expect(listEffectiveInputs).not.toHaveBeenCalled();
+    });
+
+    it('isEntitled for the default-inbox agent is true under observe policy', async () => {
+      getSnapshot.mockResolvedValue(observePolicy());
+      listEffectiveInputs.mockResolvedValue([defaultInboxRow()]);
+
+      await expect(createResolver().isEntitled('user', 'inbox')).resolves.toBe(true);
+      expect(listEffectiveInputs).toHaveBeenCalledWith('user', { platformAgentId: 'inbox' });
+    });
+
+    it('beginOperation for the default-inbox platformAgentId succeeds under observe (resume)', async () => {
+      getSnapshot.mockResolvedValue(observePolicy());
+      listEffectiveInputs.mockResolvedValue([defaultInboxRow()]);
+
+      const handle = await createResolver().beginOperation('user', 'inbox');
+      expect(handle?.getSnapshot()).toMatchObject({ platformAgentId: 'inbox' });
+    });
+
+    it('isEntitled for a catalog agent remains false under observe policy', async () => {
+      getSnapshot.mockResolvedValue(observePolicy());
+      listEffectiveInputs.mockResolvedValue([
+        row({ agentId: 'catalog', agentKey: 'catalog', assignmentId: 'a', priority: 1 }),
+      ]);
+
+      await expect(createResolver().isEntitled('user', 'catalog')).resolves.toBe(false);
     });
   });
 });

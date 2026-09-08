@@ -7,6 +7,7 @@ import { TRPCError } from '@trpc/server';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MANAGED_ERROR_CODES } from '@/const/platform/errorCodes';
 import { getTestDB } from '@/database/core/getTestDB';
 import { PlatformAgentCatalogRepository } from '@/database/repositories/platformAgentCatalog';
 import { agents } from '@/database/schemas/agent';
@@ -23,8 +24,10 @@ import { getEnterpriseErrorBody } from './enterpriseErrors';
 import {
   assertAgentNotPlatformManaged,
   assertAgentsNotPlatformManaged,
+  assertInboxManagedFieldsNotEdited,
   MANAGED_AGENT_BATCH_LIMIT_CODE,
   MANAGED_AGENT_BATCH_LIMIT_REASON,
+  MANAGED_AGENT_MUTATION_FORBIDDEN,
   MAX_MANAGED_AGENT_GUARD_IDS,
   pickAgentId,
   pickAgentIds,
@@ -211,6 +214,39 @@ describe('assertAgentsNotPlatformManaged (RR2-4 batch)', () => {
     expect(countingDb.select).toHaveBeenCalledTimes(3);
   });
 
+  it('skipManagedInbox still rejects a materialized platform Agent', async () => {
+    vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
+    const error = await assertAgentsNotPlatformManaged({
+      agentIds: [AGT_MATERIALIZED],
+      db,
+      skipManagedInbox: true,
+      userId: USER_A,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(TRPCError);
+    expect((error as TRPCError).code).toBe('FORBIDDEN');
+  });
+
+  it('skipManagedInbox does not blanket-reject the builtin inbox', async () => {
+    vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
+    await db.insert(agents).values({ id: AGT_BUILTIN_INBOX, slug: 'inbox', userId: USER_A });
+    const capture = vi
+      .spyOn(PlatformDefaultInboxService.prototype, 'capture')
+      .mockResolvedValue({} as never);
+
+    await expect(
+      assertAgentsNotPlatformManaged({
+        agentIds: [AGT_BUILTIN_INBOX],
+        db,
+        skipManagedInbox: true,
+        userId: USER_A,
+      }),
+    ).resolves.toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
+  });
+
   it('rejects oversized batches before any query with structured i18n details', async () => {
     vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
     const countingDb = Object.create(db) as LobeChatDatabase;
@@ -264,5 +300,105 @@ describe('agent-id pickers (RR2-4)', () => {
     expect(pickAgentIds({})).toEqual([]);
     expect(pickAgentId(null)).toEqual([undefined]);
     expect(pickId(undefined)).toEqual([undefined]);
+  });
+});
+
+describe('assertInboxManagedFieldsNotEdited', () => {
+  const run = (patch: unknown, agentId = AGT_BUILTIN_INBOX) =>
+    assertInboxManagedFieldsNotEdited({
+      agentId,
+      db,
+      patch,
+      userId: USER_A,
+    });
+
+  const seedInbox = async () => {
+    await db.insert(agents).values({ id: AGT_BUILTIN_INBOX, slug: 'inbox', userId: USER_A });
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
+  });
+
+  it('rejects admin-owned fields when the platform overlay is bound', async () => {
+    await seedInbox();
+    const capture = vi
+      .spyOn(PlatformDefaultInboxService.prototype, 'capture')
+      .mockResolvedValue({} as never);
+
+    const error = await run({ model: 'gpt-4o', systemRole: 'x' }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(TRPCError);
+    expect((error as TRPCError).code).toBe(MANAGED_AGENT_MUTATION_FORBIDDEN.code);
+    expect((error as TRPCError).message).toBe(MANAGED_ERROR_CODES.MANAGED_RESOURCE_BY_PLATFORM);
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects title/avatar meta fields the same way as model/systemRole', async () => {
+    await seedInbox();
+    vi.spyOn(PlatformDefaultInboxService.prototype, 'capture').mockResolvedValue({} as never);
+
+    const error = await run({ avatar: 'x', title: 'Managed' }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(TRPCError);
+    expect((error as TRPCError).message).toBe(MANAGED_ERROR_CODES.MANAGED_RESOURCE_BY_PLATFORM);
+  });
+
+  it('allows per-user preference patches without capturing the overlay', async () => {
+    await seedInbox();
+    const select = vi.spyOn(db, 'select');
+    const capture = vi.spyOn(PlatformDefaultInboxService.prototype, 'capture');
+
+    await expect(
+      run({
+        agencyConfig: { enabled: true },
+        chatConfig: { enableReasoning: true },
+        fewShots: [],
+        tts: { showAllLocaleVoice: true },
+      }),
+    ).resolves.toBeUndefined();
+    expect(select).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mixed patch that also touches an admin-owned field', async () => {
+    await seedInbox();
+    vi.spyOn(PlatformDefaultInboxService.prototype, 'capture').mockResolvedValue({} as never);
+
+    const error = await run({ chatConfig: { enableReasoning: true }, model: 'x' }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(TRPCError);
+  });
+
+  it('does not call capture for a non-inbox agent', async () => {
+    const capture = vi.spyOn(PlatformDefaultInboxService.prototype, 'capture');
+
+    await expect(run({ model: 'x' }, AGT_ORDINARY)).resolves.toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('allows admin-owned fields when the overlay is not bound', async () => {
+    await seedInbox();
+    const capture = vi
+      .spyOn(PlatformDefaultInboxService.prototype, 'capture')
+      .mockResolvedValue(null);
+
+    await expect(run({ systemRole: 'personal' })).resolves.toBeUndefined();
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when the managed flag is off', async () => {
+    vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '0');
+    await seedInbox();
+    const capture = vi.spyOn(PlatformDefaultInboxService.prototype, 'capture');
+
+    await expect(run({ model: 'x' })).resolves.toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { INBOX_SESSION_ID } from '@lobechat/const';
 import { TRPCError } from '@trpc/server';
 
 import { MANAGED_ERROR_CODES } from '@/const/platform/errorCodes';
@@ -35,6 +36,61 @@ export const assertDefaultInboxNotPlatformManaged = async (params: {
 }): Promise<void> => {
   const managedDefault = await new PlatformDefaultInboxService(params.db, params.userId).capture();
   if (managedDefault) throw new TRPCError(MANAGED_AGENT_MUTATION_FORBIDDEN);
+};
+
+/**
+ * Admin-owned overlay fields on the builtin inbox. Users may not persist these while the
+ * platform default assistant is bound; per-user preferences (`chatConfig`, `tts`, …) stay writable.
+ */
+export const INBOX_PLATFORM_MANAGED_FIELDS = [
+  'avatar',
+  'backgroundColor',
+  'description',
+  'model',
+  'openingMessage',
+  'openingQuestions',
+  'params',
+  'plugins',
+  'provider',
+  'systemRole',
+  'tags',
+  'title',
+] as const;
+
+export type InboxPlatformManagedField = (typeof INBOX_PLATFORM_MANAGED_FIELDS)[number];
+
+const patchTouchesInboxPlatformManagedFields = (patch: unknown): boolean => {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return false;
+  return INBOX_PLATFORM_MANAGED_FIELDS.some((key) => Object.hasOwn(patch, key));
+};
+
+/**
+ * Reject a config/meta patch on the user's builtin inbox when the platform default assistant
+ * overlay is bound and the patch touches admin-owned fields. Per-user preferences
+ * (`chatConfig`, `tts`, `agencyConfig`, `fewShots`, …) remain writable.
+ *
+ * Cheap: skip when the feature flag is off or the patch has no admin-owned keys; look up the
+ * slug first; call `capture()` only for the inbox row.
+ */
+export const assertInboxManagedFieldsNotEdited = async (params: {
+  agentId: string;
+  db: LobeChatDatabase;
+  patch: unknown;
+  userId: string;
+  workspaceId?: string;
+}): Promise<void> => {
+  if (!parseEnterpriseFeatureFlags(process.env).ENABLE_PLATFORM_MANAGED_AGENTS) return;
+  if (!patchTouchesInboxPlatformManagedFields(params.patch)) return;
+  if (typeof params.agentId !== 'string' || params.agentId.length === 0) return;
+
+  const inboxIds = await new AgentModel(
+    params.db,
+    params.userId,
+    params.workspaceId,
+  ).findAgentIdsBySlug([params.agentId], INBOX_SESSION_ID);
+  if (!inboxIds.has(params.agentId)) return;
+
+  await assertDefaultInboxNotPlatformManaged(params);
 };
 
 /**
@@ -78,6 +134,11 @@ export const assertAgentNotPlatformManaged = async (params: {
 export const assertAgentsNotPlatformManaged = async (params: {
   agentIds: string[];
   db: LobeChatDatabase;
+  /**
+   * Skip the blanket default-inbox rejection. Use when the mutation applies a field-level
+   * inbox overlay guard instead (`assertInboxManagedFieldsNotEdited` on `updateAgentConfig`).
+   */
+  skipManagedInbox?: boolean;
   userId: string;
   workspaceId?: string;
 }): Promise<void> => {
@@ -101,7 +162,9 @@ export const assertAgentsNotPlatformManaged = async (params: {
   const agentModel = new AgentModel(params.db, params.userId, params.workspaceId);
   const [platformAgentIds, inboxAgentIds] = await Promise.all([
     repository.getPlatformAgentIdsByMaterializedAgentIds(params.userId, uniqueIds),
-    agentModel.findAgentIdsBySlug(uniqueIds, 'inbox'),
+    params.skipManagedInbox
+      ? Promise.resolve(new Set<string>())
+      : agentModel.findAgentIdsBySlug(uniqueIds, INBOX_SESSION_ID),
   ]);
   if (platformAgentIds.size > 0) throw new TRPCError(MANAGED_AGENT_MUTATION_FORBIDDEN);
   if (inboxAgentIds.size > 0) await assertDefaultInboxNotPlatformManaged(params);
@@ -216,6 +279,14 @@ const resolvePickerKind = (pick: ManagedLocalAgentIdPicker): ManagedLocalAgentPi
   return kind ?? 'custom';
 };
 
+export interface ManagedLocalAgentGuardOptions {
+  /**
+   * Skip the blanket default-inbox rejection. Pair with {@link assertInboxManagedFieldsNotEdited}
+   * so per-user inbox preferences remain writable while admin-owned overlay fields stay locked.
+   */
+  skipManagedInbox?: boolean;
+}
+
 /**
  * tRPC middleware that refuses an ordinary agent-scoped mutation when its target local Agent is a
  * materialized platform Agent (M10 PR-049 · RR2-4). This is the single, uniform guard applied to
@@ -228,7 +299,10 @@ const resolvePickerKind = (pick: ManagedLocalAgentIdPicker): ManagedLocalAgentPi
  * - Owner-scoped: a foreign / non-materialized id resolves to null and passes through untouched.
  * - Attaches frozen non-enumerable metadata so registry tests can reconcile the guarded surface.
  */
-export const withManagedLocalAgentGuard = (pick: ManagedLocalAgentIdPicker) => {
+export const withManagedLocalAgentGuard = (
+  pick: ManagedLocalAgentIdPicker,
+  options?: ManagedLocalAgentGuardOptions,
+) => {
   const middleware = trpc.middleware(async ({ ctx, getRawInput, next }) => {
     if (!parseEnterpriseFeatureFlags(process.env).ENABLE_PLATFORM_MANAGED_AGENTS) return next();
     const db = (ctx as { serverDB?: LobeChatDatabase }).serverDB;
@@ -241,7 +315,13 @@ export const withManagedLocalAgentGuard = (pick: ManagedLocalAgentIdPicker) => {
       (id): id is string => typeof id === 'string' && id.length > 0,
     );
     const workspaceId = (ctx as { workspaceId?: string }).workspaceId;
-    await assertAgentsNotPlatformManaged({ agentIds, db, userId, workspaceId });
+    await assertAgentsNotPlatformManaged({
+      agentIds,
+      db,
+      skipManagedInbox: options?.skipManagedInbox,
+      userId,
+      workspaceId,
+    });
     return next();
   });
 
