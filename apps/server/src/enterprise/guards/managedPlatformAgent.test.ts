@@ -25,6 +25,9 @@ import {
   assertAgentNotPlatformManaged,
   assertAgentsNotPlatformManaged,
   assertInboxManagedFieldsNotEdited,
+  INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS,
+  INBOX_PLATFORM_MANAGED_FIELDS,
+  INBOX_PLATFORM_MODEL_MANAGED_FIELDS,
   MANAGED_AGENT_BATCH_LIMIT_CODE,
   MANAGED_AGENT_BATCH_LIMIT_REASON,
   MANAGED_AGENT_MUTATION_FORBIDDEN,
@@ -34,6 +37,18 @@ import {
   pickDocumentAgentIds,
   pickId,
 } from './managedPlatformAgent';
+
+const { isPlatformAgentTakeoverActiveMock } = vi.hoisted(() => ({
+  isPlatformAgentTakeoverActiveMock: vi.fn(),
+}));
+
+vi.mock('../services/agentCatalog/enforcement', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    isPlatformAgentTakeoverActive: isPlatformAgentTakeoverActiveMock,
+  };
+});
 
 const db: LobeChatDatabase = await getTestDB();
 const CHECKSUM = 'a'.repeat(64);
@@ -318,6 +333,27 @@ describe('assertInboxManagedFieldsNotEdited', () => {
 
   beforeEach(() => {
     vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
+    isPlatformAgentTakeoverActiveMock.mockReset();
+    isPlatformAgentTakeoverActiveMock.mockResolvedValue(false);
+  });
+
+  it('exports identity-only vs full managed field sets', () => {
+    expect(INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS).toEqual([
+      'avatar',
+      'backgroundColor',
+      'description',
+      'openingMessage',
+      'openingQuestions',
+      'slug',
+      'systemRole',
+      'tags',
+      'title',
+    ]);
+    expect(INBOX_PLATFORM_MODEL_MANAGED_FIELDS).toEqual(['model', 'params', 'provider']);
+    expect(INBOX_PLATFORM_MANAGED_FIELDS).toEqual([
+      ...INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS,
+      ...INBOX_PLATFORM_MODEL_MANAGED_FIELDS,
+    ]);
   });
 
   it('rejects admin-owned fields when the platform overlay is bound', async () => {
@@ -363,17 +399,45 @@ describe('assertInboxManagedFieldsNotEdited', () => {
     ).resolves.toBeUndefined();
     expect(select).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
+    expect(isPlatformAgentTakeoverActiveMock).not.toHaveBeenCalled();
   });
 
-  it('rejects a mixed patch that also touches an admin-owned field', async () => {
+  it('rejects a mixed patch that also touches an identity field', async () => {
     await seedInbox();
     vi.spyOn(PlatformDefaultInboxService.prototype, 'capture').mockResolvedValue({} as never);
 
-    const error = await run({ chatConfig: { enableReasoning: true }, model: 'x' }).then(
+    const error = await run({ chatConfig: { enableReasoning: true }, systemRole: 'x' }).then(
       () => null,
       (e) => e,
     );
     expect(error).toBeInstanceOf(TRPCError);
+  });
+
+  it('allows model/provider/params in light mode without capturing the overlay', async () => {
+    await seedInbox();
+    const capture = vi.spyOn(PlatformDefaultInboxService.prototype, 'capture');
+
+    await expect(
+      run({ model: 'gpt-5.6-sol', params: { temperature: 0.4 }, provider: 'chatgpt' }),
+    ).resolves.toBeUndefined();
+    expect(isPlatformAgentTakeoverActiveMock).toHaveBeenCalledTimes(1);
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('rejects model/provider/params when catalog takeover is enforced', async () => {
+    await seedInbox();
+    isPlatformAgentTakeoverActiveMock.mockResolvedValue(true);
+    const capture = vi
+      .spyOn(PlatformDefaultInboxService.prototype, 'capture')
+      .mockResolvedValue({} as never);
+
+    const error = await run({ model: 'gpt-5.6-sol', provider: 'chatgpt' }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(TRPCError);
+    expect((error as TRPCError).message).toBe(MANAGED_ERROR_CODES.MANAGED_RESOURCE_BY_PLATFORM);
+    expect(capture).toHaveBeenCalledTimes(1);
   });
 
   it('does not call capture for a non-inbox agent', async () => {
@@ -381,6 +445,7 @@ describe('assertInboxManagedFieldsNotEdited', () => {
 
     await expect(run({ model: 'x' }, AGT_ORDINARY)).resolves.toBeUndefined();
     expect(capture).not.toHaveBeenCalled();
+    expect(isPlatformAgentTakeoverActiveMock).not.toHaveBeenCalled();
   });
 
   it('allows admin-owned fields when the overlay is not bound', async () => {
@@ -400,5 +465,6 @@ describe('assertInboxManagedFieldsNotEdited', () => {
 
     await expect(run({ model: 'x' })).resolves.toBeUndefined();
     expect(capture).not.toHaveBeenCalled();
+    expect(isPlatformAgentTakeoverActiveMock).not.toHaveBeenCalled();
   });
 });

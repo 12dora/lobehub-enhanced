@@ -143,7 +143,7 @@ describe('agent.getAgentConfigById encoded platform ids', () => {
       description: 'A published platform agent',
       id: ENCODED_ID,
       model: 'qwen-plus',
-      platform: { distribution: 'mandatory', managed: true, source: 'platform' },
+      platform: { distribution: 'mandatory', managed: true, modelLocked: true, source: 'platform' },
       provider: 'qwen',
       systemRole: 'You are a managed assistant.',
       tags: ['platform'],

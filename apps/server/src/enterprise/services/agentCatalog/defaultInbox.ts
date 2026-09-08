@@ -1,5 +1,6 @@
 import { INBOX_SESSION_ID } from '@lobechat/const';
 import { type AgentItem, PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY } from '@lobechat/types';
+import { isNonEmptyString } from '@lobechat/utils';
 
 import type { EnterpriseFeatureFlags } from '@/const/platform/featureFlags';
 import type { PlatformManagedResourcePolicyModel } from '@/database/models/platform';
@@ -64,10 +65,15 @@ export class PlatformDefaultInboxService {
   }
 
   /**
-   * Overlay only the fields owned by the immutable platform version. Internal id/slug and the
+   * Overlay the fields owned by the immutable platform version. Internal id/slug and the
    * existing non-managed chat/TTS/agency fields remain intact. User plugin toggles stay unless
-   * catalog takeover is active (then plugins are blanked). A version thinking-effort pin is a
-   * default, not a lock: it fills chatConfig only when the user has not set that key.
+   * catalog takeover is active (then plugins are blanked).
+   *
+   * In light mode (takeover off) model/provider/params are DEFAULTS: a user pair is kept only
+   * when both `base.provider` and `base.model` are non-empty (never mixed with the admin pair);
+   * params merge admin defaults under the user row. Enforced takeover pins the admin pair and
+   * lets admin params win. A version thinking-effort pin is always a default, not a lock: it
+   * fills chatConfig only when the user has not set that key.
    * Resolver/exact-version/dependency errors propagate (never masquerade as "no default"); only a
    * real null capture falls back.
    */
@@ -87,23 +93,28 @@ export class PlatformDefaultInboxService {
 
     const effortPatch = resolveThinkingEffortChatConfigPatch(snapshot.config);
     const takeover = await this.isTakeoverActive();
+    const userOwnsModelPair =
+      !takeover && isNonEmptyString(base.provider) && isNonEmptyString(base.model);
 
     return {
       ...base,
       avatar: snapshot.config.avatar,
       backgroundColor: snapshot.config.backgroundColor ?? undefined,
       description: snapshot.config.description ?? undefined,
-      model: resolved.config.model,
+      model: userOwnsModelPair ? base.model : resolved.config.model,
       openingMessage: snapshot.config.openingMessage ?? undefined,
       openingQuestions: snapshot.config.openingQuestions,
-      params: { ...base.params, ...resolved.config.params },
+      params: takeover
+        ? { ...base.params, ...resolved.config.params }
+        : { ...resolved.config.params, ...base.params },
       platform: {
         distribution: handle.distribution,
         managed: true,
+        modelLocked: takeover,
         source: 'platform',
       },
       plugins: takeover ? [] : base.plugins,
-      provider: resolved.config.provider,
+      provider: userOwnsModelPair ? base.provider : resolved.config.provider,
       slug: INBOX_SESSION_ID,
       systemRole: snapshot.config.systemRole,
       tags: snapshot.config.tags,

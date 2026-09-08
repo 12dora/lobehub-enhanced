@@ -103,6 +103,7 @@ export const buildPlatformAgentRuntimeConfig = (
     params: { ...DEFAULT_AGENT_CONFIG.params, ...mapModelParameters(config) },
     platform: {
       managed: true,
+      modelLocked: true,
       source: 'platform',
     },
     plugins: [],

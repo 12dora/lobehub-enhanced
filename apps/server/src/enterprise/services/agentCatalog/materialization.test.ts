@@ -121,6 +121,7 @@ describe('PlatformAgentMaterializationService', () => {
     expect(runtime.plugins).toEqual([]);
     expect(runtime.platform).toEqual({
       managed: true,
+      modelLocked: true,
       source: 'platform',
     });
     // camelCase managed params are lowered to the runtime snake_case shape.

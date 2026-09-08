@@ -9,6 +9,7 @@ import { trpc } from '@/libs/trpc/lambda/init';
 
 import { parseEnterpriseFeatureFlags } from '../featureFlags';
 import { PlatformDefaultInboxService } from '../services/agentCatalog/defaultInbox';
+import { isPlatformAgentTakeoverActive } from '../services/agentCatalog/enforcement';
 import { throwEnterpriseError } from './enterpriseErrors';
 
 /** Stable enterprise code for client i18n (`enterprise.error.MANAGED_RESOURCE_BY_PLATFORM`). */
@@ -39,20 +40,15 @@ export const assertDefaultInboxNotPlatformManaged = async (params: {
 };
 
 /**
- * Admin-owned overlay fields on the builtin inbox. Users may not persist these while the
- * platform default assistant is bound; per-user preferences (`chatConfig`, `tts`, …) stay writable.
+ * Identity / copy fields the platform default-inbox version owns in every mode.
+ * Users may not persist these while the overlay is bound.
  */
-export const INBOX_PLATFORM_MANAGED_FIELDS = [
+export const INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS = [
   'avatar',
   'backgroundColor',
   'description',
-  'model',
   'openingMessage',
   'openingQuestions',
-  'params',
-  // `plugins` is deliberately NOT here: tool toggles stay per-user while the catalog takeover is
-  // off (the read overlay keeps `base.plugins`); under enforced takeover the overlay blanks them.
-  'provider',
   // Identity: renaming the slug would detach the row from the inbox overlay and every guard.
   'slug',
   'systemRole',
@@ -60,11 +56,32 @@ export const INBOX_PLATFORM_MANAGED_FIELDS = [
   'title',
 ] as const;
 
+/**
+ * Model selection fields. In light mode the platform version only supplies DEFAULTS, so users
+ * may persist these. Under enforced catalog takeover they join the admin-owned set.
+ */
+export const INBOX_PLATFORM_MODEL_MANAGED_FIELDS = ['model', 'params', 'provider'] as const;
+
+/**
+ * Full admin-owned overlay field set while catalog takeover is enforced (identity + model).
+ * Light mode uses {@link INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS} only.
+ * `plugins` is deliberately NOT here: tool toggles stay per-user while takeover is off
+ * (the read overlay keeps `base.plugins`); under enforced takeover the overlay blanks them.
+ * Per-user preferences (`chatConfig`, `tts`, …) stay writable.
+ */
+export const INBOX_PLATFORM_MANAGED_FIELDS = [
+  ...INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS,
+  ...INBOX_PLATFORM_MODEL_MANAGED_FIELDS,
+] as const;
+
 export type InboxPlatformManagedField = (typeof INBOX_PLATFORM_MANAGED_FIELDS)[number];
 
-const patchTouchesInboxPlatformManagedFields = (patch: unknown): boolean => {
+const patchTouchesInboxPlatformManagedFields = (
+  patch: unknown,
+  fields: readonly string[],
+): boolean => {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return false;
-  return INBOX_PLATFORM_MANAGED_FIELDS.some((key) => Object.hasOwn(patch, key));
+  return fields.some((key) => Object.hasOwn(patch, key));
 };
 
 /**
@@ -72,8 +89,12 @@ const patchTouchesInboxPlatformManagedFields = (patch: unknown): boolean => {
  * overlay is bound and the patch touches admin-owned fields. Per-user preferences
  * (`chatConfig`, `tts`, `agencyConfig`, `fewShots`, …) remain writable.
  *
- * Cheap: skip when the feature flag is off or the patch has no admin-owned keys; look up the
- * slug first; call `capture()` only for the inbox row.
+ * Mode-aware: light mode (catalog takeover off) locks only identity/copy fields — model /
+ * provider / params stay writable. Enforced takeover locks the full
+ * {@link INBOX_PLATFORM_MANAGED_FIELDS} set.
+ *
+ * Cheap: skip when the feature flag is off or the patch has no candidate keys; look up the
+ * slug first; call the memoised takeover predicate and `capture()` only for the inbox row.
  */
 export const assertInboxManagedFieldsNotEdited = async (params: {
   agentId: string;
@@ -82,8 +103,9 @@ export const assertInboxManagedFieldsNotEdited = async (params: {
   userId: string;
   workspaceId?: string;
 }): Promise<void> => {
-  if (!parseEnterpriseFeatureFlags(process.env).ENABLE_PLATFORM_MANAGED_AGENTS) return;
-  if (!patchTouchesInboxPlatformManagedFields(params.patch)) return;
+  const flags = parseEnterpriseFeatureFlags(process.env);
+  if (!flags.ENABLE_PLATFORM_MANAGED_AGENTS) return;
+  if (!patchTouchesInboxPlatformManagedFields(params.patch, INBOX_PLATFORM_MANAGED_FIELDS)) return;
   if (typeof params.agentId !== 'string' || params.agentId.length === 0) return;
 
   const inboxIds = await new AgentModel(
@@ -92,6 +114,14 @@ export const assertInboxManagedFieldsNotEdited = async (params: {
     params.workspaceId,
   ).findAgentIdsBySlug([params.agentId], INBOX_SESSION_ID);
   if (!inboxIds.has(params.agentId)) return;
+
+  const takeover = await isPlatformAgentTakeoverActive(params.db, flags);
+  if (
+    !takeover &&
+    !patchTouchesInboxPlatformManagedFields(params.patch, INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS)
+  ) {
+    return;
+  }
 
   await assertDefaultInboxNotPlatformManaged(params);
 };

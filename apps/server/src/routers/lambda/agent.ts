@@ -420,6 +420,7 @@ export const agentRouter = router({
           platform: {
             distribution: effective.distribution,
             managed: true as const,
+            modelLocked: true as const,
             source: 'platform' as const,
           },
         };

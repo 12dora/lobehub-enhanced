@@ -163,7 +163,12 @@ describe('PlatformDefaultInboxService', () => {
     expect(result.platform).toEqual({
       distribution: 'mandatory',
       managed: true,
+      modelLocked: true,
       source: 'platform',
+    });
+    expect(result.params).toMatchObject({
+      ...DEFAULT_AGENT_CONFIG.params,
+      temperature: 0.2,
     });
     expect(resolveForExistingAgent).toHaveBeenCalledWith(captured, 'builtin-inbox-id');
     expect(validateDependencies).toHaveBeenCalledWith(db, dependencySnapshot);
@@ -195,9 +200,11 @@ describe('PlatformDefaultInboxService', () => {
       expect(result.platform).toEqual({
         distribution: 'mandatory',
         managed: true,
+        modelLocked: takeover,
         source: 'platform',
       });
-      expect(result.model).toBe('managed-model');
+      expect(result.model).toBe(takeover ? 'managed-model' : 'legacy-model');
+      expect(result.provider).toBe(takeover ? 'managed-provider' : 'legacy-provider');
       expect(result.systemRole).toBe('Managed prompt v2');
     },
   );
@@ -356,4 +363,71 @@ describe('PlatformDefaultInboxService', () => {
     });
     await expect(dependencyFailure.getEffectiveBuiltinConfig(base())).rejects.toBe(exactFailure);
   });
+
+  it.each([
+    {
+      expectedModel: 'gpt-5.6-sol',
+      expectedProvider: 'chatgpt',
+      model: 'gpt-5.6-sol',
+      name: 'user pair wins when both provider and model are set',
+      provider: 'chatgpt',
+    },
+    {
+      expectedModel: 'gpt-6-astra',
+      expectedProvider: 'openai',
+      model: '',
+      name: 'empty user row uses the admin pair',
+      provider: '',
+    },
+    {
+      expectedModel: 'gpt-6-astra',
+      expectedProvider: 'openai',
+      model: '',
+      name: 'user provider without model uses the admin pair (never mixed)',
+      provider: 'chatgpt',
+    },
+  ])(
+    'light-mode model defaults: $name',
+    async ({ expectedModel, expectedProvider, model, provider }) => {
+      const captured = snapshot('v2');
+      const adminResolved = {
+        ...resolvedConfig(captured),
+        model: 'gpt-6-astra',
+        params: { max_tokens: 4096, temperature: 0.2 },
+        provider: 'openai',
+      };
+      const service = new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOn,
+        isTakeoverActive: async () => false,
+        materializationService: {
+          resolveForExistingAgent: vi.fn(async () => ({
+            agentId: 'builtin-inbox-id',
+            config: adminResolved,
+            dependencySnapshot,
+          })),
+        },
+        resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+        validateDependencies: vi.fn(async () => ({ valid: true as const })),
+      });
+
+      const row = base();
+      row.model = model;
+      row.provider = provider;
+      row.params = { temperature: 0.9 };
+      const result = await service.getEffectiveBuiltinConfig(row);
+
+      expect(result.model).toBe(expectedModel);
+      expect(result.provider).toBe(expectedProvider);
+      expect(result.params).toMatchObject({ max_tokens: 4096, temperature: 0.9 });
+      expect(result.platform).toEqual({
+        distribution: 'mandatory',
+        managed: true,
+        modelLocked: false,
+        source: 'platform',
+      });
+      expect(result.systemRole).toBe('Managed prompt v2');
+      expect(result.title).toBe('Inbox v2');
+      expect(result.plugins).toEqual(['legacy-tool']);
+    },
+  );
 });
