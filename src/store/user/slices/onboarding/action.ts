@@ -146,7 +146,9 @@ export class OnboardingActionImpl {
     const inboxAgentId = agentStore.builtinAgentIdMap[INBOX_SESSION_ID];
     if (!inboxAgentId) return;
     const inboxConfig = agentStore.agentMap[inboxAgentId];
-    if (inboxConfig?.platform?.managed) {
+    // Fully pinned platform inbox (enforced takeover): plugins are not user-editable. Under light
+    // management (`modelLocked: false`) plugin pins stay per-user.
+    if (inboxConfig?.platform?.managed && inboxConfig.platform.modelLocked !== false) {
       return;
     }
 
@@ -163,7 +165,8 @@ export class OnboardingActionImpl {
     const agentStore = getAgentStoreState();
     const inboxAgentId = agentStore.builtinAgentIdMap[INBOX_SESSION_ID];
     const inboxConfig = inboxAgentId ? agentStore.agentMap[inboxAgentId] : undefined;
-    if (inboxConfig?.platform?.managed) {
+    // The platform default is only a default when `modelLocked` is false; a pinned model cannot be changed here.
+    if (inboxConfig?.platform?.managed && inboxConfig.platform.modelLocked !== false) {
       return;
     }
 

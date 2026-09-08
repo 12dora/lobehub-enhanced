@@ -438,4 +438,38 @@ describe('onboarding actions', () => {
     expect(updateDefaultAgent).not.toHaveBeenCalled();
     expect(updateAgentConfigById).not.toHaveBeenCalled();
   });
+
+  it('updates the model of a platform inbox whose model is only a default (modelLocked false)', async () => {
+    const updateAgentConfigById = vi.fn();
+    const updateDefaultAgent = vi.fn();
+    act(() => {
+      useAgentStore.setState({
+        agentMap: {
+          'inbox-agent-id': {
+            platform: {
+              managed: true,
+              modelLocked: false,
+              systemKey: PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
+            },
+          } as any,
+        },
+        builtinAgentIdMap: { [INBOX_SESSION_ID]: 'inbox-agent-id' },
+        updateAgentConfigById,
+      } as any);
+      useUserStore.setState({ updateDefaultAgent } as any);
+    });
+    const { result } = renderHook(() => useUserStore());
+
+    await act(async () => {
+      await result.current.updateDefaultModel('gpt-6-astra', 'chatgpt');
+    });
+
+    expect(updateDefaultAgent).toHaveBeenCalledWith({
+      config: { model: 'gpt-6-astra', provider: 'chatgpt' },
+    });
+    expect(updateAgentConfigById).toHaveBeenCalledWith('inbox-agent-id', {
+      model: 'gpt-6-astra',
+      provider: 'chatgpt',
+    });
+  });
 });
