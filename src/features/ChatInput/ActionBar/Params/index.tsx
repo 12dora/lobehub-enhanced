@@ -11,11 +11,17 @@ import Controls from './Controls';
 
 const Params = memo(() => {
   const agentId = useAgentId();
-  const [isLoading] = useAgentStore((s) => [
+  const [isLoading, isPlatformManaged] = useAgentStore((s) => [
     agentByIdSelectors.isAgentConfigLoadingById(agentId)(s),
+    agentByIdSelectors.isAgentPlatformManagedById(agentId)(s),
   ]);
   const [updating, setUpdating] = useState(false);
   const { t } = useTranslation('setting');
+
+  // Model params are admin-owned on a platform-managed agent: the server overlays them on
+  // every read and rejects user writes, so the whole control is withheld rather than shown
+  // as an editable form that silently reverts.
+  if (isPlatformManaged) return null;
 
   if (isLoading) return <Action disabled icon={Settings2Icon} />;
 

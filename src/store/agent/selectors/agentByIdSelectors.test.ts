@@ -190,6 +190,30 @@ describe('agentByIdSelectors', () => {
     });
   });
 
+  describe('isAgentPlatformManagedById', () => {
+    it('returns true only when the config carries the platform managed marker', () => {
+      const state = createState({
+        agentMap: {
+          'managed-agent': {
+            model: 'gpt-4o',
+            platform: { distribution: 'mandatory', managed: true, source: 'platform' },
+          },
+          'own-agent': { model: 'gpt-4o' },
+        },
+      });
+
+      expect(agentByIdSelectors.isAgentPlatformManagedById('managed-agent')(state)).toBe(true);
+      expect(agentByIdSelectors.isAgentPlatformManagedById('own-agent')(state)).toBe(false);
+    });
+
+    it('returns false for an unknown agent or an empty id', () => {
+      const state = createState({ agentMap: {} });
+
+      expect(agentByIdSelectors.isAgentPlatformManagedById('missing')(state)).toBe(false);
+      expect(agentByIdSelectors.isAgentPlatformManagedById('')(state)).toBe(false);
+    });
+  });
+
   describe('getAgentTTSVoiceById', () => {
     it('returns the configured openai voice', () => {
       const state = createState({

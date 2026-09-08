@@ -37,6 +37,17 @@ const getAgentModelProviderById =
  * the Skills panel) wants "what's actually configured/active", matching the
  * pre-tri-state semantics where array-membership meant pinned.
  */
+/**
+ * The agent is centrally managed by the platform: the server overlays admin-owned fields
+ * (model / provider / systemRole / …) on every read and rejects user edits of them with
+ * `MANAGED_RESOURCE_BY_PLATFORM`. Clients use this to render those fields read-only
+ * instead of offering an edit that silently reverts.
+ */
+const isAgentPlatformManagedById =
+  (agentId: string) =>
+  (s: AgentStoreState): boolean =>
+    s.agentMap[agentId]?.platform?.managed === true;
+
 const getAgentPluginsById =
   (agentId: string) =>
   (s: AgentStoreState): string[] =>
@@ -217,5 +228,6 @@ export const agentByIdSelectors = {
   getAgentWorkingDirectoryById,
   isAgentConfigLoadingById,
   isAgentHeterogeneousById,
+  isAgentPlatformManagedById,
   isWorkspaceAgentById,
 };

@@ -533,6 +533,7 @@
   "minimap.previousMessage": "Previous message",
   "minimap.senderAssistant": "Agent",
   "minimap.senderUser": "You",
+  "modelSwitch.managedByAdmin": "Model is set by the administrator",
   "moderation.downgraded": "Content moderation switched this reply to {{model}}",
   "newAgent": "Create Agent",
   "newClaudeCodeAgent": "Add Claude Code",

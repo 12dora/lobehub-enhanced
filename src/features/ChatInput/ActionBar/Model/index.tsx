@@ -2,6 +2,7 @@ import { ModelIcon } from '@lobehub/icons';
 import { Center, Tooltip } from '@lobehub/ui';
 import { createStaticStyles, cx } from 'antd-style';
 import { memo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useBusinessModelModeConfig } from '@/business/client/hooks/useBusinessAgentMode';
 import ModelSwitchPanel from '@/features/ModelSwitchPanel';
@@ -30,6 +31,14 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
       }
     }
   `,
+  /**
+   * Platform-managed: the pill keeps its size and icon but drops every affordance that
+   * suggests it can be changed — no pointer, no hover fill, no press feedback.
+   */
+  modelManaged: css`
+    cursor: default;
+    border-radius: 24px;
+  `,
   model: css`
     cursor: pointer;
     border-radius: 24px;
@@ -47,15 +56,17 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 }));
 
 const ModelSwitch = memo(() => {
+  const { t } = useTranslation('chat');
   const { actionSize, dropdownPlacement } = useActionBarContext();
   const blockSize = actionSize?.blockSize ?? 32;
   const iconSize = actionSize?.size ?? 20;
   const { allowed: canCreateContent, reason } = usePermission('create_content');
 
   const agentId = useAgentId();
-  const [model, provider, updateAgentConfigById] = useAgentStore((s) => [
+  const [model, provider, isPlatformManaged, updateAgentConfigById] = useAgentStore((s) => [
     agentByIdSelectors.getAgentModelById(agentId)(s),
     agentByIdSelectors.getAgentModelProviderById(agentId)(s),
+    agentByIdSelectors.isAgentPlatformManagedById(agentId)(s),
     s.updateAgentConfigById,
   ]);
   const applyBusinessModelModeConfig = useBusinessModelModeConfig();
@@ -71,9 +82,13 @@ const ModelSwitch = memo(() => {
 
   const trigger = (
     <Center
-      className={cx(styles.model, !canCreateContent && styles.modelDisabled)}
+      aria-disabled={canCreateContent && isPlatformManaged ? true : undefined}
       height={blockSize}
       width={blockSize}
+      className={cx(
+        canCreateContent && isPlatformManaged ? styles.modelManaged : styles.model,
+        !canCreateContent && styles.modelDisabled,
+      )}
     >
       <div className={styles.icon}>
         <ModelIcon model={model} size={iconSize} />
@@ -84,6 +99,15 @@ const ModelSwitch = memo(() => {
   if (!canCreateContent)
     return (
       <Tooltip title={reason}>
+        <div>{trigger}</div>
+      </Tooltip>
+    );
+
+  // The admin owns the model of a platform-managed agent: the server overlays it on every
+  // read and rejects user edits, so offering the switch panel would only revert visually.
+  if (isPlatformManaged)
+    return (
+      <Tooltip title={t('modelSwitch.managedByAdmin')}>
         <div>{trigger}</div>
       </Tooltip>
     );

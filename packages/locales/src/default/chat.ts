@@ -370,6 +370,7 @@ export default {
   'memberSelection.selectedAgents': 'Selected ({{count}})',
   'memberSelection.setInitialMembers': 'Select Group members',
   'members': 'Members',
+  'modelSwitch.managedByAdmin': 'Model is set by the administrator',
   'moderation.downgraded': 'Content moderation switched this reply to {{model}}',
   'mention.category.agents': 'Agents',
   'mention.category.files': 'Files',

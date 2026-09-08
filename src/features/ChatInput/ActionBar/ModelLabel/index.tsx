@@ -2,6 +2,7 @@ import { Center, Flexbox, Tooltip } from '@lobehub/ui';
 import { createStaticStyles, cx } from 'antd-style';
 import { ChevronDownIcon } from 'lucide-react';
 import { memo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useBusinessModelModeConfig } from '@/business/client/hooks/useBusinessAgentMode';
 import ModelSwitchPanel from '@/features/ModelSwitchPanel';
@@ -43,16 +44,26 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
       background: transparent;
     }
   `,
+  /**
+   * Platform-managed: the label keeps its size and copy but drops every affordance that
+   * suggests it can be changed — no pointer, no hover fill, no chevron.
+   */
+  triggerManaged: css`
+    cursor: default;
+    border-radius: 6px;
+  `,
 }));
 
 const ModelLabel = memo(() => {
+  const { t } = useTranslation('chat');
   const { dropdownPlacement } = useActionBarContext();
   const { allowed: canCreateContent, reason } = usePermission('create_content');
 
   const agentId = useAgentId();
-  const [model, provider, updateAgentConfigById] = useAgentStore((s) => [
+  const [model, provider, isPlatformManaged, updateAgentConfigById] = useAgentStore((s) => [
     agentByIdSelectors.getAgentModelById(agentId)(s),
     agentByIdSelectors.getAgentModelProviderById(agentId)(s),
+    agentByIdSelectors.isAgentPlatformManagedById(agentId)(s),
     s.updateAgentConfigById,
   ]);
   const applyBusinessModelModeConfig = useBusinessModelModeConfig();
@@ -69,16 +80,23 @@ const ModelLabel = memo(() => {
     [agentId, applyBusinessModelModeConfig, canCreateContent, updateAgentConfigById],
   );
 
+  const isManaged = canCreateContent && isPlatformManaged;
+
   const trigger = (
     <Center
       horizontal
-      className={cx(styles.trigger, !canCreateContent && styles.triggerDisabled)}
+      aria-disabled={isManaged ? true : undefined}
       height={28}
       paddingInline={6}
+      className={cx(
+        isManaged ? styles.triggerManaged : styles.trigger,
+        !canCreateContent && styles.triggerDisabled,
+      )}
     >
       <Flexbox horizontal align={'center'} gap={2}>
         <span className={styles.name}>{displayName}</span>
-        <ChevronDownIcon className={styles.chevron} size={12} />
+        {/* The chevron promises a menu; a managed model has none to open. */}
+        {!isManaged && <ChevronDownIcon className={styles.chevron} size={12} />}
       </Flexbox>
     </Center>
   );
@@ -86,6 +104,15 @@ const ModelLabel = memo(() => {
   if (!canCreateContent)
     return (
       <Tooltip title={reason}>
+        <div>{trigger}</div>
+      </Tooltip>
+    );
+
+  // The admin owns the model of a platform-managed agent: the server overlays it on every
+  // read and rejects user edits, so offering the switch panel would only revert visually.
+  if (isManaged)
+    return (
+      <Tooltip title={t('modelSwitch.managedByAdmin')}>
         <div>{trigger}</div>
       </Tooltip>
     );
