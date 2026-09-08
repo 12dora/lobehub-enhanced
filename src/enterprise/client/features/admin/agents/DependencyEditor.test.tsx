@@ -411,7 +411,68 @@ describe('DependencyEditor exact authoring', () => {
     );
   });
 
-  it('reports NOT ready and flags a stale model when the checksum no longer matches', async () => {
+  /** A provider republish that leaves the chosen model published: the pin moved, the choice did not. */
+  const pinBehind = () => {
+    hooks.providers = {
+      ...idle,
+      data: page([{ displayName: 'OpenAI', id: 'p1', providerKey: 'openai' }]),
+    };
+    hooks.source = {
+      ...idle,
+      data: {
+        chatModels: [{ displayName: 'GPT-4.1', modelKey: 'gpt-4.1', type: 'chat' }],
+        providerChecksum: 'b'.repeat(64), // published checksum + revision moved on
+        providerKey: 'openai',
+        providerRevision: 5,
+      },
+    };
+    return {
+      modelKey: 'gpt-4.1',
+      providerChecksum: 'a'.repeat(64),
+      providerKey: 'openai',
+      providerRevision: 4,
+    };
+  };
+
+  it('hands Save a fresh pin instead of editing the draft or calling the model outdated', async () => {
+    const model = pinBehind();
+    const onChange = vi.fn();
+    const onValidity = vi.fn();
+    renderEditor({ connectors: [], model, skills: [] }, onChange, onValidity);
+
+    // The draft is NOT touched — an unrelated provider republish must never read as an edit — so
+    // the fresh pin travels with the validity, for the submit that actually writes a version.
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          issues: [],
+          modelRepin: {
+            modelKey: 'gpt-4.1',
+            providerChecksum: 'b'.repeat(64),
+            providerKey: 'openai',
+            providerRevision: 5,
+          },
+          ready: true,
+        }),
+      ),
+    );
+    expect(onChange).not.toHaveBeenCalled();
+    // Nothing for the admin to act on.
+    expect(screen.queryByText('agentCatalog.dependency.stale')).toBeNull();
+  });
+
+  it('asks for no re-pin while the draft already carries the published one', async () => {
+    const model = currentModel();
+    const onValidity = vi.fn();
+    renderEditor({ connectors: [], model, skills: [] }, vi.fn(), onValidity);
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith(
+        expect.objectContaining({ modelRepin: null, ready: true }),
+      ),
+    );
+  });
+
+  it('reports NOT ready and flags a stale model when the provider no longer publishes it', async () => {
     const model = {
       modelKey: 'gpt-4.1',
       providerChecksum: 'a'.repeat(64),
@@ -425,14 +486,16 @@ describe('DependencyEditor exact authoring', () => {
     hooks.source = {
       ...idle,
       data: {
-        chatModels: [{ displayName: 'GPT-4.1', modelKey: 'gpt-4.1', type: 'chat' }],
-        providerChecksum: 'b'.repeat(64), // published checksum moved
+        // The chosen model is gone from the published catalog — only the admin can answer this.
+        chatModels: [{ displayName: 'GPT-5', modelKey: 'gpt-5', type: 'chat' }],
+        providerChecksum: 'a'.repeat(64),
         providerKey: 'openai',
-        providerRevision: 5,
+        providerRevision: 4,
       },
     };
+    const onChange = vi.fn();
     const onValidity = vi.fn();
-    renderEditor({ connectors: [], model, skills: [] }, vi.fn(), onValidity);
+    renderEditor({ connectors: [], model, skills: [] }, onChange, onValidity);
     await waitFor(() =>
       expect(onValidity).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -441,6 +504,10 @@ describe('DependencyEditor exact authoring', () => {
         }),
       ),
     );
+    expect(screen.getByText('agentCatalog.dependency.stale')).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
+    // A model that is gone is never re-pinned — that would publish a promise nothing keeps.
+    for (const call of onValidity.mock.calls) expect(call[0].modelRepin).toBeNull();
   });
 
   it('reports ready when a connector ref matches its fetched detail exactly', async () => {
@@ -1485,6 +1552,26 @@ describe('DependencyEditor thinking effort', () => {
           'agentCatalog.editor.thinkingEffortDescDefaultInbox',
       ),
     ).toBe(true);
+    inbox.unmount();
+  });
+
+  it('calls the model a DEFAULT only for the default assistant', () => {
+    publishEffortModels(['reasoningEffort']);
+    const tooltips = () =>
+      [...document.querySelectorAll('[data-tooltip]')].map((node) =>
+        node.getAttribute('data-tooltip'),
+      );
+
+    // Every other platform assistant pins the model, so it stays plain "Model".
+    const pinned = renderWithEffort(null);
+    expect(screen.getByLabelText('agentCatalog.dependency.model.model')).toBeTruthy();
+    expect(tooltips()).toContain('agentCatalog.dependency.model.required');
+    pinned.unmount();
+
+    const inbox = renderWithEffort(null, vi.fn(), true);
+    expect(screen.getByLabelText('agentCatalog.dependency.model.defaultModel')).toBeTruthy();
+    expect(screen.queryByLabelText('agentCatalog.dependency.model.model')).toBeNull();
+    expect(tooltips()).toContain('agentCatalog.dependency.model.defaultModelDesc');
     inbox.unmount();
   });
 

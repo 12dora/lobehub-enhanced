@@ -194,7 +194,13 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                   extra={
                     <HelpTooltip
                       field={t('agentCatalog.editor.section.params')}
-                      title={t('agentCatalog.editor.section.paramsDesc')}
+                      title={t(
+                        // The heading stays "Parameters" everywhere; only the default assistant
+                        // publishes these as defaults a member may still change in chat.
+                        isDefaultInbox
+                          ? 'agentCatalog.editor.section.paramsDescDefaultInbox'
+                          : 'agentCatalog.editor.section.paramsDesc',
+                      )}
                     />
                   }
                 >

@@ -480,6 +480,23 @@ describe('AgentEditorForm layout', () => {
     }
   });
 
+  it('says the model parameters are defaults only for the default assistant', () => {
+    // The heading stays "Parameters" for every assistant; only the help text carries the nuance.
+    const { unmount } = render(<AgentEditorForm />);
+    expect(helpFor('agentCatalog.editor.section.paramsDesc')).toBeTruthy();
+    expect(helpFor('agentCatalog.editor.section.paramsDescDefaultInbox')).toBeNull();
+    unmount();
+
+    formMock.value = { ...baseForm(), isCreate: false, systemKey: 'default-inbox' };
+    render(<AgentEditorForm />);
+    expect(helpFor('agentCatalog.editor.section.paramsDescDefaultInbox')).toBeTruthy();
+    expect(helpFor('agentCatalog.editor.section.paramsDesc')).toBeNull();
+    // The heading itself is untouched — nothing is renamed to "Default parameters".
+    expect(
+      document.querySelector('[data-group="agentCatalog.editor.section.params"]'),
+    ).toBeTruthy();
+  });
+
   it('offers the identifier only while creating, and states its rules in the label help', () => {
     render(<AgentEditorForm />);
     expect(screen.getByLabelText('agentCatalog.editor.key')).not.toBeDisabled();

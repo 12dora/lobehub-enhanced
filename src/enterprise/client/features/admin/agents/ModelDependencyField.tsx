@@ -26,11 +26,19 @@ const styles = createStaticStyles(({ css }) => ({
     gap: 8px;
     min-width: 0;
   `,
-  /** Provider and model are one choice made in two steps — never two stacked, unrelated rows. */
+  /**
+   * Provider, model and thinking effort are ONE choice made in three steps, so they read as one
+   * row. The 720px modal holds three ~215px columns comfortably; narrower viewports drop to two
+   * and then to one rather than squeezing a Select below the width of its own value.
+   */
   grid: css`
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
+
+    @media (width <= 900px) {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 
     @media (width <= 640px) {
       grid-template-columns: 1fr;
@@ -63,7 +71,10 @@ export interface ModelDependencyFieldProps {
   editable: boolean;
   /** Set when the surrounding form section already carries the "Model" heading. */
   hideTitle?: boolean;
-  /** Only the default assistant leaves the effort adjustable by members, so only it says so. */
+  /**
+   * Only the default assistant publishes the model and the effort as DEFAULTS members may change
+   * in chat, so only it says so. Every other platform assistant pins them.
+   */
   isDefaultInbox?: boolean;
   model: PlatformAgentModelDependencyRef | null;
   onChooseModel: (modelKey: string | undefined) => void;
@@ -149,6 +160,7 @@ const ProviderPicker = ({
 /** The model half: nothing can be picked until a provider resolves its published model source. */
 const ModelPicker = ({
   editable,
+  isDefaultInbox,
   model,
   onChooseModel,
   providerId,
@@ -156,18 +168,35 @@ const ModelPicker = ({
   sourceSettled,
 }: Pick<
   ModelDependencyFieldProps,
-  'editable' | 'model' | 'onChooseModel' | 'providerId' | 'source' | 'sourceSettled'
+  | 'editable'
+  | 'isDefaultInbox'
+  | 'model'
+  | 'onChooseModel'
+  | 'providerId'
+  | 'source'
+  | 'sourceSettled'
 >) => {
   const { t } = useTranslation('admin');
+  // For the default assistant the published model is a DEFAULT members may replace in chat; every
+  // other platform assistant pins it. The label must not promise a lock that does not exist.
+  const label = t(
+    isDefaultInbox
+      ? 'agentCatalog.dependency.model.defaultModel'
+      : 'agentCatalog.dependency.model.model',
+  );
 
   return (
     <div className={styles.field}>
       <FieldLabel
         required
-        help={t('agentCatalog.dependency.model.required')}
         htmlFor={MODEL_SELECT_ID}
+        help={t(
+          isDefaultInbox
+            ? 'agentCatalog.dependency.model.defaultModelDesc'
+            : 'agentCatalog.dependency.model.required',
+        )}
       >
-        {t('agentCatalog.dependency.model.model')}
+        {label}
       </FieldLabel>
       {providerId ? (
         <DetailFetchBody
@@ -195,7 +224,7 @@ const ModelPicker = ({
             <Select
               required
               showSearch
-              aria-label={t('agentCatalog.dependency.model.model')}
+              aria-label={label}
               disabled={!editable || !sourceSettled}
               id={MODEL_SELECT_ID}
               placeholder={t('agentCatalog.dependency.model.modelPlaceholder')}
@@ -215,7 +244,7 @@ const ModelPicker = ({
         <Select
           disabled
           required
-          aria-label={t('agentCatalog.dependency.model.model')}
+          aria-label={label}
           id={MODEL_SELECT_ID}
           placeholder={t('agentCatalog.dependency.model.modelPlaceholder')}
         />
@@ -363,6 +392,7 @@ export const ModelDependencyField = ({
 
             <ModelPicker
               editable={editable}
+              isDefaultInbox={isDefaultInbox}
               model={model}
               providerId={providerId}
               source={source}

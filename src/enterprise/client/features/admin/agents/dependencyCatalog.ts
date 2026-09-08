@@ -144,6 +144,28 @@ export const withModel = (
   model: PlatformAgentModelDependencyRef | null,
 ): AdminAgentDraftDependencies => ({ ...dependencies, model });
 
+/**
+ * Apply a re-pin to the snapshot about to be written. The re-pin is only ever the SAME choice
+ * carried onto the currently published provider revision, so it is applied only when it still
+ * describes the draft's own provider and model — anything else is a race (the admin picked
+ * something new after the readiness read) and the draft wins.
+ */
+export const withRepinnedModel = (
+  dependencies: AdminAgentDraftDependencies,
+  repin: PlatformAgentModelDependencyRef | null | undefined,
+): AdminAgentDraftDependencies => {
+  const model = dependencies.model;
+  if (
+    !repin ||
+    !model ||
+    repin.providerKey !== model.providerKey ||
+    repin.modelKey !== model.modelKey
+  ) {
+    return dependencies;
+  }
+  return withModel(dependencies, repin);
+};
+
 /** Add (or replace, keyed by skillKey) a skill dependency ref. */
 export const withSkillAdded = (
   dependencies: AdminAgentDraftDependencies,
@@ -248,20 +270,34 @@ export const withConnectorRemoved = (
 // ---- validation of existing refs against the CURRENTLY fetched published catalog ----
 
 /**
- * A model ref is "current" only when it matches the freshly-resolved published source EXACTLY:
- * same provider key + published revision + checksum, and the model is still an offered chat model.
- * Non-null alone is NOT sufficient (a stale checksum/revision would fail server validation).
+ * Whether the CHOICE still exists: the ref points at this provider and the provider still publishes
+ * that chat model. This is the only question an admin can act on — a model that is gone has to be
+ * replaced by hand — so it is what gates Save and what the "Outdated" tag reports. It deliberately
+ * ignores the pinned revision/checksum, which move on their own every time the provider is
+ * republished and say nothing about the admin's selection.
  */
-export const isModelCurrent = (
+export const isModelAvailable = (
   model: PlatformAgentModelDependencyRef | null,
   source: ResolvedProviderModelSource | null | undefined,
 ): boolean =>
   !!model &&
   !!source &&
   model.providerKey === source.providerKey &&
-  model.providerRevision === source.providerRevision &&
-  model.providerChecksum === source.providerChecksum &&
   source.chatModels.some((option) => option.modelKey === model.modelKey);
+
+/**
+ * Whether the PIN is the one currently published. The server validates the snapshot's
+ * revision/checksum EXACTLY, so a behind pin could not be written — but it is not an admin
+ * problem: a submit re-pins the snapshot it writes (`withRepinnedModel`), leaving the draft alone.
+ */
+export const isModelPinCurrent = (
+  model: PlatformAgentModelDependencyRef | null,
+  source: ResolvedProviderModelSource | null | undefined,
+): boolean =>
+  !!model &&
+  !!source &&
+  model.providerRevision === source.providerRevision &&
+  model.providerChecksum === source.providerChecksum;
 
 /** Order-independent canonical form of a tool-key set (dedup + sort). */
 const canonicalToolSet = (toolKeys: readonly string[]): string =>

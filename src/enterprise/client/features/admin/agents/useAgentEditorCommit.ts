@@ -105,7 +105,7 @@ export const useAgentEditorCommit = ({
   /** Fingerprint of the value at the last committed save — what "already saved" means now. */
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
 
-  const { agentKey, baselineFingerprint, keyValid, value, valueFingerprint } = draft;
+  const { agentKey, baselineFingerprint, depValidity, keyValid, value, valueFingerprint } = draft;
   const { committedRef, setConflict, setError } = outcome;
 
   // A read-only config can never be dirty, so it can never schedule a version write.
@@ -155,6 +155,9 @@ export const useAgentEditorCommit = ({
       configEditable,
       hasIdentity: Boolean(identity),
       keyValid,
+      // A pin the catalog moved past is carried onto the snapshot being written, not onto the
+      // draft: the admin never made that change, so it must never look like one.
+      modelRepin: depValidity.modelRepin,
       value,
     });
     if (!commitPlan.valid) {
@@ -221,6 +224,7 @@ export const useAgentEditorCommit = ({
     committedRef,
     configDirty,
     configEditable,
+    depValidity.modelRepin,
     dirtyRef,
     identity,
     keyValid,

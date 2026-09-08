@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 
-import { isModelCurrent, staleConnectorKeys, staleSkillKeys } from './dependencyCatalog';
+import {
+  buildModelDependency,
+  isModelAvailable,
+  isModelPinCurrent,
+  staleConnectorKeys,
+  staleSkillKeys,
+} from './dependencyCatalog';
 import type { DependencyBlocker, DependencyValidity } from './dependencyEditorTypes';
 import type { AdminAgentDraftDependencies } from './types';
 import type {
@@ -53,8 +59,13 @@ export const useDependencyReadiness = ({
 }: UseDependencyReadinessParams) => {
   const model = dependencies.model;
 
-  // Display staleness only once the relevant source has a settled success (no spurious "Outdated").
-  const displayModelStale = Boolean(model) && sourceSettled && !isModelCurrent(model, source.data);
+  // Display staleness only once the relevant source has a settled success (no spurious "Outdated"),
+  // and only for what the admin must actually fix: a provider that is gone or a model the provider
+  // no longer publishes. A pin left behind by an unrelated provider republish is re-pinned in
+  // place (see DependencyEditor) — warning about it would accuse the admin of a change they never
+  // made and would never have to make.
+  const displayModelStale =
+    Boolean(model) && sourceSettled && !isModelAvailable(model, source.data);
   const staleSkills = useMemo(
     () => (skillsSettled ? staleSkillKeys(dependencies.skills, skills.data) : []),
     [dependencies.skills, skills.data, skillsSettled],
@@ -72,8 +83,29 @@ export const useDependencyReadiness = ({
   // the operator can author from any of them. So an errored/revalidating provider list, model
   // source, skill catalog OR connector list blocks save even when the skill/connector ref arrays
   // are EMPTY. When refs are present, the referenced batch must also be settled and match exactly.
+  /**
+   * The same choice carried onto the currently published provider revision, or `null` when the pin
+   * is already current. The server validates the snapshot field by field, so a version pinned to a
+   * superseded revision could not be written — but that is not the admin's doing and must not read
+   * as an edit, so the DRAFT is left alone and the fresh pin is applied to the snapshot a submit
+   * writes. Memoised on the pin itself so the validity effect below does not re-fire every render.
+   */
+  const settledSource = sourceSettled ? source.data : undefined;
+  const modelRepin = useMemo(
+    () =>
+      model &&
+      settledSource &&
+      isModelAvailable(model, settledSource) &&
+      !isModelPinCurrent(model, settledSource)
+        ? buildModelDependency(settledSource, model.modelKey)
+        : null,
+    [model, settledSource],
+  );
+
+  // Save asks only that the CHOICE be live: a pin left behind by an unrelated provider republish
+  // is carried forward by `modelRepin` at submit time, so it must not hold Save shut.
   const modelReady =
-    Boolean(model) && providersUsable && sourceSettled && isModelCurrent(model, source.data);
+    Boolean(model) && providersUsable && sourceSettled && isModelAvailable(model, source.data);
   const skillsReady =
     skillsSettled && (dependencies.skills.length === 0 || staleSkills.length === 0);
   // The head's detail must be a settled, RESOLVED success (not undefined/loading, not
@@ -173,13 +205,16 @@ export const useDependencyReadiness = ({
     onValidityChange?.({
       blockers: blockersRef.current,
       issues: issuesKey ? issuesKey.split('|') : [],
+      modelRepin,
       ready,
     });
-  }, [blockersKey, issuesKey, onValidityChange, ready]);
+  }, [blockersKey, issuesKey, modelRepin, onValidityChange, ready]);
 
   return {
     connectorDetailUsableForHead,
     displayModelStale,
+    /** The fresh pin a submit must carry, or `null` — see the memo above. */
+    modelRepin,
     staleConnectors,
     staleSkills,
   };

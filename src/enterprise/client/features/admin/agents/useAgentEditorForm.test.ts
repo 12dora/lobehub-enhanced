@@ -468,6 +468,66 @@ describe('useAgentEditorForm avatar upload', () => {
 });
 
 describe('useAgentEditorForm edit', () => {
+  /** The same model, carried onto a provider revision published after this version was saved. */
+  const REPINNED = { ...model, providerChecksum: 'd'.repeat(64), providerRevision: 9 };
+  const READY_REPIN = { ...READY, modelRepin: REPINNED };
+
+  it('never counts a catalog re-pin as an edit of its own', () => {
+    const dirtyRef = { current: false };
+    const { result } = renderHook(() => useAgentEditorForm({ agent, dirtyRef }));
+
+    // Opening a drifted assistant and closing it must not challenge the admin about unsaved
+    // input, and must not offer to publish a version they never authored.
+    act(() => result.current.setDepValidity(READY_REPIN));
+    expect(result.current.dirty).toBe(false);
+    expect(dirtyRef.current).toBe(false);
+    expect(result.current.canSubmit).toBe(false);
+    expect(result.current.value.dependencies.model).toEqual(model);
+    expect(result.current.depValidity.issues).toEqual([]);
+  });
+
+  it('writes the CURRENT pin with a save the admin did author', async () => {
+    const { result } = renderHook(() => useAgentEditorForm({ agent }));
+
+    act(() => result.current.setDepValidity(READY_REPIN));
+    act(() => result.current.setDisplayName('Research Assistant v2'));
+
+    await act(async () => {
+      await result.current.submit();
+    });
+
+    // The server validates the pin against the CURRENT published revision, so the snapshot this
+    // save writes carries the fresh one — even though the admin only renamed the assistant.
+    expect(mocks.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dependencySnapshot: { connectors: [], model: REPINNED, skills: [] },
+      }),
+    );
+  });
+
+  it('keeps the admin’s own model choice when it lands after the re-pin was computed', async () => {
+    const { result } = renderHook(() => useAgentEditorForm({ agent }));
+    const chosen = {
+      modelKey: 'claude-4',
+      providerChecksum: 'e'.repeat(64),
+      providerKey: 'anthropic',
+      providerRevision: 2,
+    };
+
+    act(() => result.current.setDepValidity(READY_REPIN));
+    act(() => result.current.setDependencies({ connectors: [], model: chosen, skills: [] }));
+
+    await act(async () => {
+      await result.current.submit();
+    });
+
+    expect(mocks.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dependencySnapshot: { connectors: [], model: chosen, skills: [] },
+      }),
+    );
+  });
+
   it('saves against the exact CAS carried by the loaded aggregate', async () => {
     const onSaved = vi.fn();
     const onClose = vi.fn();

@@ -1,4 +1,8 @@
-import type { PlatformAgentDependencySnapshot, PlatformAgentVersionConfig } from '@lobechat/types';
+import type {
+  PlatformAgentDependencySnapshot,
+  PlatformAgentModelDependencyRef,
+  PlatformAgentVersionConfig,
+} from '@lobechat/types';
 import { toast } from '@lobehub/ui/base-ui';
 import type { TFunction } from 'i18next';
 
@@ -9,7 +13,7 @@ import type { AgentEditorCas, ReconcileAgentStatus } from './agentEditorSubmit';
 import { applyAssignmentPlan, classifySubmitFailure, writeAgentVersion } from './agentEditorSubmit';
 import { buildAgentConfig } from './agentEditorValue';
 import type { Assignment, AssignmentPlan } from './assignmentDraft';
-import { toDependencySnapshot } from './dependencyCatalog';
+import { toDependencySnapshot, withRepinnedModel } from './dependencyCatalog';
 import { getAdminAgentErrorMessage } from './errorPresentation';
 import type { AdminAgentEditorValue, AdminPlatformAgentSaveOutput } from './types';
 
@@ -48,16 +52,26 @@ export const planAgentCommit = ({
   configEditable,
   hasIdentity,
   keyValid,
+  modelRepin,
   value,
 }: {
   configDirty: boolean;
   configEditable: boolean;
   hasIdentity: boolean;
   keyValid: boolean;
+  /**
+   * The chosen model carried onto the currently published provider revision, when an unrelated
+   * provider republish left the draft's pin behind. It is applied HERE, to the snapshot being
+   * written, and never to the draft — so an untouched assistant stays untouched, and the version
+   * this submit publishes still satisfies the server's exact-pin validation.
+   */
+  modelRepin?: PlatformAgentModelDependencyRef | null;
   value: AdminAgentEditorValue;
 }): AgentCommitPlan => {
   const config = buildAgentConfig(value);
-  const dependencySnapshot = toDependencySnapshot(value.dependencies);
+  const dependencySnapshot = toDependencySnapshot(
+    withRepinnedModel(value.dependencies, modelRepin),
+  );
   const willWriteConfig = configEditable && (configDirty || !hasIdentity);
   const valid =
     !willWriteConfig ||

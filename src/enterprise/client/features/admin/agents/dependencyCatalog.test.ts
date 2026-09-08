@@ -6,7 +6,8 @@ import {
   buildModelDependency,
   buildSkillDependency,
   isConnectorCurrent,
-  isModelCurrent,
+  isModelAvailable,
+  isModelPinCurrent,
   type ProviderPublishedDetail,
   type ProviderRevisionRef,
   type PublishedConnectorDetail,
@@ -17,6 +18,7 @@ import {
   withConnectorAdded,
   withConnectorRemoved,
   withModel,
+  withRepinnedModel,
   withSkillAdded,
   withSkillRemoved,
 } from './dependencyCatalog';
@@ -166,6 +168,21 @@ describe('dependencyCatalog exact resolution', () => {
     expect(deps.skills).toEqual([]);
   });
 
+  it('applies a re-pin only to the very choice it was computed for', () => {
+    const source = resolveProviderModelSource(detail, revisions)!;
+    const model = buildModelDependency(source, 'gpt-4.1');
+    const behind = { ...model, providerChecksum: 'z'.repeat(64), providerRevision: 1 };
+    const deps = withModel(empty(), behind);
+
+    expect(withRepinnedModel(deps, model).model).toEqual(model);
+    // No re-pin offered, nothing to apply.
+    expect(withRepinnedModel(deps, null)).toBe(deps);
+    expect(withRepinnedModel(empty(), model)).toEqual(empty());
+    // The admin picked something else after the re-pin was computed — the draft wins.
+    expect(withRepinnedModel(deps, { ...model, modelKey: 'gpt-4.1-mini' })).toBe(deps);
+    expect(withRepinnedModel(deps, { ...model, providerKey: 'anthropic' })).toBe(deps);
+  });
+
   it('builds the contract snapshot only when the model is resolved', () => {
     expect(toDependencySnapshot(empty())).toBeNull();
     const source = resolveProviderModelSource(detail, revisions)!;
@@ -216,15 +233,26 @@ describe('dependencyCatalog connector authoring', () => {
 });
 
 describe('dependencyCatalog validation against the current published catalog', () => {
-  it('treats a model as current only on an exact provider/revision/checksum/model match', () => {
+  it('separates "the choice is gone" from "the pin moved on"', () => {
     const source = resolveProviderModelSource(detail, revisions)!;
     const model = buildModelDependency(source, 'gpt-4.1');
-    expect(isModelCurrent(model, source)).toBe(true);
-    expect(isModelCurrent(null, source)).toBe(false);
-    expect(isModelCurrent(model, undefined)).toBe(false);
-    expect(isModelCurrent({ ...model, providerChecksum: 'z'.repeat(64) }, source)).toBe(false);
-    expect(isModelCurrent({ ...model, providerRevision: 99 }, source)).toBe(false);
-    expect(isModelCurrent({ ...model, modelKey: 'gone' }, source)).toBe(false);
+    expect(isModelAvailable(model, source)).toBe(true);
+    expect(isModelPinCurrent(model, source)).toBe(true);
+
+    // A provider republish moves the pin but leaves the admin's choice untouched.
+    const behind = { ...model, providerChecksum: 'z'.repeat(64), providerRevision: 1 };
+    expect(isModelAvailable(behind, source)).toBe(true);
+    expect(isModelPinCurrent(behind, source)).toBe(false);
+
+    // Genuinely unavailable: the model is gone, or the ref points at another provider.
+    expect(isModelAvailable({ ...model, modelKey: 'gone' }, source)).toBe(false);
+    expect(isModelAvailable({ ...model, providerKey: 'anthropic' }, source)).toBe(false);
+
+    // Neither question can be answered without both sides.
+    expect(isModelAvailable(null, source)).toBe(false);
+    expect(isModelAvailable(model, undefined)).toBe(false);
+    expect(isModelPinCurrent(model, undefined)).toBe(false);
+    expect(isModelPinCurrent(null, source)).toBe(false);
   });
 
   const skillOption = (over: Record<string, unknown> = {}) => ({

@@ -101,6 +101,9 @@ export default {
   'agentCatalog.dependency.issues.skillStale':
     'A referenced skill is no longer available. Remove or update it before saving.',
   'agentCatalog.dependency.loading': 'Loading…',
+  'agentCatalog.dependency.model.defaultModel': 'Default model',
+  'agentCatalog.dependency.model.defaultModelDesc':
+    'Used until a member picks another model in chat.',
   'agentCatalog.dependency.model.empty': 'No providers are available yet.',
   'agentCatalog.dependency.model.emptyAction': 'Set up a provider',
   'agentCatalog.dependency.model.loadError': 'Could not load providers.',
@@ -186,6 +189,8 @@ export default {
   'agentCatalog.editor.section.more': 'More',
   'agentCatalog.editor.section.params': 'Parameters',
   'agentCatalog.editor.section.paramsDesc': 'Leave a field empty to follow the model default.',
+  'agentCatalog.editor.section.paramsDescDefaultInbox':
+    'Leave a field empty to follow the model default. Members can adjust these in chat.',
   'agentCatalog.editor.section.prompt': 'Role',
   'agentCatalog.editor.systemRole': 'System role',
   'agentCatalog.editor.systemRoleDesc':
