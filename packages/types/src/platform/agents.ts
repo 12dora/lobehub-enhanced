@@ -58,6 +58,13 @@ export interface PlatformAgentUserListMeta {
 export interface PlatformAgentConfigMeta {
   distribution?: PlatformAgentAssignmentMode;
   managed: true;
+  /**
+   * Whether the member may change model / provider / model parameters of this Agent.
+   * `false` = the platform version only supplies DEFAULTS (default inbox while the catalog takeover
+   * is off): the chat model switcher and model-parameter controls stay enabled. Absent or `true`
+   * = fully pinned (materialized platform Agents, enforced takeover).
+   */
+  modelLocked?: boolean;
   source: 'platform';
 }
 
