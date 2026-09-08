@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import chatCopy from '@/locales/default/chat';
@@ -10,15 +10,25 @@ import Controls from './Controls';
 
 const ADVANCED_OPEN_STORAGE_KEY = 'lobehub-chat-input-params-advanced-open';
 
+/**
+ * The identity fields are part of the effective config the panel's form holds: the server rejects
+ * a patch that so much as mentions them on the platform-managed inbox, so every assertion below
+ * checks the exact patch shape rather than "was called".
+ */
 const mocks = vi.hoisted(() => ({
   agentId: 'agent-1',
   config: {
+    avatar: 'https://example.com/avatar.png',
     chatConfig: { enableHistoryCount: true, historyCount: 8 },
     params: { temperature: 0.7 },
+    slug: 'inbox',
+    systemRole: 'admin-owned prompt',
+    title: 'Default assistant',
   } as Record<string, unknown>,
   enableAgentMode: false,
   isPlatformManaged: false,
   modelLocked: undefined as boolean | undefined,
+  updateAgentChatConfig: vi.fn(),
   updateAgentConfig: vi.fn(),
 }));
 
@@ -40,7 +50,10 @@ vi.mock('react-i18next', async () => {
 vi.mock('../../hooks/useAgentId', () => ({ useAgentId: () => mocks.agentId }));
 
 vi.mock('../../hooks/useUpdateAgentConfig', () => ({
-  useUpdateAgentConfig: () => ({ updateAgentConfig: mocks.updateAgentConfig }),
+  useUpdateAgentConfig: () => ({
+    updateAgentChatConfig: mocks.updateAgentChatConfig,
+    updateAgentConfig: mocks.updateAgentConfig,
+  }),
 }));
 
 vi.mock('@/hooks/usePermission', () => ({
@@ -113,12 +126,21 @@ const CHAT_CONFIG_ROW_TITLES = [
 
 const renderControls = () => render(<Controls setUpdating={() => {}} updating={false} />);
 
+/** Clicks the switch of the row carrying `title`. */
+const toggleRowSwitch = (title: string) => {
+  const row = screen.getByText(title).closest('.control-row');
+  if (!row) throw new Error(`no control row for "${title}"`);
+
+  fireEvent.click(within(row as HTMLElement).getByRole('switch'));
+};
+
 describe('Params Controls', () => {
   beforeEach(() => {
     mocks.agentId = 'agent-1';
     mocks.enableAgentMode = false;
     mocks.isPlatformManaged = false;
     mocks.modelLocked = undefined;
+    mocks.updateAgentChatConfig.mockClear();
     mocks.updateAgentConfig.mockClear();
     // The advanced section is collapsed by default and remembers its state locally.
     localStorage.setItem(ADVANCED_OPEN_STORAGE_KEY, 'true');
@@ -217,6 +239,77 @@ describe('Params Controls', () => {
       renderControls();
 
       expect(screen.queryByText(chatCopy['modelSwitch.managedByAdmin'])).toBeNull();
+    });
+  });
+
+  /**
+   * A whole-form submit carried the agent's identity along with the edited field, which the
+   * server rejects on the platform-managed inbox — every handler must send its own field only.
+   */
+  describe('submitted patch', () => {
+    it('sends only the toggled chatConfig key, through the chatConfig updater', async () => {
+      renderControls();
+
+      toggleRowSwitch('settingModel.params.panel.historyLimit');
+
+      await waitFor(
+        () => {
+          expect(mocks.updateAgentChatConfig).toHaveBeenCalledWith({ enableHistoryCount: false });
+        },
+        { timeout: 3000 },
+      );
+      expect(mocks.updateAgentChatConfig).toHaveBeenCalledTimes(1);
+      expect(mocks.updateAgentConfig).not.toHaveBeenCalled();
+    });
+
+    it('sends only the disabled model parameter, with no identity field', async () => {
+      renderControls();
+
+      toggleRowSwitch('settingModel.params.panel.creativity');
+
+      await waitFor(
+        () => {
+          expect(mocks.updateAgentConfig).toHaveBeenCalledWith({ params: { temperature: null } });
+        },
+        { timeout: 3000 },
+      );
+
+      const patch = mocks.updateAgentConfig.mock.calls[0][0];
+      for (const key of ['avatar', 'chatConfig', 'slug', 'systemRole', 'title']) {
+        expect(patch).not.toHaveProperty(key);
+      }
+    });
+
+    it('sends only the enabled model parameter and its default value', async () => {
+      renderControls();
+
+      toggleRowSwitch('settingModel.params.panel.openness');
+
+      await waitFor(
+        () => {
+          expect(mocks.updateAgentConfig).toHaveBeenCalledWith({ params: { top_p: 1 } });
+        },
+        { timeout: 3000 },
+      );
+      expect(mocks.updateAgentChatConfig).not.toHaveBeenCalled();
+    });
+
+    /** The switch and the value it seeds are one edit, so they travel in one patch. */
+    it('pairs the response-length switch with the max_tokens it seeds', async () => {
+      renderControls();
+
+      toggleRowSwitch('settingModel.params.panel.responseLength');
+
+      await waitFor(
+        () => {
+          expect(mocks.updateAgentConfig).toHaveBeenCalledWith({
+            chatConfig: { enableMaxTokens: true },
+            params: { max_tokens: 4096 },
+          });
+        },
+        { timeout: 3000 },
+      );
+      expect(mocks.updateAgentConfig).toHaveBeenCalledTimes(1);
     });
   });
 

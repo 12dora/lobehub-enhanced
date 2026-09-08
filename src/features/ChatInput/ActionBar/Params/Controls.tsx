@@ -19,7 +19,7 @@ import { agentByIdSelectors, chatConfigByIdSelectors } from '@/store/agent/selec
 import { aiModelSelectors, useAiInfraStore } from '@/store/aiInfra';
 import { useUserStore } from '@/store/user';
 import { systemAgentSelectors } from '@/store/user/selectors';
-import type { LobeAgentConfig } from '@/types/agent';
+import type { LobeAgentChatConfig, LobeAgentConfig } from '@/types/agent';
 
 import { useAgentId } from '../../hooks/useAgentId';
 import { useUpdateAgentConfig } from '../../hooks/useUpdateAgentConfig';
@@ -28,6 +28,19 @@ interface ControlsProps {
   setUpdating: (updating: boolean) => void;
   updating: boolean;
   variant?: 'popover' | 'sidebar';
+}
+
+/**
+ * The only two sections this panel may write. Anything else the form holds (`slug`, `systemRole`,
+ * `title`, `avatar`, …) belongs to the agent's identity: on the platform-managed default inbox the
+ * server rejects a patch that merely mentions such a field (`MANAGED_RESOURCE_BY_PLATFORM`), so a
+ * whole-form submit turned every temperature or history-limit tweak into an error toast.
+ * `params` merges key by key both optimistically and in the database, so one key is enough.
+ */
+interface AgentConfigPatch {
+  chatConfig?: Partial<LobeAgentChatConfig>;
+  /** `null` is the disabled marker the database preserves and the switches read back. */
+  params?: Record<string, null | number | string>;
 }
 
 type ParamKey = 'temperature' | 'top_p' | 'presence_penalty' | 'frequency_penalty';
@@ -524,7 +537,7 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
   // The managed-params hint lives in the `chat` namespace, shared with the model pill.
   const { t } = useTranslation(['setting', 'components', 'chat']);
   const agentId = useAgentId();
-  const { updateAgentConfig } = useUpdateAgentConfig();
+  const { updateAgentChatConfig, updateAgentConfig } = useUpdateAgentConfig();
   const { allowed: canCreate } = usePermission('create_content');
 
   const config = useAgentStore(
@@ -636,18 +649,86 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
     ? t('settingModel.params.panel.agentTitle')
     : t('settingModel.params.panel.title');
 
+  /**
+   * Edits queue up here between flushes so the 500 ms debounce that smooths slider drags cannot
+   * drop a distinct field the user changed just before it (only the whole-form submit used to
+   * make that safe).
+   */
+  const pendingPatchRef = useRef<AgentConfigPatch>({});
+  /** Every updater shares one abort controller, so patches must be sent one after another. */
+  const inflightRef = useRef<Promise<void>>(Promise.resolve());
+
+  const flushPatch = useCallback(async () => {
+    const patch = pendingPatchRef.current;
+    pendingPatchRef.current = {};
+
+    const params = patch.params && Object.keys(patch.params).length > 0 ? patch.params : undefined;
+    const chatConfig =
+      patch.chatConfig && Object.keys(patch.chatConfig).length > 0 ? patch.chatConfig : undefined;
+    if (!params && !chatConfig) return;
+
+    setUpdating(true);
+    try {
+      if (chatConfig && !params) {
+        await updateAgentChatConfig(chatConfig);
+      } else {
+        await updateAgentConfig({
+          ...(chatConfig && { chatConfig }),
+          ...(params && { params: params as LobeAgentConfig['params'] }),
+        } as PartialDeep<LobeAgentConfig>);
+      }
+    } finally {
+      setUpdating(false);
+    }
+  }, [setUpdating, updateAgentChatConfig, updateAgentConfig]);
+
+  const runFlush = useCallback(() => {
+    const next = inflightRef.current.then(flushPatch).catch(() => {});
+    inflightRef.current = next;
+    return next;
+  }, [flushPatch]);
+
+  const debouncedFlush = useMemo(
+    () =>
+      debounce(() => {
+        void runFlush();
+      }, 500),
+    [runFlush],
+  );
+
+  const submitPatch = useCallback(
+    (patch: AgentConfigPatch, options?: { immediate?: boolean }): Promise<void> => {
+      const pending = pendingPatchRef.current;
+      pendingPatchRef.current = {
+        ...pending,
+        ...(patch.chatConfig && { chatConfig: { ...pending.chatConfig, ...patch.chatConfig } }),
+        ...(patch.params && { params: { ...pending.params, ...patch.params } }),
+      };
+
+      if (!options?.immediate) {
+        debouncedFlush();
+        return Promise.resolve();
+      }
+
+      debouncedFlush.cancel();
+      return runFlush();
+    },
+    [debouncedFlush, runFlush],
+  );
+
   const handleToggle = useCallback(
     async (key: ParamKey, enabled: boolean) => {
       if (!canCreate) return;
       const namePath = PARAM_NAME_MAP[key];
-      let newValue: number | undefined;
+      let newValue: null | number;
 
       if (!enabled) {
         const currentValue = form.getFieldValue(namePath);
         if (typeof currentValue === 'number') {
           lastValuesRef.current[key] = currentValue;
         }
-        newValue = undefined;
+        // Use null as a disabled marker (the database preserves null, and the frontend uses it to determine checkbox state)
+        newValue = null;
         form.setFieldValue(namePath, undefined);
       } else {
         const fallback = lastValuesRef.current[key];
@@ -658,56 +739,18 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
       }
       refreshFormValues((value) => value + 1);
 
-      // Save changes immediately - manually construct config object to ensure latest values are used
-      setUpdating(true);
-      const currentValues = form.getFieldsValue(true) as PartialDeep<LobeAgentConfig>;
-      const prevParams = (currentValues.params ?? {}) as Partial<
-        Record<ParamKey, null | number | undefined>
-      >;
-      const currentParams: Partial<Record<ParamKey, null | number | undefined>> = {
-        ...prevParams,
-      };
-
-      if (newValue === undefined) {
-        // Explicitly delete the property instead of setting it to undefined
-        // This ensures the Form state stays in sync
-        delete currentParams[key];
-        // Use null as a disabled marker (the database preserves null, and the frontend uses it to determine checkbox state)
-        currentParams[key] = null;
-      } else {
-        currentParams[key] = newValue;
-      }
-
-      const updatedConfig = {
-        ...currentValues,
-        params: currentParams as LobeAgentConfig['params'],
-      } satisfies PartialDeep<LobeAgentConfig>;
-
-      try {
-        await updateAgentConfig(updatedConfig);
-      } finally {
-        setUpdating(false);
-      }
+      // Save immediately: a switch is a deliberate act, not a drag to smooth out.
+      await submitPatch({ params: { [key]: newValue } }, { immediate: true });
     },
-    [canCreate, form, refreshFormValues, setUpdating, updateAgentConfig],
-  );
-
-  const handleValuesChange = useMemo(
-    () =>
-      debounce(async (values: PartialDeep<LobeAgentConfig>) => {
-        if (!canCreate) return;
-        setUpdating(true);
-        try {
-          await updateAgentConfig(values);
-        } finally {
-          setUpdating(false);
-        }
-      }, 500),
-    [canCreate, updateAgentConfig, setUpdating],
+    [canCreate, form, refreshFormValues, submitPatch],
   );
 
   const handleFieldChange = useCallback(
-    (namePath: (string | number)[], value: boolean | number | string) => {
+    (
+      namePath: (string | number)[],
+      value: boolean | number | string,
+      extraPatch?: AgentConfigPatch,
+    ) => {
       if (!canCreate) return;
       form.setFieldValue(namePath, value);
       if (
@@ -719,9 +762,22 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
         lastValuesRef.current[namePath[1] as ParamKey] = value;
       }
       refreshFormValues((current) => current + 1);
-      handleValuesChange(form.getFieldsValue(true) as PartialDeep<LobeAgentConfig>);
+
+      const [section, key] = namePath;
+      if (typeof key !== 'string') return;
+
+      // Only the edited field travels — plus whatever the caller had to seed alongside it
+      // (enabling `max_tokens` writes both the switch and the value the slider starts at).
+      const patch: AgentConfigPatch = { ...extraPatch };
+      if (section === 'params') {
+        patch.params = { ...patch.params, [key]: value as number | string };
+      } else {
+        patch.chatConfig = { ...patch.chatConfig, [key]: value } as Partial<LobeAgentChatConfig>;
+      }
+
+      void submitPatch(patch);
     },
-    [canCreate, form, handleValuesChange, refreshFormValues],
+    [canCreate, form, refreshFormValues, submitPatch],
   );
 
   const handleAdvancedOpenChange = useCallback(() => {
@@ -943,10 +999,13 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
                         disabled={!canCreate}
                         size={'small'}
                         onChange={(checked) => {
-                          if (checked && typeof maxTokensValue !== 'number') {
-                            form.setFieldValue(['params', 'max_tokens'], 4096);
-                          }
-                          handleFieldChange(['chatConfig', 'enableMaxTokens'], checked);
+                          const seedMaxTokens = checked && typeof maxTokensValue !== 'number';
+                          if (seedMaxTokens) form.setFieldValue(['params', 'max_tokens'], 4096);
+                          handleFieldChange(
+                            ['chatConfig', 'enableMaxTokens'],
+                            checked,
+                            seedMaxTokens ? { params: { max_tokens: 4096 } } : undefined,
+                          );
                         }}
                       />
                     }
@@ -975,10 +1034,15 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
                         checked={Boolean(enableReasoningEffort)}
                         size={'small'}
                         onChange={(checked) => {
-                          if (checked && typeof reasoningEffortValue !== 'string') {
+                          const seedEffort = checked && typeof reasoningEffortValue !== 'string';
+                          if (seedEffort) {
                             form.setFieldValue(['params', 'reasoning_effort'], 'medium');
                           }
-                          handleFieldChange(['chatConfig', 'enableReasoningEffort'], checked);
+                          handleFieldChange(
+                            ['chatConfig', 'enableReasoningEffort'],
+                            checked,
+                            seedEffort ? { params: { reasoning_effort: 'medium' } } : undefined,
+                          );
                         }}
                       />
                     }
