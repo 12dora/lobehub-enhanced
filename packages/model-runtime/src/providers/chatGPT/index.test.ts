@@ -259,6 +259,33 @@ describe('LobeChatGPTAI', () => {
     expect(instance['client'].chat.completions.create).not.toHaveBeenCalled();
   });
 
+  it('applies the Codex reasoning contract to any model id, not just GPT-5 heuristics', async () => {
+    await instance.chat(
+      {
+        frequency_penalty: 0,
+        messages: [{ content: 'Hello', role: 'user' }],
+        model: 'gpt-6-astra',
+        presence_penalty: 0,
+        reasoning_effort: 'low',
+        stream: true,
+        temperature: 1,
+        top_p: 1,
+      },
+      { user: 'user-id' },
+    );
+
+    const [request] = (instance['client'].responses.create as Mock).mock.calls[0];
+
+    // The Codex backend answers `Unsupported parameter: temperature|top_p|frequency_penalty` (400).
+    expect(request).not.toHaveProperty('temperature');
+    expect(request).not.toHaveProperty('top_p');
+    expect(request).not.toHaveProperty('frequency_penalty');
+    expect(request).not.toHaveProperty('presence_penalty');
+    expect(request).not.toHaveProperty('max_output_tokens');
+    expect(request).not.toHaveProperty('user');
+    expect(request.reasoning).toMatchObject({ effort: 'low', summary: 'auto' });
+  });
+
   it('accepts the connectivity probe contract: maxRetries 0 and no sampling params', async () => {
     // The enterprise admin probe builds this runtime with `maxRetries: 0` so one honest attempt
     // is made instead of three (each paying the full streaming budget), and sends

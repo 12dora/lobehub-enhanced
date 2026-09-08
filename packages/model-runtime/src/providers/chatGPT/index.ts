@@ -479,14 +479,34 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
   responses: {
     handlePayload: (payload) => {
       const handledPayload = openAIParams.responses?.handlePayload?.(payload) || payload;
-      const { service_tier: _serviceTier, ...rest } = handledPayload;
+      // Every model behind the Codex backend is a reasoning model with the same request contract
+      // (see the open-source Codex CLI): sampling parameters are rejected with
+      // `Unsupported parameter`, reasoning summaries are always requested, and output limits are
+      // managed by the subscription catalog. Apply that contract to EVERY model id instead of the
+      // public-API GPT-5 heuristics, so a new catalog model (e.g. gpt-6-astra) needs no adaptation.
+      const {
+        frequency_penalty: _frequencyPenalty,
+        logprobs: _logprobs,
+        presence_penalty: _presencePenalty,
+        reasoning,
+        service_tier: _serviceTier,
+        temperature: _temperature,
+        top_logprobs: _topLogprobs,
+        top_p: _topP,
+        verbosity,
+        ...rest
+      } = handledPayload as typeof handledPayload & {
+        logprobs?: unknown;
+        top_logprobs?: unknown;
+        verbosity?: string;
+      };
 
-      // The ChatGPT Codex backend manages output limits from the subscription
-      // model catalog and rejects the public API's max_output_tokens field.
       return {
         ...rest,
         include: ['reasoning.encrypted_content'],
         max_tokens: undefined,
+        reasoning: { ...reasoning, summary: reasoning?.summary ?? 'auto' },
+        ...(verbosity && !rest.text ? { text: { verbosity } } : {}),
       };
     },
     prepareRequest: async (payload, _options, client) => {
