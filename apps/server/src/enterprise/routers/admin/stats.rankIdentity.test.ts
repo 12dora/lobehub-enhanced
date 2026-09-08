@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+import { BRANDING_LOGO_URL } from '@lobechat/business-const';
 import { DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
 import type { AgentRankItem } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +38,24 @@ const inboxRow = (overrides: Partial<AgentRankItem> = {}): AgentRankItem =>
     ...overrides,
   });
 
+const PUBLISHED_BRANDING = {
+  defaultAgentDisplayName: 'AI 助手',
+  iconUrl: 'https://brand.example/icon.png',
+  logoUrl: 'https://brand.example/logo.png',
+};
+
+const builtInInboxAvatarLiteral = (source: string) => {
+  const match = source.match(
+    /\[\s*'\/avatars\/lobe-ai\.png',\s*DEFAULT_INBOX_AVATAR,\s*BRANDING_LOGO_URL\s*\]/,
+  );
+  expect(match).toBeTruthy();
+  return match![0].replaceAll(/\s+/g, '');
+};
+
+const builtInCatalogAvatars = [
+  ...new Set(['/avatars/lobe-ai.png', DEFAULT_INBOX_AVATAR, BRANDING_LOGO_URL].filter(Boolean)),
+];
+
 describe('admin.stats inbox rank identity', () => {
   beforeEach(() => {
     vi.mocked(resolveServerRuntimeBranding).mockReset();
@@ -44,14 +66,25 @@ describe('admin.stats inbox rank identity', () => {
   });
 
   describe('resolveInboxRankIdentity', () => {
+    it('keeps built-in inbox avatars in sync with useDefaultInboxAvatar', () => {
+      const overlaySource = readFileSync(
+        fileURLToPath(new URL('./stats.rankIdentity.ts', import.meta.url)),
+        'utf8',
+      );
+      const hookSource = readFileSync(
+        fileURLToPath(
+          new URL('../../../../../../src/hooks/useDefaultInboxAvatar.ts', import.meta.url),
+        ),
+        'utf8',
+      );
+
+      expect(builtInInboxAvatarLiteral(overlaySource)).toBe(builtInInboxAvatarLiteral(hookSource));
+    });
+
     it('prefers the published catalog identity', () => {
       expect(
         resolveInboxRankIdentity({
-          branding: {
-            defaultAgentDisplayName: 'AI 助手',
-            iconUrl: 'https://brand.example/icon.png',
-            logoUrl: 'https://brand.example/logo.png',
-          },
+          branding: PUBLISHED_BRANDING,
           catalog: {
             avatar: '/f/pba_published',
             backgroundColor: '#123456',
@@ -65,14 +98,60 @@ describe('admin.stats inbox rank identity', () => {
       });
     });
 
+    it.each(builtInCatalogAvatars)(
+      'falls through built-in catalog avatar %s to branding, then DEFAULT_INBOX_AVATAR',
+      (avatar) => {
+        expect(
+          resolveInboxRankIdentity({
+            branding: PUBLISHED_BRANDING,
+            catalog: {
+              avatar,
+              backgroundColor: '#123456',
+              title: 'Published assistant',
+            },
+          }),
+        ).toEqual({
+          avatar: 'https://brand.example/icon.png',
+          backgroundColor: '#123456',
+          title: 'Published assistant',
+        });
+
+        expect(
+          resolveInboxRankIdentity({
+            branding: {
+              defaultAgentDisplayName: 'AI 助手',
+              iconUrl: '  ',
+              logoUrl: 'https://brand.example/logo.png',
+            },
+            catalog: {
+              avatar: `  ${avatar}  `,
+              backgroundColor: null,
+              title: 'Published assistant',
+            },
+          }),
+        ).toEqual({
+          avatar: 'https://brand.example/logo.png',
+          backgroundColor: null,
+          title: 'Published assistant',
+        });
+
+        expect(
+          resolveInboxRankIdentity({
+            branding: { defaultAgentDisplayName: 'AI 助手', iconUrl: null, logoUrl: null },
+            catalog: { avatar, backgroundColor: null, title: 'Published assistant' },
+          }),
+        ).toEqual({
+          avatar: DEFAULT_INBOX_AVATAR,
+          backgroundColor: null,
+          title: 'Published assistant',
+        });
+      },
+    );
+
     it('falls through blank catalog fields to published branding, then DEFAULT_INBOX_*', () => {
       expect(
         resolveInboxRankIdentity({
-          branding: {
-            defaultAgentDisplayName: 'AI 助手',
-            iconUrl: 'https://brand.example/icon.png',
-            logoUrl: 'https://brand.example/logo.png',
-          },
+          branding: PUBLISHED_BRANDING,
           catalog: { avatar: '  ', backgroundColor: null, title: '' },
         }),
       ).toEqual({
@@ -147,17 +226,12 @@ describe('admin.stats inbox rank identity', () => {
       expect(resolveServerRuntimeBranding).not.toHaveBeenCalled();
     });
 
-    it('overlays catalog identity onto the merged inbox entry', async () => {
+    it('overlays catalog identity without resolving branding when avatar and title are customised', async () => {
       vi.spyOn(PlatformDefaultInboxService.prototype, 'getPublishedIdentity').mockResolvedValue({
         avatar: '/f/pba_published',
         backgroundColor: '#123456',
         title: 'Published assistant',
       });
-      vi.mocked(resolveServerRuntimeBranding).mockResolvedValue({
-        defaultAgentDisplayName: 'AI 助手',
-        iconUrl: 'https://brand.example/icon.png',
-        logoUrl: 'https://brand.example/logo.png',
-      } as Awaited<ReturnType<typeof resolveServerRuntimeBranding>>);
 
       const local = rankRow();
       const result = await overlayInboxAgentRank(db, 'admin', [inboxRow(), local]);
@@ -169,9 +243,49 @@ describe('admin.stats inbox rank identity', () => {
         title: 'Published assistant',
       });
       expect(result[1]).toEqual(local);
-      expect(resolveServerRuntimeBranding).toHaveBeenCalledWith({
-        getDatabase: expect.any(Function),
+      expect(resolveServerRuntimeBranding).not.toHaveBeenCalled();
+    });
+
+    it('resolves cached branding when the catalog avatar is built-in', async () => {
+      vi.spyOn(PlatformDefaultInboxService.prototype, 'getPublishedIdentity').mockResolvedValue({
+        avatar: DEFAULT_INBOX_AVATAR,
+        backgroundColor: '#123456',
+        title: 'Published assistant',
       });
+      vi.mocked(resolveServerRuntimeBranding).mockResolvedValue({
+        ...PUBLISHED_BRANDING,
+      } as Awaited<ReturnType<typeof resolveServerRuntimeBranding>>);
+
+      const result = await overlayInboxAgentRank(db, 'admin', [inboxRow()]);
+
+      expect(result[0]).toMatchObject({
+        avatar: 'https://brand.example/icon.png',
+        backgroundColor: '#123456',
+        id: INBOX_SESSION_ID,
+        title: 'Published assistant',
+      });
+      expect(resolveServerRuntimeBranding).toHaveBeenCalledOnce();
+      expect(resolveServerRuntimeBranding).toHaveBeenCalledWith();
+    });
+
+    it('resolves cached branding when the catalog title is blank', async () => {
+      vi.spyOn(PlatformDefaultInboxService.prototype, 'getPublishedIdentity').mockResolvedValue({
+        avatar: '/f/pba_published',
+        backgroundColor: null,
+        title: '  ',
+      });
+      vi.mocked(resolveServerRuntimeBranding).mockResolvedValue({
+        ...PUBLISHED_BRANDING,
+      } as Awaited<ReturnType<typeof resolveServerRuntimeBranding>>);
+
+      const result = await overlayInboxAgentRank(db, 'admin', [inboxRow()]);
+
+      expect(result[0]).toMatchObject({
+        avatar: '/f/pba_published',
+        id: INBOX_SESSION_ID,
+        title: 'AI 助手',
+      });
+      expect(resolveServerRuntimeBranding).toHaveBeenCalledWith();
     });
   });
 });
