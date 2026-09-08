@@ -1,5 +1,8 @@
 import { DEFAULT_AGENT_CONFIG, DEFAULT_INBOX_AVATAR, INBOX_SESSION_ID } from '@lobechat/const';
-import { PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY } from '@lobechat/types';
+import {
+  PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
+  type PlatformAgentVersionConfig,
+} from '@lobechat/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_ENTERPRISE_FEATURE_FLAGS } from '@/const/platform/featureFlags';
@@ -48,6 +51,7 @@ const snapshot = (versionId: string, displayName = `Inbox ${versionId}`) =>
       openingQuestions: ['Managed question'],
       systemRole: `Managed prompt ${versionId}`,
       tags: ['managed'],
+      thinkingEffort: null as PlatformAgentVersionConfig['thinkingEffort'],
     },
     platformAgentId: 'platform-default-inbox',
     versionId,

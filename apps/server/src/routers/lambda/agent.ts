@@ -719,7 +719,7 @@ export const agentRouter = router({
         db: ctx.serverDB,
         patch: input.value,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: ctx.workspaceId ?? undefined,
       });
 
       // Use AgentService to update and return the updated agent data

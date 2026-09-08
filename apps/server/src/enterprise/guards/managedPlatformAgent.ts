@@ -52,6 +52,8 @@ export const INBOX_PLATFORM_MANAGED_FIELDS = [
   'params',
   'plugins',
   'provider',
+  // Identity: renaming the slug would detach the row from the inbox overlay and every guard.
+  'slug',
   'systemRole',
   'tags',
   'title',
