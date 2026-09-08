@@ -35,6 +35,8 @@ vi.mock('@lobehub/ui/base-ui', () => ({
     </button>
   ),
 }));
+// Kept although the card no longer imports it: if a status tag is ever re-added here it renders
+// as this marker, and the assertions below fail instead of silently passing.
 vi.mock('../primitives/StatusBadge', () => ({ default: () => <span>status</span> }));
 
 const snapshot = (avatar: string | null = '🤖'): AdminDefaultAgentSnapshot =>
@@ -104,11 +106,28 @@ describe('DefaultAgentSection', () => {
     renderSection();
 
     expect(screen.getByText('Company assistant')).toBeTruthy();
-    // Avatar and model still come from the current version…
+    // The avatar still comes from the current version…
     expect(screen.getByAltText('avatar').getAttribute('src')).toBe('🤖');
-    expect(screen.getByText('openai · gpt-4o-mini')).toBeTruthy();
     // …but saving IS publishing, so there is no version for an admin to reason about.
     expect(screen.queryByText('1.2.0')).toBeNull();
+    // The card is always the published default: a status tag states the obvious, and the model is
+    // an editor-level detail. Neither belongs on the pinned summary.
+    expect(screen.queryByText('status')).toBeNull();
+    expect(screen.queryByText('openai · gpt-4o-mini')).toBeNull();
+    expect(screen.queryByText('agentCatalog.defaultAgent.modelUnknown')).toBeNull();
+  });
+
+  // Dropping the two removed lines must not leave a gap under the name: what the default
+  // assistant is reads as the identity's own second line, below the name.
+  it('reads the description as the second line of the identity, not as a card caption', () => {
+    renderSection();
+
+    const description = screen.getByText('agentCatalog.defaultAgent.description');
+    const identity = description.parentElement;
+    expect(identity?.className).toBe('identity');
+    expect(identity?.textContent).toBe('Company assistantagentCatalog.defaultAgent.description');
+    // The heading still names the card, once.
+    expect(screen.getAllByText('agentCatalog.defaultAgent.title')).toHaveLength(1);
   });
 
   it('says the default is being prepared instead of offering a takeover step', () => {

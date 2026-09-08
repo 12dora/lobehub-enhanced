@@ -2,32 +2,20 @@
 
 import { Avatar, Block, Flexbox, Text } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles, cssVar } from 'antd-style';
+import { createStaticStyles } from 'antd-style';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDefaultInboxAvatar } from '@/hooks/useDefaultInboxAvatar';
 
-import StatusBadge from '../primitives/StatusBadge';
 import type { AdminDefaultAgentSnapshot } from './useAdminAgents';
 
 const styles = createStaticStyles(({ css }) => ({
   identity: css`
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     min-width: 0;
-  `,
-  meta: css`
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  `,
-  metaText: css`
-    font-family: ${cssVar.fontFamilyCode};
-    font-size: ${cssVar.fontSizeSM};
-    color: ${cssVar.colorTextTertiary};
   `,
   root: css`
     padding: 16px;
@@ -75,8 +63,8 @@ export const DefaultAgentSection = memo<DefaultAgentSectionProps>(
     snapshot,
   }) => {
     const { t } = useTranslation('admin');
-    // Avatar and model live on the current version, not on the list row. The version itself is
-    // never shown: saving IS publishing here, so there is no version for an admin to reason about.
+    // The avatar lives on the current version, not on the list row. The version itself is never
+    // shown: saving IS publishing here, so there is no version for an admin to reason about.
     const version = snapshot?.detail?.versions.find(
       ({ id }) => id === snapshot.item.identity.currentVersionId,
     );
@@ -117,11 +105,13 @@ export const DefaultAgentSection = memo<DefaultAgentSectionProps>(
       }
 
       const { item } = snapshot;
-      const model = version?.dependencySnapshot.model;
 
+      // One compact row: who the assistant is on the left, the single action on the right. The
+      // status and the model are deliberately absent — this card is always the published default,
+      // and the model is an editor-level detail that says nothing an admin acts on from here.
       return (
         <Flexbox horizontal align={'center'} gap={16} justify={'space-between'} wrap={'wrap'}>
-          <Flexbox horizontal align={'center'} gap={12} style={{ minWidth: 0 }}>
+          <Flexbox horizontal align={'center'} gap={12} style={{ flex: 1, minWidth: 0 }}>
             <Avatar
               avatar={avatar}
               background={version?.config.backgroundColor ?? undefined}
@@ -132,14 +122,9 @@ export const DefaultAgentSection = memo<DefaultAgentSectionProps>(
               <Text ellipsis weight={600}>
                 {item.displayName}
               </Text>
-              <span className={styles.meta}>
-                <StatusBadge status={item.identity.status} />
-                <span className={styles.metaText}>
-                  {model
-                    ? `${model.providerKey} · ${model.modelKey}`
-                    : t('agentCatalog.defaultAgent.modelUnknown')}
-                </span>
-              </span>
+              <Text ellipsis type={'secondary'}>
+                {t('agentCatalog.defaultAgent.description')}
+              </Text>
             </div>
           </Flexbox>
           {canEdit ? (
@@ -153,10 +138,9 @@ export const DefaultAgentSection = memo<DefaultAgentSectionProps>(
 
     return (
       <Block className={styles.root} gap={12} variant={'outlined'}>
-        <Flexbox gap={2}>
-          <Text weight={600}>{t('agentCatalog.defaultAgent.title')}</Text>
-          <Text type={'secondary'}>{t('agentCatalog.defaultAgent.description')}</Text>
-        </Flexbox>
+        {/* The heading names the card; what the default assistant *is* now reads as the
+            assistant's own second line, right under its name, instead of a caption up here. */}
+        <Text weight={600}>{t('agentCatalog.defaultAgent.title')}</Text>
         {stale ? (
           <Flexbox horizontal align={'center'} gap={8} wrap={'wrap'}>
             <Text type={'warning'}>{t('agentCatalog.defaultAgent.loadError')}</Text>

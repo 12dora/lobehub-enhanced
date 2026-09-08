@@ -69,7 +69,6 @@ export default {
   'agentCatalog.defaultAgent.description': 'The assistant every member sees first.',
   'agentCatalog.defaultAgent.loadError': 'Could not load the default assistant.',
   'agentCatalog.defaultAgent.loading': 'Loading…',
-  'agentCatalog.defaultAgent.modelUnknown': 'Model unavailable',
   'agentCatalog.defaultAgent.preparing': 'Preparing the default assistant…',
   'agentCatalog.defaultAgent.provision.error':
     'The default assistant could not be prepared. Members are using the built-in one meanwhile.',

@@ -1014,12 +1014,16 @@ describe('AgentListPage with the real AsyncBoundary', () => {
 
       expect(screen.getByText('agentCatalog.defaultAgent.title')).toBeTruthy();
       expect(screen.getByText('Company assistant')).toBeTruthy();
-      // Avatar and model live on the published version, not on the list row.
+      // The avatar lives on the published version, not on the list row.
       expect(screen.getByAltText('avatar').getAttribute('src')).toBe('🤖');
-      expect(screen.getByText('openai · gpt-4o-mini')).toBeTruthy();
+      // What the default assistant is reads as the identity's second line, under the name.
+      expect(screen.getByText('agentCatalog.defaultAgent.description')).toBeTruthy();
       // Saving IS publishing here, so a version number is an implementation detail no admin has
-      // to reason about — the card never shows the one it reads for the avatar / model.
+      // to reason about — the card never shows the one it reads for the avatar. For the same
+      // reason the always-published status tag and the model line are gone from this summary.
       expect(screen.queryByText('1.2.0')).toBeNull();
+      expect(screen.queryByText('status')).toBeNull();
+      expect(screen.queryByText('openai · gpt-4o-mini')).toBeNull();
       expect(screen.queryByText('agentCatalog.defaultAgent.preparing')).toBeNull();
     });
 
@@ -1248,7 +1252,7 @@ describe('AgentListPage with the real AsyncBoundary', () => {
       renderPage();
 
       expect(screen.getByText('Company assistant')).toBeTruthy();
-      expect(screen.getByText('openai · gpt-4o-mini')).toBeTruthy();
+      expect(screen.getByText('agentCatalog.defaultAgent.description')).toBeTruthy();
       expect(screen.getByText('agentCatalog.defaultAgent.loadError')).toBeTruthy();
 
       fireEvent.click(screen.getByText('agentCatalog.dependency.retry'));

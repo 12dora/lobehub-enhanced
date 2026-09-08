@@ -54,7 +54,6 @@
   "agentCatalog.defaultAgent.description": "每位成员看到的第一个助理。",
   "agentCatalog.defaultAgent.loadError": "无法加载默认助理。",
   "agentCatalog.defaultAgent.loading": "加载中…",
-  "agentCatalog.defaultAgent.modelUnknown": "模型信息暂不可用",
   "agentCatalog.defaultAgent.preparing": "正在初始化默认助理…",
   "agentCatalog.defaultAgent.provision.error": "默认助理初始化失败，成员暂时使用内置默认助理。",
   "agentCatalog.defaultAgent.provision.readOnly": "默认助理尚未初始化，请联系有权限的管理员。",
