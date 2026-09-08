@@ -2,6 +2,7 @@ import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { DEFAULT_AGENT_CONFIG, INBOX_SESSION_ID } from '@lobechat/const';
 import { CreateAgentSchema, decodePlatformAgentListId, type KnowledgeItem } from '@lobechat/types';
 import { KnowledgeType } from '@lobechat/types';
+import { isNonEmptyString } from '@lobechat/utils';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -723,8 +724,24 @@ export const agentRouter = router({
         workspaceId: ctx.workspaceId ?? undefined,
       });
 
+      // Light-mode inbox: a model-only (or provider-only) write must persist a complete
+      // pair so the raw row never ends up half-set. Missing side comes from the overlaid
+      // config the client already sees. AgentService.updateAgentConfig repeats this for
+      // non-router callers; a patch that already has both keys is a no-op there.
+      let patch = input.value;
+      if (Object.hasOwn(patch, 'model') !== Object.hasOwn(patch, 'provider')) {
+        const effective = await ctx.agentService.getAgentConfig(input.agentId);
+        if (effective?.slug === INBOX_SESSION_ID) {
+          if (Object.hasOwn(patch, 'model') && isNonEmptyString(patch.model)) {
+            patch = { ...patch, provider: effective.provider };
+          } else if (Object.hasOwn(patch, 'provider') && isNonEmptyString(patch.provider)) {
+            patch = { ...patch, model: effective.model };
+          }
+        }
+      }
+
       // Use AgentService to update and return the updated agent data
-      return ctx.agentService.updateAgentConfig(input.agentId, input.value);
+      return ctx.agentService.updateAgentConfig(input.agentId, patch);
     }),
 
   /**

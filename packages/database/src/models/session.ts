@@ -442,13 +442,17 @@ export class SessionModel {
 
     if (item) return;
 
+    // Seed chatConfig/tts/plugins/etc. from DEFAULT_AGENT_CONFIG + server defaults,
+    // but never persist model/provider/params — a seeded pair would look like an
+    // explicit user choice and hide the platform default-inbox overlay.
+    const seeded = merge(DEFAULT_AGENT_CONFIG, defaultAgentConfig) as Partial<NewAgent>;
     return await this.create({
       // `merge` returns the `@lobechat/types` LobeAgentConfig shape
       // (plugins: AgentPluginEntry[]); `create`'s `config` is the DB-layer
       // NewAgent, whose `plugins` column type is intentionally left as
       // `string[]` (only the domain types are widened for the tri-state
       // rollout, not the JSONB column's compile-time annotation).
-      config: merge(DEFAULT_AGENT_CONFIG, defaultAgentConfig) as Partial<NewAgent>,
+      config: { ...seeded, model: null, params: {}, provider: null },
       slug: INBOX_SESSION_ID,
       type: 'agent',
     });

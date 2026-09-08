@@ -1178,14 +1178,18 @@ export class AgentModel {
     // partitioned { target, where } once 0109 has flipped the index in every
     // environment. Payload still carries workspaceId so workspace-scoped
     // builtin agents land in the right workspace.
+    const isInbox = slug === INBOX_SESSION_ID;
     const result = await this.db
       .insert(agents)
       .values(
         buildWorkspacePayload(
           { userId: this.userId, workspaceId: this.workspaceId },
           {
-            model: persistConfig.model,
-            provider: persistConfig.provider,
+            // Inbox follows the platform / settings default until the user picks.
+            // Other builtins keep their persist model/provider.
+            ...(isInbox
+              ? { model: null, params: {}, provider: null }
+              : { model: persistConfig.model, provider: persistConfig.provider }),
             slug: persistConfig.slug,
             virtual: true,
           },

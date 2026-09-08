@@ -450,6 +450,51 @@ describe('agentRouter', () => {
       });
     });
 
+    describe('light-mode inbox model pair', () => {
+      it('completes a model-only write from the effective config and returns the user pair', async () => {
+        agentServiceMock.getAgentConfig = vi.fn().mockResolvedValue({
+          model: 'admin-model',
+          provider: 'admin-provider',
+          slug: INBOX_SESSION_ID,
+        });
+        agentServiceMock.updateAgentConfig = vi.fn().mockResolvedValue({
+          agent: { model: 'x', provider: 'admin-provider', slug: INBOX_SESSION_ID },
+          success: true,
+        });
+
+        const caller = agentRouter.createCaller(mockCtx);
+        const result = await caller.updateAgentConfig({
+          agentId: 'inbox-1',
+          value: { model: 'x' },
+        });
+
+        expect(agentServiceMock.getAgentConfig).toHaveBeenCalledWith('inbox-1');
+        expect(agentServiceMock.updateAgentConfig).toHaveBeenCalledWith('inbox-1', {
+          model: 'x',
+          provider: 'admin-provider',
+        });
+        expect(result.agent.model).toBe('x');
+        expect(result.agent.provider).toBe('admin-provider');
+      });
+
+      it('does not complete a model-only write on a non-inbox agent', async () => {
+        agentServiceMock.getAgentConfig = vi.fn().mockResolvedValue({
+          model: 'admin-model',
+          provider: 'admin-provider',
+          slug: 'other',
+        });
+        agentServiceMock.updateAgentConfig = vi.fn().mockResolvedValue({
+          agent: { model: 'x', slug: 'other' },
+          success: true,
+        });
+
+        const caller = agentRouter.createCaller(mockCtx);
+        await caller.updateAgentConfig({ agentId: 'agent-1', value: { model: 'x' } });
+
+        expect(agentServiceMock.updateAgentConfig).toHaveBeenCalledWith('agent-1', { model: 'x' });
+      });
+    });
+
     describe('acquireAgentLock', () => {
       it('returns unlocked without touching the lock service for personal agents', async () => {
         const acquireSpy = vi.spyOn(EditLockService.prototype, 'acquire');

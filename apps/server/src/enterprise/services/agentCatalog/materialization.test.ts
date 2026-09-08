@@ -14,6 +14,7 @@ import type { PlatformAgentOperationSnapshot } from './effectiveResolver';
 import { PlatformAgentMaterializationError, PlatformAgentNotFoundError } from './errors';
 import {
   buildPlatformAgentRuntimeConfig,
+  mapModelParameters,
   PlatformAgentMaterializationService,
 } from './materialization';
 
@@ -82,6 +83,20 @@ const makeService = (repo: Partial<PlatformAgentCatalogRepository>) =>
     'user-a',
     repo as PlatformAgentCatalogRepository,
   );
+
+describe('mapModelParameters', () => {
+  it('forwards only keys present on modelParameters', () => {
+    expect(mapModelParameters({ modelParameters: {} })).toEqual({});
+    expect(mapModelParameters({ modelParameters: { temperature: 0.2 } })).toEqual({
+      temperature: 0.2,
+    });
+    expect(
+      mapModelParameters({
+        modelParameters: { maxTokens: 4096, temperature: 0.2, topP: 0.8 },
+      }),
+    ).toEqual({ max_tokens: 4096, temperature: 0.2, top_p: 0.8 });
+  });
+});
 
 describe('PlatformAgentMaterializationService', () => {
   beforeEach(() => {

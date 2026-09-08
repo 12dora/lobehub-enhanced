@@ -15,7 +15,7 @@ import {
   type PlatformAgentOperationHandle,
 } from './effectiveResolver';
 import { isPlatformAgentTakeoverActive } from './enforcement';
-import { PlatformAgentMaterializationService } from './materialization';
+import { mapModelParameters, PlatformAgentMaterializationService } from './materialization';
 import { resolveThinkingEffortChatConfigPatch } from './thinkingEffort';
 
 interface PlatformDefaultInboxServiceOptions {
@@ -89,10 +89,12 @@ export class PlatformDefaultInboxService {
    * when both provider and model are non-empty on the raw row (never mixed with the admin pair).
    * Pass `options.userRow` for that decision — `base` is the merged config and is always populated
    * by DEFAULT_AGENT_CONFIG. When `userRow` is omitted, fall back to `base` (back-compat).
-   * Light-mode params: `{ ...base.params, ...admin params, ...userRow.params }` so system defaults
-   * stay complete, admin params are not shadowed by merge fills, and only persisted user keys win.
-   * Enforced takeover pins the admin pair and lets admin params win. A version thinking-effort pin
-   * is always a default, not a lock: it fills chatConfig only when the user has not set that key.
+   * Light-mode params: `{ ...base.params, ...mapModelParameters(snapshot.config), ...userRow.params }`
+   * so only the admin's mapped `modelParameters` overlay the settings/base layer (empty admin
+   * params must not clobber e.g. temperature 0.35 with DEFAULT_AGENT_CONFIG fills), and only
+   * persisted user keys win. Enforced takeover pins the admin pair and lets admin params win.
+   * A version thinking-effort pin is always a default, not a lock: it fills chatConfig only when
+   * the user has not set that key.
    * Resolver/exact-version/dependency errors propagate (never masquerade as "no default"); only a
    * real null capture falls back.
    */
@@ -120,13 +122,12 @@ export class PlatformDefaultInboxService {
     const userProvider = isNonEmptyString(modelSource.provider) ? modelSource.provider : undefined;
     const userOwnsModelPair = !takeover && userModel !== undefined && userProvider !== undefined;
 
-    const lightParams = options?.userRow
-      ? {
-          ...base.params,
-          ...resolved.config.params,
-          ...options.userRow.params,
-        }
-      : { ...resolved.config.params, ...base.params };
+    const mappedAdminParams = mapModelParameters(snapshot.config);
+    const lightParams = {
+      ...base.params,
+      ...mappedAdminParams,
+      ...(options?.userRow ? (options.userRow.params ?? {}) : {}),
+    };
 
     return {
       ...base,

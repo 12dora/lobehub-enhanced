@@ -418,7 +418,8 @@ describe('PlatformDefaultInboxService', () => {
 
       expect(result.model).toBe(expectedModel);
       expect(result.provider).toBe(expectedProvider);
-      expect(result.params).toMatchObject({ max_tokens: 4096, temperature: 0.9 });
+      // No userRow: admin mapped keys overlay base. Snapshot only maps temperature.
+      expect(result.params).toMatchObject({ temperature: 0.2 });
       expect(result.platform).toEqual({
         distribution: 'mandatory',
         managed: true,
@@ -469,9 +470,9 @@ describe('PlatformDefaultInboxService', () => {
     expect(result.provider).toBe('openai');
     expect(result.params).toMatchObject({
       ...DEFAULT_AGENT_CONFIG.params,
-      max_tokens: 4096,
       temperature: 0.2,
     });
+    expect(result.params).not.toHaveProperty('max_tokens');
     expect(result.platform).toEqual({
       distribution: 'mandatory',
       managed: true,
@@ -518,21 +519,65 @@ describe('PlatformDefaultInboxService', () => {
     });
     expect(fromEmptyRow.params).toMatchObject({
       frequency_penalty: 0,
-      max_tokens: 4096,
       presence_penalty: 0,
       temperature: 0.2,
       top_p: 1,
     });
+    expect(fromEmptyRow.params).not.toHaveProperty('max_tokens');
 
     const fromUserKeys = await service.getEffectiveBuiltinConfig(row, {
       userRow: { model: null, params: { temperature: 0.9 }, provider: null },
     });
     expect(fromUserKeys.params).toMatchObject({
       frequency_penalty: 0,
-      max_tokens: 4096,
       presence_penalty: 0,
       temperature: 0.9,
       top_p: 1,
     });
+  });
+
+  it('light-mode params overlay only mapped admin modelParameters, then user keys', async () => {
+    const captured = snapshot('v2');
+    const makeService = (modelParameters: PlatformAgentVersionConfig['modelParameters']) => {
+      captured.config.modelParameters = modelParameters;
+      const adminResolved = {
+        ...resolvedConfig(captured),
+        model: 'gpt-6-astra',
+        // Deliberately filled like buildPlatformAgentRuntimeConfig — must NOT overlay.
+        params: { ...DEFAULT_AGENT_CONFIG.params, temperature: 1, top_p: 1 },
+        provider: 'openai',
+      };
+      return new PlatformDefaultInboxService(db, 'user', {
+        flags: flagsOn,
+        isTakeoverActive: async () => false,
+        materializationService: {
+          resolveForExistingAgent: vi.fn(async () => ({
+            agentId: 'builtin-inbox-id',
+            config: adminResolved,
+            dependencySnapshot,
+          })),
+        },
+        resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+        validateDependencies: vi.fn(async () => ({ valid: true as const })),
+      });
+    };
+
+    const row = base();
+    row.params = { temperature: 0.35, top_p: 0.8 };
+
+    const emptyAdmin = await makeService({}).getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, params: {}, provider: null },
+    });
+    expect(emptyAdmin.params).toEqual({ temperature: 0.35, top_p: 0.8 });
+
+    const adminTemp = await makeService({ temperature: 0.2 }).getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, params: {}, provider: null },
+    });
+    expect(adminTemp.params).toEqual({ temperature: 0.2, top_p: 0.8 });
+
+    const userWins = await makeService({ temperature: 0.2 }).getEffectiveBuiltinConfig(row, {
+      userRow: { model: null, params: { top_p: 0.5 }, provider: null },
+    });
+    expect(userWins.params).toEqual({ temperature: 0.2, top_p: 0.5 });
   });
 });

@@ -59,8 +59,10 @@ const isValidConnectorRef = (ref: PlatformAgentConnectorDependencyRef): boolean 
  * Map the immutable, secret-free platform model parameters onto the runtime `LLMParams` shape.
  * Only defined values are forwarded so unset managed parameters fall back to the runtime defaults.
  */
-const mapModelParameters = (config: PlatformAgentVersionConfig): LLMParams => {
-  const mp = config.modelParameters;
+export const mapModelParameters = (
+  config: Pick<PlatformAgentVersionConfig, 'modelParameters'>,
+): LLMParams => {
+  const mp = config.modelParameters ?? {};
   const params: LLMParams = {};
   if (mp.frequencyPenalty !== undefined) params.frequency_penalty = mp.frequencyPenalty;
   if (mp.maxTokens !== undefined) params.max_tokens = mp.maxTokens;

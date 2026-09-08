@@ -1495,6 +1495,9 @@ describe('AgentModel', () => {
         expect(result).toBeDefined();
         expect(result?.slug).toBe(INBOX_SESSION_ID);
         expect(result?.virtual).toBe(true);
+        expect(result?.model).toBeNull();
+        expect(result?.provider).toBeNull();
+        expect(result?.params).toEqual({});
       });
 
       it('should return the same agent on subsequent calls (idempotent)', async () => {
@@ -1562,6 +1565,9 @@ describe('AgentModel', () => {
         expect(result).toBeDefined();
         expect(result?.slug).toBe('page-agent');
         expect(result?.virtual).toBe(true);
+        // Non-inbox builtins still persist their registry model/provider.
+        expect(result?.model).toEqual(expect.any(String));
+        expect(result?.provider).toEqual(expect.any(String));
       });
 
       it('should create task-agent builtin agent', async () => {

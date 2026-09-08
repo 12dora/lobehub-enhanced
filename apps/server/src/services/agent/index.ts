@@ -4,7 +4,7 @@ import { DEFAULT_AGENT_CONFIG, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lo
 import { type LobeChatDatabase } from '@lobechat/database';
 import type { AgentItem, LobeAgentConfig } from '@lobechat/types';
 import { decodePlatformAgentListId } from '@lobechat/types';
-import { cleanObject, merge } from '@lobechat/utils';
+import { cleanObject, isNonEmptyString, merge } from '@lobechat/utils';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
 import { type PartialDeep } from 'type-fest';
@@ -50,6 +50,29 @@ interface AgentWelcomeData {
   openQuestions: string[];
   welcomeMessage: string;
 }
+
+/**
+ * Fill the missing model/provider side from the currently displayed (effective) config.
+ * No-op when the patch already has both, neither, or is clearing rather than choosing.
+ */
+export const completeInboxModelProviderPairPatch = <T extends object>(
+  patch: T,
+  effective: { model?: string | null; provider?: string | null } | null | undefined,
+): T => {
+  if (!effective) return patch;
+  const hasModel = Object.hasOwn(patch, 'model');
+  const hasProvider = Object.hasOwn(patch, 'provider');
+  if (hasModel === hasProvider) return patch;
+
+  const record = patch as { model?: unknown; provider?: unknown };
+  if (hasModel && isNonEmptyString(record.model) && !hasProvider) {
+    return { ...patch, provider: effective.provider } as T;
+  }
+  if (hasProvider && isNonEmptyString(record.provider) && !hasModel) {
+    return { ...patch, model: effective.model } as T;
+  }
+  return patch;
+};
 
 /** Raw inbox row (pre-mergeDefaultConfig) so light-mode overlay does not treat filled defaults as a user choice. */
 const inboxUserRowOptions = (
@@ -459,13 +482,15 @@ export class AgentService {
     agentId: string,
     value: PartialDeep<AgentItem>,
   ): Promise<UpdateAgentResult> {
+    const patch = await this.completeInboxModelProviderPair(agentId, value);
+
     // 1. Execute update
     // `AgentItem` here is the `@lobechat/types` domain shape (plugins:
     // AgentPluginEntry[]); `agentModel.updateConfig` takes the DB-layer
     // AgentItem, whose `plugins` column type is intentionally left as
     // `string[]` (only the domain types are widened for the tri-state
     // rollout, not the JSONB column's compile-time annotation).
-    await this.agentModel.updateConfig(agentId, value as any);
+    await this.agentModel.updateConfig(agentId, patch as any);
 
     // 2. Query and return updated data (with default config merged)
     const agent = await this.getAgentConfigById(agentId);
@@ -473,4 +498,29 @@ export class AgentService {
 
     return { agent: agent as any, success: true };
   }
+
+  /**
+   * Light-mode inbox: a model-only (or provider-only) patch must persist a complete pair
+   * so the raw row never looks half-set. The missing side is taken from the overlaid
+   * config the client already sees. Enforced takeover leaves the patch untouched (writes
+   * of model/provider are rejected by the inbox field guard).
+   */
+  private completeInboxModelProviderPair = async (
+    agentId: string,
+    value: PartialDeep<AgentItem>,
+  ): Promise<PartialDeep<AgentItem>> => {
+    const hasModel = Object.hasOwn(value, 'model');
+    const hasProvider = Object.hasOwn(value, 'provider');
+    if (hasModel === hasProvider) return value;
+
+    const settingModel = hasModel && isNonEmptyString(value.model);
+    const settingProvider = hasProvider && isNonEmptyString(value.provider);
+    if (!settingModel && !settingProvider) return value;
+
+    const effective = await this.getAgentConfig(agentId);
+    if (!effective || effective.slug !== INBOX_SESSION_ID) return value;
+    if (await isPlatformAgentTakeoverActive(this.db)) return value;
+
+    return completeInboxModelProviderPairPatch(value, effective);
+  };
 }

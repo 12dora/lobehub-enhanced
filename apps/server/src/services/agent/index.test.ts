@@ -11,7 +11,7 @@ import type { PlatformDefaultInboxService as PlatformDefaultInboxServiceContract
 import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
 import { parseAgentConfig } from '@/server/globalConfig/parseDefaultAgent';
 
-import { AgentService } from './index';
+import { AgentService, completeInboxModelProviderPairPatch } from './index';
 
 const { mockGetEffectiveBuiltinConfig } = vi.hoisted(() => ({
   mockGetEffectiveBuiltinConfig: vi.fn(async (base: any, _options?: any) => base),
@@ -901,6 +901,123 @@ describe('AgentService', () => {
       ).rejects.toMatchObject({
         code: 'NOT_FOUND',
         message: 'Agent not found',
+      });
+    });
+
+    it('completes a model-only inbox write from the effective pair and returns the user pair', async () => {
+      const mockAgentModel = {
+        getAgentConfig: vi.fn().mockResolvedValue({
+          id: 'inbox-1',
+          model: null,
+          params: {},
+          provider: null,
+          slug: 'inbox',
+        }),
+        getAgentConfigById: vi.fn().mockResolvedValue({
+          id: 'inbox-1',
+          model: 'x',
+          params: {},
+          provider: 'admin-provider',
+          slug: 'inbox',
+        }),
+        updateConfig: vi.fn().mockResolvedValue(undefined),
+      };
+
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({});
+      mockGetEffectiveBuiltinConfig.mockImplementation(async (base: any, options?: any) => {
+        const row = options?.userRow;
+        if (row?.model && row?.provider) {
+          return { ...base, model: row.model, provider: row.provider };
+        }
+        return { ...base, model: 'admin-model', provider: 'admin-provider' };
+      });
+
+      const newService = new AgentService(mockDb, mockUserId);
+      const result = await newService.updateAgentConfig('inbox-1', { model: 'x' });
+
+      expect(mockAgentModel.updateConfig).toHaveBeenCalledWith('inbox-1', {
+        model: 'x',
+        provider: 'admin-provider',
+      });
+      expect(result.agent?.model).toBe('x');
+      expect(result.agent?.provider).toBe('admin-provider');
+    });
+
+    it('completes a provider-only inbox write from the effective pair', async () => {
+      const mockAgentModel = {
+        getAgentConfig: vi.fn().mockResolvedValue({
+          id: 'inbox-1',
+          model: null,
+          provider: null,
+          slug: 'inbox',
+        }),
+        getAgentConfigById: vi.fn().mockResolvedValue({
+          id: 'inbox-1',
+          model: 'admin-model',
+          provider: 'chatgpt',
+          slug: 'inbox',
+        }),
+        updateConfig: vi.fn().mockResolvedValue(undefined),
+      };
+
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({});
+      mockGetEffectiveBuiltinConfig.mockImplementation(async (base: any) => ({
+        ...base,
+        model: 'admin-model',
+        provider: 'admin-provider',
+      }));
+
+      const newService = new AgentService(mockDb, mockUserId);
+      await newService.updateAgentConfig('inbox-1', { provider: 'chatgpt' });
+
+      expect(mockAgentModel.updateConfig).toHaveBeenCalledWith('inbox-1', {
+        model: 'admin-model',
+        provider: 'chatgpt',
+      });
+    });
+
+    it('does not complete a model-only write on a non-inbox agent', async () => {
+      const mockAgentModel = {
+        getAgentConfig: vi.fn().mockResolvedValue({
+          id: 'agent-1',
+          slug: 'other',
+        }),
+        getAgentConfigById: vi.fn().mockResolvedValue({
+          id: 'agent-1',
+          model: 'x',
+          slug: 'other',
+        }),
+        updateConfig: vi.fn().mockResolvedValue(undefined),
+      };
+
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({});
+
+      const newService = new AgentService(mockDb, mockUserId);
+      await newService.updateAgentConfig('agent-1', { model: 'x' });
+
+      expect(mockAgentModel.updateConfig).toHaveBeenCalledWith('agent-1', { model: 'x' });
+    });
+  });
+
+  describe('completeInboxModelProviderPairPatch', () => {
+    it('fills the missing side from the effective pair', () => {
+      expect(
+        completeInboxModelProviderPairPatch({ model: 'x' }, { model: 'a', provider: 'p' }),
+      ).toEqual({ model: 'x', provider: 'p' });
+      expect(
+        completeInboxModelProviderPairPatch({ provider: 'p' }, { model: 'a', provider: 'q' }),
+      ).toEqual({ model: 'a', provider: 'p' });
+    });
+
+    it('is a no-op when both or neither side is present', () => {
+      expect(
+        completeInboxModelProviderPairPatch({ model: 'x', provider: 'p' }, { provider: 'q' }),
+      ).toEqual({ model: 'x', provider: 'p' });
+      expect(completeInboxModelProviderPairPatch({ systemRole: 's' }, { provider: 'p' })).toEqual({
+        systemRole: 's',
       });
     });
   });

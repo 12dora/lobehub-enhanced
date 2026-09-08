@@ -924,10 +924,30 @@ describe('SessionModel', () => {
       expect(inbox).toBeDefined();
       expect(inbox?.slug).toBe('inbox');
 
-      // verify agent config
+      // verify agent config — model/provider/params stay unset so the row follows
+      // the platform default until the user picks. Other DEFAULT_AGENT_CONFIG
+      // fields are still seeded.
       const session = await sessionModel.findByIdOrSlug('inbox');
       expect(session?.agent).toBeDefined();
-      expect(session?.agent.model).toBe(DEFAULT_AGENT_CONFIG.model);
+      expect(session?.agent.model).toBeNull();
+      expect(session?.agent.provider).toBeNull();
+      expect(session?.agent.params).toEqual({});
+      expect(session?.agent.chatConfig).toMatchObject(DEFAULT_AGENT_CONFIG.chatConfig);
+      expect(session?.agent.tts).toMatchObject(DEFAULT_AGENT_CONFIG.tts);
+      expect(session?.agent.systemRole).toBe(DEFAULT_AGENT_CONFIG.systemRole);
+    });
+
+    it('does not persist DEFAULT_AGENT_CONFIG model/provider/params even when passed in', async () => {
+      await sessionModel.createInbox({
+        model: DEFAULT_AGENT_CONFIG.model,
+        params: DEFAULT_AGENT_CONFIG.params,
+        provider: DEFAULT_AGENT_CONFIG.provider,
+      });
+
+      const session = await sessionModel.findByIdOrSlug('inbox');
+      expect(session?.agent.model).toBeNull();
+      expect(session?.agent.provider).toBeNull();
+      expect(session?.agent.params).toEqual({});
     });
 
     it('should not create duplicate inbox session', async () => {
