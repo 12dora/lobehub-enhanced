@@ -13,6 +13,7 @@ import { mutate } from '@/libs/swr';
 import { toolKeys } from '@/libs/swr/keys';
 import { userService } from '@/services/user';
 import { type StoreSetter } from '@/store/types';
+import { readEnterpriseErrorBody } from '@/utils/enterpriseErrorBody';
 import { setNamespace } from '@/utils/storeDebug';
 
 import { type ToolStore } from '../../store';
@@ -66,25 +67,27 @@ const resolveUninstalledBuiltinTools = (
 };
 
 /**
- * Build the full `tool` settings payload for persisting a new uninstalled list
- * in the active scope. The whole object is returned (not a partial) because the
- * server replaces the `tool` column wholesale on update — spreading the current
- * `tool` keeps `humanIntervention` and the other scope's list intact.
+ * Build the skill-slot payload for persisting a new uninstalled list in the
+ * active scope. Only disable-list slots are returned — locked policy leaves
+ * such as `humanIntervention.approvalMode` must not be round-tripped.
  */
-const buildUninstalledToolsUpdate = <T extends UninstalledBuiltinToolsScope>(
-  tool: T | undefined,
+const buildUninstalledToolsUpdate = (
+  tool: UninstalledBuiltinToolsScope | undefined,
   workspaceId: string | null,
   nextUninstalled: string[],
-) =>
-  workspaceId
+): UninstalledBuiltinToolsScope => {
+  const slots = pickSkillDisableSlots(tool);
+
+  return workspaceId
     ? {
-        ...tool,
+        ...slots,
         uninstalledBuiltinToolsByWorkspace: {
           ...tool?.uninstalledBuiltinToolsByWorkspace,
           [workspaceId]: nextUninstalled,
         },
       }
-    : { ...tool, uninstalledBuiltinTools: nextUninstalled };
+    : { ...slots, uninstalledBuiltinTools: nextUninstalled };
+};
 
 /**
  * Resolve the disabled-skill identifier list for the active scope. Mirrors
@@ -100,20 +103,23 @@ const resolveDisabledSkillIdentifiers = (
     : tool?.disabledSkillIdentifiers) ?? [];
 
 /** Counterpart of {@link buildUninstalledToolsUpdate} for the disabled-skill list. */
-const buildDisabledSkillsUpdate = <T extends UninstalledBuiltinToolsScope>(
-  tool: T | undefined,
+const buildDisabledSkillsUpdate = (
+  tool: UninstalledBuiltinToolsScope | undefined,
   workspaceId: string | null,
   nextDisabled: string[],
-) =>
-  workspaceId
+): UninstalledBuiltinToolsScope => {
+  const slots = pickSkillDisableSlots(tool);
+
+  return workspaceId
     ? {
-        ...tool,
+        ...slots,
         disabledSkillIdentifiersByWorkspace: {
           ...tool?.disabledSkillIdentifiersByWorkspace,
           [workspaceId]: nextDisabled,
         },
       }
-    : { ...tool, disabledSkillIdentifiers: nextDisabled };
+    : { ...slots, disabledSkillIdentifiers: nextDisabled };
+};
 
 /**
  * The `settings.tool` slots the skill toggles rewrite. Only these are carried
@@ -126,6 +132,21 @@ const SKILL_DISABLE_SLOTS = [
   'uninstalledBuiltinTools',
   'uninstalledBuiltinToolsByWorkspace',
 ] as const;
+
+/** Copy only the skill disable slots — never locked registry leaves. */
+const pickSkillDisableSlots = (
+  tool: UninstalledBuiltinToolsScope | undefined,
+): UninstalledBuiltinToolsScope => {
+  if (!tool) return {};
+
+  const slots: UninstalledBuiltinToolsScope = {};
+  for (const slot of SKILL_DISABLE_SLOTS) {
+    if (Object.hasOwn(tool, slot) && tool[slot] !== undefined) {
+      slots[slot] = tool[slot] as never;
+    }
+  }
+  return slots;
+};
 
 /**
  * Overlay the disable slots this store already persisted onto a freshly read
@@ -152,6 +173,16 @@ const mergePersistedDisableSlots = <T extends UninstalledBuiltinToolsScope>(
   return merged;
 };
 
+const skillToggleFailureDetail = (error: unknown): string | undefined => {
+  const body = readEnterpriseErrorBody(error);
+  const code = body?.code?.trim();
+  if (code) return code;
+  const bodyMessage = body?.message?.trim();
+  if (bodyMessage) return bodyMessage;
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  return undefined;
+};
+
 /**
  * Builtin Tool Action Interface
  */
@@ -166,7 +197,7 @@ export class BuiltinToolActionImpl {
 
   /**
    * Serializes every `settings.tool` mutation issued by this store. Each toggle
-   * is a read-modify-write of the whole `tool` object, so two overlapping
+   * is a read-modify-write of the skill disable slots, so two overlapping
    * toggles would both rebase on the pre-toggle value and the later write would
    * silently drop the earlier one.
    */
@@ -286,7 +317,9 @@ export class BuiltinToolActionImpl {
   /** Surface a failed skill toggle; the caller has already rolled the store back. */
   #notifySkillToggleFailed = (error: unknown): void => {
     log('skill toggle failed: %o', error);
-    message.error(t('tools.skillEnabled.saveFailed', { ns: 'setting' }));
+    const generic = t('tools.skillEnabled.saveFailed', { ns: 'setting' });
+    const detail = skillToggleFailureDetail(error);
+    message.error(detail ? `${generic} (${detail})` : generic);
   };
 
   /**
@@ -294,10 +327,10 @@ export class BuiltinToolActionImpl {
    * workspace), persisting to the matching slot in user settings.
    *
    * The current list is read fresh from the server so the diff is against the
-   * real stored value (not the default seed), and the full `tool` object is
-   * written back so the other scope's list and `humanIntervention` survive the
-   * server's wholesale column replacement. The whole read-modify-write runs on
-   * the settings queue, so a second toggle can never overwrite the first.
+   * real stored value (not the default seed), and only skill disable slots are
+   * written back so locked policy leaves are never round-tripped. The whole
+   * read-modify-write runs on the settings queue, so a second toggle can never
+   * overwrite the first.
    */
   #toggleBuiltinToolInstalled = (identifier: string, install: boolean): Promise<void> =>
     this.#enqueueToolSettingsMutation(async () => {
@@ -363,8 +396,8 @@ export class BuiltinToolActionImpl {
    * workspace) by writing `disabledSkillIdentifiers` in user settings.
    *
    * Same read-then-write discipline as the builtin list — queued, read fresh
-   * from the server and written back whole, because the server replaces the
-   * column wholesale.
+   * from the server, and written as skill-slot partials so locked policy leaves
+   * are never round-tripped.
    */
   #toggleSkillDisabled = (identifier: string, enabled: boolean): Promise<void> =>
     this.#enqueueToolSettingsMutation(async () => {

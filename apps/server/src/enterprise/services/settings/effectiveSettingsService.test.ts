@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '@/database/core/getTestDB';
+import { UserModel } from '@/database/models/user';
 import { users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 
@@ -502,6 +503,64 @@ describe('EffectiveSettingsService (flag ON)', () => {
 
     const effective2 = await service.getEffectiveSettings({ userId: 'u1' });
     expect(effective2.effectiveValues['general.fontSize']).toBe(16);
+  });
+
+  it('legacy wholesale tool update drops an unchanged locked approvalMode and keeps disable lists', async () => {
+    const base = await admin.getDraft();
+    await admin.save({
+      actorUserId: 'admin',
+      expectedDraftToken: base.draftToken,
+      expectedRevision: base.baseRevision,
+      policies: {
+        'tool.humanIntervention.approvalMode': {
+          mode: 'locked',
+          schemaVersion: 1,
+          value: 'manual',
+          visibility: 'visible',
+        },
+      },
+      reason: 'lock approvalMode',
+    });
+
+    const workspaceId = '550e8400-e29b-41d4-a716-446655440000';
+    const adapted = await service.applyLegacyUpdateSettings({
+      input: {
+        tool: {
+          disabledSkillIdentifiers: ['my-skill'],
+          humanIntervention: { approvalMode: 'manual' },
+          uninstalledBuiltinToolsByWorkspace: { 'ws-1': ['a'], [workspaceId]: ['b'] },
+        },
+      },
+      userId: 'u1',
+    });
+
+    expect(adapted.appliedPaths).not.toContain('tool.humanIntervention.approvalMode');
+
+    const userModel = new UserModel(serverDB, 'u1');
+    const row = await userModel.getUserSettings();
+    expect(row?.tool).toMatchObject({
+      disabledSkillIdentifiers: ['my-skill'],
+      uninstalledBuiltinToolsByWorkspace: { 'ws-1': ['a'], [workspaceId]: ['b'] },
+    });
+    expect(
+      (row?.tool as { humanIntervention?: unknown } | undefined)?.humanIntervention,
+    ).toBeUndefined();
+
+    const effective = await service.getEffectiveSettings({ userId: 'u1' });
+    expect(effective.effectiveValues['tool.humanIntervention.approvalMode']).toBe('manual');
+    expect(effective.pathMeta['tool.humanIntervention.approvalMode']?.locked).toBe(true);
+
+    await expect(
+      service.applyLegacyUpdateSettings({
+        input: {
+          tool: {
+            disabledSkillIdentifiers: ['other'],
+            humanIntervention: { approvalMode: 'auto-run' },
+          },
+        },
+        userId: 'u1',
+      }),
+    ).rejects.toMatchObject({ code: 'MANAGED_SETTING_BY_ADMIN' });
   });
 
   it('user isolation', async () => {

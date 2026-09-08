@@ -31,7 +31,7 @@ import {
   settingsSoftCacheSize,
 } from './effectiveSettingsCache';
 import { SettingsPathError } from './effectiveSettingsErrors';
-import { collectLegacyOverrideOps } from './effectiveSettingsLegacyOps';
+import { collectLegacyOverrideOps, dropNoopLockedLegacyOps } from './effectiveSettingsLegacyOps';
 import { publishedRowsToPolicyMap } from './effectiveSettingsMaps';
 import { loadEffectiveSettings, reportSettingsUnavailable } from './effectiveSettingsRead';
 import type { SettingsMutationLifecycle } from './effectiveSettingsTypes';
@@ -311,25 +311,28 @@ export class EffectiveSettingsService {
 
     // 2) Single transaction: re-check locks, overrides, revision, legacy write
     let revision = 0;
+    let writableOps = ops;
     await this.db.transaction(async (tx) => {
       const model = new PlatformSettingsModel(tx);
       await this.lifecycle.beforeBundleLock?.('legacyUpdate');
       await model.lockBundleForUpdate();
       await this.lifecycle.afterBundleLock?.('legacyUpdate');
+      const lockedEffectiveValues = new Map<string, unknown>();
       for (const op of ops) {
         const policy = await model.getPublishedPolicy(op.path);
         if (policy?.mode === 'locked') {
-          throw new SettingsPathError(MANAGED_ERROR_CODES.MANAGED_SETTING_BY_ADMIN);
+          lockedEffectiveValues.set(op.path, policy.value);
         }
       }
-      if (ops.length > 0) {
+      writableOps = dropNoopLockedLegacyOps(ops, lockedEffectiveValues);
+      if (writableOps.length > 0) {
         revision = await model.upsertUserOverridesBatch({
           afterOverrideWrite: async (index) =>
             this.lifecycle.afterManagedOverrideWrite?.('legacyUpdate', index),
           alreadyInTransaction: true,
           beforeRevisionBump: async () =>
             this.lifecycle.beforeOverrideRevisionBump?.('legacyUpdate'),
-          ops,
+          ops: writableOps,
           userId: params.userId,
         });
       }
@@ -342,7 +345,7 @@ export class EffectiveSettingsService {
     });
 
     dropUserCache(params.userId);
-    if (ops.length > 0 || Object.keys(legacyPartial).length > 0) {
+    if (writableOps.length > 0 || Object.keys(legacyPartial).length > 0) {
       await this.invalidation.publish({
         at: new Date().toISOString(),
         resourceId: params.userId,
@@ -352,7 +355,7 @@ export class EffectiveSettingsService {
       });
     }
 
-    return { appliedPaths: ops.map((o) => o.path) };
+    return { appliedPaths: writableOps.map((o) => o.path) };
   };
 }
 

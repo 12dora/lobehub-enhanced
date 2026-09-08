@@ -1,3 +1,5 @@
+import isEqual from 'fast-deep-equal';
+
 import { MANAGED_ERROR_CODES } from '@/const/platform/errorCodes';
 
 import { SettingsPathError } from './effectiveSettingsErrors';
@@ -37,4 +39,30 @@ export function collectLegacyOverrideOps(
   }
 
   return ops;
+}
+
+/**
+ * Wholesale legacy updates echo the whole effective blob, including locked
+ * registry leaves the user did not change. Those ops are no-ops and must be
+ * dropped before the lock check; a different value is still forbidden.
+ *
+ * `lockedEffectiveValues` is keyed by path and must only contain currently
+ * locked leaves (mode=locked). Unregistered skill-list fields never appear here.
+ */
+export function dropNoopLockedLegacyOps(
+  ops: Array<{ path: string; value: unknown }>,
+  lockedEffectiveValues: ReadonlyMap<string, unknown>,
+): Array<{ path: string; value: unknown }> {
+  const writable: Array<{ path: string; value: unknown }> = [];
+
+  for (const op of ops) {
+    if (!lockedEffectiveValues.has(op.path)) {
+      writable.push(op);
+      continue;
+    }
+    if (isEqual(op.value, lockedEffectiveValues.get(op.path))) continue;
+    throw new SettingsPathError(MANAGED_ERROR_CODES.MANAGED_SETTING_BY_ADMIN);
+  }
+
+  return writable;
 }

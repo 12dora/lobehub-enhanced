@@ -4,7 +4,15 @@
  */
 
 const SEGMENT_RE = /^[A-Z]\w*$/i;
+/**
+ * Flatten walks user maps (`*ByWorkspace` keyed by workspace id / UUID), not
+ * only registered identifier paths. Hyphens and leading digits must survive.
+ */
+const FLATTEN_SEGMENT_RE = /^[\w-]+$/;
 const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+const isWalkableFlattenKey = (key: string): boolean =>
+  Boolean(key) && !FORBIDDEN_SEGMENTS.has(key) && FLATTEN_SEGMENT_RE.test(key);
 
 export const splitSettingPath = (path: string): string[] => {
   if (!path || typeof path !== 'string') return [];
@@ -131,7 +139,7 @@ export const flattenLeaves = (
 
   const out: Array<{ path: string; value: unknown }> = [];
   for (const [key, child] of entries) {
-    if (!SEGMENT_RE.test(key)) continue;
+    if (!isWalkableFlattenKey(key)) continue;
     const next = prefix ? `${prefix}.${key}` : key;
     out.push(...flattenLeaves(child, next));
   }

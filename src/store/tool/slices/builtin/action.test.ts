@@ -149,7 +149,6 @@ describe('createBuiltinToolSlice', () => {
 
       expect(updateSpy).toHaveBeenCalledWith({
         tool: {
-          humanIntervention: { approvalMode: 'manual' },
           uninstalledBuiltinTools: ['b'],
         },
       });
@@ -236,7 +235,6 @@ describe('createBuiltinToolSlice', () => {
       expect(updateSpy).toHaveBeenCalledWith({
         tool: {
           disabledSkillIdentifiers: ['my-skill'],
-          humanIntervention: { approvalMode: 'manual' },
           uninstalledBuiltinTools: ['a'],
         },
       });
@@ -383,6 +381,7 @@ describe('createBuiltinToolSlice', () => {
 
       expect(result.current.disabledSkillIdentifiers).toEqual([]);
       expect(message.error).toHaveBeenCalledTimes(1);
+      expect(message.error).toHaveBeenCalledWith(expect.stringContaining('offline'));
     });
 
     it('rolls the builtin list back when the write fails', async () => {
@@ -407,6 +406,37 @@ describe('createBuiltinToolSlice', () => {
       });
 
       expect(result.current.uninstalledBuiltinTools).toEqual([]);
+    });
+
+    it('includes the server error code in the failed-write toast', async () => {
+      vi.spyOn(workspaceHooks, 'getActiveWorkspaceId').mockReturnValue(null);
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+      mockUserState({ disabledSkillIdentifiers: [] });
+      vi.spyOn(userService, 'updateUserSettings').mockRejectedValue(
+        Object.assign(new Error('FORBIDDEN'), {
+          data: { errorData: { code: 'MANAGED_SETTING_BY_ADMIN' } },
+        }),
+      );
+      vi.mocked(message.error).mockClear();
+
+      const { result } = renderHook(() => useToolStore());
+      act(() => {
+        useToolStore.setState({ disabledSkillIdentifiers: [] });
+      });
+
+      await act(async () => {
+        await expect(
+          result.current.setSkillEnabled({
+            enabled: false,
+            identifier: 'my-skill',
+            kind: 'skill',
+          }),
+        ).rejects.toThrow();
+      });
+
+      expect(message.error).toHaveBeenCalledWith(
+        expect.stringContaining('MANAGED_SETTING_BY_ADMIN'),
+      );
     });
 
     it('is a no-op when the skill is already in the desired state', async () => {

@@ -45,4 +45,24 @@ describe('pathUtils', () => {
       ]),
     );
   });
+
+  it('flattenLeaves preserves hyphenated and UUID map keys', () => {
+    const workspaceId = '550e8400-e29b-41d4-a716-446655440000';
+    const leaves = flattenLeaves({
+      tool: {
+        uninstalledBuiltinToolsByWorkspace: {
+          'ws-1': ['a'],
+          [workspaceId]: ['b'],
+        },
+      },
+    });
+
+    expect(leaves).toEqual(
+      expect.arrayContaining([
+        { path: 'tool.uninstalledBuiltinToolsByWorkspace.ws-1', value: ['a'] },
+        { path: `tool.uninstalledBuiltinToolsByWorkspace.${workspaceId}`, value: ['b'] },
+      ]),
+    );
+    expect(leaves.some((leaf) => leaf.path.includes('__proto__'))).toBe(false);
+  });
 });
