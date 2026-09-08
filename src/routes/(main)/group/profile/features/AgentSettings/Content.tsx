@@ -21,10 +21,15 @@ const Content = memo(() => {
   const updateGroupConfig = async (config: any) => {
     if (!canEdit) return;
     if (!groupId) return;
+    // The settings store sends only the edited fields; copying an absent key would overwrite the
+    // stored value with undefined (updateGroupConfig spreads, it does not merge).
     const groupConfig = {
-      openingMessage: config.openingMessage,
-      openingQuestions: config.openingQuestions,
+      ...(Object.hasOwn(config, 'openingMessage') && { openingMessage: config.openingMessage }),
+      ...(Object.hasOwn(config, 'openingQuestions') && {
+        openingQuestions: config.openingQuestions,
+      }),
     };
+    if (Object.keys(groupConfig).length === 0) return;
     await useAgentGroupStore.getState().updateGroupConfig(groupConfig);
   };
 

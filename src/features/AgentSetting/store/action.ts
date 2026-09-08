@@ -92,6 +92,37 @@ export type Store = Action & State;
 
 const t = setNamespace('AgentSettings');
 
+/**
+ * What a dispatch actually writes back. The store keeps the whole effective config, but a save must
+ * carry only the edited fields: on the platform-managed default inbox the server rejects a patch
+ * that merely mentions an admin-owned field (`slug`, `systemRole`, `title`, `avatar`, …), so
+ * resending the whole config turned every edit — a chatConfig switch included — into an error toast.
+ * Consumers deep-merge what they receive (`optimisticUpdateAgentConfig`), so a patch is enough.
+ */
+const configPatchOf = (
+  payload: ConfigDispatch,
+  nextConfig: LobeAgentConfig,
+): PartialDeep<LobeAgentConfig> => {
+  switch (payload.type) {
+    case 'update': {
+      return payload.config;
+    }
+
+    case 'togglePlugin': {
+      return { plugins: nextConfig.plugins };
+    }
+
+    // A reset deliberately rewrites every field back to the defaults.
+    default: {
+      return nextConfig;
+    }
+  }
+};
+
+/** Same rule for the meta half: only the edited fields, except on a deliberate reset. */
+const metaPatchOf = (payload: MetaDataDispatch, nextValue: MetaData): Partial<MetaData> =>
+  payload.type === 'update' ? payload.value : nextValue;
+
 export const store: StateCreator<Store, [['zustand/devtools', never]]> = (set, get) => ({
   ...initialState,
   autoPickEmoji: async () => {
@@ -258,7 +289,8 @@ export const store: StateCreator<Store, [['zustand/devtools', never]]> = (set, g
     if (get().onConfigChange) {
       get().updateSaveStatus('saving');
       try {
-        await get().onConfigChange?.(nextConfig);
+        // The prop is still typed as the whole config; widening it is the consumers' change.
+        await get().onConfigChange?.(configPatchOf(payload, nextConfig) as LobeAgentConfig);
         get().updateSaveStatus('saved');
       } catch (error: any) {
         if (error?.name === 'AbortError' || error?.message?.includes('aborted')) {
@@ -278,7 +310,7 @@ export const store: StateCreator<Store, [['zustand/devtools', never]]> = (set, g
     if (get().onMetaChange) {
       get().updateSaveStatus('saving');
       try {
-        await get().onMetaChange?.(nextValue);
+        await get().onMetaChange?.(metaPatchOf(payload, nextValue) as MetaData);
         get().updateSaveStatus('saved');
       } catch (error: any) {
         if (error?.name === 'AbortError' || error?.message?.includes('aborted')) {
