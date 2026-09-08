@@ -39,7 +39,8 @@ const createEgressFetchMock = vi.hoisted(() => vi.fn(() => hostnameEgressFetch))
 vi.mock('../chatgptWeb/transport', () => ({ getChatGPTWebFetch: () => impersonatedFetch }));
 vi.mock('../cursorAgent', () => ({ getCursorAgentFetch: () => cursorAgentFetch }));
 vi.mock('../networkProxy/egress/fetch', () => ({
-  createEgressFetch: (...args: unknown[]) => createEgressFetchMock(...args),
+  createEgressFetch: (...args: unknown[]) =>
+    (createEgressFetchMock as unknown as (...params: unknown[]) => unknown)(...args),
 }));
 
 /** Captures the runtime init options so transport/retry wiring is assertable. */

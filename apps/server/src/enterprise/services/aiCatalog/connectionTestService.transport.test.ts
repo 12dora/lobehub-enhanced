@@ -16,7 +16,8 @@ const hostnameEgressFetch = vi.hoisted(() => vi.fn());
 const createEgressFetchMock = vi.hoisted(() => vi.fn(() => hostnameEgressFetch));
 
 vi.mock('../networkProxy/egress/fetch', () => ({
-  createEgressFetch: (...args: unknown[]) => createEgressFetchMock(...args),
+  createEgressFetch: (...args: unknown[]) =>
+    (createEgressFetchMock as unknown as (...params: unknown[]) => unknown)(...args),
 }));
 
 const okJson = (body: unknown): PinnedTransportResponse => ({
@@ -649,7 +650,10 @@ L5cQAJVyU/9xX/AcEgAxKA==
           oauthAccountId: 'acct-not-real',
         },
         model: 'gpt-6-astra',
-        provider: { ...chatgptProvider, checkModel: 'gpt-6-astra' },
+        provider: {
+          ...(chatgptProvider as Record<string, unknown>),
+          checkModel: 'gpt-6-astra',
+        } as never,
         runtimeProvider: 'chatgpt',
       });
 
