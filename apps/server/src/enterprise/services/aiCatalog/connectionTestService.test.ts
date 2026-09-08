@@ -32,9 +32,15 @@ const chatMock = vi.hoisted(() =>
 const impersonatedFetch = vi.hoisted(() => vi.fn());
 /** Sentinel standing in for the Cursor Agent CLI transport. */
 const cursorAgentFetch = vi.hoisted(() => vi.fn());
+/** Sentinel standing in for ChatGPT Codex production egress fetch. */
+const hostnameEgressFetch = vi.hoisted(() => vi.fn());
+const createEgressFetchMock = vi.hoisted(() => vi.fn(() => hostnameEgressFetch));
 
 vi.mock('../chatgptWeb/transport', () => ({ getChatGPTWebFetch: () => impersonatedFetch }));
 vi.mock('../cursorAgent', () => ({ getCursorAgentFetch: () => cursorAgentFetch }));
+vi.mock('../networkProxy/egress/fetch', () => ({
+  createEgressFetch: (...args: unknown[]) => createEgressFetchMock(...args),
+}));
 
 /** Captures the runtime init options so transport/retry wiring is assertable. */
 const initRuntimeMock = vi.hoisted(() => vi.fn());
@@ -267,6 +273,18 @@ describe('classifyAiConnectionFailure', () => {
     ).toMatchObject({ errorCategory: 'network' });
   });
 
+  it('reads a TLS reset from a DNS-pinned proxy CONNECT as network', () => {
+    // The error SafeOutbound actually throws when NODE_USE_ENV_PROXY CONNECTs to the
+    // pinned chatgpt.com IP: the corporate proxy resets the handshake. Mapped to the
+    // same connection_failed_network code the admin checker shows.
+    const error = Object.assign(
+      new Error('Client network socket disconnected before secure TLS connection was established'),
+      { code: 'ECONNRESET' },
+    );
+    expect(classifyAiConnectionFailure(error)).toMatchObject({ errorCategory: 'network' });
+    expect(aiConnectionFailureCode('network')).toBe('connection_failed_network');
+  });
+
   it('keeps a plain provider 400 in the provider bucket', () => {
     expect(
       classifyAiConnectionFailure(
@@ -312,6 +330,80 @@ describe('classifyAiConnectionFailure', () => {
       errorCategory: 'auth',
       status: 401,
     });
+  });
+});
+
+describe('createSafeAiConnectionProbe ChatGPT Codex transport', () => {
+  const probe = () =>
+    createSafeAiConnectionProbe(
+      createSafeOutboundHttpClient({
+        resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+        transport: vi.fn(),
+      }),
+    );
+
+  /**
+   * SafeOutbound DNS-pins and CONNECTs to the literal IP. With NODE_USE_ENV_PROXY=1
+   * that hop is reset by the corporate proxy; production chat uses createEgressFetch
+   * (hostname CONNECT) and works. The probe must take the same path.
+   */
+  it('probes chatgpt through createEgressFetch, not SafeOutbound, streaming', async () => {
+    chatMock.mockClear();
+    initRuntimeMock.mockClear();
+    createEgressFetchMock.mockClear();
+    hostnameEgressFetch.mockClear();
+    hostnameEgressFetch.mockResolvedValue(streamingResponse());
+    chatMock.mockResolvedValueOnce(streamingResponse());
+
+    await probe()({
+      keyVaults: { oauthAccessToken: 'fake-token' },
+      model: 'gpt-5.5',
+      provider: { ...provider, checkModel: 'gpt-5.5', providerKey: 'chatgpt' },
+      runtimeProvider: 'chatgpt',
+    });
+
+    expect(createEgressFetchMock).toHaveBeenCalledWith('provider:chatgpt');
+    const transport = initRuntimeMock.mock.calls[0][2] as Record<string, unknown>;
+    expect(transport.fetch).not.toBe(hostnameEgressFetch);
+    expect(transport.fetch).not.toBe(impersonatedFetch);
+    expect(transport.maxRetries).toBe(0);
+    expect(chatMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.5', stream: true }),
+      expect.anything(),
+    );
+  });
+
+  it('bounds the Codex probe with the streaming deadline and reuses it across hops', async () => {
+    chatMock.mockClear();
+    initRuntimeMock.mockClear();
+    createEgressFetchMock.mockClear();
+    hostnameEgressFetch.mockClear();
+    hostnameEgressFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+    chatMock.mockResolvedValueOnce(streamingResponse());
+
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      await probe()({
+        keyVaults: { oauthAccessToken: 'fake-token' },
+        model: 'gpt-5.5',
+        provider: { ...provider, checkModel: 'gpt-5.5', providerKey: 'chatgpt' },
+        runtimeProvider: 'chatgpt',
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+
+      const wrapped = (initRuntimeMock.mock.calls[0][2] as { fetch: typeof fetch }).fetch;
+      await wrapped('https://chatgpt.com/backend-api/codex/responses');
+      await wrapped('https://chatgpt.com/backend-api/codex/models');
+
+      expect(hostnameEgressFetch).toHaveBeenCalledTimes(2);
+      const first = (hostnameEgressFetch.mock.calls[0][1] as RequestInit).signal;
+      const second = (hostnameEgressFetch.mock.calls[1][1] as RequestInit).signal;
+      expect(first).toBeInstanceOf(AbortSignal);
+      expect(second).toBe(first);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
 

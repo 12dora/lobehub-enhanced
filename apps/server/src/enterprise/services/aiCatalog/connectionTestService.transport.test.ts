@@ -8,12 +8,16 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSafeOutboundHttpClient } from '../../security/outboundHttp';
-import type {
-  PinnedTransportRequest,
-  PinnedTransportResponse,
-} from '../../security/outboundHttp/types';
+import type { PinnedTransportResponse } from '../../security/outboundHttp/types';
 import { createSafeAiConnectionProbe } from './connectionTestService';
 import { resolveAiCatalogOutboundMode } from './outboundMode';
+
+const hostnameEgressFetch = vi.hoisted(() => vi.fn());
+const createEgressFetchMock = vi.hoisted(() => vi.fn(() => hostnameEgressFetch));
+
+vi.mock('../networkProxy/egress/fetch', () => ({
+  createEgressFetch: (...args: unknown[]) => createEgressFetchMock(...args),
+}));
 
 const okJson = (body: unknown): PinnedTransportResponse => ({
   body: Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)),
@@ -398,9 +402,9 @@ L5cQAJVyU/9xX/AcEgAxKA==
   });
 
   /**
-   * The shared-ChatGPT (Codex) backend is streaming-first. Before this, the probe asked for
-   * `stream: true` but ran on the BUFFERING adapter, so the SDK call could not return until the
-   * whole completion had arrived — inside a 15s round-trip budget a reasoning model never met.
+   * The shared-ChatGPT (Codex) backend is streaming-first AND must use production's
+   * hostname-based egress fetch. SafeOutbound DNS-pins + CONNECT-to-IP hangs behind
+   * NODE_USE_ENV_PROXY; createEgressFetch CONNECTs to chatgpt.com and matches chat.
    */
   describe('chatgpt streaming probe', () => {
     const chatgptProvider = {
@@ -418,47 +422,90 @@ L5cQAJVyU/9xX/AcEgAxKA==
       status: 'draft',
     } as never;
 
-    const lowerCaseHeaders = (headers: Record<string, string>) =>
-      Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
-
-    it('resolves on the first SSE chunk while the upstream stream is still open', async () => {
-      const requests: PinnedTransportRequest[] = [];
-      let streamCancelled = false;
-      const bufferingTransport = vi.fn();
-
-      const streamingTransport = vi.fn(async (req: PinnedTransportRequest) => {
-        requests.push(req);
-        // The real pinned streaming transport tears the socket down on abort; mirror that so
-        // "the probe hung up" is observable here.
-        req.signal?.addEventListener('abort', () => {
-          streamCancelled = true;
+    const lowerCaseHeaders = (headers: HeadersInit | undefined) => {
+      const record: Record<string, string> = {};
+      if (!headers) return record;
+      if (headers instanceof Headers) {
+        headers.forEach((value, key) => {
+          record[key.toLowerCase()] = value;
         });
-        const body = new ReadableStream<Uint8Array>({
-          cancel: () => {
-            streamCancelled = true;
-          },
+        return record;
+      }
+      if (Array.isArray(headers)) {
+        for (const [key, value] of headers) record[key.toLowerCase()] = value;
+        return record;
+      }
+      return Object.fromEntries(
+        Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]),
+      );
+    };
+
+    const extractUrl = (input: RequestInfo | URL): string => {
+      if (typeof input === 'string') return input;
+      if (input instanceof URL) return input.href;
+      return input.url;
+    };
+
+    const notFound = () => new Response('{}', { status: 404 });
+
+    const isCodexResponsesUrl = (url: string) =>
+      url.includes('chatgpt.com') && url.includes('/responses');
+
+    const isCodexModelsUrl = (url: string) =>
+      url.includes('chatgpt.com') && url.includes('/models');
+
+    const extractBodyText = async (init?: RequestInit): Promise<string> => {
+      const body = init?.body;
+      if (body == null) return '';
+      if (typeof body === 'string') return body;
+      if (body instanceof ArrayBuffer) return Buffer.from(body).toString('utf8');
+      if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer).toString('utf8');
+      if (typeof Blob !== 'undefined' && body instanceof Blob) return body.text();
+      return String(body);
+    };
+
+    const unusedOutbound = () =>
+      createSafeOutboundHttpClient({
+        resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+        streamingTransport: vi.fn(),
+        transport: vi.fn(),
+      });
+
+    beforeEach(() => {
+      hostnameEgressFetch.mockReset();
+      createEgressFetchMock.mockClear();
+    });
+
+    const sseResponse = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
           start: (controller) => {
             controller.enqueue(
               new TextEncoder().encode(
                 'data: {"type":"response.created","response":{"id":"resp_probe","status":"in_progress"}}\n\n',
               ),
             );
-            // Deliberately never closed: a probe that needs the completion would hang here.
           },
-        });
-        return new Response(body, {
-          headers: { 'content-type': 'text/event-stream' },
-          status: 200,
-        });
+        }),
+        { headers: { 'content-type': 'text/event-stream' }, status: 200 },
+      );
+
+    it('does not send the Codex probe through the injected SafeOutbound transports', async () => {
+      const bufferingTransport = vi.fn();
+      const streamingTransport = vi.fn();
+      hostnameEgressFetch.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = extractUrl(input);
+        if (isCodexModelsUrl(url) || !isCodexResponsesUrl(url)) return notFound();
+        return sseResponse();
       });
 
-      const outbound = createSafeOutboundHttpClient({
-        resolve: async () => [{ address: '93.184.216.34', family: 4 }],
-        streamingTransport,
-        transport: bufferingTransport,
-      });
-
-      await createSafeAiConnectionProbe(outbound)({
+      await createSafeAiConnectionProbe(
+        createSafeOutboundHttpClient({
+          resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+          streamingTransport,
+          transport: bufferingTransport,
+        }),
+      )({
         keyVaults: {
           oauthAccessToken: 'chatgpt-access-token-not-real',
           oauthAccountId: 'acct-not-real',
@@ -468,20 +515,67 @@ L5cQAJVyU/9xX/AcEgAxKA==
         runtimeProvider: 'chatgpt',
       });
 
-      expect(streamingTransport).toHaveBeenCalledTimes(1);
-      // A buffering hop here is the bug: it waits for `res.on('end')`.
+      expect(createEgressFetchMock).toHaveBeenCalledWith('provider:chatgpt');
+      expect(streamingTransport).not.toHaveBeenCalled();
       expect(bufferingTransport).not.toHaveBeenCalled();
-      expect(streamCancelled).toBe(true);
-      expect(requests[0]!.signal?.aborted).toBe(true);
-      expect(globalFetchCalls).toEqual([]);
+      expect(globalFetchCalls.filter((url) => url.includes('chatgpt.com'))).toEqual([]);
+    });
 
-      const request = requests[0]!;
-      expect(request.url.toString()).toBe('https://chatgpt.com/backend-api/codex/responses');
-      const headers = lowerCaseHeaders(request.headers);
+    it('resolves on the first SSE chunk while the upstream stream is still open', async () => {
+      const requests: Array<{ init?: RequestInit; url: string }> = [];
+      let streamCancelled = false;
+
+      hostnameEgressFetch.mockImplementation(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = extractUrl(input);
+          requests.push({ init, url });
+          if (isCodexModelsUrl(url) || !isCodexResponsesUrl(url)) return notFound();
+          init?.signal?.addEventListener('abort', () => {
+            streamCancelled = true;
+          });
+          const body = new ReadableStream<Uint8Array>({
+            cancel: () => {
+              streamCancelled = true;
+            },
+            start: (controller) => {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"type":"response.created","response":{"id":"resp_probe","status":"in_progress"}}\n\n',
+                ),
+              );
+              // Deliberately never closed: a probe that needs the completion would hang here.
+            },
+          });
+          return new Response(body, {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
+          });
+        },
+      );
+
+      await createSafeAiConnectionProbe(unusedOutbound())({
+        keyVaults: {
+          oauthAccessToken: 'chatgpt-access-token-not-real',
+          oauthAccountId: 'acct-not-real',
+        },
+        model: 'gpt-5.5',
+        provider: chatgptProvider,
+        runtimeProvider: 'chatgpt',
+      });
+
+      expect(streamCancelled).toBe(true);
+      const responseRequest = requests.find((item) => item.url.includes('/responses'));
+      expect(responseRequest).toBeDefined();
+      expect(responseRequest!.url).toBe('https://chatgpt.com/backend-api/codex/responses');
+      expect(responseRequest!.init?.signal?.aborted).toBe(true);
+      // Codex may resolve its client version from GitHub; the chatgpt.com hop must not.
+      expect(globalFetchCalls.filter((url) => url.includes('chatgpt.com'))).toEqual([]);
+
+      const headers = lowerCaseHeaders(responseRequest!.init?.headers);
       expect(headers['chatgpt-account-id']).toBe('acct-not-real');
       expect(headers['originator']).toBe('lobehub');
 
-      const payload = JSON.parse(request.body!.toString('utf8'));
+      const payload = JSON.parse(await extractBodyText(responseRequest!.init));
       expect(payload.model).toBe('gpt-5.5');
       expect(payload.stream).toBe(true);
       expect(payload.store).toBe(false);
@@ -491,7 +585,9 @@ L5cQAJVyU/9xX/AcEgAxKA==
     });
 
     it('makes exactly one attempt (maxRetries: 0) instead of the SDK retry storm', async () => {
-      const streamingTransport = vi.fn(async () => {
+      hostnameEgressFetch.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = extractUrl(input);
+        if (isCodexModelsUrl(url) || !isCodexResponsesUrl(url)) return notFound();
         // A retryable status: the SDK default (2 retries) would call this three times, each
         // one paying the full streaming budget before the operator sees any verdict.
         const body = new ReadableStream<Uint8Array>({
@@ -506,14 +602,8 @@ L5cQAJVyU/9xX/AcEgAxKA==
         });
       });
 
-      const outbound = createSafeOutboundHttpClient({
-        resolve: async () => [{ address: '93.184.216.34', family: 4 }],
-        streamingTransport,
-        transport: vi.fn(),
-      });
-
       await expect(
-        createSafeAiConnectionProbe(outbound)({
+        createSafeAiConnectionProbe(unusedOutbound())({
           keyVaults: {
             oauthAccessToken: 'chatgpt-access-token-not-real',
             oauthAccountId: 'acct-not-real',
@@ -524,7 +614,52 @@ L5cQAJVyU/9xX/AcEgAxKA==
         }),
       ).rejects.toBeDefined();
 
-      expect(streamingTransport).toHaveBeenCalledTimes(1);
+      const responseCalls = hostnameEgressFetch.mock.calls.filter((call) =>
+        extractUrl(call[0] as RequestInfo | URL).includes('/responses'),
+      );
+      expect(responseCalls).toHaveLength(1);
+    });
+
+    it('sends the Responses Lite header for catalog models through the real ChatGPT runtime', async () => {
+      const requests: Array<{ init?: RequestInit; url: string }> = [];
+      hostnameEgressFetch.mockImplementation(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = extractUrl(input);
+          requests.push({ init, url });
+          if (isCodexModelsUrl(url) || !isCodexResponsesUrl(url)) return notFound();
+          const body = new ReadableStream<Uint8Array>({
+            start: (controller) => {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"type":"response.created","response":{"id":"resp_lite","status":"in_progress"}}\n\n',
+                ),
+              );
+            },
+          });
+          return new Response(body, {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
+          });
+        },
+      );
+
+      await createSafeAiConnectionProbe(unusedOutbound())({
+        keyVaults: {
+          oauthAccessToken: 'chatgpt-access-token-not-real',
+          oauthAccountId: 'acct-not-real',
+        },
+        model: 'gpt-6-astra',
+        provider: { ...chatgptProvider, checkModel: 'gpt-6-astra' },
+        runtimeProvider: 'chatgpt',
+      });
+
+      const responseRequest = requests.find((item) => item.url.includes('/responses'));
+      expect(responseRequest).toBeDefined();
+      const headers = lowerCaseHeaders(responseRequest!.init?.headers);
+      expect(headers['x-openai-internal-codex-responses-lite']).toBe('true');
+      const payload = JSON.parse(await extractBodyText(responseRequest!.init));
+      expect(payload.model).toBe('gpt-6-astra');
+      expect(payload.stream).toBe(true);
     });
   });
 

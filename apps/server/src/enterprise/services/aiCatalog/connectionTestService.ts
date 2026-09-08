@@ -25,6 +25,7 @@ import {
 } from '../../security/outboundHttp';
 import { getChatGPTWebFetch } from '../chatgptWeb/transport';
 import { getCursorAgentFetch } from '../cursorAgent';
+import { createEgressFetch } from '../networkProxy/egress/fetch';
 import { getEgressProxyUrlForCurl } from '../networkProxy/egress/router';
 import { createEgressSafeOutboundTransport } from '../networkProxy/egress/safeOutboundTransport';
 import { resolveAiCatalogOutboundMode } from './outboundMode';
@@ -66,6 +67,23 @@ export interface AiConnectionRuntimeTransportOptions {
  * the cheaper single-shot completion.
  */
 const RESPONSES_ONLY_RUNTIMES = new Set(['chatgpt', 'chatgptweb', 'grok', 'supergrok', 'xai']);
+
+/**
+ * Runtimes whose production chat transport is hostname-based Node/undici fetch
+ * (`createEgressFetch`), not the SSRF-pinned SafeOutbound client.
+ *
+ * chatgpt.com's Codex API is reachable through the process `HTTPS_PROXY` when the
+ * request CONNECTs to the hostname. SafeOutbound DNS-pins and then CONNECTs to the
+ * literal IP; with `NODE_USE_ENV_PROXY=1` that hop is reset or hung by the corporate
+ * proxy (NO_PROXY matches hostnames, not the pinned address). Production chat already
+ * uses `createEgressFetch` for this runtime — the probe must too, or an operator sees
+ * `connection_failed_network` for a provider that chats fine.
+ *
+ * The outbound POLICY still applies for every other provider. The DNS/IP guard is
+ * skipped only for this fixed, provider-owned host — the same rationale as the
+ * impersonated transports below.
+ */
+const HOSTNAME_EGRESS_FETCH_RUNTIMES = new Set<string>([ModelProvider.ChatGPT]);
 
 /**
  * Runtimes whose production transport is NOT the enterprise outbound adapter.
@@ -398,9 +416,11 @@ export const createSafeAiConnectionProbe = (
     // One deadline for the WHOLE probe, not per hop — see `withProbeDeadline`. It is armed
     // here, once per invocation, and reaches both the transport and the runtime call.
     const impersonated = IMPERSONATED_TRANSPORT_RUNTIMES.has(runtimeProvider);
-    const probeDeadline = impersonated
-      ? AbortSignal.timeout(AI_CONNECTION_TEST_STREAM_TIMEOUT_MS)
-      : undefined;
+    const hostnameEgress = HOSTNAME_EGRESS_FETCH_RUNTIMES.has(runtimeProvider);
+    const probeDeadline =
+      impersonated || hostnameEgress
+        ? AbortSignal.timeout(AI_CONNECTION_TEST_STREAM_TIMEOUT_MS)
+        : undefined;
 
     const extractUrl = (input: RequestInfo | URL): string => {
       if (typeof input === 'string') return input;
@@ -409,7 +429,7 @@ export const createSafeAiConnectionProbe = (
       return String(input);
     };
 
-    const fetchAdapter = probeDeadline
+    const fetchAdapter = impersonated
       ? withProbeDeadline(async (input, init) => {
           const proxyUrl = await getEgressProxyUrlForCurl(scope, extractUrl(input));
           if (runtimeProvider === ModelProvider.Cursor) {
@@ -418,10 +438,12 @@ export const createSafeAiConnectionProbe = (
           return getChatGPTWebFetch(proxyUrl, {
             impersonate: (browserProfile ?? DEFAULT_BROWSER_DEVICE_PROFILE).impersonateProfile,
           })(input, init);
-        }, probeDeadline)
-      : stream
-        ? streamingFetchAdapter
-        : bufferedFetchAdapter;
+        }, probeDeadline!)
+      : hostnameEgress
+        ? withProbeDeadline(createEgressFetch(scope), probeDeadline!)
+        : stream
+          ? streamingFetchAdapter
+          : bufferedFetchAdapter;
     const transport: AiConnectionRuntimeTransportOptions = {
       /**
        * Whatever the caller resolved, for EVERY runtime that presents an installation
