@@ -48,6 +48,23 @@ const isAgentPlatformManagedById =
   (s: AgentStoreState): boolean =>
     s.agentMap[agentId]?.platform?.managed === true;
 
+/**
+ * The agent's model / provider / model parameters are pinned by the platform, so the chat model
+ * switcher and the model-parameter controls must render read-only.
+ *
+ * A managed agent is pinned unless the server explicitly says the platform version only supplies
+ * DEFAULTS (`platform.modelLocked === false`, the default inbox while the catalog takeover is off):
+ * there the member may switch model and tune parameters, and only the identity fields stay
+ * admin-owned. An older payload without the field keeps the pinned behaviour.
+ */
+const isAgentModelLockedById =
+  (agentId: string) =>
+  (s: AgentStoreState): boolean => {
+    const platform = s.agentMap[agentId]?.platform;
+
+    return platform?.managed === true && platform?.modelLocked !== false;
+  };
+
 const getAgentPluginsById =
   (agentId: string) =>
   (s: AgentStoreState): string[] =>
@@ -228,6 +245,7 @@ export const agentByIdSelectors = {
   getAgentWorkingDirectoryById,
   isAgentConfigLoadingById,
   isAgentHeterogeneousById,
+  isAgentModelLockedById,
   isAgentPlatformManagedById,
   isWorkspaceAgentById,
 };

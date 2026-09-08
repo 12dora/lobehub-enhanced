@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   agentId: 'agent-1',
   isLoading: false,
   isPlatformManaged: false,
+  modelLocked: undefined as boolean | undefined,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -25,7 +26,9 @@ vi.mock('@/store/agent', () => ({
 vi.mock('@/store/agent/selectors', () => ({
   agentByIdSelectors: {
     isAgentConfigLoadingById: () => () => mocks.isLoading,
-    isAgentPlatformManagedById: () => () => mocks.isPlatformManaged,
+    // Mirrors the real selector: a managed agent is model-locked unless the server marked its
+    // platform config as defaults-only (`platform.modelLocked === false`).
+    isAgentModelLockedById: () => () => mocks.isPlatformManaged && mocks.modelLocked !== false,
   },
 }));
 
@@ -46,6 +49,7 @@ describe('Params', () => {
     mocks.agentId = 'agent-1';
     mocks.isLoading = false;
     mocks.isPlatformManaged = false;
+    mocks.modelLocked = undefined;
   });
 
   it('renders the params action for an ordinary agent', () => {
@@ -68,6 +72,16 @@ describe('Params', () => {
     render(<Params />);
 
     // Only the model-params section inside Controls is withheld — see Controls.test.tsx.
+    expect(screen.getByTestId('params-action')).toHaveAttribute('data-disabled', 'false');
+  });
+
+  it('keeps the action when the managed agent only supplies default params', () => {
+    mocks.isPlatformManaged = true;
+    mocks.modelLocked = false;
+
+    render(<Params />);
+
+    // Nothing is withheld at all in this mode — Controls renders the full panel.
     expect(screen.getByTestId('params-action')).toHaveAttribute('data-disabled', 'false');
   });
 });

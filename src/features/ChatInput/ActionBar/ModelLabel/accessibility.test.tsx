@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   isModelCatalogReady: true,
   isPlatformManaged: true,
   model: 'gpt-5.5',
+  modelLocked: undefined as boolean | undefined,
   permission: { allowed: true, reason: undefined as string | undefined },
   provider: 'openai',
   updateAgentConfigById: vi.fn(),
@@ -52,7 +53,9 @@ vi.mock('@/store/agent/selectors', () => ({
   agentByIdSelectors: {
     getAgentModelById: () => () => mocks.model,
     getAgentModelProviderById: () => () => mocks.provider,
-    isAgentPlatformManagedById: () => () => mocks.isPlatformManaged,
+    // Mirrors the real selector: a managed agent is model-locked unless the server marked its
+    // platform config as defaults-only (`platform.modelLocked === false`).
+    isAgentModelLockedById: () => () => mocks.isPlatformManaged && mocks.modelLocked !== false,
   },
 }));
 
@@ -80,6 +83,7 @@ describe('ModelLabel managed accessibility', () => {
     mocks.isModelCatalogReady = true;
     mocks.isPlatformManaged = true;
     mocks.model = 'gpt-5.5';
+    mocks.modelLocked = undefined;
     mocks.permission = { allowed: true, reason: undefined };
   });
 
@@ -108,6 +112,16 @@ describe('ModelLabel managed accessibility', () => {
 
     const { container } = render(<ModelLabel />);
 
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(container.querySelector('[tabindex]')).toBeNull();
+  });
+
+  it('adds no tab stop when the managed agent only supplies a default model', () => {
+    mocks.modelLocked = false;
+
+    const { container } = render(<ModelLabel />);
+
+    expect(screen.getByTestId('model-switch-panel')).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
     expect(container.querySelector('[tabindex]')).toBeNull();
   });

@@ -537,12 +537,13 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
   );
   const enableAgentMode = useAgentStore(agentByIdSelectors.getAgentEnableModeById(agentId));
   /**
-   * Admin-owned on a platform-managed agent: `params` (temperature, top_p, penalties,
-   * max_tokens, reasoning_effort) is overlaid on every read and rejected on write. Every
-   * other control on this panel writes `chatConfig`, which stays the user's own, so only
-   * the params section is withheld.
+   * Admin-PINNED on a managed agent (`platform.modelLocked !== false`): `params` (temperature,
+   * top_p, penalties, max_tokens, reasoning_effort) is overlaid on every read and rejected on
+   * write. Every other control on this panel writes `chatConfig`, which stays the user's own, so
+   * only the params section is withheld. A managed agent whose platform version merely supplies
+   * defaults (`modelLocked: false`) keeps the full panel.
    */
-  const isPlatformManaged = useAgentStore(agentByIdSelectors.isAgentPlatformManagedById(agentId));
+  const isModelLocked = useAgentStore(agentByIdSelectors.isAgentModelLockedById(agentId));
   const hasModelConfig = useAiInfraStore(
     aiModelSelectors.isModelHasExtendParams(agentModel ?? '', agentProvider ?? ''),
   );
@@ -879,7 +880,7 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
               )}
             </>
           )}
-          {!enableAgentMode && isPlatformManaged && (
+          {!enableAgentMode && isModelLocked && (
             <>
               <div className={styles.divider} />
               <div className={cx(styles.hint, styles.managedHint)}>
@@ -887,7 +888,7 @@ const Controls = memo<ControlsProps>(({ setUpdating, updating, variant = 'popove
               </div>
             </>
           )}
-          {!enableAgentMode && !isPlatformManaged && (
+          {!enableAgentMode && !isModelLocked && (
             <>
               <div className={styles.divider} />
               <SectionHeader

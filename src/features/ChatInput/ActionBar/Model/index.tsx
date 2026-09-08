@@ -93,10 +93,10 @@ const ModelSwitch = memo(() => {
   const { allowed: canCreateContent, reason } = usePermission('create_content');
 
   const agentId = useAgentId();
-  const [model, provider, isPlatformManaged, updateAgentConfigById] = useAgentStore((s) => [
+  const [model, provider, isModelLocked, updateAgentConfigById] = useAgentStore((s) => [
     agentByIdSelectors.getAgentModelById(agentId)(s),
     agentByIdSelectors.getAgentModelProviderById(agentId)(s),
-    agentByIdSelectors.isAgentPlatformManagedById(agentId)(s),
+    agentByIdSelectors.isAgentModelLockedById(agentId)(s),
     s.updateAgentConfigById,
   ]);
   const applyBusinessModelModeConfig = useBusinessModelModeConfig();
@@ -115,7 +115,7 @@ const ModelSwitch = memo(() => {
       height={blockSize}
       width={blockSize}
       className={cx(
-        canCreateContent && isPlatformManaged ? styles.modelManaged : styles.model,
+        canCreateContent && isModelLocked ? styles.modelManaged : styles.model,
         !canCreateContent && styles.modelDisabled,
       )}
     >
@@ -132,11 +132,13 @@ const ModelSwitch = memo(() => {
       </Tooltip>
     );
 
-  // The admin owns the model of a platform-managed agent: the server overlays it on every
-  // read and rejects user edits, so offering the switch panel would only revert visually.
+  // The admin PINS the model of this managed agent (`platform.modelLocked !== false`): the
+  // server overlays it on every read and rejects user edits, so offering the switch panel
+  // would only revert visually. A managed agent whose platform version merely supplies
+  // defaults (`modelLocked: false`) keeps the normal switcher.
   // The pill stays focusable and named: keyboard users open the tooltip on focus, and the
   // accessible name plus description carry the model and the reason it cannot be changed.
-  if (isPlatformManaged)
+  if (isModelLocked)
     return (
       <Tooltip title={t('modelSwitch.managedByAdmin')}>
         <span

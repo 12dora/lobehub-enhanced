@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   } as Record<string, unknown>,
   enableAgentMode: false,
   isPlatformManaged: false,
+  modelLocked: undefined as boolean | undefined,
   updateAgentConfig: vi.fn(),
 }));
 
@@ -56,7 +57,9 @@ vi.mock('@/store/agent/selectors', () => ({
     getAgentEnableModeById: () => () => mocks.enableAgentMode,
     getAgentModelById: () => () => 'gpt-5.5',
     getAgentModelProviderById: () => () => 'openai',
-    isAgentPlatformManagedById: () => () => mocks.isPlatformManaged,
+    // Mirrors the real selector: a managed agent is model-locked unless the server marked its
+    // platform config as defaults-only (`platform.modelLocked === false`).
+    isAgentModelLockedById: () => () => mocks.isPlatformManaged && mocks.modelLocked !== false,
   },
   chatConfigByIdSelectors: {
     getChatConfigById: () => () => mocks.config.chatConfig as Record<string, unknown>,
@@ -115,6 +118,7 @@ describe('Params Controls', () => {
     mocks.agentId = 'agent-1';
     mocks.enableAgentMode = false;
     mocks.isPlatformManaged = false;
+    mocks.modelLocked = undefined;
     mocks.updateAgentConfig.mockClear();
     // The advanced section is collapsed by default and remembers its state locally.
     localStorage.setItem(ADVANCED_OPEN_STORAGE_KEY, 'true');
@@ -140,9 +144,24 @@ describe('Params Controls', () => {
     });
   });
 
+  /**
+   * Managed is not the same as pinned: only `platform.modelLocked !== false` locks the params.
+   * The field is absent here, which is the back-compatible "pinned" reading.
+   */
   describe('platform-managed agent', () => {
     beforeEach(() => {
       mocks.isPlatformManaged = true;
+    });
+
+    it('withholds the params section just the same when the pin is explicit', () => {
+      mocks.modelLocked = true;
+
+      renderControls();
+
+      for (const title of PARAM_ROW_TITLES) {
+        expect(screen.queryByText(title)).toBeNull();
+      }
+      expect(screen.getByText(chatCopy['modelSwitch.managedByAdmin'])).toBeInTheDocument();
     });
 
     it('withholds every control that writes admin-owned params', () => {
@@ -172,6 +191,32 @@ describe('Params Controls', () => {
       renderControls();
 
       expect(mocks.updateAgentConfig).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * `platform.modelLocked === false`: the platform version only seeds model parameters (the
+   * default inbox under light management), so the member tunes them as on an own agent.
+   */
+  describe('managed agent whose params are only defaults', () => {
+    beforeEach(() => {
+      mocks.isPlatformManaged = true;
+      mocks.modelLocked = false;
+    });
+
+    it('renders the model-params section like an ordinary agent', () => {
+      renderControls();
+
+      for (const title of PARAM_ROW_TITLES) {
+        expect(screen.getByText(title)).toBeInTheDocument();
+      }
+      expect(screen.getByText('settingModel.params.panel.advanced')).toBeInTheDocument();
+    });
+
+    it('shows no managed hint', () => {
+      renderControls();
+
+      expect(screen.queryByText(chatCopy['modelSwitch.managedByAdmin'])).toBeNull();
     });
   });
 

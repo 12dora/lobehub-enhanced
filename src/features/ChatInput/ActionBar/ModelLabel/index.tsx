@@ -118,10 +118,10 @@ const ModelLabel = memo(() => {
   const { allowed: canCreateContent, reason } = usePermission('create_content');
 
   const agentId = useAgentId();
-  const [model, provider, isPlatformManaged, updateAgentConfigById] = useAgentStore((s) => [
+  const [model, provider, isModelLocked, updateAgentConfigById] = useAgentStore((s) => [
     agentByIdSelectors.getAgentModelById(agentId)(s),
     agentByIdSelectors.getAgentModelProviderById(agentId)(s),
-    agentByIdSelectors.isAgentPlatformManagedById(agentId)(s),
+    agentByIdSelectors.isAgentModelLockedById(agentId)(s),
     s.updateAgentConfigById,
   ]);
   const applyBusinessModelModeConfig = useBusinessModelModeConfig();
@@ -138,7 +138,7 @@ const ModelLabel = memo(() => {
     [agentId, applyBusinessModelModeConfig, canCreateContent, updateAgentConfigById],
   );
 
-  const isManaged = canCreateContent && isPlatformManaged;
+  const isLocked = canCreateContent && isModelLocked;
 
   const trigger = (
     <Center
@@ -146,7 +146,7 @@ const ModelLabel = memo(() => {
       height={28}
       paddingInline={6}
       className={cx(
-        isManaged ? styles.triggerManaged : styles.trigger,
+        isLocked ? styles.triggerManaged : styles.trigger,
         !canCreateContent && styles.triggerDisabled,
       )}
     >
@@ -156,11 +156,11 @@ const ModelLabel = memo(() => {
         ) : (
           <span aria-hidden className={styles.namePlaceholder} />
         )}
-        {/* The chevron promises a menu; a managed model has none to open. The
+        {/* The chevron promises a menu; a pinned model has none to open. The
             slot around it stays, so the pill — and the send row it sits in —
             keeps the same width in both states and never re-flows. */}
         <span aria-hidden className={styles.chevronSlot} data-testid={'model-label-chevron-slot'}>
-          {!isManaged && <ChevronDownIcon className={styles.chevron} size={12} />}
+          {!isLocked && <ChevronDownIcon className={styles.chevron} size={12} />}
         </span>
       </Flexbox>
     </Center>
@@ -173,11 +173,13 @@ const ModelLabel = memo(() => {
       </Tooltip>
     );
 
-  // The admin owns the model of a platform-managed agent: the server overlays it on every
-  // read and rejects user edits, so offering the switch panel would only revert visually.
+  // The admin PINS the model of this managed agent (`platform.modelLocked !== false`): the
+  // server overlays it on every read and rejects user edits, so offering the switch panel
+  // would only revert visually. A managed agent whose platform version merely supplies
+  // defaults (`modelLocked: false`) keeps the normal switcher.
   // The label stays focusable and named: keyboard users open the tooltip on focus, and the
   // accessible name plus description carry the model and the reason it cannot be changed.
-  if (isManaged)
+  if (isLocked)
     return (
       <Tooltip title={t('modelSwitch.managedByAdmin')}>
         <span

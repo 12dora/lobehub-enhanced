@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   agentId: 'agent-1',
   isPlatformManaged: false,
   model: 'gpt-5.5',
+  modelLocked: undefined as boolean | undefined,
   permission: { allowed: true, reason: undefined as string | undefined },
   provider: 'openai',
   updateAgentConfigById: vi.fn(),
@@ -56,7 +57,9 @@ vi.mock('@/store/agent/selectors', () => ({
   agentByIdSelectors: {
     getAgentModelById: () => () => mocks.model,
     getAgentModelProviderById: () => () => mocks.provider,
-    isAgentPlatformManagedById: () => () => mocks.isPlatformManaged,
+    // Mirrors the real selector: a managed agent is model-locked unless the server marked its
+    // platform config as defaults-only (`platform.modelLocked === false`).
+    isAgentModelLockedById: () => () => mocks.isPlatformManaged && mocks.modelLocked !== false,
   },
 }));
 
@@ -99,6 +102,7 @@ describe('ModelSwitch', () => {
     mocks.agentId = 'agent-1';
     mocks.isPlatformManaged = false;
     mocks.model = 'gpt-5.5';
+    mocks.modelLocked = undefined;
     mocks.permission = { allowed: true, reason: undefined };
     mocks.updateAgentConfigById.mockClear();
   });
@@ -122,6 +126,10 @@ describe('ModelSwitch', () => {
     });
   });
 
+  /**
+   * Managed is not the same as pinned: only `platform.modelLocked !== false` locks the model.
+   * The field is absent here, which is the back-compatible "pinned" reading.
+   */
   describe('platform-managed agent', () => {
     beforeEach(() => {
       mocks.isPlatformManaged = true;
@@ -131,6 +139,15 @@ describe('ModelSwitch', () => {
       render(<ModelSwitch />);
 
       expect(screen.queryByTestId('model-switch-panel')).toBeNull();
+    });
+
+    it('drops the switch panel just the same when the pin is explicit', () => {
+      mocks.modelLocked = true;
+
+      render(<ModelSwitch />);
+
+      expect(screen.queryByTestId('model-switch-panel')).toBeNull();
+      expect(managedTrigger()).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('still renders the model icon for the admin-set model', () => {
@@ -161,6 +178,34 @@ describe('ModelSwitch', () => {
       render(<ModelSwitch />);
 
       expect(mocks.updateAgentConfigById).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * `platform.modelLocked === false`: the platform version only seeds the model (the default
+   * inbox under light management), so the member switches models exactly as on an own agent.
+   */
+  describe('managed agent whose model is only a default', () => {
+    beforeEach(() => {
+      mocks.isPlatformManaged = true;
+      mocks.modelLocked = false;
+    });
+
+    it('keeps the switch panel for the active model', () => {
+      render(<ModelSwitch />);
+
+      const panel = screen.getByTestId('model-switch-panel');
+      expect(panel).toHaveAttribute('data-model', 'gpt-5.5');
+      expect(panel).toContainElement(screen.getByTestId('model-icon'));
+    });
+
+    it('adds no managed tooltip, no aria-disabled and no extra tab stop', () => {
+      render(<ModelSwitch />);
+
+      expect(screen.queryByTestId('tooltip')).toBeNull();
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(document.querySelector('[aria-disabled]')).toBeNull();
+      expect(document.querySelector('[tabindex]')).toBeNull();
     });
   });
 

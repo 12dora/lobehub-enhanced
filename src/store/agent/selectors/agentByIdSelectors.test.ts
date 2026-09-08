@@ -214,6 +214,41 @@ describe('agentByIdSelectors', () => {
     });
   });
 
+  describe('isAgentModelLockedById', () => {
+    const managedWith = (modelLocked?: boolean) => ({
+      model: 'gpt-4o',
+      platform: { managed: true as const, modelLocked, source: 'platform' as const },
+    });
+
+    it('locks a managed agent whose payload omits modelLocked', () => {
+      const state = createState({ agentMap: { 'managed-agent': managedWith() } });
+
+      expect(agentByIdSelectors.isAgentModelLockedById('managed-agent')(state)).toBe(true);
+    });
+
+    it('locks a managed agent pinned with modelLocked true', () => {
+      const state = createState({ agentMap: { 'managed-agent': managedWith(true) } });
+
+      expect(agentByIdSelectors.isAgentModelLockedById('managed-agent')(state)).toBe(true);
+    });
+
+    it('leaves the model editable when the platform only supplies defaults', () => {
+      const state = createState({ agentMap: { 'managed-agent': managedWith(false) } });
+
+      expect(agentByIdSelectors.isAgentModelLockedById('managed-agent')(state)).toBe(false);
+      // identity fields stay admin-owned even then
+      expect(agentByIdSelectors.isAgentPlatformManagedById('managed-agent')(state)).toBe(true);
+    });
+
+    it('returns false for an own agent, an unknown agent or an empty id', () => {
+      const state = createState({ agentMap: { 'own-agent': { model: 'gpt-4o' } } });
+
+      expect(agentByIdSelectors.isAgentModelLockedById('own-agent')(state)).toBe(false);
+      expect(agentByIdSelectors.isAgentModelLockedById('missing')(state)).toBe(false);
+      expect(agentByIdSelectors.isAgentModelLockedById('')(state)).toBe(false);
+    });
+  });
+
   describe('getAgentTTSVoiceById', () => {
     it('returns the configured openai voice', () => {
       const state = createState({
