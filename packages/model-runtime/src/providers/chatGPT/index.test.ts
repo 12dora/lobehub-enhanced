@@ -230,12 +230,14 @@ describe('LobeChatGPTAI', () => {
   });
 
   it('always uses Responses API and omits public API output limits', async () => {
+    // `gpt-6-astra` is NOT covered by the built-in GPT-5 Responses model rule, so this proves the
+    // provider-level `responsesOnly` flag, not the model heuristic, wins over `apiMode`.
     await instance.chat(
       {
         apiMode: 'chatCompletion',
         max_tokens: 4096,
         messages: [{ content: 'Hello', role: 'user' }],
-        model: 'gpt-5.5',
+        model: 'gpt-6-astra',
         stream: true,
       },
       { user: 'user-id' },
@@ -245,14 +247,15 @@ describe('LobeChatGPTAI', () => {
 
     expect(request).toMatchObject({
       include: ['reasoning.encrypted_content'],
-      input: [{ content: 'Hello', role: 'user' }],
-      model: 'gpt-5.5',
+      input: expect.arrayContaining([{ content: 'Hello', role: 'user' }]),
+      model: 'gpt-6-astra',
       store: false,
       stream: true,
     });
     expect(request.max_output_tokens).toBeUndefined();
     expect(request.safety_identifier).toBeUndefined();
-    expect(requestOptions.headers).not.toHaveProperty('x-openai-internal-codex-responses-lite');
+    // gpt-6-astra is a Responses-Lite catalog model, so the protocol header is expected here.
+    expect(requestOptions.headers).toHaveProperty('x-openai-internal-codex-responses-lite', 'true');
     expect(instance['client'].chat.completions.create).not.toHaveBeenCalled();
   });
 

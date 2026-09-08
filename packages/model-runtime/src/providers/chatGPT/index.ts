@@ -399,6 +399,9 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
     forceImageBase64: true,
     inlineFile: { maxBytes: DEFAULT_FILE_INLINE_MAX_BYTES, ownOriginOnly: true },
     inlineImage: { maxBytes: DEFAULT_IMAGE_INLINE_MAX_BYTES, ownOriginOnly: true },
+    // chatgpt.com/backend-api/codex has no chat/completions endpoint (404 behind a Cloudflare
+    // challenge); a client-side `apiMode: 'chatCompletion'` must never downgrade the protocol.
+    responsesOnly: true,
     useResponse: true,
   },
   createImage: createChatGPTImage,

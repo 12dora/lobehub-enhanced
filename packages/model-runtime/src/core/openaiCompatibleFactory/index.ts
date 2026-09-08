@@ -259,6 +259,12 @@ export interface OpenAICompatibleFactoryOptions<T extends Record<string, any> = 
     ) => ReadableStream<OpenAI.ChatCompletionChunk>;
     noUserId?: boolean;
     /**
+     * The backend has no Chat Completions endpoint at all (e.g. the ChatGPT Codex backend): always
+     * use the Responses API, even when the caller asks for `apiMode: 'chatCompletion'`. Unlike
+     * `useResponse`, this cannot be overridden by the user's per-provider preference.
+     */
+    responsesOnly?: boolean;
+    /**
      * If true, route chat requests to Responses API path directly
      */
     useResponse?: boolean;
@@ -534,6 +540,8 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
     private shouldUseResponsesAPI(params: {
       /** Context for logging (e.g., 'chat', 'generateObject', 'tool calling') */
       context?: string;
+      /** Provider has no Chat Completions endpoint: Responses API regardless of user preference */
+      flagResponsesOnly?: boolean;
       /** Factory/instance level useResponse flag */
       flagUseResponse?: boolean;
       /** Factory/instance level model patterns for Responses API */
@@ -549,6 +557,7 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
         model,
         userApiMode,
         responseApi,
+        flagResponsesOnly,
         flagUseResponse,
         flagUseResponseModels,
         context = 'operation',
@@ -564,6 +573,14 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
       }
 
       // Priority 1: userApiMode is explicitly set to 'chatCompletion' (user disabled the switch)
+      if (flagResponsesOnly) {
+        log(
+          'using Responses API: provider is Responses-only (userApiMode=%s ignored)',
+          userApiMode,
+        );
+        return true;
+      }
+
       if (userApiMode === 'chatCompletion') {
         log('using Chat Completions API: userApiMode=%s', userApiMode);
         return false;
@@ -681,9 +698,11 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
         const modelId = (payload as any).model as string | undefined;
 
         const instanceChat = ((this._options as any).chatCompletion || {}) as {
+          responsesOnly?: boolean;
           useResponse?: boolean;
           useResponseModels?: Array<string | RegExp>;
         };
+        const flagResponsesOnly = instanceChat.responsesOnly ?? chatCompletion?.responsesOnly;
         const flagUseResponse =
           instanceChat.useResponse ?? (chatCompletion ? chatCompletion.useResponse : undefined);
         const flagUseResponseModels =
@@ -692,6 +711,7 @@ export const createOpenAICompatibleRuntime = <T extends Record<string, any> = an
         // Determine if should use Responses API
         const shouldUseResponses = this.shouldUseResponsesAPI({
           context: 'chat',
+          flagResponsesOnly,
           flagUseResponse,
           flagUseResponseModels,
           model: modelId,
