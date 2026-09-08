@@ -108,30 +108,53 @@ docker compose logs app | grep -i bootstrap
 
 同一个镜像，从完整栈到「一个容器 + 一个数据库」按机器选择：
 
-| 启动命令                                             | 边车                        | 适用                                            |
-| ---------------------------------------------------- | --------------------------- | ----------------------------------------------- |
-| `docker compose up -d`                               | ParadeDB + Redis + 对象存储 | 默认完整栈（4 核 / 8 GiB 起）                   |
-| `docker compose --profile search up -d`              | 另加 SearXNG                | 需要内置联网搜索                                |
-| `docker compose -f docker-compose.minimal.yml up -d` | 仅 ParadeDB                 | 小机器（1–2 核 / 2–4 GiB），搭配 `minimal` 预设 |
+| 启动命令                                             | 边车                        | 适用                                                                           |
+| ---------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------ |
+| `docker compose up -d`                               | ParadeDB + Redis + 对象存储 | 默认完整栈（4 核 / 8 GiB 起）                                                  |
+| `docker compose --profile search up -d`              | 另加 SearXNG                | 需要内置联网搜索                                                               |
+| `docker compose -f docker-compose.minimal.yml up -d` | 仅 ParadeDB                 | 小机器（1–2 核 / 2–4 GiB），搭配 `minimal` 预设                                |
+| `docker compose --profile document-render up -d`     | 另加 Gotenberg              | 需要把 Word / Excel / PPT 渲染成页面图喂给模型（另需设 `DOCUMENT_RENDER_URL`） |
 
 23 个功能模块由 `LOBE_MODULE_PRESET=minimal|standard|full` 三档预设决定默认启停（默认 `full`，即今天的完整行为），单个模块可在管理页「系统 → 模块」或用 `LOBE_MODULES_DISABLED` 覆盖。Node 堆上限 `LOBE_NODE_HEAP_MB` 由 compose 注入 1536（裸 `docker run` 不设则不封顶）。各模块的内存 / 后台任务开销与实测数据见 [`docs/enterprise/modules.md`](./docs/enterprise/modules.md)。
 
 升级：`docker compose pull && docker compose up -d`（迁移自动执行）。镜像标签：`latest`、`1.0`、`1.0.0`，支持 `linux/amd64` 与 `linux/arm64`（Apple 芯片的 Mac 通过 Docker Desktop 直接使用 arm64 镜像）。完整示例见 [`docker-compose/enhanced/`](./docker-compose/enhanced/)。
 
-## AI 一键部署提示词
+### AI 一键部署（含沙箱与文档渲染）
 
-把下面这段话直接发给你的 AI 助手（Claude Code、Codex、Cursor 等），它会替你完成部署：
+把下面这段话直接发给你的 AI 助手（Claude Code、Codex、Cursor 等），它会替你完成部署，并顺带装好**代码沙箱**与**文档渲染**两个边车：
 
 ```text
-请在这台机器上用 Docker 部署 LobeHub Enhanced：
+请在这台机器上用 Docker 部署 LobeHub Enhanced，并同时装好沙箱和文档渲染：
+
+一、基础栈
 1. git clone https://github.com/12dora/lobehub-enhanced.git，进入 docker-compose/enhanced，把 .env.example 复制为 .env。
-2. 用 openssl rand -base64 32 生成三个不同的值，分别填入 AUTH_SECRET、KEY_VAULTS_SECRET、PLATFORM_MASTER_KEY。
-3. 把 APP_URL 设为对外访问地址（本机试用填 http://localhost:3210）；把 S3_ENDPOINT 和 S3_PUBLIC_DOMAIN 设为浏览器能访问到的 http://<本机IP或域名>:9000；
-   设置 BOOTSTRAP_SUPER_ADMIN_EMAIL=<我的邮箱> 和 BOOTSTRAP_ALLOW_CREATE=1。
-4. 执行 docker compose up -d，等待 app 容器日志出现数据库迁移通过与 Ready，然后从日志中找到 bootstrap 打印的一次性管理员密码告诉我（只打印一次）。
-5. 最后告诉我访问地址 <APP_URL>/admin，并把 .env 里需要备份的 PLATFORM_MASTER_KEY 提醒我保存好。
-如遇端口冲突或镜像拉取失败，请说明原因并给出修复方案。
+2. 用 openssl rand -base64 32 生成互不相同的值，分别填入 AUTH_SECRET、KEY_VAULTS_SECRET、PLATFORM_MASTER_KEY、POSTGRES_PASSWORD、RUSTFS_SECRET_KEY。
+3. 把 APP_URL 设为对外访问地址（本机试用填 http://localhost:3210）；把 S3_ENDPOINT 和 S3_PUBLIC_DOMAIN 设为浏览器能访问到的
+   http://<本机IP或域名>:9000（不能填 localhost，否则浏览器取不到附件）；设置 BOOTSTRAP_SUPER_ADMIN_EMAIL=<我的邮箱> 和 BOOTSTRAP_ALLOW_CREATE=1。
+
+二、沙箱边车（代码 / 终端 / 文件工具跑在同级容器里）
+4. 在仓库根目录构建沙箱镜像：docker build -f Dockerfile.sandbox -t aihub-sandbox:latest .
+   （约 2.7 GB、十几分钟；机器上有 bun 时也可以用 bun run build:sandbox-image -- --smoke，顺带跑一遍冒烟测试。
+   镜像已预装 LibreOffice、pandoc、poppler-utils、中日韩字体和 Office 处理库，沙箱根文件系统只读，运行时装不了包，所以必须用这个镜像。）
+5. 把宿主 Docker 套接字的组 ID 写进 .env：Linux 用 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)，macOS 用 stat -f '%g'。
+   SANDBOX_PROVIDER=local 与 SANDBOX_LOCAL_IMAGE=aihub-sandbox:latest 已是默认值，不用改。
+
+三、文档渲染边车（把 Word / Excel / PPT 转成页面图喂给模型，缺它这些文件只能当纯文本读）
+6. 在 .env 里加 COMPOSE_PROFILES=document-render 和 DOCUMENT_RENDER_URL=http://document-render:3000
+   （会额外起一个 gotenberg/gotenberg:8 容器，限 1 CPU / 1 GiB，只在内网可达；已经用了别的 profile 就写成 COMPOSE_PROFILES=search,document-render）。
+
+四、启动与自检
+7. 执行 docker compose up -d，等 app 容器日志出现数据库迁移通过与 Ready，然后从日志里找到 bootstrap 打印的一次性管理员密码（只打印一次）告诉我。
+8. 自检并把结果贴给我：docker compose ps 所有容器 running/healthy；docker run --rm aihub-sandbox:latest soffice --version 能打印版本；
+   docker compose logs document-render 无报错；curl -I <APP_URL> 有响应。
+9. 最后告诉我 <APP_URL>/admin 的登录方式，提醒我备份 .env 里的 PLATFORM_MASTER_KEY（丢了已存的服务商密钥无法解密），
+   并说明沙箱和文档渲染分别在管理面板「系统 → 模块」和「系统 → 通用 → 文档渲染」里开关、测试连接。
+
+排障要求：端口冲突、镜像拉取失败先说明原因再给方案；沙箱报 EACCES 或 “Docker daemon is unreachable” 基本是 DOCKER_GID 填错，
+按宿主套接字实际组 ID 改掉再重启 app 容器。不要用普通 postgres 镜像替换 paradedb，迁移跑不过。
 ```
+
+不想要沙箱或文档渲染时，把第二、三步删掉即可：沙箱可在管理面板「系统 → 模块」关掉 `sandbox` 模块，`DOCUMENT_RENDER_URL` 留空则 Office 文件按纯文本处理。
 
 ## 登录方式
 
