@@ -5,6 +5,29 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.3.0 (2026-09-10)
+
+First explicit upstream sync: 59 upstream pull requests from lobehub/lobehub v2.2.11–v2.2.16 cherry-picked onto the v2.2.10 base, plus 11 follow-up fixes found in review. Scope was limited to security, reliability, model runtime / model cards and small UX changes; no dependency bumps, no database schema changes, no upstream feature that overlaps the enterprise admin console. The full per-PR ledger (applied, skipped and why) lives in [docs/enterprise/upstream-sync.md](./docs/enterprise/upstream-sync.md).
+
+#### 🔒 Security
+
+- OpenAPI auth errors return 401 instead of 500 and API keys are masked with their real prefix (#17143).
+
+#### 🐛 Reliability
+
+- Agent runtime: reuse assistant messages on step retry, drop duplicate continuations, preserve grouped sub-agent final answers, recover stale scoped tool calls, diagnose synthetic tool failures with reason and tool, keep image tool results from being reported as failures, account container message tokens in the context budget, fall back to state messages after context compression, bound repeated compression, slim compression payloads, retry preflighted OpenAI context-limit errors, run blocking XREAD on a dedicated Redis connection, fix `sanitizeNullBytes` escape corruption (#17044 #17703 #17726 #17725 #18664 #19116 #18795 #17839 #18587 #18626 #16896 #17876 #18507).
+- Chat client: stop gateway reconnect loops on stale running operations, isolate thread cancellation, stop duplicating AskUserQuestion answers, keep unsent composer drafts, commit model switch before immediate send, preserve default action lists, hide empty reasoning cards, fix layout jitter on tool-call completion, anchor tool timers to the result message, `Enter`/`Esc` hotkeys on approval cards (#17332 #17719 #17939 #18097 #18365 #18993 #17935 #17968 #17930 #18182 #18413 #17733).
+- Server: gateway sync peak avoidance, hung device handshake timeout, serialized file-parse cache writes, agent-document edits can no longer clear content, parsed-file source metadata preserved (with the fork's Office preview now receiving the backing file id), error-status mapping aligned with the spec table, numeric chat errors mapped to tRPC status, deduplicated AI model batch updates (#17305 #19021 #17919 #18643 #17458 #18688 #17221 #17465).
+
+#### 🤖 Models and runtime
+
+- New model cards: Gemini 3.8 Flash, GLM-5.3 / GLM-5.3-Flash with always-on thinking, MiniMax-H3 (video v2 API), Kimi K3 descriptions, DeepSeek V4 Flash Vision description, Cerebras / Groq reasoning parameters and seven long-tail cards (#19058 #18290 #18723 #17827 #18560 #16469).
+- Claude Fable 5.1 `tool_choice` rules and the auto fallback prompt; Grok 4.6 reasoning-effort control and prompt-cache keys; Claude replayed-thinking sanitisation for Anthropic-compatible providers; failed assistant placeholders filtered and the Claude prefill guard hardened; nine new error patterns and `SubscriptionPlanLimit` classified; chat output cost ratio aligned; unavailable image models disabled with a notice (#19016 #19024 #18225 #17489 #17629 #17737 #19004 #19006 #18748 #17410).
+
+#### ✨ UX
+
+- Disabled models can be re-enabled from the chat input; the todo tray scrolls; large PDFs are readable; `.v` / `.sv` attachments are recognised; `message.getMessages` is split out of the initial-load batch (#18730 #18858 #19073 #19118 #18462).
+
 ## 1.0.0 (2026-08-16)
 
 First public release of LobeHub Enhanced — an enterprise-enhanced fork of LobeHub.
