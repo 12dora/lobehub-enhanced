@@ -256,20 +256,25 @@ interface FileViewerProps extends FileListItem {
 /**
  * Preview any file type.
  */
-const FileViewer = memo<FileViewerProps>(({ id, style, fileType, url, name }) => {
+const FileViewer = memo<FileViewerProps>(({ id, fileId, style, fileType, url, name }) => {
+  // Documents (docs_*) that are backed by an uploaded file must hand the backing file id
+  // to viewers that call file endpoints (PDF page images, Office preview rendering);
+  // the document id itself is unknown to those endpoints.
+  const backingId = fileId ?? id;
+
   // PDF files
   if (fileType?.toLowerCase() === 'pdf' || name?.toLowerCase().endsWith('.pdf')) {
-    return <PDFViewer fileId={id} url={url} />;
+    return <PDFViewer fileId={backingId} url={url} />;
   }
 
   // Image files
   if (matchesFileType(fileType, name, IMAGE_EXTENSIONS, IMAGE_MIME_TYPES)) {
-    return <ImageViewer fileId={id} url={url} />;
+    return <ImageViewer fileId={backingId} url={url} />;
   }
 
   // Video files
   if (matchesFileType(fileType, name, VIDEO_EXTENSIONS, VIDEO_MIME_TYPES)) {
-    return <VideoViewer fileId={id} url={url} />;
+    return <VideoViewer fileId={backingId} url={url} />;
   }
 
   // Archive files (zip, rar, 7z, etc.) - not supported for preview
@@ -281,17 +286,17 @@ const FileViewer = memo<FileViewerProps>(({ id, style, fileType, url, name }) =>
   // Microsoft Office documents - check before code files to avoid false matches
   // (e.g., 'doc' contains 'c' which would match CODE_EXTENSIONS)
   if (matchesFileType(fileType, name, MSDOC_EXTENSIONS, MSDOC_MIME_TYPES)) {
-    return <MSDocViewer fileId={id} fileName={name} url={url} />;
+    return <MSDocViewer fileId={backingId} fileName={name} url={url} />;
   }
 
   // HTML files should render as a sandboxed preview before the broader code-file fallback.
   if (isHtmlFile({ fileName: name, fileType })) {
-    return <HTMLViewer fileId={id} url={url} />;
+    return <HTMLViewer fileId={backingId} url={url} />;
   }
 
   // Code files (JavaScript, TypeScript, Python, Java, C++, Go, Rust, Markdown, etc.)
   if (matchesFileType(fileType, name, CODE_EXTENSIONS, CODE_MIME_TYPES)) {
-    return <CodeViewer fileId={id} fileName={name} url={url} />;
+    return <CodeViewer fileId={backingId} fileName={name} url={url} />;
   }
 
   // Unsupported file type
