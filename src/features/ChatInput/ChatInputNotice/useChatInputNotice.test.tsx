@@ -38,7 +38,6 @@ const testState = vi.hoisted(() => ({
     enabledChatModelList: [] as TestProviderWithModels[],
     enabledAiProviders: [] as { id: string }[],
     isInitAiProviderRuntimeState: false,
-    modelRedirects: {} as Record<string, string>,
     toggleProviderEnabled: vi.fn(async () => {}),
     toggleProviderModelEnabled: vi.fn(async () => {}),
   },
@@ -124,7 +123,6 @@ describe('useChatInputNotice', () => {
     testState.aiInfra.enabledChatModelList = [];
     testState.aiInfra.enabledAiProviders = [];
     testState.aiInfra.isInitAiProviderRuntimeState = false;
-    testState.aiInfra.modelRedirects = {};
     testState.aiInfra.toggleProviderEnabled.mockReset();
     testState.aiInfra.toggleProviderModelEnabled.mockReset();
     toastError.mockReset();

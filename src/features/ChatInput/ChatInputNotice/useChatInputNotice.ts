@@ -105,7 +105,6 @@ export const useChatInputNotice = (): ChatInputNotice | undefined => {
   const enabledChatModelList = useEnabledChatModels();
   const builtinAiModelList = useAiInfraStore((s) => s.builtinAiModelList);
   const enabledAiProviders = useAiInfraStore((s) => s.enabledAiProviders);
-  const modelRedirects = useAiInfraStore((s) => s.modelRedirects);
   const toggleProviderEnabled = useAiInfraStore((s) => s.toggleProviderEnabled);
   const toggleProviderModelEnabled = useAiInfraStore((s) => s.toggleProviderModelEnabled);
   const isModelConfigReady = useAiInfraStore((s) =>
@@ -120,12 +119,11 @@ export const useChatInputNotice = (): ChatInputNotice | undefined => {
             {
               builtinAiModelList,
               enabledList: enabledChatModelList,
-              modelRedirects,
               modelType: 'chat',
             },
           )
         : undefined,
-    [builtinAiModelList, enabledChatModelList, isModelConfigReady, model, modelRedirects, provider],
+    [builtinAiModelList, enabledChatModelList, isModelConfigReady, model, provider],
   );
   const enableTargetProviderId =
     staleModelState?.status === 'notEnabled'
