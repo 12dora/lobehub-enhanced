@@ -2350,7 +2350,7 @@ describe('GatewayActionImpl', () => {
     // Seeds a topic whose local metadata still carries a runningOperation, wires up
     // internal_dispatchTopic + connectToGateway capture, so we can assert the local
     // store clear (LOBE-12055) on both the NOT_FOUND refresh path and onSessionComplete.
-    function createSeededReconnectHarness() {
+    function createSeededReconnectHarness(stateOverrides: Record<string, any> = {}) {
       const captured: { onSessionComplete?: (p: any) => void } = {};
       const connectToGateway = vi.fn((params: any) => {
         captured.onSessionComplete = params.onSessionComplete;
@@ -2376,6 +2376,7 @@ describe('GatewayActionImpl', () => {
             ],
           },
         },
+        ...stateOverrides,
       };
       const set = vi.fn((updater: any) => {
         if (typeof updater === 'function') Object.assign(state, updater(state));
@@ -2496,6 +2497,50 @@ describe('GatewayActionImpl', () => {
       captured.onSessionComplete!({ authFailed: false, succeeded: true, terminalReceived: false });
 
       expect(internalDispatchTopic).not.toHaveBeenCalled();
+    });
+
+    // A group run that finishes in the background, after the user has switched to
+    // another group: the clear must be routed by the run's OWN agent + group, not
+    // the active ones, or it looks up an unrelated bucket and strands the marker.
+    it('clears the owning group bucket marker for a background group-agent completion', async () => {
+      const { action, captured, internalDispatchTopic } = createSeededReconnectHarness({
+        // the user has moved on: different group, different topic on screen
+        activeGroupId: 'group-2',
+        activeTopicId: 'topic-other',
+        topicDataMap: {
+          group_agent_group1_agent1: {
+            items: [
+              {
+                id: 'topic-1',
+                metadata: {
+                  model: 'gpt-4',
+                  runningOperation: { assistantMessageId: 'ast-1', operationId: 'server-op-1' },
+                },
+              },
+            ],
+          },
+        },
+      });
+
+      await action.reconnectToGatewayOperation({
+        agentId: 'agent1',
+        assistantMessageId: 'ast-1',
+        groupId: 'group1',
+        operationId: 'server-op-1',
+        topicId: 'topic-1',
+      });
+
+      internalDispatchTopic.mockClear();
+      vi.mocked(topicService.updateTopicMetadata).mockResolvedValue(undefined as never);
+      captured.onSessionComplete!({ authFailed: false, succeeded: true, terminalReceived: true });
+
+      expect(internalDispatchTopic).toHaveBeenCalledWith({
+        agentId: 'agent1',
+        groupId: 'group1',
+        id: 'topic-1',
+        type: 'updateTopic',
+        value: { metadata: { model: 'gpt-4', runningOperation: null } },
+      });
     });
   });
 });

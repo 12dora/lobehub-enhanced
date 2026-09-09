@@ -1049,7 +1049,16 @@ export class GatewayActionImpl {
         topicService.updateTopicMetadata(topicId, { runningOperation: null }).catch(() => {});
         // Mirror the clear into the local store — the server clear above leaves the
         // Zustand topic map stale, which useGatewayReconnect keys off (LOBE-12055).
-        this.clearLocalRunningOperation({ agentId: context.agentId, operationId, topicId });
+        // Carry `groupId` alongside `agentId` (same pair the status write above
+        // uses): both route the lookup to the run's OWNING topic bucket, and a
+        // group run completing after the user switched away would otherwise fall
+        // back to the active group and leave its marker behind.
+        this.clearLocalRunningOperation({
+          agentId: context.agentId,
+          groupId: context.groupId,
+          operationId,
+          topicId,
+        });
       },
       operationId,
       resumeOnConnect: true,
