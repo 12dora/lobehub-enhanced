@@ -57,6 +57,35 @@ const antgroupChatModels: AIChatModelCard[] = [
   {
     abilities: {
       functionCall: true,
+      reasoning: true,
+      search: true,
+      structuredOutput: true,
+    },
+    contextWindowTokens: 262_144, // Model can support 1M context window but API only release 256K
+    description:
+      'Ling-3.0-flash is the latest generation high cost-performance model in the Ling series. It adopts a Mixture-of-Experts (MoE) architecture, with a total parameter count of 124B and 5.1B activated parameters per token. It natively supports a 256K context window, which can be expanded up to 1M. Compared to the previous flash version, Ling-3.0-flash significantly enhances long-horizon task stability, tool call accuracy, and adaptation to common Harness environments.',
+    displayName: 'Ling-3.0-flash',
+    enabled: true,
+    family: 'ling',
+    generation: 'ling-3.0',
+    id: 'Ling-3.0-flash',
+    pricing: {
+      currency: 'CNY',
+      units: [
+        { name: 'textInput', rate: 0.4, strategy: 'fixed', unit: 'millionTokens' },
+        { name: 'textOutput', rate: 1.2, strategy: 'fixed', unit: 'millionTokens' },
+      ],
+    },
+    releasedAt: '2026-07-23',
+    settings: {
+      extendParams: ['enableReasoning'],
+      searchImpl: 'params',
+    },
+    type: 'chat',
+  },
+  {
+    abilities: {
+      functionCall: true,
       search: true,
       structuredOutput: true,
     },

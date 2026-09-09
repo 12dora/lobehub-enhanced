@@ -1659,6 +1659,69 @@ const qwenChatModels: AIChatModelCard[] = [
       vision: true,
     },
     config: {
+      deploymentName: 'qwen3.7-flash', // Supports context caching
+    },
+    contextWindowTokens: 1_000_000,
+    description:
+      'Qwen3.7 native vision-language Flash model, with comprehensive improvements in multimodal understanding and Agent execution capabilities compared to Qwen3.6-Flash. Key enhancements include strengthened multimodal foundational capabilities, stronger universal object recognition, further improved real-world perception and spatial intelligence, significantly upgraded capabilities in multimodal Agent scenarios such as Search Agent and CI Agent, more stable end-to-end task execution, optimized multimodal Coding capabilities, and a smoother vibe coding experience.',
+    displayName: 'Qwen3.7 Flash',
+    enabled: true,
+    family: 'qwen',
+    generation: 'qwen3.7',
+    id: 'qwen3.7-flash',
+    maxOutput: 65_536,
+    organization: 'Qwen',
+    pricing: {
+      currency: 'CNY',
+      units: [
+        {
+          name: 'textInput',
+          strategy: 'tiered',
+          tiers: [
+            { rate: 0.2, upTo: 32_000 },
+            { rate: 0.6, upTo: 256_000 },
+            { rate: 1.2, upTo: 'infinity' },
+          ],
+          unit: 'millionTokens',
+        },
+        {
+          name: 'textOutput',
+          strategy: 'tiered',
+          tiers: [
+            { rate: 0.8, upTo: 32_000 },
+            { rate: 2.4, upTo: 256_000 },
+            { rate: 4.8, upTo: 'infinity' },
+          ],
+          unit: 'millionTokens',
+        },
+        {
+          name: 'textInput_cacheRead',
+          strategy: 'tiered',
+          tiers: [
+            { rate: 0.2 * 0.2, upTo: 32_000 },
+            { rate: 0.6 * 0.2, upTo: 256_000 },
+            { rate: 1.2 * 0.2, upTo: 'infinity' },
+          ],
+          unit: 'millionTokens',
+        },
+      ],
+    },
+    releasedAt: '2026-07-21',
+    settings: {
+      extendParams: ['enableReasoning', 'reasoningBudgetToken', 'preserveThinking'],
+      searchImpl: 'params',
+    },
+    type: 'chat',
+  },
+  {
+    abilities: {
+      functionCall: true,
+      reasoning: true,
+      search: true,
+      video: true,
+      vision: true,
+    },
+    config: {
       deploymentName: 'qwen3.6-flash', // Supports context caching
     },
     contextWindowTokens: 1_000_000,
