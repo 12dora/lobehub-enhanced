@@ -1,6 +1,8 @@
 import { type ChatToolPayload, type GlobalInterventionAuditConfig } from '@lobechat/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { compressContext } from '../../executors/compressContext';
+import type { AgentRuntimeHost } from '../../transport';
 import { type AgentRuntimeContext, type AgentState } from '../../types';
 import { GeneralChatAgent } from '../GeneralChatAgent';
 
@@ -2229,6 +2231,95 @@ describe('GeneralChatAgent', () => {
           type: 'call_llm',
         }),
       );
+    });
+
+    it('should call LLM with compressed state messages after compress_context omits them from the payload', async () => {
+      const preservedMessage = {
+        content: 'continue with this exact instruction',
+        id: 'msg-follow-up',
+        role: 'user',
+      };
+      const host: AgentRuntimeHost = {
+        lifecycle: {
+          dispatch: vi.fn().mockResolvedValue(undefined),
+          dispatchBeforeToolCall: vi.fn().mockResolvedValue(null),
+        },
+        operation: {
+          operationId: 'op-123',
+          stepIndex: 2,
+          topicId: 'topic-123',
+          userId: 'user-123',
+          workspaceId: 'workspace-123',
+        },
+        transports: {
+          compression: {
+            buildPrompt: vi.fn().mockResolvedValue({
+              messages: [{ content: 'summarize', role: 'user' }],
+            }),
+            createGroup: vi.fn().mockResolvedValue({
+              messageGroupId: 'group-123',
+              messagesToSummarize: [{ content: 'history', id: 'msg-history', role: 'user' }],
+            }),
+            finalizeGroup: vi.fn().mockResolvedValue({
+              messages: [{ content: 'summary', id: 'group-123', role: 'compressedGroup' }],
+            }),
+          },
+          llm: {
+            stream: vi.fn().mockResolvedValue({ content: 'summary' }),
+          },
+          messages: {
+            query: vi.fn().mockResolvedValue([
+              { content: 'history', id: 'msg-history', role: 'user' },
+              { content: 'loading', id: 'assistant-existing', role: 'assistant' },
+              preservedMessage,
+            ]),
+          } as any,
+          stream: {
+            publishChunk: vi.fn(),
+            publishEvent: vi.fn(),
+          },
+        },
+      };
+
+      const agent = new GeneralChatAgent({
+        agentConfig: { maxSteps: 100 },
+        operationId: 'test-session',
+        modelRuntimeConfig: mockModelRuntimeConfig,
+      });
+      const state = createMockState({
+        messages: [{ content: 'history', id: 'msg-history', role: 'user' }, preservedMessage] as any,
+        metadata: { agentId: 'agent-123', threadId: 'thread-123', topicId: 'topic-123' },
+        modelRuntimeConfig: mockModelRuntimeConfig,
+        tools: [{ name: 'search' }] as any,
+      });
+
+      const compressed = await compressContext(host)(
+        {
+          payload: { currentTokenCount: 5000, messages: state.messages },
+          type: 'compress_context',
+        },
+        state,
+      );
+
+      expect((compressed.nextContext?.payload as any).compressedMessages).toBeUndefined();
+      expect(compressed.nextContext?.phase).toBe('compression_result');
+
+      const next = await agent.runner(compressed.nextContext!, compressed.newState);
+
+      expect(next).toEqual({
+        type: 'call_llm',
+        payload: {
+          createAssistantMessage: true,
+          messages: [
+            { content: 'summary', id: 'group-123', role: 'compressedGroup' },
+            preservedMessage,
+          ],
+          model: 'gpt-4o-mini',
+          parentMessageId: 'assistant-existing',
+          provider: 'openai',
+          tools: state.tools,
+        },
+      });
     });
 
     // High-context tool-first resume: when the first post-tool turn compresses
