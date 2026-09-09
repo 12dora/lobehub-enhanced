@@ -30,6 +30,20 @@ const isSameNullableContextValue = (left?: string | null, right?: string | null)
   (left ?? null) === (right ?? null);
 
 /**
+ * `isNew` marks the draft seam of a conversation (the `*_new` message bucket)
+ * and only `true` carries that meaning — every persisted context is "not new",
+ * whether it says so explicitly or leaves the optional field off entirely.
+ *
+ * Producers disagree on which of the two they write: `runClientSubAgent` builds
+ * its sub-agent thread context without the field, while the thread portal
+ * rendering that same persisted thread passes `isNew: false`. Comparing them
+ * strictly made Stop silently skip the operation it was aimed at, so normalize
+ * both sides to a boolean and keep only the `true` distinction meaningful.
+ */
+const isSameIsNewFlag = (left?: boolean, right?: boolean): boolean =>
+  (left ?? false) === (right ?? false);
+
+/**
  * Operation Actions
  */
 
@@ -535,7 +549,7 @@ export class OperationActionsImpl {
         matches = matches && op.context.scope === filter.scope;
       }
       if (filter.isNew !== undefined) {
-        matches = matches && op.context.isNew === filter.isNew;
+        matches = matches && isSameIsNewFlag(op.context.isNew, filter.isNew);
       }
 
       if (matches) {

@@ -582,6 +582,80 @@ describe('Operation Actions', () => {
       expect(result.current.operations[mainOperationId!].status).toBe('cancelled');
       expect(result.current.operations[threadOperationId!].status).toBe('running');
     });
+
+    // `runClientSubAgent` builds its sub-agent thread context without `isNew`,
+    // while the thread portal showing that persisted thread stops it with
+    // `isNew: false`. Both mean "not a draft", so Stop must still match —
+    // comparing the raw values made `undefined !== false` skip the operation.
+    it('should cancel a persisted thread operation whose context omits isNew', () => {
+      const { result } = renderHook(() => useChatStore());
+
+      let subAgentOperationId: string;
+
+      act(() => {
+        subAgentOperationId = result.current.startOperation({
+          context: {
+            agentId: 'session1',
+            isSubAgent: true,
+            scope: 'thread',
+            threadId: 'thread1',
+            topicId: 'topic1',
+          },
+          type: 'execClientSubAgent',
+        }).operationId;
+      });
+
+      act(() => {
+        const cancelled = result.current.cancelOperations({
+          agentId: 'session1',
+          isNew: false,
+          scope: 'thread',
+          status: 'running',
+          threadId: 'thread1',
+          topicId: 'topic1',
+          type: 'execClientSubAgent',
+        });
+        expect(cancelled).toEqual([subAgentOperationId!]);
+      });
+
+      expect(result.current.operations[subAgentOperationId!].status).toBe('cancelled');
+    });
+
+    // The draft seam stays distinct: a `*_new` thread operation must not be
+    // swept up by a Stop aimed at the persisted conversation.
+    it('should not cancel a draft thread operation when filtering for isNew: false', () => {
+      const { result } = renderHook(() => useChatStore());
+
+      let draftOperationId: string;
+
+      act(() => {
+        draftOperationId = result.current.startOperation({
+          context: {
+            agentId: 'session1',
+            isNew: true,
+            scope: 'thread',
+            threadId: null,
+            topicId: 'topic1',
+          },
+          type: 'execAgentRuntime',
+        }).operationId;
+      });
+
+      act(() => {
+        const cancelled = result.current.cancelOperations({
+          agentId: 'session1',
+          isNew: false,
+          scope: 'thread',
+          status: 'running',
+          threadId: null,
+          topicId: 'topic1',
+          type: 'execAgentRuntime',
+        });
+        expect(cancelled).toEqual([]);
+      });
+
+      expect(result.current.operations[draftOperationId!].status).toBe('running');
+    });
   });
 
   describe('cleanupCompletedOperations', () => {
