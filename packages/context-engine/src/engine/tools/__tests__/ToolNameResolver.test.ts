@@ -900,7 +900,7 @@ describe('ToolNameResolver', () => {
       it('should drop an explicitly namespaced API missing from its manifest', () => {
         const toolCalls = [
           {
-            function: { arguments: '{}', name: 'workspace____write' },
+            function: { arguments: '{}', name: 'lobe-local-system____submitEvidence' },
             id: 'call_1',
             type: 'function',
           },
