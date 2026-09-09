@@ -192,9 +192,10 @@ export class AiModelActionImpl {
 
       // "New" is measured against the list the operator was just looking at, so the count
       // reports rows that actually appeared rather than server-side insert bookkeeping.
+      // Count the deduplicated `models` that were persisted, not the raw fetch.
       // batchUpdateAiModels already refreshes the list; do not refresh again here.
-      const created = data.filter((model) => !currentEnabledState.has(model.id)).length;
-      return { created, total: data.length, updated: data.length - created };
+      const created = models.filter((model) => !currentEnabledState.has(model.id)).length;
+      return { created, total: models.length, updated: models.length - created };
     }
 
     return undefined;

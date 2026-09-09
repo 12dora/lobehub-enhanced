@@ -652,6 +652,29 @@ describe('AiModelAction', () => {
 
       expect(outcome).toEqual({ created: 1, total: 2, updated: 1 });
     });
+
+    it('counts created and total from the deduplicated models, not the raw fetch', async () => {
+      const { result } = renderHook(() => useStore());
+      vi.spyOn(result.current, 'batchUpdateAiModels').mockResolvedValue(undefined);
+      vi.spyOn(result.current, 'refreshAiModelList').mockResolvedValue(undefined);
+
+      vi.resetModules();
+      vi.doMock('@/services/models', () => ({
+        modelsService: {
+          getModels: vi.fn().mockResolvedValue([
+            { id: 'brand-new', type: 'chat' },
+            { id: 'brand-new', type: 'chat' },
+          ]),
+        },
+      }));
+
+      let outcome;
+      await act(async () => {
+        outcome = await result.current.syncUpstreamModelList('test-provider');
+      });
+
+      expect(outcome).toEqual({ created: 1, total: 1, updated: 0 });
+    });
   });
 
   describe('internal_toggleAiModelLoading', () => {
