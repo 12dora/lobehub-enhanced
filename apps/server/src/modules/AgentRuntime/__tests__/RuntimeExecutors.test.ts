@@ -1177,6 +1177,7 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
     it('stops immediately when the branded provider returns an empty completion', async () => {
       const mockChat = vi.fn().mockImplementation(async (_payload, options) => {
         await options?.callback?.onCompletion?.({
+          finishReason: 'network_error',
           usage: {
             cost: 5.980_015,
             totalInputTokens: 100,
@@ -1206,7 +1207,7 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
       expect(error.diagnostics).toMatchObject({
         attempt: 1,
         cost: 5.980_015,
-        maxAttempts: 1,
+        maxAttempts: 4,
         model: 'deepseek-v4-pro',
         outputTokens: 25_617,
         provider: 'lobehub',
@@ -2105,6 +2106,140 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
         // Empty string is falsy, so should create new message
         expect(mockMessageModel.create).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('tool-call repeat guard', () => {
+      const injectToolName = new ToolNameResolver().generate('credentials', 'inject', 'builtin');
+      const fifthInjectCall = {
+        function: {
+          arguments: '{"scope":"repo","keys":["github"]}',
+          name: injectToolName,
+        },
+        id: 'call-5',
+        type: 'function' as const,
+      };
+      const createRepeatedToolCallState = () =>
+        Object.assign(
+          createMockState({
+            operationToolSet: {
+              enabledToolIds: ['credentials'],
+              manifestMap: {
+                credentials: {
+                  api: [
+                    {
+                      description: 'Inject credentials',
+                      name: 'inject',
+                      parameters: { type: 'object' },
+                    },
+                  ],
+                  identifier: 'credentials',
+                  meta: { title: 'Credentials' },
+                  type: 'builtin',
+                },
+              },
+              sourceMap: { credentials: 'builtin' as const },
+              tools: [{ function: { name: injectToolName }, type: 'function' }],
+            },
+          }),
+          {
+            toolCallRepeatGuard: {
+              counts: {
+                '["credentials","inject","{\\"keys\\":[\\"github\\"],\\"scope\\":\\"repo\\"}"]': 4,
+              },
+            },
+          },
+        );
+
+      it('blocks the fifth consecutive identical tool call before it can execute', async () => {
+        const mockChat = vi.fn().mockImplementation(async (_payload, options) => {
+          await options?.callback?.onToolsCalling?.({ toolsCalling: [fifthInjectCall] });
+          return new Response('done');
+        });
+        vi.mocked(initModelRuntimeFromDB).mockResolvedValueOnce({ chat: mockChat } as any);
+
+        const result = await createRuntimeExecutors(ctx).call_llm!(
+          {
+            payload: {
+              messages: [{ content: 'Hello', role: 'user' }],
+              model: 'gpt-4',
+              parentMessageId: 'parent-msg-123',
+              provider: 'openai',
+              tools: [],
+            },
+            type: 'call_llm' as const,
+          },
+          createRepeatedToolCallState(),
+        );
+
+        expect(
+          (result.nextContext?.payload as { hasToolsCalling?: boolean }).hasToolsCalling,
+        ).toBe(false);
+        expect(mockMessageModel.update).toHaveBeenCalledWith(
+          'msg-123',
+          expect.objectContaining({
+            content: 'Stopped after the same tool call was requested 5 consecutive times.',
+            tools: undefined,
+          }),
+        );
+        expect(mockStreamManager.publishStreamEvent).toHaveBeenCalledWith(
+          'op-123',
+          expect.objectContaining({
+            data: expect.objectContaining({ toolsCalling: [] }),
+            type: 'stream_end',
+          }),
+        );
+      });
+
+      it('preserves user cancellation when an interrupted operation emits the fifth repeated tool call', async () => {
+        const mockChat = vi.fn().mockImplementation(async (_payload, options) => {
+          await options?.callback?.onToolsCalling?.({ toolsCalling: [fifthInjectCall] });
+          throw new Error('AbortError: stream aborted');
+        });
+        vi.mocked(initModelRuntimeFromDB).mockResolvedValueOnce({ chat: mockChat } as any);
+
+        const interruptedCtx: RuntimeExecutorContext = {
+          ...ctx,
+          loadAgentState: vi.fn().mockResolvedValue({
+            metadata: { platformStartClassification: 'ordinary' },
+            status: 'interrupted',
+          }),
+        };
+
+        await expect(
+          createRuntimeExecutors(interruptedCtx).call_llm!(
+            {
+              payload: {
+                messages: [{ content: 'Hello', role: 'user' }],
+                model: 'gpt-4',
+                parentMessageId: 'parent-msg-123',
+                provider: 'openai',
+                tools: [],
+              },
+              type: 'call_llm' as const,
+            },
+            createRepeatedToolCallState(),
+          ),
+        ).rejects.toThrow();
+
+        expect(mockMessageModel.update).toHaveBeenCalledWith(
+          'msg-123',
+          expect.objectContaining({
+            metadata: expect.objectContaining({ interruptedMidStream: true }),
+            tools: expect.arrayContaining([
+              expect.objectContaining({
+                apiName: 'inject',
+                identifier: 'credentials',
+              }),
+            ]),
+          }),
+        );
+        expect(mockMessageModel.update).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            content: 'Stopped after the same tool call was requested 5 consecutive times.',
+          }),
+        );
       });
     });
 
@@ -5503,6 +5638,160 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
           ([, event]: [string, { type: string }]) => event.type === 'stream_retry',
         ),
       ).toBe(false);
+    });
+
+    it('should retry a no-usage empty completion caused by a network error once', async () => {
+      vi.useFakeTimers();
+
+      const mockChat = vi
+        .fn()
+        .mockImplementationOnce(async (_payload: any, options: any) => {
+          await options.callback.onCompletion?.({ finishReason: 'network_error', text: '' });
+          return new Response('done');
+        })
+        .mockImplementationOnce(async (_payload: any, options: any) => {
+          await options.callback.onText?.('recovered');
+          await options.callback.onCompletion?.({
+            finishReason: 'stop',
+            usage: { totalInputTokens: 10, totalOutputTokens: 2, totalTokens: 12 },
+          });
+          return new Response('done');
+        });
+
+      vi.mocked(initModelRuntimeFromDB).mockResolvedValue({ chat: mockChat } as any);
+
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState();
+      const instruction = {
+        payload: {
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'glm-5.3-flash',
+          parentMessageId: 'parent-msg-123',
+          provider: 'lobehub',
+          tools: [],
+        },
+        type: 'call_llm' as const,
+      };
+
+      try {
+        const resultPromise = executors.call_llm!(instruction, state);
+
+        await vi.runOnlyPendingTimersAsync();
+
+        const result = await resultPromise;
+
+        expect(mockChat).toHaveBeenCalledTimes(2);
+        expect(result.nextContext?.phase).toBe('llm_result');
+        expect(mockMessageModel.update).toHaveBeenCalledWith(
+          'msg-123',
+          expect.objectContaining({ content: 'recovered' }),
+        );
+        expect(mockStreamManager.publishStreamEvent).toHaveBeenCalledWith(
+          'op-123',
+          expect.objectContaining({
+            data: expect.objectContaining({ attempt: 2, delayMs: 1000, maxAttempts: 4 }),
+            type: 'stream_retry',
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should retry a third-party no-usage network empty completion too', async () => {
+      vi.useFakeTimers();
+
+      const mockChat = vi
+        .fn()
+        .mockImplementationOnce(async (_payload: any, options: any) => {
+          await options.callback.onCompletion?.({ finishReason: 'network_error', text: '' });
+          return new Response('done');
+        })
+        .mockImplementationOnce(async (_payload: any, options: any) => {
+          await options.callback.onText?.('recovered');
+          await options.callback.onCompletion?.({
+            finishReason: 'stop',
+            usage: { totalInputTokens: 10, totalOutputTokens: 2, totalTokens: 12 },
+          });
+          return new Response('done');
+        });
+
+      vi.mocked(initModelRuntimeFromDB).mockResolvedValue({ chat: mockChat } as any);
+
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState();
+      const instruction = {
+        payload: {
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'gpt-5',
+          parentMessageId: 'parent-msg-123',
+          provider: 'openai',
+          tools: [],
+        },
+        type: 'call_llm' as const,
+      };
+
+      try {
+        const resultPromise = executors.call_llm!(instruction, state);
+
+        await vi.runOnlyPendingTimersAsync();
+
+        const result = await resultPromise;
+
+        // Nothing was produced and nothing was billed, so the drop is as
+        // retryable on a BYOK route as on the first-party one.
+        expect(mockChat).toHaveBeenCalledTimes(2);
+        expect(result.nextContext?.phase).toBe('llm_result');
+        expect(mockMessageModel.update).toHaveBeenCalledWith(
+          'msg-123',
+          expect.objectContaining({ content: 'recovered' }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should stop after three retries when network empty completions continue', async () => {
+      vi.useFakeTimers();
+
+      const mockChat = vi.fn().mockImplementation(async (_payload: any, options: any) => {
+        await options.callback.onCompletion?.({ finishReason: 'network_error', text: '' });
+        return new Response('done');
+      });
+
+      vi.mocked(initModelRuntimeFromDB).mockResolvedValue({ chat: mockChat } as any);
+
+      const executors = createRuntimeExecutors(ctx);
+      const state = createMockState();
+      const instruction = {
+        payload: {
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'glm-5.3-flash',
+          parentMessageId: 'parent-msg-123',
+          provider: 'lobehub',
+          tools: [],
+        },
+        type: 'call_llm' as const,
+      };
+
+      try {
+        const resultPromise = executors.call_llm!(instruction, state);
+        const rejection = expect(resultPromise).rejects.toMatchObject({
+          diagnostics: expect.objectContaining({ attempt: 4, maxAttempts: 4 }),
+          errorType: 'ModelEmptyCompletion',
+        });
+
+        await vi.runOnlyPendingTimersAsync();
+        await Promise.resolve();
+        await vi.runOnlyPendingTimersAsync();
+        await Promise.resolve();
+        await vi.runOnlyPendingTimersAsync();
+        await rejection;
+
+        expect(mockChat).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should retry llm execution, emit stream_retry, and commit only the successful attempt', async () => {

@@ -4,12 +4,17 @@ import type {
   CallLLMPayload,
   InstructionExecutor,
 } from '@lobechat/agent-runtime';
+import {
+  hasRepeatedToolCall,
+  TOOL_CALL_REPEAT_LIMIT,
+  updateToolCallRepeatGuard,
+} from '@lobechat/agent-runtime';
 import type { ChatStreamPayload, ModelRuntime } from '@lobechat/model-runtime';
 import { consumeStreamUntilDone } from '@lobechat/model-runtime';
 import { isRecord } from '@lobechat/utils/object';
 
 import type { RuntimeExecutorContext } from '../context';
-import { log } from '../executorHelpers';
+import { isOperationInterrupted, log } from '../executorHelpers';
 import { createServerCallLlmCallbacks } from './serverCallLlmCallbacks';
 import { assertNonEmptyCompletion, salvageAnswerFromThinking } from './serverCallLlmCompletion';
 import type { GeneratedFileUploader } from './serverCallLlmGeneratedFile';
@@ -133,6 +138,19 @@ export const runServerCallLlmAttempt = async (
   await settleAttemptOutput(input.streamSink, input.generatedFiles);
   await assertNonEmptyCompletion(input);
   salvageAnswerFromThinking(input);
+  const toolCallRepeatGuard = updateToolCallRepeatGuard(
+    input.state.toolCallRepeatGuard,
+    input.attemptState.toolsCalling,
+  );
+  if (
+    hasRepeatedToolCall(toolCallRepeatGuard) &&
+    !(await isOperationInterrupted(input.ctx))
+  ) {
+    input.attemptState.finishReason = 'tool_call_repeat_limit';
+    input.attemptState.toolCalls = [];
+    input.attemptState.toolsCalling = [];
+    input.streamSink.content = `Stopped after the same tool call was requested ${TOOL_CALL_REPEAT_LIMIT} consecutive times.`;
+  }
   const visibleOutputEndPublishedStepIndex = await publishCallLlmOutput(input);
   log('[%s:%d] call_llm completed', input.ctx.operationId, input.ctx.stepIndex);
   const finalReasoning = await persistSuccessfulCallLlmMessage(input);
@@ -140,6 +158,7 @@ export const runServerCallLlmAttempt = async (
     ...input,
     finalReasoning,
     operationId: input.ctx.operationId,
+    toolCallRepeatGuard,
     visibleOutputEndPublishedStepIndex,
   });
 };

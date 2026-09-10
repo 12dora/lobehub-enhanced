@@ -117,6 +117,7 @@ export const buildCallLlmResult = ({
   state,
   stepLabel,
   streamSink,
+  toolCallRepeatGuard,
   visibleOutputEndPublishedStepIndex,
 }: {
   assistantMessageId: string;
@@ -129,9 +130,11 @@ export const buildCallLlmResult = ({
   state: AgentState;
   stepLabel?: string;
   streamSink: ServerCallLlmStreamSink;
+  toolCallRepeatGuard: NonNullable<AgentState['toolCallRepeatGuard']>;
   visibleOutputEndPublishedStepIndex?: number;
 }) => {
   const newState = structuredClone(state);
+  newState.toolCallRepeatGuard = toolCallRepeatGuard;
   const sanitizedToolCalls = attemptState.toolCalls
     .filter((toolCall) => !!toolCall.function.name)
     .map((toolCall) => ({

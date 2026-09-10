@@ -27,6 +27,7 @@ import {
   resolveCallLlmParentId,
   resolveCallLlmStepLabel,
 } from './serverCallLlmPayload';
+import { NETWORK_EMPTY_COMPLETION_MAX_ATTEMPTS } from './serverCallLlmRetryPolicy';
 import { resolveServerCallLlmTooling, type ServerCallLlmTooling } from './serverCallLlmTooling';
 
 export { isAnswerInThinkingSalvageFinishReason } from './serverCallLlmCompletion';
@@ -126,7 +127,15 @@ const executeCallLlmInstruction = async ({
         ctx,
         events,
         llmPayload,
-        maxAttempts: resolveLLMMaxAttempts(provider, SERVER_LLM_RETRY_POLICY),
+        // The executor fixes the attempt ceiling before any error exists, so it
+        // has to leave room for the error-driven network-empty budget. Providers
+        // that already allow more keep their own ceiling; only a no-retry
+        // provider is lifted, and resolveLLMRetryBudget still refuses every
+        // other error of theirs at the first attempt.
+        maxAttempts: Math.max(
+          resolveLLMMaxAttempts(provider, SERVER_LLM_RETRY_POLICY),
+          NETWORK_EMPTY_COMPLETION_MAX_ATTEMPTS,
+        ),
         model,
         modelRuntime,
         operationLogId,

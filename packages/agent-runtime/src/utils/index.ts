@@ -5,3 +5,4 @@ export * from './runtimeRetry';
 export * from './status';
 export * from './stepContextComputer';
 export * from './tokenCounter';
+export * from './toolCallRepeatGuard';

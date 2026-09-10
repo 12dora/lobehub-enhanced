@@ -29,6 +29,10 @@ import {
   createGeneratedFileUploader,
 } from './serverCallLlmGeneratedFile';
 import { persistInterruptedCallLlmMessage } from './serverCallLlmPersistence';
+import {
+  isRetryableNetworkEmptyCompletion,
+  NETWORK_EMPTY_COMPLETION_MAX_RETRIES,
+} from './serverCallLlmRetryPolicy';
 import { createServerCallLlmStreamSink } from './serverCallLlmStreamSink';
 import type { ServerCallLlmExecutionInput } from './serverCallLlmTypes';
 
@@ -81,18 +85,24 @@ const handleAttemptError = async ({
 }): Promise<'retry'> => {
   await runInput.streamSink.cancelAndDrain();
   const classified = classifyLLMError(error);
+  const retryableNetworkEmpty = isRetryableNetworkEmptyCompletion(error);
+  const retryClassified = retryableNetworkEmpty
+    ? { ...classified, kind: 'retry' as const }
+    : classified;
   const interrupted = await isOperationInterrupted(input.ctx);
-  const retryBudget = resolveLLMRetryBudget(input.provider, policy);
+  const retryBudget = retryableNetworkEmpty
+    ? NETWORK_EMPTY_COMPLETION_MAX_RETRIES
+    : resolveLLMRetryBudget(input.provider, policy);
 
-  if (!interrupted && shouldRetryLLM(classified.kind, attempt, retryBudget)) {
+  if (!interrupted && shouldRetryLLM(retryClassified.kind, attempt, retryBudget)) {
     const delayMs = getLLMRetryDelayMs(attempt);
     await publishRetry(
       input,
       input.events,
       attempt,
       input.maxAttempts,
-      classified.kind,
-      classified.code,
+      retryClassified.kind,
+      retryClassified.code,
       delayMs,
     );
     if (await isOperationInterrupted(input.ctx)) throw error;
