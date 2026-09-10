@@ -3,6 +3,7 @@
 import { CheckCircleFilled } from '@ant-design/icons';
 import { type ChatMessageError } from '@lobechat/types';
 import { TraceNameMap } from '@lobechat/types';
+import { isRecord, pickTrimmedString } from '@lobechat/utils/object';
 import { ModelIcon } from '@lobehub/icons';
 import { Alert, Button, Flexbox, Highlighter, Icon } from '@lobehub/ui';
 import { Select } from '@lobehub/ui/base-ui';
@@ -37,12 +38,21 @@ const styles = createStaticStyles(({ css }) => ({
 const Error = memo<{ error: ChatMessageError; title?: string }>(({ error, title }) => {
   const { t } = useTranslation(['error', 'modelRuntime']);
   const providerName = useProviderName(error.body?.provider);
+  // A runtime code without `modelRuntime:` copy used to render its raw key as the headline;
+  // show whatever the server actually said instead, and only then the generic unknown-error copy.
+  const bodyMessage = isRecord(error.body)
+    ? pickTrimmedString(error.body.message)
+    : pickTrimmedString(error.body);
+  const fallbackMessage =
+    pickTrimmedString(error.message) ?? bodyMessage ?? t('response.UnknownChatFetchError');
 
   return (
     <Flexbox gap={8} style={{ maxWidth: 600, width: '100%' }}>
       <Alert
         showIcon
-        title={title ?? getRuntimeErrorMessage(t, error.type, { provider: providerName })}
+        title={
+          title ?? getRuntimeErrorMessage(t, error.type, { provider: providerName }, fallbackMessage)
+        }
         type={'error'}
         extra={
           <Flexbox paddingBlock={8} paddingInline={16}>

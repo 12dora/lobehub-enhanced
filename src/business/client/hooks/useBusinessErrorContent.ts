@@ -1,4 +1,4 @@
-import { type ErrorType } from '@lobechat/types';
+import { type ChatMessageError } from '@lobechat/types';
 
 export interface BusinessErrorContentResult {
   errorType?: string;
@@ -8,8 +8,10 @@ export interface BusinessErrorContentResult {
 }
 
 export default function useBusinessErrorContent(
+  // Takes the whole error, not just its type: business builds format the message from
+  // `body`/`diagnostics` (empty-completion cost, for instance), which the type alone cannot carry.
   // eslint-disable-next-line unused-imports/no-unused-vars
-  errorType?: ErrorType | string,
+  error?: ChatMessageError | null,
 ): BusinessErrorContentResult {
   return {};
 }

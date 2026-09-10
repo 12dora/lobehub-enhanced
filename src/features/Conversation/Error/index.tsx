@@ -255,7 +255,7 @@ export const useErrorContent = (error: any) => {
     // Business builds may inject a pre-formatted cost message; open-source falls
     // through to ModelEmptyCompletionWithCost below when cost diagnostics exist.
     message: businessMessage,
-  } = useBusinessErrorContent(error?.type);
+  } = useBusinessErrorContent(error);
 
   return useMemo<AlertProps | undefined>(() => {
     if (!error) return;

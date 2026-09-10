@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderSettingsContext } from '../ModelList/ProviderSettingsContext';
 import Checker from './Checker';
 
+const missingTranslationKeys = vi.hoisted(() => new Set<string>());
+
 const mocks = vi.hoisted(() => ({
   aiProviderModelList: [] as { enabled: boolean; id: string; type: string }[],
   enabledAiModels: [] as { id: string; providerId: string; type: string }[],
@@ -15,7 +17,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    // i18next-shaped: a key registered as missing resolves to `defaultValue` instead of itself.
+    t: (key: string, options?: Record<string, unknown>) =>
+      missingTranslationKeys.has(key) ? String(options?.defaultValue ?? key) : key,
+  }),
 }));
 
 vi.mock('antd-style', () => ({
@@ -86,6 +92,7 @@ const clickCheck = () => fireEvent.click(screen.getByRole('button'));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  missingTranslationKeys.clear();
   mocks.aiProviderModelList = [
     { enabled: false, id: 'gpt-5.5', type: 'chat' },
     { enabled: true, id: 'gpt-5.6-sol', type: 'chat' },
@@ -266,6 +273,28 @@ describe('Checker — user surface model selection', () => {
     renderChecker(false);
 
     expect(screen.getByTestId('check-model').textContent).toBe('gpt-5.5');
+  });
+
+  it('shows the server message when the error type owns no localized copy', async () => {
+    // A registered runtime code without `modelRuntime:` copy used to headline the raw key.
+    missingTranslationKeys.add('modelRuntime:InvalidGithubCopilotToken');
+    mocks.fetchPresetTaskResult.mockImplementation(
+      async ({ onError }: { onError: (id: unknown, error: unknown) => void }) => {
+        onError(undefined, {
+          body: { message: 'The GitHub Copilot token is invalid.' },
+          type: 'InvalidGithubCopilotToken',
+        });
+      },
+    );
+
+    renderChecker(false);
+    clickCheck();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('alert-title').textContent).toBe(
+        'The GitHub Copilot token is invalid.',
+      ),
+    );
   });
 
   it('checks the resolved model, not the card default', async () => {

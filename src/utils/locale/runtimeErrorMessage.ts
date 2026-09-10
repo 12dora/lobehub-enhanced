@@ -44,16 +44,20 @@ export const isPlatformLocalizedErrorType = (code: string): boolean =>
  *
  * The caller should pre-load both namespaces:
  * `useTranslation(['error', 'modelRuntime'])`.
+ *
+ * `fallbackMessage` is handed to i18next as `defaultValue`, so a registered runtime code that
+ * has no locale key yet renders the server's own message instead of the raw key.
  */
 export const getRuntimeErrorMessage = (
   t: unknown,
   code: string | number | undefined,
   vars?: Record<string, unknown>,
+  fallbackMessage = '',
 ): string => {
   if (code === undefined || code === null || code === '') return '';
   const key =
     typeof code === 'string' && getErrorCodeSpec(code)
       ? `modelRuntime:${code}`
       : `response.${code}`;
-  return (t as LooseT)(key, vars);
+  return (t as LooseT)(key, { ...vars, defaultValue: fallbackMessage });
 };
