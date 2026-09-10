@@ -157,3 +157,6 @@
 复核（本轮 codex 持续「模型容量不足」，改由 opus 子代理复核）发现并已修正：#18497 客户端半边最初在网关路径上、以及运行记录被回收后仍会恢复草稿（重复发送 / 覆盖当前输入），已改为以「用户消息持久化」为界（网关 transport 与客户端模式在持久化后立即清空快照；异构执行失败不恢复；技能准备失败补上恢复）。
 
 复核后判定不修的意见：Checker 在 `modelRuntime` 命名空间尚未加载的瞬间可能以传输异常文本作标题（命名空间加载后即重渲染，且该文本是用户自己的服务商检查结果）。
+
+v1.3.1 发布后 codex 恢复，对发布区间再复核一轮（v1.3.2）。采纳：客户端模式 `internal_ensureTopicDetail` 失败也走失败 + 恢复草稿；输入框已有新内容时不覆盖；工具错误卡标题回退到服务端消息；Dockerfile manifests 阶段补 `apps/server/package.json`。
+不采纳：`maxAttempts` 对无重试预算服务商显示 4（与上游一致，仅诊断字段）；`getRuntimeErrorMessage` 仅在有回退文案时才传 `defaultValue`（会让对话错误卡重新显示裸 key，违背上游意图）；e2e 工作区清单入 manifests（纯开发依赖，原 Dockerfile 亦不装）。

@@ -5,6 +5,18 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.3.2 (2026-09-10)
+
+Review follow-up to 1.3.1 (codex review of the released range).
+
+#### 🐛 Reliability
+
+- Chat client: a failed topic-detail fetch before the user message is persisted now fails the operation and restores the draft, like the other pre-persist failures; a restore never overwrites text the user already typed while the send was in flight (the send error is still surfaced); the tool error card falls back to the server message when the error code has no localized copy.
+
+#### 🏗️ Build
+
+- Dockerfile: the `manifests` stage also carries `apps/server/package.json`, so the dependency layer's cache key covers every production workspace package.
+
 ## 1.3.1 (2026-09-10)
 
 Follow-up to the first upstream sync: the four "needs real work" items left in the ledger were ported onto the fork's own code paths, two others were re-checked and closed as not applicable, and the Docker build no longer reinstalls dependencies on every release. Ledger: [docs/enterprise/upstream-sync.md](./docs/enterprise/upstream-sync.md).
