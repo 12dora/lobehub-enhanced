@@ -5,6 +5,25 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.3.1 (2026-09-10)
+
+Follow-up to the first upstream sync: the four "needs real work" items left in the ledger were ported onto the fork's own code paths, two others were re-checked and closed as not applicable, and the Docker build no longer reinstalls dependencies on every release. Ledger: [docs/enterprise/upstream-sync.md](./docs/enterprise/upstream-sync.md).
+
+#### 🐛 Reliability
+
+- Agent runtime: an empty completion whose `finishReason` is `network_error` and that produced nothing billable is retried up to three times (four attempts in total) even on providers that otherwise never retry; any other empty completion still stops immediately (#19083).
+- Agent runtime: the same tool call (name + canonicalised arguments) requested five times in a row ends the turn with `finishReason: tool_call_repeat_limit` and a short stop notice instead of looping; the guard is tracked per operation in agent state and resets whenever a step produces a different call or no call (#18965).
+- Chat client: when a send fails before the run starts (gateway 5xx, network error, heterogeneous agent start failure), the typed text and attachments are restored into the composer for every runtime branch; previously only the client-mode branch restored, and only for tRPC client errors. Cancelled sends and sends whose user message was already persisted are left alone. The upstream server-side topic reservation half does not apply to the fork (#18497, client half).
+- Errors: `getRuntimeErrorMessage` accepts a fallback message, so a runtime error code without localized copy shows the server's message instead of the raw key; the provider connectivity check uses it; `useBusinessErrorContent` receives the whole error object (#17418, remaining frontend hunks).
+
+#### 🏗️ Build
+
+- Dockerfile: a `manifests` stage feeds `pnpm install` only the workspace `package.json` files (root version zeroed), patches and the desktop manifest, so package source edits and release version bumps no longer invalidate the dependency layer.
+
+#### 📝 Ledger
+
+- #17748 / #17754 (stale model state in the selector) were found already implemented in the fork; only the model-redirect half is missing and is intentionally not ported. #17928 (recent-topic preview batching) does not apply: the fork's `recent.ts` has no topic preview and no per-topic subquery.
+
 ## 1.3.0 (2026-09-10)
 
 First explicit upstream sync: 59 upstream pull requests from lobehub/lobehub v2.2.11–v2.2.16 cherry-picked onto the v2.2.10 base, plus 11 follow-up fixes found in review. Scope was limited to security, reliability, model runtime / model cards and small UX changes; no dependency bumps, no database schema changes, no upstream feature that overlaps the enterprise admin console. The full per-PR ledger (applied, skipped and why) lives in [docs/enterprise/upstream-sync.md](./docs/enterprise/upstream-sync.md).

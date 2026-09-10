@@ -112,7 +112,7 @@
 | 移动端消息树迭代遍历（#17457） | 上游次日已回滚（#17493） |
 | 音频多模态与成本估算（#17904 #17949） | 触及二开重写的 aiAgent service 与 const 包依赖 |
 | 模型+思考强度合并选择器（#18838） | 与二开 `platform.modelLocked` 模型切换器逻辑冲突（22 个冲突文件） |
-| 模型过期状态展示（#17748 #17754） | 触及二开重写的 aiProviderAccess 与 business-server |
+| 模型过期状态展示（#17748 #17754） | 2026-09-10 复核：二开已自行落地 `resolveStaleModelState`（notEnabled / removed）与选择器提示；只有上游的 redirect 半边未做（二开无模型重定向元数据，a17a36083 已明确不移植） |
 | 设置页表头统一（#17667 #17696 #17698） | 100 个冲突文件，纯样式 |
 | 实时语音听写（#18132 #18578 #18709） | 依赖 OpenAI realtime STT，内网未接；触及二开定制的 ChatInput |
 | AskUserQuestion 补充回答（#18571） | 依赖 heterogeneous-agents Cursor ACP 会话 |
@@ -122,12 +122,12 @@
 
 | 上游 PR | 原因 |
 | --- | --- |
-| #17418 空补全重试与错误分类 | 二开重写了 ServerLLMTransport（无 ServerLLMRetryPolicy）与 Conversation/Error，并删除了 ClientLLMTransport；核心 `runtimeRetry.ts` 已与上游一致 |
-| #19083 网络空补全重试 | 依赖 #17418 的 ServerLLMRetryPolicy |
-| #18965 工具循环上限 | 二开删除了 `callLlmFinalizer.ts`，LLM 收尾在 `apps/server/.../serverCallLlm*`，接入需改写该路径 |
-| #18497 死锁 topic 吞消息 | 二开删除了 `topicStartReservation.ts` 并重写 aiAgent service / conversationLifecycle |
+| #17418 空补全重试与错误分类 | 二开重写了 ServerLLMTransport（无 ServerLLMRetryPolicy）与 Conversation/Error，并删除了 ClientLLMTransport；核心 `runtimeRetry.ts` 已与上游一致。**2026-09-10 随 v1.3.1 补齐剩余前端 hunk**（见下方第二轮） |
+| #19083 网络空补全重试 | 依赖 #17418 的 ServerLLMRetryPolicy。**2026-09-10 随 v1.3.1 按二开路径移植**（见下方第二轮） |
+| #18965 工具循环上限 | 二开删除了 `callLlmFinalizer.ts`，LLM 收尾在 `apps/server/.../serverCallLlm*`。**2026-09-10 随 v1.3.1 按二开路径移植**（见下方第二轮） |
+| #18497 死锁 topic 吞消息 | 二开删除了 `topicStartReservation.ts` 并重写 aiAgent service / conversationLifecycle。**2026-09-10 复核：服务端无 topic 预留锁，问题不可达；客户端草稿恢复半边随 v1.3.1 移植**（见下方第二轮） |
 | #18682 网关完成后清侧栏加载态 | 二开未合 #18497，其 `onSessionComplete` 已走 `updateTopicStatus` 路径，问题不存在 |
-| #17928 recent 预览批量查询 | 需新增依赖 `remove-markdown` |
+| #17928 recent 预览批量查询 | 二开的 `recent.ts` 仍是 v2.2.10 基线（无话题预览、无逐话题子查询），问题不存在；`remove-markdown` 已是根依赖（2026-09-10 复核） |
 | #18063 受限 API key 可访问 /users/me | 二开没有 API key scope 基础设施，`/users/me` 已仅 requireAuth |
 | #18596 模型路由上下文与回退 | 二开重写了 `apps/server/src/modules/ModelRuntime`，且依赖 `packages/business` |
 | #17363 仅思考型 Qwen 保护 | 逻辑已在二开；剩余 hunk 是 `*ModelId.ts` 改名，会破坏后续 PR 与二开 |
@@ -142,3 +142,18 @@
 - 全仓 `tsgo --noEmit` 与本轮触及的测试文件在主检出（非 worktree）跑通；worktree 里的 `node_modules` 软链会把跨包导入解析到主检出，单包测试需在包目录内运行。
 - 每个批次由 codex 对照上游原始提交做合并复核，复核发现的问题（FileViewer 后备文件 id、压缩后消息回落、取消操作的 `isNew` 判定、网关重连 groupId、同步计数、缺失模型卡等）已以追加提交修正。
 - 线上验证见 CHANGELOG 1.3.0 与 `apps/docs/aihub/README.md` 的发布记录。
+
+## 第二轮：v1.3.0 遗留项收尾（2026-09-10，随 v1.3.1 发布）
+
+不引入新的上游区间，只处理第一轮「试合并后放弃」中需要按二开路径重写的条目。做法：opus 子代理先探索二开对应路径并产出移植映射，再由 grok / opus 在独立工作树按映射重写，codex 只读复核，最后在主检出跑测试与 `tsgo`。
+
+| 上游 PR | 二开落点 | 本仓库提交 |
+| --- | --- | --- |
+| #19083 网络空补全重试 | 新增 `apps/server/src/modules/AgentRuntime/adapters/serverCallLlmRetryPolicy.ts`（`isRetryableNetworkEmptyCompletion`，额外校验二开特有的 `fileCount === 0`）；`serverCallLlmExecution.ts` 在错误分类与重试预算处覆盖；`serverCallLlmExecutor.ts` 的 `maxAttempts` 取 `max(策略值, 4)` | 见 v1.3.1 |
+| #18965 工具循环上限 | `packages/agent-runtime/src/utils/toolCallRepeatGuard.ts` 原样复制并导出，`AgentState.toolCallRepeatGuard` 字段；接入点 `serverCallLlmAttempt.ts`（`salvageAnswerFromThinking` 之后、`publishCallLlmOutput` 之前，用 `isOperationInterrupted` 替代上游的 `finishReason !== 'abort'`），`serverCallLlmPersistence.buildCallLlmResult` 每步把 guard 写回 state；同时跟进上游同日热修 #18989（上限 5→20），终止说明改为中文 | 见 v1.3.1 |
+| #18497 死锁 topic 吞消息（客户端半边） | `conversationLifecycle.ts` 新增 `restoreComposerAfterFailedSend`，网关 / 异构 / 客户端模式四处 catch 统一调用；取消不恢复，`inputEditorTempState === null`（用户消息已持久化）不恢复。服务端预留逻辑不移植：二开无 topic 启动锁，`cleanupStaleRunningTopics` 已有 2h 过期 | 见 v1.3.1 |
+| #17418 剩余前端 hunk | `getRuntimeErrorMessage` 第 4 参 `fallbackMessage`（i18next `defaultValue`）；`ProviderConfig/Checker.tsx` 传服务端消息作回退；`useBusinessErrorContent(error)` 改收完整错误对象 | 见 v1.3.1 |
+
+复核（本轮 codex 持续「模型容量不足」，改由 opus 子代理复核）发现并已修正：#18497 客户端半边最初在网关路径上、以及运行记录被回收后仍会恢复草稿（重复发送 / 覆盖当前输入），已改为以「用户消息持久化」为界（网关 transport 与客户端模式在持久化后立即清空快照；异构执行失败不恢复；技能准备失败补上恢复）。
+
+复核后判定不修的意见：Checker 在 `modelRuntime` 命名空间尚未加载的瞬间可能以传输异常文本作标题（命名空间加载后即重渲染，且该文本是用户自己的服务商检查结果）。
