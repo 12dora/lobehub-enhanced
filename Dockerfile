@@ -161,8 +161,9 @@ WORKDIR /manifests
 COPY package.json pnpm-workspace.yaml .npmrc ./
 COPY packages ./packages
 COPY patches ./patches
-# bring in desktop workspace manifest so pnpm can resolve it
+# bring in the desktop and server workspace manifests so pnpm can resolve them
 COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
+COPY apps/server/package.json ./apps/server/package.json
 
 RUN set -e && \
     find packages -type f ! -name package.json -delete && \
