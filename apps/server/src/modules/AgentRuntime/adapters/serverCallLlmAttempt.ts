@@ -142,14 +142,11 @@ export const runServerCallLlmAttempt = async (
     input.state.toolCallRepeatGuard,
     input.attemptState.toolsCalling,
   );
-  if (
-    hasRepeatedToolCall(toolCallRepeatGuard) &&
-    !(await isOperationInterrupted(input.ctx))
-  ) {
+  if (hasRepeatedToolCall(toolCallRepeatGuard) && !(await isOperationInterrupted(input.ctx))) {
     input.attemptState.finishReason = 'tool_call_repeat_limit';
     input.attemptState.toolCalls = [];
     input.attemptState.toolsCalling = [];
-    input.streamSink.content = `Stopped after the same tool call was requested ${TOOL_CALL_REPEAT_LIMIT} consecutive times.`;
+    input.streamSink.content = `同一工具调用已连续请求 ${TOOL_CALL_REPEAT_LIMIT} 次，已停止执行。`;
   }
   const visibleOutputEndPublishedStepIndex = await publishCallLlmOutput(input);
   log('[%s:%d] call_llm completed', input.ctx.operationId, input.ctx.stepIndex);

@@ -1,4 +1,4 @@
-import { type AgentState } from '@lobechat/agent-runtime';
+import { type AgentState, TOOL_CALL_REPEAT_LIMIT } from '@lobechat/agent-runtime';
 import { BRANDING_PROVIDER } from '@lobechat/business-const';
 import { ToolNameResolver } from '@lobechat/context-engine';
 import {
@@ -2111,7 +2111,7 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
     describe('tool-call repeat guard', () => {
       const injectToolName = new ToolNameResolver().generate('credentials', 'inject', 'builtin');
-      const fifthInjectCall = {
+      const repeatedInjectCall = {
         function: {
           arguments: '{"scope":"repo","keys":["github"]}',
           name: injectToolName,
@@ -2145,15 +2145,16 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
           {
             toolCallRepeatGuard: {
               counts: {
-                '["credentials","inject","{\\"keys\\":[\\"github\\"],\\"scope\\":\\"repo\\"}"]': 4,
+                '["credentials","inject","{\\"keys\\":[\\"github\\"],\\"scope\\":\\"repo\\"}"]':
+                  TOOL_CALL_REPEAT_LIMIT - 1,
               },
             },
           },
         );
 
-      it('blocks the fifth consecutive identical tool call before it can execute', async () => {
+      it('blocks the identical tool call once the repeat limit is reached', async () => {
         const mockChat = vi.fn().mockImplementation(async (_payload, options) => {
-          await options?.callback?.onToolsCalling?.({ toolsCalling: [fifthInjectCall] });
+          await options?.callback?.onToolsCalling?.({ toolsCalling: [repeatedInjectCall] });
           return new Response('done');
         });
         vi.mocked(initModelRuntimeFromDB).mockResolvedValueOnce({ chat: mockChat } as any);
@@ -2172,13 +2173,13 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
           createRepeatedToolCallState(),
         );
 
-        expect(
-          (result.nextContext?.payload as { hasToolsCalling?: boolean }).hasToolsCalling,
-        ).toBe(false);
+        expect((result.nextContext?.payload as { hasToolsCalling?: boolean }).hasToolsCalling).toBe(
+          false,
+        );
         expect(mockMessageModel.update).toHaveBeenCalledWith(
           'msg-123',
           expect.objectContaining({
-            content: 'Stopped after the same tool call was requested 5 consecutive times.',
+            content: `同一工具调用已连续请求 ${TOOL_CALL_REPEAT_LIMIT} 次，已停止执行。`,
             tools: undefined,
           }),
         );
@@ -2193,7 +2194,7 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
 
       it('preserves user cancellation when an interrupted operation emits the fifth repeated tool call', async () => {
         const mockChat = vi.fn().mockImplementation(async (_payload, options) => {
-          await options?.callback?.onToolsCalling?.({ toolsCalling: [fifthInjectCall] });
+          await options?.callback?.onToolsCalling?.({ toolsCalling: [repeatedInjectCall] });
           throw new Error('AbortError: stream aborted');
         });
         vi.mocked(initModelRuntimeFromDB).mockResolvedValueOnce({ chat: mockChat } as any);
@@ -2237,7 +2238,7 @@ describe('RuntimeExecutors', { timeout: 60_000 }, () => {
         expect(mockMessageModel.update).not.toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({
-            content: 'Stopped after the same tool call was requested 5 consecutive times.',
+            content: `同一工具调用已连续请求 ${TOOL_CALL_REPEAT_LIMIT} 次，已停止执行。`,
           }),
         );
       });
