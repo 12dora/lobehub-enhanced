@@ -151,6 +151,24 @@ RUN set -e && \
     /distroless/opt/cursor-agent/node --version && \
     rm -rf /tmp/cursor-agent
 
+## Manifests stage: collect the files pnpm needs to resolve the workspace
+## (root package.json with the version zeroed, workspace package.json files,
+## patches) so the builder's `pnpm i` layer survives source-only changes.
+FROM node:${NODEJS_VERSION}-slim AS manifests
+
+WORKDIR /manifests
+
+COPY package.json pnpm-workspace.yaml .npmrc ./
+COPY packages ./packages
+COPY patches ./patches
+# bring in desktop workspace manifest so pnpm can resolve it
+COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
+
+RUN set -e && \
+    find packages -type f ! -name package.json -delete && \
+    find packages -depth -type d -empty -delete && \
+    sed -i 's/"version": "[^"]*"/"version": "0.0.0"/' package.json
+
 ## Builder image, install all the dependencies and build the app
 FROM base AS builder
 
@@ -194,12 +212,9 @@ ENV NODE_OPTIONS="--max-old-space-size=8192"
 
 WORKDIR /app
 
-COPY package.json pnpm-workspace.yaml ./
-COPY .npmrc ./
-COPY packages ./packages
-COPY patches ./patches
-# bring in desktop workspace manifest so pnpm can resolve it
-COPY apps/desktop/src/main/package.json ./apps/desktop/src/main/package.json
+# Dependency manifests only: the install layer below is keyed on these files, so
+# source edits under packages/ and release version bumps no longer invalidate it.
+COPY --from=manifests /manifests/ ./
 
 RUN set -e && \
     if [ "${USE_CN_MIRROR:-false}" = "true" ]; then \
