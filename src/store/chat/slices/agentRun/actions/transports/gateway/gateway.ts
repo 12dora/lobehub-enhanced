@@ -558,6 +558,12 @@ export class GatewayActionImpl {
       { signal: abortSignal },
     );
 
+    // Persist boundary: the server created the user message inside
+    // execAgentTask, so a later start failure must not put the draft back
+    // (it would look like the app re-sent the message).
+    if (parentOperationId)
+      this.#get().updateOperationMetadata(parentOperationId, { inputEditorTempState: null });
+
     if (abortSignal?.aborted) {
       // Cancel arrived after execAgentTask resolved — server task exists.
       aiAgentService

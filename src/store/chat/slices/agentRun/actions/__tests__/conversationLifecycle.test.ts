@@ -2079,6 +2079,141 @@ describe('ConversationLifecycle actions', () => {
         expect(setJSONState).toHaveBeenCalledWith(inputEditorState);
         expect(setDocument).not.toHaveBeenCalled();
       });
+
+      it('does not restore the draft when the gateway already persisted the user message', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const agentId = TEST_IDS.SESSION_ID;
+        const { setDocument, setJSONState } = mockComposer();
+
+        act(() => {
+          useChatStore.setState({
+            activeAgentId: agentId,
+            // Mirrors the transport: execAgentTask resolved (the server wrote the
+            // user row and cleared the snapshot), then a later step blew up.
+            executeGatewayAgent: vi.fn().mockImplementation(async ({ parentOperationId }: any) => {
+              useChatStore
+                .getState()
+                .updateOperationMetadata(parentOperationId, { inputEditorTempState: null });
+              throw new Error('Failed to execute agent');
+            }),
+            isGatewayModeEnabled: () => true,
+          });
+        });
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: { agentId, threadId: null, topicId: null },
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        // Restoring here would leave a duplicate of an already-persisted message
+        // sitting in the composer.
+        expect(setJSONState).not.toHaveBeenCalled();
+        expect(setDocument).not.toHaveBeenCalled();
+      });
+
+      it('does not restore the draft when the operation record is already gone', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const agentId = TEST_IDS.SESSION_ID;
+        const { setDocument, setJSONState } = mockComposer();
+
+        act(() => {
+          useChatStore.setState({
+            activeAgentId: agentId,
+            // `cleanupCompletedOperations` can delete the record before a late
+            // failure lands: the snapshot is lost, not "never captured".
+            executeGatewayAgent: vi.fn().mockImplementation(async ({ parentOperationId }: any) => {
+              useChatStore.setState((state) => {
+                const operations = { ...state.operations };
+                delete operations[parentOperationId];
+                return { operations } as any;
+              });
+              throw new Error('run died late');
+            }),
+            isGatewayModeEnabled: () => true,
+          });
+        });
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: { agentId, threadId: null, topicId: null },
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        // Falling through to `setDocument('markdown', message)` here would stomp
+        // whatever the user is typing right now.
+        expect(setJSONState).not.toHaveBeenCalled();
+        expect(setDocument).not.toHaveBeenCalled();
+      });
+
+      it('does not restore the draft in client mode once sendMessageInServer resolved', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const { setDocument, setJSONState } = mockComposer();
+
+        vi.spyOn(aiChatService, 'sendMessageInServer').mockResolvedValue({
+          messages: [
+            createMockMessage({ id: TEST_IDS.USER_MESSAGE_ID, role: 'user' }),
+            createMockMessage({ id: TEST_IDS.ASSISTANT_MESSAGE_ID, role: 'assistant' }),
+          ],
+          topics: [],
+          topicId: TEST_IDS.NEW_TOPIC_ID,
+          isCreateNewTopic: true,
+          assistantMessageId: TEST_IDS.ASSISTANT_MESSAGE_ID,
+          userMessageId: TEST_IDS.USER_MESSAGE_ID,
+        } as any);
+
+        // A post-persist step throws: the message is already stored, so the
+        // composer must stay untouched.
+        act(() => {
+          useChatStore.setState({
+            switchTopic: vi.fn().mockRejectedValue(new Error('topic switch failed')),
+          });
+        });
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: createTestContext(),
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        expect(setJSONState).not.toHaveBeenCalled();
+        expect(setDocument).not.toHaveBeenCalled();
+      });
+
+      it('restores the draft when skill preparation fails before anything is persisted', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const { setDocument, setJSONState } = mockComposer();
+
+        vi.spyOn(agentSkillService, 'beginPlatformSkillOperation').mockRejectedValue(
+          new Error('catalog offline'),
+        );
+        vi.spyOn(toolStoreModule, 'getToolStoreState').mockReturnValue({
+          agentSkillDetailMap: {},
+          agentSkills: [],
+          builtinSkills: [],
+          platformSkillCatalog: { revision: 3, skills: [] },
+          platformSkillRuntimeStatus: 'ready',
+        } as any);
+
+        await act(async () => {
+          await expect(
+            result.current.sendMessage({
+              context: createTestContext(),
+              editorData: inputEditorState as any,
+              message: 'Draft that must survive',
+            }),
+          ).rejects.toThrow('catalog offline');
+        });
+
+        expect(setJSONState).toHaveBeenCalledWith(inputEditorState);
+        expect(setDocument).not.toHaveBeenCalled();
+      });
     });
 
     describe('page scope documentId injection', () => {

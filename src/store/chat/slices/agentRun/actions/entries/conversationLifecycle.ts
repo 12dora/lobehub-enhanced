@@ -677,11 +677,17 @@ export class ConversationLifecycleActionImpl {
       if (isAbortError(error, abortController)) return;
 
       const failedOperation = this.#get().operations[operationId];
-      const tempState = failedOperation?.metadata.inputEditorTempState;
-      // `null` is written explicitly once the user message is persisted (see the
-      // clears further below): the send landed, so restoring would look like the
-      // app re-sent the message. `undefined` just means no editor state was ever
-      // captured, and the raw markdown is the best available fallback.
+      // Record already GC'd by `cleanupCompletedOperations`: we lost the
+      // snapshot, not "none was captured". Treat it as persisted and leave
+      // whatever the user is typing now alone.
+      if (!failedOperation) return;
+
+      const tempState = failedOperation.metadata.inputEditorTempState;
+      // `null` is written explicitly at each persist boundary (hetero and client
+      // mode below, and the gateway transport after `execAgentTask` resolves):
+      // the send landed, so restoring would look like the app re-sent the
+      // message. `undefined` just means no editor state was ever captured, and
+      // the raw markdown is the best available fallback.
       if (tempState === null) return;
 
       this.#get().updateOperationMetadata(operationId, {
@@ -801,6 +807,8 @@ export class ConversationLifecycleActionImpl {
         message: error instanceof Error ? error.message : 'Unknown error',
         type: error instanceof Error ? error.name : 'unknown_error',
       });
+      // Nothing is persisted yet at this point — hand the draft back.
+      restoreComposerAfterFailedSend(error);
       throw error;
     }
 
@@ -1125,9 +1133,9 @@ export class ConversationLifecycleActionImpl {
 
       // Clear editor temp state — the user's message is already persisted, so
       // a later Stop click must NOT restore it into the input (would feel like
-      // the app re-sent the message). Client/Gateway paths clear this at
-      // line 684-686 after `sendMessageInServer` resolves, but the hetero
-      // branch returns early (line 498) and never reaches that clear.
+      // the app re-sent the message). Client mode clears this after
+      // `sendMessageInServer` resolves and the gateway transport after
+      // `execAgentTask` resolves; the hetero branch returns before both.
       this.#get().updateOperationMetadata(operationId, { inputEditorTempState: null });
 
       // Sidebar "running" spinner for hetero runs is driven off the persisted
@@ -1197,9 +1205,6 @@ export class ConversationLifecycleActionImpl {
           message: e instanceof Error ? e.message : 'Unknown error',
           type: 'HeterogeneousAgentError',
         });
-        // No-op once the user message is persisted (the temp state is cleared
-        // above); it only fires when the run dies before that.
-        restoreComposerAfterFailedSend(e);
       } finally {
         // Release the creation owner migrated by resolveOptimisticTopic (run
         // end no longer clears topicLoadingIds since #16745, so without this
@@ -1428,6 +1433,10 @@ export class ConversationLifecycleActionImpl {
         },
         abortController,
       );
+      // Persist boundary: the user message is stored, so a failure from any of
+      // the steps below must not restore the draft.
+      this.#get().updateOperationMetadata(operationId, { inputEditorTempState: null });
+
       const responseMeta = data as SendMessageServerResponseMeta;
       // Use created topicId/threadId if available, otherwise use original from context
       let finalTopicId = data.topicId ?? operationContext.topicId;
@@ -1573,11 +1582,6 @@ export class ConversationLifecycleActionImpl {
           { operationId },
         );
       }
-    }
-
-    // Clear editor temp state after message created
-    if (data) {
-      this.#get().updateOperationMetadata(operationId, { inputEditorTempState: null });
     }
 
     if (!data) {

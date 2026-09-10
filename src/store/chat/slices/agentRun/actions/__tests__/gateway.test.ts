@@ -544,7 +544,10 @@ describe('GatewayActionImpl', () => {
         topicDetailMap: {},
       };
       const associateMessageWithOperation = vi.fn();
+      const completeOperation = vi.fn();
       const connectToGateway = vi.fn();
+      const getOperationAbortSignal = vi.fn(() => undefined);
+      const updateOperationMetadata = vi.fn();
       const internalDispatchTopic = vi.fn();
       const internalEnsureTopicDetail = vi.fn().mockResolvedValue(undefined);
       const internalReplaceTopicId = vi.fn();
@@ -566,7 +569,10 @@ describe('GatewayActionImpl', () => {
       const get = vi.fn(() => ({
         ...state,
         associateMessageWithOperation,
+        completeOperation,
         connectToGateway,
+        getOperationAbortSignal,
+        updateOperationMetadata,
         internal_dispatchTopic: internalDispatchTopic,
         internal_ensureTopicDetail: internalEnsureTopicDetail,
         internal_replaceTopicId: internalReplaceTopicId,
@@ -595,8 +601,10 @@ describe('GatewayActionImpl', () => {
       return {
         action,
         associateMessageWithOperation,
+        completeOperation,
         connectToGateway,
         get,
+        updateOperationMetadata,
         internalDispatchTopic,
         internalEnsureTopicDetail,
         internalReplaceTopicId,
@@ -680,6 +688,56 @@ describe('GatewayActionImpl', () => {
           prompt: 'Hello',
         }),
         expect.anything(),
+      );
+    });
+
+    it('clears the parent operation composer snapshot once execAgentTask resolves', async () => {
+      const { action, updateOperationMetadata } = createExecuteTestAction();
+
+      vi.mocked(aiAgentService.execAgentTask).mockResolvedValue({
+        agentId: 'agent-1',
+        assistantMessageId: 'ast-1',
+        autoStarted: true,
+        createdAt: new Date().toISOString(),
+        message: 'ok',
+        operationId: 'server-op-1',
+        status: 'created',
+        success: true,
+        timestamp: new Date().toISOString(),
+        token: 'test-token',
+        topicId: 'topic-1',
+        userMessageId: 'usr-1',
+      });
+
+      await action.executeGatewayAgent({
+        context: { agentId: 'agent-1', topicId: 'topic-1', threadId: null, scope: 'main' },
+        message: 'Hello',
+        parentOperationId: 'parent-send-msg-op',
+      });
+
+      // The server persisted the user message inside execAgentTask, so the
+      // sendMessage catch must no longer restore the draft.
+      expect(updateOperationMetadata).toHaveBeenCalledWith('parent-send-msg-op', {
+        inputEditorTempState: null,
+      });
+    });
+
+    it('does not clear any composer snapshot when execAgentTask rejects', async () => {
+      const { action, updateOperationMetadata } = createExecuteTestAction();
+
+      vi.mocked(aiAgentService.execAgentTask).mockRejectedValue(new Error('topic is busy'));
+
+      await expect(
+        action.executeGatewayAgent({
+          context: { agentId: 'agent-1', topicId: 'topic-1', threadId: null, scope: 'main' },
+          message: 'Hello',
+          parentOperationId: 'parent-send-msg-op',
+        }),
+      ).rejects.toThrow('topic is busy');
+
+      expect(updateOperationMetadata).not.toHaveBeenCalledWith(
+        'parent-send-msg-op',
+        expect.objectContaining({ inputEditorTempState: null }),
       );
     });
 
@@ -1188,6 +1246,7 @@ describe('GatewayActionImpl', () => {
         replaceMessages: vi.fn(),
         startOperation,
         switchTopic: vi.fn(),
+        updateOperationMetadata: vi.fn(),
       })) as any;
 
       (globalThis as any).window = {
