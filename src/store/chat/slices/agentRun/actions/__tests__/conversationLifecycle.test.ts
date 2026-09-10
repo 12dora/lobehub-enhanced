@@ -1962,6 +1962,125 @@ describe('ConversationLifecycle actions', () => {
       });
     });
 
+    describe('composer restore on failed send', () => {
+      // The composer is cleared the instant Enter is pressed. If a send dies
+      // before the user message is persisted, the draft only exists in the
+      // operation's `inputEditorTempState` — restoring it is the difference
+      // between a visible failure and a silently swallowed message.
+      const inputEditorState = {
+        root: {
+          children: [
+            {
+              children: [{ text: 'Draft that must survive', type: 'text', version: 1 }],
+              type: 'paragraph',
+              version: 1,
+            },
+          ],
+          type: 'root',
+          version: 1,
+        },
+      };
+
+      const mockComposer = () => {
+        const setDocument = vi.fn();
+        const setJSONState = vi.fn();
+        act(() => {
+          useChatStore.setState({
+            mainInputEditor: {
+              getJSONState: vi.fn().mockReturnValue({
+                root: { children: [], type: 'root', version: 1 },
+              }),
+              setDocument,
+              setJSONState,
+            } as any,
+          });
+        });
+        return { setDocument, setJSONState };
+      };
+
+      it('restores the draft when the gateway refuses to start the run', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const agentId = TEST_IDS.SESSION_ID;
+        const { setDocument, setJSONState } = mockComposer();
+
+        act(() => {
+          useChatStore.setState({
+            activeAgentId: agentId,
+            // A plain Error, not a TRPCClientError: a gateway 5xx or a dead
+            // topic lock used to fall through every restore branch.
+            executeGatewayAgent: vi.fn().mockRejectedValue(new Error('topic is busy')),
+            isGatewayModeEnabled: () => true,
+          });
+        });
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: { agentId, threadId: null, topicId: null },
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        const operation = Object.values(result.current.operations).find(
+          (item) => item.type === 'sendMessage',
+        );
+        expect(operation?.status).toBe('failed');
+        expect(operation?.metadata.inputSendErrorMsg).toBe('topic is busy');
+        expect(setJSONState).toHaveBeenCalledWith(inputEditorState);
+        expect(setDocument).not.toHaveBeenCalled();
+      });
+
+      it('does not restore the draft when the send was aborted', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const agentId = TEST_IDS.SESSION_ID;
+        const { setDocument, setJSONState } = mockComposer();
+        const abortError = Object.assign(new Error('The user aborted a request.'), {
+          name: 'AbortError',
+        });
+
+        act(() => {
+          useChatStore.setState({
+            activeAgentId: agentId,
+            executeGatewayAgent: vi.fn().mockRejectedValue(abortError),
+            isGatewayModeEnabled: () => true,
+          });
+        });
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: { agentId, threadId: null, topicId: null },
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        // Cancellation has its own restore path (conversationControl replays the
+        // same snapshot); re-filling here would fight it.
+        expect(setJSONState).not.toHaveBeenCalled();
+        expect(setDocument).not.toHaveBeenCalled();
+      });
+
+      it('restores the draft in client mode for a non-TRPC failure', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const { setDocument, setJSONState } = mockComposer();
+
+        vi.spyOn(aiChatService, 'sendMessageInServer').mockRejectedValue(
+          new Error('Failed to fetch'),
+        );
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: createTestContext(),
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        expect(setJSONState).toHaveBeenCalledWith(inputEditorState);
+        expect(setDocument).not.toHaveBeenCalled();
+      });
+    });
+
     describe('page scope documentId injection', () => {
       it('injects the active page documentId into the gateway context when scope is page', async () => {
         const { result } = renderHook(() => useChatStore());

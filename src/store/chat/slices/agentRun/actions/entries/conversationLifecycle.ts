@@ -23,7 +23,6 @@ import type {
 } from '@lobechat/types';
 import { getWorkingDirEffectivePath, getWorkingDirSourcePath } from '@lobechat/types';
 import { nanoid } from '@lobechat/utils';
-import { TRPCClientError } from '@trpc/client';
 import { t } from 'i18next';
 
 import { message as antdMessage } from '@/components/AntdStaticMethods';
@@ -658,6 +657,44 @@ export class ConversationLifecycleActionImpl {
       inputSendErrorMsg: undefined,
     });
 
+    /**
+     * Put the typed message (text + attachments) back into the composer when a
+     * send fails before the user message was persisted. The composer is cleared
+     * the instant Enter is pressed, so without this the draft is gone for good:
+     * the run never happened and there is no persisted row to recover it from.
+     *
+     * Shared by every runtime branch. Gateway and hetero used to only log and
+     * fail the operation, so a start refusal (gateway 5xx, a dead topic lock, a
+     * network blip) was indistinguishable from the message being silently
+     * swallowed. Deliberately typed as `unknown`: the class of the error says
+     * nothing about whether the draft survived — the client-mode branch used to
+     * restore only for `TRPCClientError` and lost the draft for everything else.
+     */
+    const restoreComposerAfterFailedSend = (error: unknown) => {
+      // Cancellation is a deliberate user action with its own restore path
+      // (`conversationControl` replays `inputEditorTempState` on cancel);
+      // re-filling the composer here would fight it.
+      if (isAbortError(error, abortController)) return;
+
+      const failedOperation = this.#get().operations[operationId];
+      const tempState = failedOperation?.metadata.inputEditorTempState;
+      // `null` is written explicitly once the user message is persisted (see the
+      // clears further below): the send landed, so restoring would look like the
+      // app re-sent the message. `undefined` just means no editor state was ever
+      // captured, and the raw markdown is the best available fallback.
+      if (tempState === null) return;
+
+      this.#get().updateOperationMetadata(operationId, {
+        inputSendErrorMsg: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      if (tempState) {
+        targetInputEditor?.setJSONState(tempState);
+      } else {
+        targetInputEditor?.setDocument('markdown', message);
+      }
+    };
+
     // Everything the conversation surface needs to paint the send now exists.
     // Callers that navigate on this seam release here — before any round-trip.
     onOptimisticReady?.();
@@ -993,6 +1030,7 @@ export class ConversationLifecycleActionImpl {
           message: e instanceof Error ? e.message : 'Unknown error',
           type: 'HeterogeneousAgentError',
         });
+        restoreComposerAfterFailedSend(e);
         rollbackOptimisticTopic('sendMessage/rollbackOptimisticTopic');
         return;
       }
@@ -1159,6 +1197,9 @@ export class ConversationLifecycleActionImpl {
           message: e instanceof Error ? e.message : 'Unknown error',
           type: 'HeterogeneousAgentError',
         });
+        // No-op once the user message is persisted (the temp state is cleared
+        // above); it only fires when the run dies before that.
+        restoreComposerAfterFailedSend(e);
       } finally {
         // Release the creation owner migrated by resolveOptimisticTopic (run
         // end no longer clears topicLoadingIds since #16745, so without this
@@ -1272,6 +1313,7 @@ export class ConversationLifecycleActionImpl {
           message: getGatewayStartErrorMessage(e),
           type: 'GatewayError',
         });
+        restoreComposerAfterFailedSend(e);
         rollbackOptimisticTopic('sendMessage/rollbackOptimisticTopic');
         return;
       }
@@ -1522,19 +1564,7 @@ export class ConversationLifecycleActionImpl {
         message: e instanceof Error ? e.message : 'Unknown error',
       });
 
-      if (e instanceof TRPCClientError) {
-        const isAbort = e.message.includes('aborted') || e.name === 'AbortError';
-        // Check if error is due to cancellation
-        if (!isAbort) {
-          this.#get().updateOperationMetadata(operationId, { inputSendErrorMsg: e.message });
-          const op = this.#get().operations[operationId];
-          if (op?.metadata.inputEditorTempState) {
-            targetInputEditor?.setJSONState(op.metadata.inputEditorTempState);
-          } else {
-            targetInputEditor?.setDocument('markdown', message);
-          }
-        }
-      }
+      restoreComposerAfterFailedSend(e);
     } finally {
       // A new topic was created, or the user cancelled the message (or it failed), so data is absent here
       if (isCreatedTopicResponse(data) || !data) {
