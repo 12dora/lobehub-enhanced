@@ -694,6 +694,12 @@ export class ConversationLifecycleActionImpl {
         inputSendErrorMsg: error instanceof Error ? error.message : 'Unknown error',
       });
 
+      // The user started typing again while the send was in flight. Their new
+      // draft wins — the failure is still surfaced through `inputSendErrorMsg`
+      // recorded above. Only a positive `false` blocks the restore: an editor
+      // kernel that is not mounted yet must not swallow the draft.
+      if (targetInputEditor?.instance?.isEmpty === false) return;
+
       if (tempState) {
         targetInputEditor?.setJSONState(tempState);
       } else {
@@ -1345,7 +1351,27 @@ export class ConversationLifecycleActionImpl {
       groupId: operationContext.groupId ?? undefined,
     };
     if (operationContext.topicId) {
-      await this.#get().internal_ensureTopicDetail(operationContext.topicId, clientTopicScope);
+      try {
+        await this.#get().internal_ensureTopicDetail(operationContext.topicId, clientTopicScope);
+      } catch (error) {
+        // Nothing is persisted yet at this point, and both optimistic bubbles
+        // are already on screen. A failed topic-detail fetch (network blip)
+        // must fail the operation and hand the draft back — same contract as
+        // the skill-preparation failure above — otherwise the "…" assistant row
+        // never stops loading and the typed message is lost.
+        rollbackOptimisticMessages();
+
+        // A Stop that aborted the in-flight request surfaces here; leave the
+        // user's own interruption as the recorded outcome.
+        if (isSendCancelled()) return;
+
+        this.#get().failOperation(operationId, {
+          message: error instanceof Error ? error.message : 'Unknown error',
+          type: error instanceof Error ? error.name : 'unknown_error',
+        });
+        restoreComposerAfterFailedSend(error);
+        throw error;
+      }
     }
     const capturedApprovalMode = getEffectiveApprovalMode(
       topicSelectors.getTopicApprovalMode(operationContext.topicId, clientTopicScope)(this.#get()),

@@ -50,7 +50,9 @@ const ErrorResponse = memo<ErrorResponseProps>(({ id, type, body, message, plugi
   return (
     <Alert
       showIcon
-      title={getRuntimeErrorMessage(t, type)}
+      // No localized copy for this type: the server message (else the raw type)
+      // keeps the alert from rendering with an empty title.
+      title={getRuntimeErrorMessage(t, type, undefined, message || String(type ?? ''))}
       type={'secondary'}
       extra={
         <Flexbox className={styles.errorResponseExtra}>

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import en from '../../../../../../../locales/en-US/setting.json';
 import zh from '../../../../../../../locales/zh-CN/setting.json';
-import { ConnectorToolErrorResponse } from './ErrorResponse';
+import ErrorResponse, { ConnectorToolErrorResponse } from './ErrorResponse';
 
 const translate = vi.hoisted(() => vi.fn());
 
@@ -40,5 +40,30 @@ describe('ConnectorToolErrorResponse', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent(copy);
     expect(screen.getByRole('alert')).not.toHaveTextContent('PLATFORM_CONNECTOR_NOT_PUBLISHED');
+  });
+});
+
+describe('ErrorResponse', () => {
+  beforeEach(() => {
+    translate.mockReset();
+    // i18next hands back `defaultValue` when the key has no copy — that is the
+    // path `getRuntimeErrorMessage` relies on since it stopped rendering keys.
+    translate.mockImplementation(
+      (_key: string, vars?: { defaultValue?: string }) => vars?.defaultValue ?? '',
+    );
+  });
+
+  it('falls back to the server message when the error type has no localized copy', () => {
+    render(
+      <ErrorResponse id={'tool-1'} message={'upstream exploded'} type={'NoCopyErrorType' as any} />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('upstream exploded');
+  });
+
+  it('falls back to the raw error type when there is no server message either', () => {
+    render(<ErrorResponse id={'tool-1'} type={'NoCopyErrorType' as any} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('NoCopyErrorType');
   });
 });

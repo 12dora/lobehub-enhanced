@@ -433,6 +433,8 @@ describe('ConversationLifecycle actions', () => {
           useChatStore.setState({
             mainInputEditor: {
               getJSONState: vi.fn().mockReturnValue(clearedEditorState),
+              // Cleared on send: the restore only runs on an empty composer.
+              instance: { isEmpty: true },
               setDocument,
               setJSONState,
             } as any,
@@ -1981,7 +1983,9 @@ describe('ConversationLifecycle actions', () => {
         },
       };
 
-      const mockComposer = () => {
+      // `isEmpty` defaults to true: the composer is cleared the instant Enter is
+      // pressed, so an empty editor is what a failing send normally finds.
+      const mockComposer = ({ isEmpty = true }: { isEmpty?: boolean } = {}) => {
         const setDocument = vi.fn();
         const setJSONState = vi.fn();
         act(() => {
@@ -1990,6 +1994,7 @@ describe('ConversationLifecycle actions', () => {
               getJSONState: vi.fn().mockReturnValue({
                 root: { children: [], type: 'root', version: 1 },
               }),
+              instance: { isEmpty },
               setDocument,
               setJSONState,
             } as any,
@@ -2213,6 +2218,75 @@ describe('ConversationLifecycle actions', () => {
 
         expect(setJSONState).toHaveBeenCalledWith(inputEditorState);
         expect(setDocument).not.toHaveBeenCalled();
+      });
+
+      it('restores the draft when the topic detail fetch fails before persistence', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const { setDocument, setJSONState } = mockComposer();
+
+        const sendMessageInServerSpy = vi
+          .spyOn(aiChatService, 'sendMessageInServer')
+          .mockResolvedValue({} as any);
+
+        act(() => {
+          useChatStore.setState({
+            // A network blip while loading the existing topic: nothing is
+            // persisted yet, so the send must fail loudly instead of stranding
+            // the "…" bubbles and swallowing the draft.
+            internal_ensureTopicDetail: vi
+              .fn()
+              .mockRejectedValue(new Error('topic detail unavailable')),
+          });
+        });
+
+        await act(async () => {
+          await expect(
+            result.current.sendMessage({
+              context: {
+                agentId: TEST_IDS.SESSION_ID,
+                threadId: null,
+                topicId: TEST_IDS.TOPIC_ID,
+              },
+              editorData: inputEditorState as any,
+              message: 'Draft that must survive',
+            }),
+          ).rejects.toThrow('topic detail unavailable');
+        });
+
+        const operation = Object.values(useChatStore.getState().operations).find(
+          (item) => item.type === 'sendMessage',
+        );
+        expect(operation?.status).toBe('failed');
+        expect(operation?.metadata.inputSendErrorMsg).toBe('topic detail unavailable');
+        expect(setJSONState).toHaveBeenCalledWith(inputEditorState);
+        expect(setDocument).not.toHaveBeenCalled();
+        expect(sendMessageInServerSpy).not.toHaveBeenCalled();
+      });
+
+      it('does not overwrite a composer the user already refilled while the send was in flight', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const { setDocument, setJSONState } = mockComposer({ isEmpty: false });
+
+        vi.spyOn(aiChatService, 'sendMessageInServer').mockRejectedValue(
+          new Error('Failed to fetch'),
+        );
+
+        await act(async () => {
+          await result.current.sendMessage({
+            context: createTestContext(),
+            editorData: inputEditorState as any,
+            message: 'Draft that must survive',
+          });
+        });
+
+        // The new draft wins; the failure is still surfaced through the operation.
+        expect(setJSONState).not.toHaveBeenCalled();
+        expect(setDocument).not.toHaveBeenCalled();
+
+        const operation = Object.values(useChatStore.getState().operations).find(
+          (item) => item.type === 'sendMessage',
+        );
+        expect(operation?.metadata.inputSendErrorMsg).toBe('Failed to fetch');
       });
     });
 
