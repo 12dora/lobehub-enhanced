@@ -692,6 +692,13 @@ export default {
   'primitives.status.pending': 'Pending',
   'primitives.status.published': 'Published',
   'primitives.status.unknown': 'Unknown',
+  'primitives.userSearch.empty': 'No matching users',
+  'primitives.userSearch.failed': 'User search failed.',
+  'primitives.userSearch.loading': 'Searching…',
+  'primitives.userSearch.noPermission': 'No permission to search users.',
+  'primitives.userSearch.notFound': 'User not found',
+  'primitives.userSearch.placeholder': 'Search name, pinyin, email or username',
+  'primitives.userSearch.useId': 'Use ID: {{id}}',
   'primitives.dataTable.cursorNav': 'Page navigation',
   'primitives.dataTable.next': 'Next',
   'primitives.dataTable.pageSize': 'Rows per page',
@@ -2612,7 +2619,7 @@ export default {
   'nav.auditRetention': 'General settings',
   'audit.noPermission': 'You do not have permission to use any audit tools on this account.',
   'audit.toast.savedRefreshFailed': 'Saved, but the view could not be refreshed. Reload the page.',
-  'audit.shared.userSearchPlaceholder': 'Search users by email or username',
+  'audit.shared.userSearchPlaceholder': 'Search name, pinyin, email or username',
   'audit.shared.clearFilters': 'Clear filters',
   'audit.shared.yes': 'Yes',
   'audit.shared.no': 'No',
@@ -2912,8 +2919,8 @@ export default {
   'audit.conversations.page.desc':
     'Review conversations and messages by user. Access is governed by the audit policy.',
   'audit.conversations.search.heading': 'Find a user',
-  'audit.conversations.search.hint': 'Search by email or username.',
-  'audit.conversations.search.placeholder': 'Search users…',
+  'audit.conversations.search.hint': 'Search by name, pinyin, email or username.',
+  'audit.conversations.search.placeholder': 'Search name, pinyin, email or username',
   'audit.conversations.search.lastActive': 'Last active',
   'audit.conversations.search.policyNote':
     'Message bodies may be hidden by the content access policy. Every view is recorded in the audit log.',
@@ -3191,11 +3198,12 @@ export default {
   'nav.auditLive': 'Live View',
   'audit.live.page.title': 'Live View',
   'audit.live.page.desc': 'Watch a user’s chats update in near real time. Body access is audited.',
-  'audit.live.filters.user': 'Choose a user…',
+  'audit.live.filters.user': 'Search name, pinyin, email or username',
   'audit.live.filters.live': 'Live',
   'audit.live.filters.refreshed': 'Updated {{time}}',
   'audit.live.filters.refreshNow': 'Refresh now',
   'audit.live.empty.pickUser': 'Pick a user to start watching.',
+  'audit.live.empty.userNotFound': 'User not found',
   'audit.live.empty.noConversationPermission':
     'You do not have permission to view conversation content.',
   'audit.live.errors.loadFailed': 'Could not refresh. Retry or check your connection.',
@@ -3644,7 +3652,7 @@ export default {
     'This record is removed permanently. The aggregate charts are unaffected.',
   'contentModeration.records.deleteManyConfirm':
     '{{count}} records are removed permanently. The aggregate charts are unaffected.',
-  'contentModeration.records.filteredByUser': 'Filtered to user {{userId}}',
+  'contentModeration.records.filteredByUser': 'Filtered to user',
   'contentModeration.records.clearUserFilter': 'Clear user filter',
   'contentModeration.records.detailTitle': 'Moderation record',
   'contentModeration.records.detailLoadError': 'Could not load this record.',
@@ -3728,7 +3736,8 @@ export default {
   'contentModeration.settings.scope.exemptUsers': 'Whitelisted users',
   'contentModeration.settings.scope.exemptUsersHint':
     'Individual users allowed through in addition to the roles above.',
-  'contentModeration.settings.scope.userSearchPlaceholder': 'Search by email, username or name',
+  'contentModeration.settings.scope.userSearchPlaceholder':
+    'Search name, pinyin, email or username',
   'contentModeration.settings.scope.addUser': 'Add',
   'contentModeration.settings.scope.noExemptUsers': 'No whitelisted users yet.',
   'contentModeration.settings.scope.userSearchFailed':
