@@ -217,6 +217,24 @@ describe('runStartupPlatformBootstrap', () => {
 
     expect(outcome).toEqual({ errorCategory: 'Error', status: 'failed' });
   });
+
+  it('does not await pinyin backfill before returning', async () => {
+    const { UserModel } = await import('@/database/models/user');
+    let resolveBackfill!: (value: number) => void;
+    vi.mocked(UserModel.backfillMissingPinyin).mockReturnValue(
+      new Promise<number>((resolve) => {
+        resolveBackfill = resolve;
+      }),
+    );
+
+    const outcome = await runStartupPlatformBootstrap(db, baseEnv);
+
+    expect(outcome).toEqual({ status: 'seeded', superAdminCount: 0 });
+    await vi.waitFor(() => {
+      expect(UserModel.backfillMissingPinyin).toHaveBeenCalled();
+    });
+    resolveBackfill(0);
+  });
 });
 
 describe('bootstrapPlatformAdminRuntime', () => {

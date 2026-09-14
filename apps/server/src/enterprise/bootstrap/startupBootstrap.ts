@@ -13,7 +13,8 @@
  *  3. Repair published lock-visible policies (currently `general.telemetry`) that
  *     were stored as locked+hidden before the control stayed on-screen. Idempotent;
  *     does not bump the settings revision. Failures never block boot.
- *  4. Backfill `users.pinyin_full` / `pinyin_initials` for existing named rows.
+ *  4. Backfill `users.pinyin_full` / `pinyin_initials` for existing named rows
+ *     (fire-and-forget after the rest of bootstrap so it never blocks listen).
  *     Failures never block boot.
  *  5. Optional super-admin bootstrap, driven by the same `BOOTSTRAP_*` env vars
  *     the CLI script accepts. Promotes an existing user, or (with
@@ -118,18 +119,20 @@ export const runStartupPlatformBootstrap = async (
       });
     }
 
-    try {
-      const { UserModel } = await import('@/database/models/user');
-      const backfilled = await UserModel.backfillMissingPinyin(db);
-      if (backfilled > 0) {
-        console.info(`${LOG_PREFIX} user pinyin backfill complete`, { backfilled });
+    void (async () => {
+      try {
+        const { UserModel } = await import('@/database/models/user');
+        const backfilled = await UserModel.backfillMissingPinyin(db);
+        if (backfilled > 0) {
+          console.info(`${LOG_PREFIX} user pinyin backfill complete`, { backfilled });
+        }
+      } catch (error) {
+        console.error(`${LOG_PREFIX} user pinyin backfill failed (non-blocking)`, {
+          errorCategory: classifyError(error),
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
-    } catch (error) {
-      console.error(`${LOG_PREFIX} user pinyin backfill failed (non-blocking)`, {
-        errorCategory: classifyError(error),
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    })();
 
     const userId = env.BOOTSTRAP_SUPER_ADMIN_USER_ID?.trim() || null;
     const email = env.BOOTSTRAP_SUPER_ADMIN_EMAIL?.trim() || null;

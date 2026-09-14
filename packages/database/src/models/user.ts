@@ -695,33 +695,46 @@ export class UserModel {
   };
 
   /**
-   * One-shot backfill for rows that have a name but no pinyin yet.
-   * Names that yield no ASCII letters stay null and are skipped via the CJK/letter regex
-   * so the scan cannot loop.
+   * Recompute pinyin columns for every user row (keyset by id). Used at
+   * startup and after Better Auth writes that bypass UserModel. Terminates
+   * even when pinyin stays NULL (unromanizable names). Never blocks callers
+   * that fire-and-forget this.
    */
-  static backfillMissingPinyin = async (db: LobeChatDatabase, batchSize = 200): Promise<number> => {
+  static backfillMissingPinyin = async (
+    db: LobeChatDatabase,
+    batchSize = 200,
+    maxBatches = 10_000,
+  ): Promise<number> => {
+    const size = Math.min(Math.max(batchSize, 1), 1000);
+    const batchLimit = Math.min(Math.max(maxBatches, 1), 10_000);
     let updated = 0;
-    for (;;) {
-      const rows = await db
-        .select({ fullName: users.fullName, id: users.id })
-        .from(users)
-        .where(
-          and(
-            isNull(users.pinyinFull),
-            sql`${users.fullName} IS NOT NULL AND ${users.fullName} ~ '[A-Za-z\\u3400-\\u9FFF]'`,
-          ),
-        )
-        .limit(batchSize);
+    let lastId: string | null = null;
+
+    for (let batch = 0; batch < batchLimit; batch += 1) {
+      const base = db.select({ fullName: users.fullName, id: users.id }).from(users);
+      const scoped = lastId === null ? base : base.where(gt(users.id, lastId));
+      const rows = await scoped.orderBy(asc(users.id)).limit(size);
       if (rows.length === 0) break;
-      for (const row of rows) {
-        await db
-          .update(users)
-          .set(pinyinFieldsFromFullName(row.fullName))
-          .where(eq(users.id, row.id));
-      }
+
+      const tuples = rows.map((row) => {
+        const fields = pinyinFieldsFromFullName(row.fullName);
+        return sql`(${row.id}::text, ${fields.pinyinFull}::text, ${fields.pinyinInitials}::text)`;
+      });
+
+      await db.execute(sql`
+        UPDATE ${users} AS u
+        SET
+          pinyin_full = v.pinyin_full,
+          pinyin_initials = v.pinyin_initials
+        FROM (VALUES ${sql.join(tuples, sql`, `)}) AS v(id, pinyin_full, pinyin_initials)
+        WHERE u.id = v.id
+      `);
+
       updated += rows.length;
-      if (rows.length < batchSize) break;
+      lastId = rows.at(-1)!.id;
+      if (rows.length < size) break;
     }
+
     return updated;
   };
 }

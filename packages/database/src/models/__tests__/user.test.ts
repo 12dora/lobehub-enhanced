@@ -638,6 +638,51 @@ describe('UserModel', () => {
         expect(row?.pinyinFull).toBe('shaojunjun');
         expect(row?.pinyinInitials).toBe('sjj');
       });
+
+      it('recomputes stale pinyin including surname-head readings', async () => {
+        await serverDB.insert(users).values({
+          fullName: '曾小贤',
+          id: 'pinyin-backfill-surname',
+          pinyinFull: 'cengxiaoxian',
+          pinyinInitials: 'cxx',
+        });
+
+        await UserModel.backfillMissingPinyin(serverDB);
+
+        const row = await serverDB.query.users.findFirst({
+          where: eq(users.id, 'pinyin-backfill-surname'),
+        });
+        expect(row?.pinyinFull).toBe('zengxiaoxian');
+        expect(row?.pinyinInitials).toBe('zxx');
+      });
+
+      it('terminates on unromanizable CJK Ext-A names instead of looping', async () => {
+        await serverDB.insert(users).values({
+          fullName: '㐀㐁',
+          id: 'pinyin-backfill-ext-a',
+        });
+
+        const first = await UserModel.backfillMissingPinyin(serverDB, 50, 20);
+        const second = await UserModel.backfillMissingPinyin(serverDB, 50, 20);
+        expect(first).toBeGreaterThanOrEqual(1);
+        expect(second).toBeGreaterThanOrEqual(1);
+
+        const row = await serverDB.query.users.findFirst({
+          where: eq(users.id, 'pinyin-backfill-ext-a'),
+        });
+        expect(row).toBeDefined();
+      });
+
+      it('stops after maxBatches even when more rows remain', async () => {
+        await serverDB.insert(users).values([
+          { fullName: '甲', id: 'pinyin-cap-a' },
+          { fullName: '乙', id: 'pinyin-cap-b' },
+          { fullName: '丙', id: 'pinyin-cap-c' },
+        ]);
+
+        const n = await UserModel.backfillMissingPinyin(serverDB, 1, 2);
+        expect(n).toBe(2);
+      });
     });
 
     describe('deleteUser', () => {
