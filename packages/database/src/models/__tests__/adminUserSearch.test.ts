@@ -64,4 +64,28 @@ describe('searchUsers', () => {
     const items = await searchUsers(serverDB, { limit: 20, q: '%alice' });
     expect(items.map((row) => row.id)).not.toContain(IDS.latin);
   });
+
+  it('resolves a pasted user id', async () => {
+    const items = await searchUsers(serverDB, { limit: 20, q: IDS.ding });
+    expect(items.map((row) => row.id)).toEqual([IDS.ding]);
+  });
+
+  it('ranks exact username before contains matches', async () => {
+    const containsOnly = 'admin-search-stale';
+    await serverDB.delete(users).where(eq(users.id, containsOnly));
+    await serverDB.insert(users).values({
+      email: 'alice-stale@example.com',
+      fullName: 'Alice Stale',
+      id: containsOnly,
+      lastActiveAt: new Date('2030-01-01T00:00:00.000Z'),
+      username: 'aliceother',
+      ...pinyinFieldsFromFullName('Alice Stale'),
+    });
+
+    const items = await searchUsers(serverDB, { limit: 20, q: 'alice' });
+    expect(items[0]?.id).toBe(IDS.latin);
+    expect(items.map((row) => row.id)).toContain(containsOnly);
+
+    await serverDB.delete(users).where(eq(users.id, containsOnly));
+  });
 });
