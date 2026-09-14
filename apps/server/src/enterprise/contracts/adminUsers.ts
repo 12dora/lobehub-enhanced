@@ -58,6 +58,17 @@ export {
   adminUsersListOutputSchema,
 } from './adminUsers/list';
 export {
+  ADMIN_USERS_SEARCH_DEFAULT_LIMIT,
+  ADMIN_USERS_SEARCH_MAX_LIMIT,
+  ADMIN_USERS_SEARCH_QUERY_MAX,
+  type AdminUserSearchInput,
+  type AdminUserSearchInputParsed,
+  type AdminUserSearchOutput,
+  adminUserSearchInputSchema,
+  adminUserSearchOutputSchema,
+} from './adminUsers/search';
+export { type UserPublicRef, userPublicRefSchema } from './shared/userPublicRef';
+export {
   type AdminUsersBanInput,
   adminUsersBanInputSchema,
   type AdminUsersBanOutput,
