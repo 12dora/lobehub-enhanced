@@ -27,7 +27,6 @@ import type {
   adminAuditRetentionCreateOutputSchema,
   adminAuditRetentionListRunsOutputSchema,
   adminAuditRetentionRunItemSchema,
-  adminAuditUsersSearchOutputSchema,
   adminAuditUsersSummaryOutputSchema,
   adminAuditUsersTimelineOutputSchema,
 } from '@/server/enterprise/contracts/adminAudit';
@@ -49,8 +48,6 @@ export type AdminAuditConversationsMessagesOutput = z.infer<
 >;
 export type AdminAuditConversationMessage = AdminAuditConversationsMessagesOutput['items'][number];
 
-export type AdminAuditUsersSearchOutput = z.infer<typeof adminAuditUsersSearchOutputSchema>;
-export type AdminAuditUserSearchItem = AdminAuditUsersSearchOutput['items'][number];
 export type AdminAuditUserSummary = z.infer<typeof adminAuditUsersSummaryOutputSchema>;
 export type AdminAuditUsersTimelineOutput = z.infer<typeof adminAuditUsersTimelineOutputSchema>;
 export type AdminAuditUsersTimelineItem = AdminAuditUsersTimelineOutput['items'][number];
@@ -144,14 +141,6 @@ class AdminAuditService {
   };
 
   // ── users ────────────────────────────────────────────────────────────────
-  searchUsers = async (input: {
-    cursor?: string;
-    limit?: number;
-    q: string;
-  }): Promise<AdminAuditUsersSearchOutput> => {
-    return lambdaClient.admin.audit.users.search.query(input);
-  };
-
   getUserSummary = async (input: { userId: string }): Promise<AdminAuditUserSummary> => {
     return lambdaClient.admin.audit.users.summary.query(input);
   };

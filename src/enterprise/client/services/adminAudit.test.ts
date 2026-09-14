@@ -46,7 +46,6 @@ vi.mock('@/libs/trpc/client', () => ({
           status: { query: (...args: unknown[]) => query('retention.status', ...args) },
         },
         users: {
-          search: { query: (...args: unknown[]) => query('users.search', ...args) },
           summary: { query: (...args: unknown[]) => query('users.summary', ...args) },
           timeline: { query: (...args: unknown[]) => query('users.timeline', ...args) },
         },
