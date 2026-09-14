@@ -3,15 +3,16 @@
  *
  * Safe projections only — never selects account password/token/scope or session tokens.
  * Offset pagination with a matching count(*) plus optional keyset cursor for
- * backward compatibility. Search uses `buildUserSearchConditions` (contains ILIKE
- * on name/username/email plus pinyin prefix). Page + count + role/provider
- * projections run in one REPEATABLE READ transaction so they share a snapshot.
+ * backward compatibility. Search uses `buildUserSearchConditions` (contains
+ * `lower(field) LIKE '%q%'` on name/username/email plus pinyin prefix). Page +
+ * count + role/provider projections run in one REPEATABLE READ transaction so
+ * they share a snapshot.
  *
  * Index evidence:
  * - users_created_at_idx (createdAt) — list order / keyset
- * - users_*_lower_pattern_idx — lower(field) text_pattern_ops for prefix LIKE
- *   (email / username / normalizedEmail)
- * - users_pinyin_*_pattern_idx — lowercase pinyin prefix LIKE
+ * - users_*_trgm_idx — gin (lower(field) gin_trgm_ops) for contains LIKE '%q%'
+ *   (full_name / username / email / normalized_email)
+ * - users_pinyin_*_pattern_idx — lowercase pinyin prefix LIKE (btree text_pattern_ops)
  * - users_banned_true_created_at_idx — partial banned filter
  * - auth_session_userId_idx / account_userId_idx — aggregates by user
  */

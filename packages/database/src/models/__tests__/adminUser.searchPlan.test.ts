@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * EXPLAIN plan evidence that admin prefix search uses lower(field) text_pattern_ops indexes.
- * Fails on pure Seq Scan at representative cardinality.
+ * EXPLAIN plan evidence that admin contains/pinyin search uses GIN trigram +
+ * text_pattern_ops indexes. Fails on Seq Scan on users at representative cardinality.
  *
  * Run: TEST_SERVER_DB=1 DATABASE_TEST_URL=... bunx vitest run src/models/__tests__/adminUser.searchPlan.test.ts
  */
@@ -11,9 +11,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getTestDB } from '../../core/getTestDB';
 import { users } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
-import { escapeAdminUserLikePattern } from '../adminUser';
+import { buildUserSearchConditions } from '../adminUserSearch';
 
 const isServerDB = process.env.TEST_SERVER_DB === '1' && Boolean(process.env.DATABASE_TEST_URL);
+
+const planTextOf = (result: unknown): string => JSON.stringify(result);
+
+const hasSeqScanOnUsers = (planText: string): boolean => /Seq Scan on users\b/i.test(planText);
 
 describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () => {
   let db: LobeChatDatabase;
@@ -22,7 +26,7 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
   beforeEach(async () => {
     db = await getTestDB();
     await db.delete(users).where(sql`${users.id} like 'explain-%'`);
-    // Representative cardinality so planner prefers expression index for selective prefix.
+    // Representative cardinality so planner prefers expression indexes for selective contains.
     const rows = Array.from({ length: 800 }, (_, i) => ({
       email: `explain-bulk-${i}@example.com`,
       id: `explain-bulk-${i}`,
@@ -35,7 +39,6 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
       normalizedEmail: `${prefixUser}@example.com`,
       username: prefixUser,
     });
-    // Insert in chunks
     for (let i = 0; i < rows.length; i += 100) {
       await db.insert(users).values(rows.slice(i, i + 100));
     }
@@ -47,10 +50,7 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
     await db.delete(users).where(sql`${users.id} like 'explain-%'`);
   });
 
-  it('prefix search uses text_pattern_ops index path (fail on pure Seq Scan)', async () => {
-    const escaped = escapeAdminUserLikePattern(prefixUser.toLowerCase());
-    const pattern = `${escaped}%`;
-
+  it('trigram GIN indexes exist with gin_trgm_ops', async () => {
     const opclass = await db.execute(sql`
       SELECT i.relname AS indexname, opc.opcname
       FROM pg_index ix
@@ -59,9 +59,10 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
       JOIN pg_opclass opc ON opc.oid = ANY (ix.indclass)
       WHERE t.relname = 'users'
         AND i.relname IN (
-          'users_email_lower_pattern_idx',
-          'users_username_lower_pattern_idx',
-          'users_normalized_email_lower_pattern_idx',
+          'users_full_name_trgm_idx',
+          'users_username_trgm_idx',
+          'users_email_trgm_idx',
+          'users_normalized_email_trgm_idx',
           'users_pinyin_full_pattern_idx',
           'users_pinyin_initials_pattern_idx'
         )
@@ -70,38 +71,49 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
       (opclass as unknown as { rows?: Array<Record<string, unknown>> }).rows ??
       (Array.isArray(opclass) ? (opclass as unknown[]) : []);
     expect(opRows.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(opRows)).toContain('gin_trgm_ops');
     expect(JSON.stringify(opRows)).toContain('text_pattern_ops');
+  });
 
-    const result = await db.execute(sql`
-      EXPLAIN (FORMAT TEXT)
-      SELECT id FROM users
-      WHERE lower(username) LIKE ${pattern} ESCAPE '\\'
-      LIMIT 10
-    `);
-    // Assert plan shape only (do not print planText — may embed the bound pattern).
-    const planText = JSON.stringify(result);
-    const hasIndexPath = /Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
-    const pureSeq =
-      /Seq Scan/i.test(planText) && !/Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
+  it('buildUserSearchConditions uses index paths (no Seq Scan on users)', async () => {
+    await db.execute(sql`SET enable_seqscan = off`);
+    try {
+      const result = await db.execute(sql`
+        EXPLAIN (FORMAT TEXT)
+        SELECT id FROM ${users}
+        WHERE ${buildUserSearchConditions(prefixUser)}
+        LIMIT 10
+      `);
+      const planText = planTextOf(result);
+      const hasIndexPath = /Index Scan|Bitmap Index Scan|Index Only Scan|Bitmap Heap Scan/i.test(
+        planText,
+      );
 
-    // Hard gate: pure Seq Scan is a failure at this cardinality/selectivity.
-    expect(pureSeq).toBe(false);
-    expect(hasIndexPath).toBe(true);
+      expect(hasSeqScanOnUsers(planText)).toBe(false);
+      expect(hasIndexPath).toBe(true);
+    } finally {
+      await db.execute(sql`SET enable_seqscan = on`);
+    }
   });
 
   it('pinyin prefix (1–3 letters) uses text_pattern_ops index path', async () => {
-    const pattern = 'sjj%';
-    const result = await db.execute(sql`
-      EXPLAIN (FORMAT TEXT)
-      SELECT id FROM users
-      WHERE "pinyin_initials" LIKE ${pattern} ESCAPE '\\'
-      LIMIT 10
-    `);
-    const planText = JSON.stringify(result);
-    const hasIndexPath = /Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
-    const pureSeq =
-      /Seq Scan/i.test(planText) && !/Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
-    expect(pureSeq).toBe(false);
-    expect(hasIndexPath).toBe(true);
+    await db.execute(sql`SET enable_seqscan = off`);
+    try {
+      const result = await db.execute(sql`
+        EXPLAIN (FORMAT TEXT)
+        SELECT id FROM ${users}
+        WHERE ${buildUserSearchConditions('sjj')}
+        LIMIT 10
+      `);
+      const planText = planTextOf(result);
+      const hasIndexPath = /Index Scan|Bitmap Index Scan|Index Only Scan|Bitmap Heap Scan/i.test(
+        planText,
+      );
+
+      expect(hasSeqScanOnUsers(planText)).toBe(false);
+      expect(hasIndexPath).toBe(true);
+    } finally {
+      await db.execute(sql`SET enable_seqscan = on`);
+    }
   });
 });

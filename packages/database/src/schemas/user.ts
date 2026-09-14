@@ -111,6 +111,18 @@ export const users = pgTable(
       'btree',
       sql`${table.pinyinInitials} text_pattern_ops`,
     ),
+    /**
+     * Contains search (`lower(field) LIKE '%q%'`) via pg_trgm. Optional where the
+     * extension is missing — migration 0030 creates these only after a guarded
+     * `CREATE EXTENSION IF NOT EXISTS pg_trgm`.
+     */
+    index('users_full_name_trgm_idx').using('gin', sql`lower(${table.fullName}) gin_trgm_ops`),
+    index('users_username_trgm_idx').using('gin', sql`lower(${table.username}) gin_trgm_ops`),
+    index('users_email_trgm_idx').using('gin', sql`lower(${table.email}) gin_trgm_ops`),
+    index('users_normalized_email_trgm_idx').using(
+      'gin',
+      sql`lower(${table.normalizedEmail}) gin_trgm_ops`,
+    ),
   ],
 );
 
