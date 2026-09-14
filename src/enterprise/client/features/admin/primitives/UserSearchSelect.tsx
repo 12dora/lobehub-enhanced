@@ -3,7 +3,7 @@
 import { Flexbox } from '@lobehub/ui';
 import { AutoComplete, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { adminUsersService } from '@/enterprise/client/services/adminUsers';
@@ -80,6 +80,7 @@ const UserSearchSelect = memo<UserSearchSelectProps>(
     const debounceRef = useRef<number | null>(null);
     const requestIdRef = useRef(0);
     const mountedRef = useRef(true);
+    const rootRef = useRef<HTMLDivElement>(null);
     const usersById = useRef(new Map<string, UserPublicRef>());
 
     useEffect(() => {
@@ -237,11 +238,20 @@ const UserSearchSelect = memo<UserSearchSelectProps>(
     const hasDropdownRows = options.length > 0;
     const showDropdown = open && inputValue.trim().length > 0 && hasDropdownRows;
 
+    // AutoComplete forwards leftover props to Autocomplete.Root (no DOM). `id` still
+    // reaches ComboboxInput via root context; `aria-label` does not, so stamp it on
+    // the actual input the three labelled call sites need.
+    useLayoutEffect(() => {
+      const input = rootRef.current?.querySelector('input');
+      if (!input) return;
+      if (ariaLabel) input.setAttribute('aria-label', ariaLabel);
+      else input.removeAttribute('aria-label');
+    }, [ariaLabel, inputValue]);
+
     return (
-      <div className={styles.root} style={style}>
+      <div className={styles.root} ref={rootRef} style={style}>
         <AutoComplete
           allowClear={allowClear}
-          aria-label={ariaLabel}
           disabled={disabled}
           filter={null}
           id={id}
