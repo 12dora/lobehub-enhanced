@@ -1056,16 +1056,20 @@ export class TopicModel {
   };
 
   /**
-   * Bump `updated_at` without changing any other column. Recents orders by
+   * Bump `updated_at` without changing any other column (`accessed_at` is pinned explicitly). Recents orders by
    * this timestamp, and appending a message does not otherwise touch the topic
    * row — callers persist a user turn then call this so the conversation
    * re-sorts to the top.
    */
   touchUpdatedAt = async (id: string) => {
-    return this.db
-      .update(topics)
-      .set({ updatedAt: new Date() })
-      .where(and(eq(topics.id, id), this.ownership()));
+    return (
+      this.db
+        .update(topics)
+        // `accessedAt` has `$onUpdate` and means "last opened"; pin it so this
+        // activity bump changes `updatedAt` only.
+        .set({ accessedAt: sql`${topics.accessedAt}`, updatedAt: new Date() })
+        .where(and(eq(topics.id, id), this.ownership()))
+    );
   };
 
   /**

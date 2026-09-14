@@ -849,6 +849,7 @@ export class AgentModel {
         // `updatedAt` has `$onUpdate`; pin the existing value so a publish does not
         // yank Inbox to the top of every user's agent list.
         updatedAt: sql`${agents.updatedAt}`,
+        accessedAt: sql`${agents.accessedAt}`,
       })
       .where(
         and(
