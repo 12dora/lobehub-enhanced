@@ -10,6 +10,8 @@ import type {
   ModerationRequestKind,
 } from '@/const/platform/contentModeration';
 
+import { displayUserLabel } from '../primitives/userLabel';
+
 /**
  * Tag colour per effective action (design §6.2). `default` renders the neutral tag —
  * an allowed request is not a status worth colouring.
@@ -106,12 +108,15 @@ export const formatPercent = (rate: number | null | undefined): string =>
 export const displayModerationUser = (
   snapshot: { email?: string | null; fullName?: string | null; username?: string | null } | null,
   userId: string | null,
-): string =>
-  snapshot?.fullName?.trim() ||
-  snapshot?.username?.trim() ||
-  snapshot?.email?.trim() ||
-  userId ||
-  '—';
+): string => {
+  if (!snapshot && !userId) return '—';
+  return displayUserLabel({
+    email: snapshot?.email,
+    fullName: snapshot?.fullName,
+    id: userId ?? '',
+    username: snapshot?.username,
+  });
+};
 
 /** Category rows sorted by score (desc) so the reason for a decision reads first. */
 export const sortCategoriesByScore = <T extends { score: number }>(rows: T[]): T[] =>

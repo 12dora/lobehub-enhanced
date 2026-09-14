@@ -5,6 +5,7 @@ import { formatAdminDateTime } from '@/enterprise/client/features/admin/users/ut
 import { formatAuditReason } from './auditReasonCodes';
 
 export { formatAdminDateTime };
+export { displayUserLabel as displayAuditUserLabel } from '../../primitives/userLabel';
 
 /**
  * Readable fallback for an audit action/target-type token that has no explicit
@@ -43,15 +44,6 @@ export const auditTargetTypeLabel = (t: TFunction<'admin'>, value: string): stri
   value
     ? t(`audit.logs.targetType.${value}` as never, { defaultValue: humanizeAuditToken(value) })
     : '—';
-
-export const displayAuditUserLabel = (user: {
-  email?: string | null;
-  fullName?: string | null;
-  id: string;
-  username?: string | null;
-}): string => {
-  return user.fullName?.trim() || user.username?.trim() || user.email?.trim() || user.id;
-};
 
 export const truncateText = (value: string | null | undefined, max = 80): string => {
   if (!value) return '—';

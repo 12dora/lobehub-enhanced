@@ -11,18 +11,15 @@ import { DEFAULT_AVATAR } from '@/const/meta';
 import type { AdminUsersListOutput } from '@/enterprise/client/services/adminUsers';
 import { adminUsersService } from '@/enterprise/client/services/adminUsers';
 
+import { displayUserLabel } from '../primitives/userLabel';
+
 type AdminUserListItem = AdminUsersListOutput['items'][number];
 
 const DEBOUNCE_MS = 300;
 const SEARCH_LIMIT = 20;
 
 /** Display label for a user row — never the raw email alone. */
-export const displayStatsUserLabel = (user: {
-  email?: string | null;
-  fullName?: string | null;
-  id: string;
-  username?: string | null;
-}): string => user.fullName || user.username || user.email || user.id;
+export { displayUserLabel as displayStatsUserLabel } from '../primitives/userLabel';
 
 export interface StatsUserFilterSelectProps {
   onChange: (userId: string | undefined, name?: string) => void;
@@ -65,7 +62,7 @@ const StatsUserFilterSelect = memo<StatsUserFilterSelectProps>(
       if (!value) setInputValue('');
       else if (valueLabel) setInputValue(valueLabel);
       else if (usersById.current.has(value)) {
-        setInputValue(displayStatsUserLabel(usersById.current.get(value)!));
+        setInputValue(displayUserLabel(usersById.current.get(value)!));
       }
     }, [value, valueLabel]);
 
@@ -89,11 +86,11 @@ const StatsUserFilterSelect = memo<StatsUserFilterSelectProps>(
               label: (
                 <Flexbox horizontal align={'center'} gap={8}>
                   <Avatar
-                    alt={displayStatsUserLabel(item)}
+                    alt={displayUserLabel(item)}
                     avatar={item.avatar || DEFAULT_AVATAR}
                     size={20}
                   />
-                  <span>{displayStatsUserLabel(item)}</span>
+                  <span>{displayUserLabel(item)}</span>
                   {item.email ? (
                     <span style={{ color: cssVar.colorTextTertiary, fontSize: 12 }}>
                       {item.email}
@@ -156,7 +153,7 @@ const StatsUserFilterSelect = memo<StatsUserFilterSelectProps>(
           // it would land after the commit and reopen the popup over the choice.
           if (debounceRef.current) window.clearTimeout(debounceRef.current);
           requestIdRef.current += 1;
-          const name = displayStatsUserLabel(picked);
+          const name = displayUserLabel(picked);
           setInputValue(name);
           setOpen(false);
           onChange(picked.id, name);

@@ -56,7 +56,14 @@ export {
   getAdminStatusPresentation,
   normalizeAdminStatus,
 } from './statusBadge.utils';
+export { default as UserNameCell, type UserNameCellProps } from './UserNameCell';
 export { useModalPhaseGuard, type UseModalPhaseGuardOptions } from './useModalPhaseGuard';
+export {
+  displayUserLabel,
+  displayUserSecondary,
+  type UserLabelSource,
+  type UserPublicRef,
+} from './userLabel';
 export {
   type AdminReauthBusyPhase,
   type RunReauthedSubmitOptions,

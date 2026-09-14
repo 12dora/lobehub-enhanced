@@ -1,20 +1,13 @@
 import { mapEnterpriseError } from '@/enterprise/client/errors/mapEnterpriseError';
 
+export { displayUserLabel as displayUserName } from '../primitives/userLabel';
+
 /** Format a Date for admin tables (locale-aware, stable empty). */
 export const formatAdminDateTime = (value: Date | string | null | undefined): string => {
   if (!value) return '—';
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString();
-};
-
-export const displayUserName = (user: {
-  email?: string | null;
-  fullName?: string | null;
-  id: string;
-  username?: string | null;
-}): string => {
-  return user.fullName?.trim() || user.username?.trim() || user.email?.trim() || user.id;
 };
 
 /** Map mutation errors to toast-friendly text keys under admin namespace. */

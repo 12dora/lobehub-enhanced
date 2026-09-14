@@ -6,7 +6,7 @@ import { useSearchParams } from 'react-router';
 import { adminUsersService } from '@/enterprise/client/services/adminUsers';
 import { useClientDataSWR } from '@/libs/swr';
 
-import { displayStatsUserLabel } from './StatsUserFilterSelect';
+import { displayUserLabel } from '../primitives/userLabel';
 
 /** Mirrors the server's `userIdSchema` (min 1 / max 128). */
 const MAX_USER_ID_LENGTH = 128;
@@ -76,7 +76,7 @@ export const useStatsUserFilter = (): StatsUserFilterControls => {
     async (): Promise<string | null> => {
       try {
         const user = await adminUsersService.get({ userId: userId! });
-        return displayStatsUserLabel(user);
+        return displayUserLabel(user);
       } catch {
         // Deleted user, or an admin without USER_READ — the id stays the label.
         return null;
