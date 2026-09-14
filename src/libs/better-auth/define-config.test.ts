@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   EnvHttpProxyAgent: vi.fn((options) => ({ options })),
   initUser: vi.fn(async () => undefined),
   setGlobalDispatcher: vi.fn(),
+  syncPinyin: vi.fn(async () => undefined),
   withTwoFactorChallengedPaths: vi.fn((plugin) => plugin),
 }));
 
@@ -185,6 +186,10 @@ vi.mock('@/server/services/user', () => ({
   UserService: vi.fn().mockImplementation(() => ({
     initUser: mocks.initUser,
   })),
+}));
+
+vi.mock('@/database/models/user', () => ({
+  UserModel: { syncPinyin: mocks.syncPinyin },
 }));
 
 describe('defineConfig', { timeout: 15_000 }, () => {
@@ -426,6 +431,27 @@ describe('defineConfig', { timeout: 15_000 }, () => {
       }),
     );
     expect(mocks.ensureDefaultPlatformUserRole).toHaveBeenCalledWith(serverDB, 'user_new_signup');
+  });
+
+  it('syncs pinyin after user.update.after (SSO overrideUserInfo)', async () => {
+    const { defineConfig } = await import('./define-config');
+    const { serverDB } = await import('@lobechat/database');
+
+    await defineConfig({ plugins: [] });
+
+    const options = mocks.betterAuth.mock.calls.at(-1)?.[0] as {
+      databaseHooks: {
+        user: {
+          update: {
+            after: (user: Record<string, unknown>, context?: unknown) => Promise<void>;
+          };
+        };
+      };
+    };
+
+    await options.databaseHooks.user.update.after({ id: 'user_sso_update' });
+
+    expect(mocks.syncPinyin).toHaveBeenCalledWith(serverDB, 'user_sso_update');
   });
 
   it('repairs default platform_user on session.create.before (idempotent)', async () => {

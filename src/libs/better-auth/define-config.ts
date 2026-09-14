@@ -15,6 +15,7 @@ import debug from 'debug';
 import { eq } from 'drizzle-orm';
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 
+import { UserModel } from '@/database/models/user';
 import { appEnv } from '@/envs/app';
 import { authEnv } from '@/envs/auth';
 import {
@@ -408,6 +409,8 @@ export function defineConfig(
           // rewrites the avatar with the provider URL on every SSO login, so this has to run again
           // each time; `materializeProviderAvatar` short-circuits on the already-copied object.
           after: async (user, context) => {
+            // overrideUserInfo rewrites fullName via Better Auth's adapter (bypasses UserModel).
+            await UserModel.syncPinyin(serverDB, user.id);
             await storeMaterializedSsoAvatar(user, context);
           },
         },
