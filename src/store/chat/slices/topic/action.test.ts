@@ -2618,6 +2618,9 @@ describe('topic action', () => {
 
       const createTopicSpy = vi.spyOn(topicService, 'createTopic').mockResolvedValue(newTopicId);
       const refreshTopicSpy = vi.spyOn(result.current, 'refreshTopic');
+      const refreshRecentsSpy = vi
+        .spyOn(useHomeStore.getState(), 'refreshRecents')
+        .mockResolvedValue(undefined);
 
       await act(async () => {
         const topicId = await result.current.createTopic();
@@ -2630,6 +2633,7 @@ describe('topic action', () => {
         title: 'defaultTitle',
       });
       expect(refreshTopicSpy).toHaveBeenCalled();
+      expect(refreshRecentsSpy).toHaveBeenCalled();
     });
   });
   describe('duplicateTopic', () => {

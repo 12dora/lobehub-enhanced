@@ -1,7 +1,8 @@
 import type { ConversationContext } from '@lobechat/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatStore } from '@/store/chat/store';
+import { useHomeStore } from '@/store/home';
 
 import { messageMapKey } from '../../../../utils/messageMapKey';
 import type { AgentRuntimeType } from '../dispatch/agentDispatcher';
@@ -373,6 +374,18 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     ...fields,
   });
 
+  let refreshRecentsSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    refreshRecentsSpy = vi
+      .spyOn(useHomeStore.getState(), 'refreshRecents')
+      .mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    refreshRecentsSpy.mockRestore();
+  });
+
   it('new topic (top_level) summarizes the title with the caller-provided messages', async () => {
     const { get, store } = makeStore();
     const messages = [{ content: 'hello there', id: 'm1', role: 'user' } as any];
@@ -382,6 +395,17 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     );
 
     expect(store.summaryTopicTitle).toHaveBeenCalledWith('t1', messages);
+    expect(refreshRecentsSpy).toHaveBeenCalled();
+  });
+
+  it('refreshes Recents for an existing top_level topic so updated_at reorders the sidebar', async () => {
+    const { get } = makeStore();
+
+    await lifecycle('client', get, 'top_level').afterUserMessagePersisted(
+      persistedEvent('client', 'top_level', { isCreateNewTopic: false, topicId: 't1' }),
+    );
+
+    expect(refreshRecentsSpy).toHaveBeenCalled();
   });
 
   it('dev-slice title update does not clear the client runtime loading owner', async () => {
@@ -441,6 +465,7 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     );
 
     expect(store.summaryTopicTitle).not.toHaveBeenCalled();
+    expect(refreshRecentsSpy).not.toHaveBeenCalled();
   });
 
   it('does nothing when no topicId is resolved', async () => {
@@ -451,6 +476,7 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     );
 
     expect(store.summaryTopicTitle).not.toHaveBeenCalled();
+    expect(refreshRecentsSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -8,6 +8,7 @@ import { emitClientAgentSignalSourceEvent } from '@/store/chat/slices/agentRun/a
 import { snapshotTopicWorkingDirGit } from '@/store/chat/slices/agentRun/actions/lifecycle/snapshotWorkingDirGit';
 import type { ChatStore } from '@/store/chat/store';
 import { notifyDesktopAgentCompleted } from '@/store/chat/utils/desktopNotification';
+import { getHomeStoreState } from '@/store/home';
 import { markdownToTxt } from '@/utils/markdownToTxt';
 
 import { messageMapKey } from '../../../../utils/messageMapKey';
@@ -183,6 +184,14 @@ export const buildRunLifecycle = (
       if (adapter.runScope !== 'top_level') return;
       const { isCreateNewTopic, topicId, assistantMessageId } = event;
       if (!topicId) return;
+
+      // Recents sidebar (`recent:list`) is a separate SWR key ordered by
+      // `updated_at desc`. Touching any top-level topic — new or existing —
+      // must revalidate so the list appears/reorders immediately. Fire-and-
+      // forget: a refresh failure must not affect the run.
+      void getHomeStoreState()
+        .refreshRecents()
+        .catch(() => {});
 
       // Snapshot the working directory's live branch + linked PR onto the topic.
       // Anchored HERE (send) rather than in the ControlBar's mount effect so that

@@ -1871,6 +1871,13 @@ export class ChatTopicActionImpl {
     await this.#get().refreshTopic();
     this.#get().internal_updateTopicLoading(topicId, false);
 
+    // Recents sidebar is a separate SWR key; createTopic / saveToTopic never
+    // go through afterUserMessagePersisted. Fire-and-forget so a refresh
+    // failure cannot fail topic creation.
+    void getHomeStoreState()
+      .refreshRecents()
+      .catch(() => {});
+
     return topicId;
   };
 
