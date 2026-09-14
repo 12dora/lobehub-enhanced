@@ -77,6 +77,7 @@ vi.mock('@/database/models/plugin', () => ({
 const topicMock = {
   create: vi.fn().mockResolvedValue({ id: 'topic-1', metadata: undefined }),
   findById: vi.fn().mockResolvedValue(undefined),
+  touchUpdatedAt: vi.fn().mockResolvedValue(undefined),
   updateMetadata: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock('@/database/models/topic', () => ({
@@ -147,6 +148,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
     vi.clearAllMocks();
     topicMock.create.mockResolvedValue({ id: 'topic-1', metadata: undefined });
     topicMock.findById.mockResolvedValue(undefined);
+    topicMock.touchUpdatedAt.mockResolvedValue(undefined);
     topicMock.updateMetadata.mockResolvedValue(undefined);
     mockMessageCreate.mockResolvedValue({ id: 'msg-1' });
     mockCreateOperation.mockResolvedValue({

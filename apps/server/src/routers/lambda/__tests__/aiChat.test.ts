@@ -68,6 +68,7 @@ describe('aiChatRouter', () => {
         ({
           create: vi.fn(),
           findById: vi.fn().mockResolvedValue({ id: 'owned-topic' }),
+          touchUpdatedAt: vi.fn().mockResolvedValue(undefined),
         }) as any,
     );
   });
@@ -1148,6 +1149,69 @@ describe('aiChatRouter', () => {
       } as any);
 
       // Verify touchUpdatedAt was NOT called since no new topic was created
+      expect(mockTouchUpdatedAt).not.toHaveBeenCalled();
+    });
+
+    it('touches topic updatedAt when using an existing topicId', async () => {
+      const mockCreateMessage = vi
+        .fn()
+        .mockResolvedValueOnce({ id: 'm-user' })
+        .mockResolvedValueOnce({ id: 'm-assistant' });
+      const mockGet = vi.fn().mockResolvedValue({ messages: [], topics: undefined });
+      const mockTouchUpdatedAt = vi.fn().mockResolvedValue(undefined);
+
+      mockMessageModel(mockCreateMessage);
+      vi.mocked(AiChatService).mockImplementation(() => ({ getMessagesAndTopics: mockGet }) as any);
+      vi.mocked(TopicModel).mockImplementation(
+        () =>
+          ({
+            findById: vi.fn().mockResolvedValue({ id: 't-exist' }),
+            touchUpdatedAt: mockTouchUpdatedAt,
+          }) as any,
+      );
+
+      const caller = aiChatRouter.createCaller(mockCtx as any);
+
+      await caller.sendMessageInServer({
+        agentId: 'agent-1',
+        newAssistantMessage: { model: 'gpt-4o', provider: 'openai' },
+        newUserMessage: { content: 'hi' },
+        sessionId: 's1',
+        topicId: 't-exist',
+      } as any);
+
+      expect(mockTouchUpdatedAt).toHaveBeenCalledWith('t-exist');
+    });
+
+    it('does not touch topic updatedAt when creating a new topic', async () => {
+      const mockCreateTopic = vi.fn().mockResolvedValue({ id: 't-new' });
+      const mockCreateMessage = vi
+        .fn()
+        .mockResolvedValueOnce({ id: 'm-user' })
+        .mockResolvedValueOnce({ id: 'm-assistant' });
+      const mockGet = vi.fn().mockResolvedValue({ messages: [], topics: [{}] });
+      const mockTouchUpdatedAt = vi.fn().mockResolvedValue(undefined);
+
+      vi.mocked(TopicModel).mockImplementation(
+        () =>
+          ({
+            create: mockCreateTopic,
+            touchUpdatedAt: mockTouchUpdatedAt,
+          }) as any,
+      );
+      mockMessageModel(mockCreateMessage);
+      vi.mocked(AiChatService).mockImplementation(() => ({ getMessagesAndTopics: mockGet }) as any);
+
+      const caller = aiChatRouter.createCaller(mockCtx as any);
+
+      await caller.sendMessageInServer({
+        agentId: 'agent-1',
+        newAssistantMessage: { model: 'gpt-4o', provider: 'openai' },
+        newTopic: { title: 'New Topic' },
+        newUserMessage: { content: 'hi' },
+        sessionId: 's1',
+      } as any);
+
       expect(mockTouchUpdatedAt).not.toHaveBeenCalled();
     });
   });

@@ -225,6 +225,7 @@ export const aiChatRouter = router({
 
       let isCreateNewTopic = false;
       let agentTouchUpdatedAtTask: Promise<void> | undefined;
+      let topicTouchUpdatedAtTask: Promise<void> | undefined;
 
       // create topic if there should be a new topic
       if (input.newTopic) {
@@ -291,6 +292,20 @@ export const aiChatRouter = router({
         if (!existingTopic) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Topic not found' });
         }
+
+        // Recents orders by `topics.updated_at`. Message insert does not bump
+        // the topic row, so an existing conversation would stay buried until
+        // some later status/title write. Awaited alongside message create so
+        // the persist response is visible to the client's Recents refetch.
+        topicTouchUpdatedAtTask = runTimedStage(
+          timingContext,
+          'lambda.aiChat.topic.touchUpdatedAt',
+          async () => {
+            await ctx.topicModel.touchUpdatedAt(input.topicId!);
+          },
+        ).catch((error) => {
+          console.error('[aiChat] Failed to touch topic updatedAt:', error);
+        });
       }
 
       // create thread if there should be a new thread
@@ -456,9 +471,12 @@ export const aiChatRouter = router({
           provider: input.newAssistantMessage.provider,
         },
       );
+      const persistSideTasks = [agentTouchUpdatedAtTask, topicTouchUpdatedAtTask].filter(
+        (task): task is Promise<void> => !!task,
+      );
       const { assistantMessage: assistantMessageItem, userMessage: userMessageItem } =
-        agentTouchUpdatedAtTask
-          ? (await Promise.all([createMessagePairPromise, agentTouchUpdatedAtTask]))[0]
+        persistSideTasks.length > 0
+          ? (await Promise.all([createMessagePairPromise, ...persistSideTasks]))[0]
           : await createMessagePairPromise;
 
       const messageId = userMessageItem.id;

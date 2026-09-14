@@ -99,6 +99,11 @@ const completeEvent = (
 beforeEach(() => {
   agentSignalBridgeMock.emitClientAgentSignalSourceEvent.mockClear();
   desktopNotificationMock.notifyDesktopAgentCompleted.mockClear();
+  vi.spyOn(useHomeStore.getState(), 'refreshRecents').mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('buildRunLifecycle.completeRun — transport-driven disposition', () => {
@@ -169,11 +174,9 @@ describe('buildRunLifecycle.completeRun — transport-driven disposition', () =>
   });
 });
 
-// The client transport persists `status: 'running'` at run start; without a
-// terminal reset for the topic the user is viewing, both the sidebar spinner and
-// the home "running" card would stay stuck after the reply finished (the
-// `markTopicUnread` reset early-returns on the active topic). Mirrors gateway's
-// onSessionComplete `viewing || !succeeded → 'active'` rule.
+// A client completion the user is viewing must reset leftover sidebar spinner
+// state because `markTopicUnread` early-returns on the active topic. Mirrors
+// gateway's onSessionComplete `viewing || !succeeded → 'active'` rule.
 describe('buildRunLifecycle.completeRun — client resets a viewed topic out of `running`', () => {
   it('client success while VIEWING the topic force-resets its status to `active`', async () => {
     const { get, store } = makeStore(); // activeTopicId === 't1' (viewing)
@@ -399,14 +402,14 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     expect(refreshRecentsSpy).toHaveBeenCalled();
   });
 
-  it('does NOT refresh Recents for an existing top_level topic at persist time', async () => {
+  it('refreshes Recents for an existing top_level topic at persist time', async () => {
     const { get } = makeStore();
 
     await lifecycle('client', get, 'top_level').afterUserMessagePersisted(
       persistedEvent('client', 'top_level', { isCreateNewTopic: false, topicId: 't1' }),
     );
 
-    expect(refreshRecentsSpy).not.toHaveBeenCalled();
+    expect(refreshRecentsSpy).toHaveBeenCalled();
   });
 
   it('dev-slice title update does not clear the client runtime loading owner', async () => {
@@ -494,12 +497,12 @@ describe('buildRunLifecycle.completeRun — Recents sidebar reorder', () => {
     refreshRecentsSpy.mockRestore();
   });
 
-  it('refreshes Recents once when a top_level run with a topicId finishes', async () => {
+  it('does NOT refresh Recents when a top_level run with a topicId finishes', async () => {
     const { get } = makeStore();
 
     await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
 
-    expect(refreshRecentsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshRecentsSpy).not.toHaveBeenCalled();
   });
 
   it('does NOT refresh Recents for a sub_agent run', async () => {
@@ -513,15 +516,21 @@ describe('buildRunLifecycle.completeRun — Recents sidebar reorder', () => {
   });
 
   it('does NOT refresh Recents when a top_level run requeues into a follow-up send', async () => {
-    const { get, store } = makeStore();
-    store.drainQueuedMessages = vi.fn(() => [{ content: 'queued', id: 'q1' } as any]);
+    vi.useFakeTimers();
+    try {
+      const { get, store } = makeStore();
+      store.drainQueuedMessages = vi.fn(() => [{ content: 'queued', id: 'q1' } as any]);
 
-    const { requeued } = await lifecycle('client', get).completeRun(
-      completeEvent('client', { runtimeStatus: 'done' }),
-    );
+      const { requeued } = await lifecycle('client', get).completeRun(
+        completeEvent('client', { runtimeStatus: 'done' }),
+      );
 
-    expect(requeued).toBe(true);
-    expect(refreshRecentsSpy).not.toHaveBeenCalled();
+      expect(requeued).toBe(true);
+      expect(refreshRecentsSpy).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

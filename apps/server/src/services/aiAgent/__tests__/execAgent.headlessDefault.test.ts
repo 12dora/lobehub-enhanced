@@ -66,6 +66,7 @@ vi.mock('@/database/models/plugin', () => ({
 vi.mock('@/database/models/topic', () => ({
   TopicModel: vi.fn().mockImplementation(() => ({
     create: mockTopicCreate,
+    touchUpdatedAt: vi.fn().mockResolvedValue(undefined),
     findById: mockTopicFindById,
   })),
 }));

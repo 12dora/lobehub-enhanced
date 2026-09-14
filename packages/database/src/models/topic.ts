@@ -1056,6 +1056,19 @@ export class TopicModel {
   };
 
   /**
+   * Bump `updated_at` without changing any other column. Recents orders by
+   * this timestamp, and appending a message does not otherwise touch the topic
+   * row — callers persist a user turn then call this so the conversation
+   * re-sorts to the top.
+   */
+  touchUpdatedAt = async (id: string) => {
+    return this.db
+      .update(topics)
+      .set({ updatedAt: new Date() })
+      .where(and(eq(topics.id, id), this.ownership()));
+  };
+
+  /**
    * Move multiple topics (and all their messages) to another agent.
    *
    * Reassigns ownership purely through the `agentId` foreign key (the new data

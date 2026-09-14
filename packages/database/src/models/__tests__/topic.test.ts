@@ -395,6 +395,38 @@ describe('TopicModel', () => {
     });
   });
 
+  describe('touchUpdatedAt', () => {
+    it('only updates updatedAt without changing other fields', async () => {
+      const topic = await topicModel.create({ title: 'My Topic' });
+      const originalUpdatedAt = topic.updatedAt;
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await topicModel.touchUpdatedAt(topic.id);
+
+      const [row] = await serverDB.select().from(topics).where(eq(topics.id, topic.id));
+
+      expect(row.title).toBe('My Topic');
+      expect(row.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+    });
+
+    it('does not touch a topic owned by another user', async () => {
+      await serverDB
+        .insert(topics)
+        .values({ id: 't-foreign-touch', title: 'foreign', userId: otherUserId });
+
+      const [before] = await serverDB.select().from(topics).where(eq(topics.id, 't-foreign-touch'));
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await topicModel.touchUpdatedAt('t-foreign-touch');
+
+      const [after] = await serverDB.select().from(topics).where(eq(topics.id, 't-foreign-touch'));
+      expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+      expect(after.title).toBe('foreign');
+    });
+  });
+
   describe('update', () => {
     it('updates status and bumps updatedAt', async () => {
       const topic = await topicModel.create({ title: 'to update' });

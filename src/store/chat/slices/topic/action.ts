@@ -1545,6 +1545,9 @@ export class ChatTopicActionImpl {
 
     // switch to default topic
     switchTopic(null);
+    void getHomeStoreState()
+      .refreshRecents()
+      .catch(() => {});
   };
 
   removeGroupTopics = async (groupId: string): Promise<void> => {
@@ -1566,6 +1569,9 @@ export class ChatTopicActionImpl {
 
     // switch to default topic
     switchTopic(null);
+    void getHomeStoreState()
+      .refreshRecents()
+      .catch(() => {});
   };
 
   removeAllTopics = async (): Promise<void> => {

@@ -585,6 +585,29 @@ describe('agentGroup actions', () => {
         expect(refreshRecentsSpy).toHaveBeenCalled();
       });
 
+      it('refreshes Recents when sending in an existing group topic', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const refreshRecentsSpy = vi
+          .spyOn(useHomeStore.getState(), 'refreshRecents')
+          .mockResolvedValue(undefined);
+
+        vi.mocked(lambdaClient.aiAgent.execGroupAgent.mutate).mockResolvedValue(
+          createMockExecGroupAgentResponse({
+            isCreateNewTopic: false,
+          }),
+        );
+        vi.mocked(agentRuntimeClient.createStreamConnection).mockReturnValue({} as any);
+
+        await act(async () => {
+          await result.current.sendGroupMessage({
+            context: createTestContext({ topicId: 'existing-topic-id' }),
+            message: TEST_CONTENT.GROUP_MESSAGE,
+          });
+        });
+
+        expect(refreshRecentsSpy).toHaveBeenCalledTimes(1);
+      });
+
       it('should populate the new topic bucket BEFORE switching into it (no blank flicker)', async () => {
         const { result } = renderHook(() => useChatStore());
 

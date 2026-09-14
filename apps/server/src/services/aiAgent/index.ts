@@ -1882,6 +1882,18 @@ export class AiAgentService {
     if (userMessageRecord) {
       selfMessageIds.add(userMessageRecord.id);
       log('execAgent: created user message %s', userMessageRecord.id);
+
+      // Recents orders by `topics.updated_at`. A new topic already has "now";
+      // an existing topic's row is otherwise untouched by message insert (and
+      // `updateMetadata` does not bump it). Await so the execAgent response
+      // is visible to a following Recents refetch.
+      if (!isNewTopic) {
+        try {
+          await this.topicModel.touchUpdatedAt(topicId);
+        } catch (error) {
+          log('execAgent: failed to touch topic updatedAt: %O', error);
+        }
+      }
     }
 
     // Snapshot the author's group orchestration role onto the assistant message

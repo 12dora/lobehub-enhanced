@@ -67,6 +67,7 @@ vi.mock('@/database/models/plugin', () => ({
 vi.mock('@/database/models/topic', () => ({
   TopicModel: vi.fn().mockImplementation(() => ({
     create: vi.fn().mockResolvedValue({ id: 'topic-new' }),
+    touchUpdatedAt: vi.fn().mockResolvedValue(undefined),
     findById: vi.fn().mockResolvedValue(undefined),
     updateMetadata: vi.fn().mockResolvedValue(undefined),
   })),

@@ -151,6 +151,30 @@ describe('RecentActionImpl', () => {
       ]);
       expect(updater(undefined)).toBeUndefined();
     });
+
+    it('does not rewrite the store list when no recent item matches', () => {
+      useHomeStore.setState({ recents: [item('a', 'old')] });
+      const before = useHomeStore.getState().recents;
+      vi.spyOn(swr, 'mutate').mockResolvedValue(undefined as any);
+
+      act(() => {
+        useHomeStore.getState().updateRecentTitle('missing', 'new');
+      });
+
+      expect(useHomeStore.getState().recents).toBe(before);
+      expect(useHomeStore.getState().recents).toEqual([item('a', 'old')]);
+    });
+
+    it('swallows mutate failures so a title patch cannot reject', async () => {
+      useHomeStore.setState({ recents: [item('a', 'old')] });
+      vi.spyOn(swr, 'mutate').mockRejectedValue(new Error('offline'));
+
+      await act(async () => {
+        useHomeStore.getState().updateRecentTitle('a', 'new');
+      });
+
+      expect(useHomeStore.getState().recents).toEqual([item('a', 'new')]);
+    });
   });
 
   describe('refreshRecents', () => {

@@ -1592,7 +1592,7 @@ describe('topic action', () => {
   });
 
   describe('Recents refresh on topic deletion', () => {
-    it('refreshes Recents after removeTopic, removeUnstarredTopic, and removeAllTopics', async () => {
+    it('refreshes Recents after removeTopic, removeUnstarredTopic, and removeSessionTopics', async () => {
       const { result } = renderHook(() => useChatStore());
       const refreshRecentsSpy = vi
         .spyOn(useHomeStore.getState(), 'refreshRecents')
@@ -1612,6 +1612,13 @@ describe('topic action', () => {
               hasMore: false,
               pageSize: 20,
             },
+            [topicMapKey({ groupId: 'group-1' })]: {
+              items: [{ id: 'group-topic-1' }] as ChatTopic[],
+              total: 1,
+              currentPage: 0,
+              hasMore: false,
+              pageSize: 20,
+            },
           },
         });
       });
@@ -1619,10 +1626,11 @@ describe('topic action', () => {
       await act(async () => {
         await result.current.removeTopic('topic-1');
         await result.current.removeUnstarredTopic();
-        await result.current.removeAllTopics();
+        await result.current.removeSessionTopics();
+        await result.current.removeGroupTopics('group-1');
       });
 
-      expect(refreshRecentsSpy).toHaveBeenCalledTimes(3);
+      expect(refreshRecentsSpy).toHaveBeenCalledTimes(4);
     });
   });
   describe('removeTopicsByTimeRange', () => {
@@ -2652,12 +2660,6 @@ describe('topic action', () => {
     });
   });
   describe('createTopic', () => {
-    let refreshRecentsSpy: ReturnType<typeof vi.spyOn>;
-
-    afterEach(() => {
-      refreshRecentsSpy?.mockRestore();
-    });
-
     it('should create a new topic and update the store', async () => {
       const { result } = renderHook(() => useChatStore());
       const activeAgentId = 'test-session-id';
@@ -2675,7 +2677,7 @@ describe('topic action', () => {
 
       const createTopicSpy = vi.spyOn(topicService, 'createTopic').mockResolvedValue(newTopicId);
       const refreshTopicSpy = vi.spyOn(result.current, 'refreshTopic');
-      refreshRecentsSpy = vi
+      const refreshRecentsSpy = vi
         .spyOn(useHomeStore.getState(), 'refreshRecents')
         .mockResolvedValue(undefined);
 

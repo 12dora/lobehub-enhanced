@@ -38,8 +38,11 @@ export class RecentActionImpl {
   };
 
   updateRecentTitle = (id: string, title: string): void => {
-    const recents = this.#get().recents.map((item) => (item.id === id ? { ...item, title } : item));
-    this.#set({ recents }, false, n('updateRecentTitle'));
+    const recents = this.#get().recents;
+    const next = recents.map((item) => (item.id === id ? { ...item, title } : item));
+    if (next.some((item, index) => item !== recents[index])) {
+      this.#set({ recents: next }, false, n('updateRecentTitle'));
+    }
 
     const updater = updateRecentTitleInList(id, title);
     void Promise.all([
@@ -51,7 +54,7 @@ export class RecentActionImpl {
         updater,
         { revalidate: false },
       ),
-    ]);
+    ]).catch(() => {});
   };
 
   refreshRecents = async (): Promise<void> => {

@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AiAgentService } from '../index';
 
-const { mockGetLatestNonToolMessageId, mockGetLatestSpineMessageId, mockMessageCreate } =
-  vi.hoisted(() => ({
-    mockGetLatestNonToolMessageId: vi.fn(),
-    mockGetLatestSpineMessageId: vi.fn(),
-    mockMessageCreate: vi.fn(),
-  }));
+const {
+  mockGetLatestNonToolMessageId,
+  mockGetLatestSpineMessageId,
+  mockMessageCreate,
+  mockTouchUpdatedAt,
+} = vi.hoisted(() => ({
+  mockGetLatestNonToolMessageId: vi.fn(),
+  mockGetLatestSpineMessageId: vi.fn(),
+  mockMessageCreate: vi.fn(),
+  mockTouchUpdatedAt: vi.fn(),
+}));
 
 vi.mock('@/libs/trusted-client', () => ({
   generateTrustedClientToken: vi.fn().mockReturnValue(undefined),
@@ -54,6 +59,7 @@ vi.mock('@/server/services/agent', () => ({
       provider: 'openai',
       systemRole: 'You are a helpful assistant',
     }),
+    queryAvailableAgents: vi.fn().mockResolvedValue([]),
   })),
 }));
 
@@ -67,6 +73,7 @@ vi.mock('@/database/models/topic', () => ({
   TopicModel: vi.fn().mockImplementation(() => ({
     create: vi.fn().mockResolvedValue({ id: 'topic-1' }),
     findById: vi.fn().mockResolvedValue(undefined),
+    touchUpdatedAt: mockTouchUpdatedAt,
     updateMetadata: vi.fn().mockResolvedValue(undefined),
   })),
 }));
@@ -170,6 +177,7 @@ describe('AiAgentService.execAgent - user turn spine anchoring', () => {
     }));
     mockGetLatestSpineMessageId.mockResolvedValue(undefined);
     mockGetLatestNonToolMessageId.mockResolvedValue(undefined);
+    mockTouchUpdatedAt.mockResolvedValue(undefined);
 
     service = new AiAgentService(mockDb, 'test-user-id');
   });
@@ -248,5 +256,24 @@ describe('AiAgentService.execAgent - user turn spine anchoring', () => {
       topicId: 'topic-1',
     });
     expect(userMessageCall()![0]).toMatchObject({ parentId: 'thread-spine-1' });
+  });
+
+  it('touches topic updatedAt when appending to an existing topic', async () => {
+    await service.execAgent({
+      agentId: 'agent-1',
+      appContext: { topicId: 'topic-1' },
+      prompt: 'Test prompt',
+    });
+
+    expect(mockTouchUpdatedAt).toHaveBeenCalledWith('topic-1');
+  });
+
+  it('does not touch topic updatedAt when creating a new topic', async () => {
+    await service.execAgent({
+      agentId: 'agent-1',
+      prompt: 'Test prompt',
+    });
+
+    expect(mockTouchUpdatedAt).not.toHaveBeenCalled();
   });
 });

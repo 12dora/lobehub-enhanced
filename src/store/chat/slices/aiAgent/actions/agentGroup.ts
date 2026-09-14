@@ -143,9 +143,12 @@ export class ChatGroupChatActionImpl {
           clearNewKey: true,
           skipRefreshMessage: true,
         });
-        // Group chat creates the topic server-side and never reaches
-        // afterUserMessagePersisted. Recents includes group topics — refresh
-        // so the new conversation appears immediately. Fire-and-forget.
+      }
+
+      // Group chat never reaches afterUserMessagePersisted. The persist
+      // path already created or touched `topics.updated_at`, so refetch
+      // Recents now (new and existing topics). Fire-and-forget, one call.
+      if (result.topicId) {
         void getHomeStoreState()
           .refreshRecents()
           .catch(() => {});

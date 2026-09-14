@@ -80,6 +80,7 @@ vi.mock('@/database/models/file', () => ({
 vi.mock('@/database/models/topic', () => ({
   TopicModel: vi.fn().mockImplementation(() => ({
     create: vi.fn().mockResolvedValue({ id: 'topic-1' }),
+    touchUpdatedAt: vi.fn().mockResolvedValue(undefined),
   })),
 }));
 

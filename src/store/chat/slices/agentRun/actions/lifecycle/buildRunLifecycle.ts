@@ -185,18 +185,14 @@ export const buildRunLifecycle = (
       const { isCreateNewTopic, topicId, assistantMessageId } = event;
       if (!topicId) return;
 
-      // Recents sidebar (`recent:list`) is a separate SWR key. A new topic
-      // must appear immediately; existing-topic refresh is wasted here
-      // because `topics.updated_at` is not bumped on the persist path, and
-      // the `status: 'running'` write happens at run start AFTER this refetch
-      // would already be in flight. Existing conversations re-sort on
-      // completeRun instead. Fire-and-forget: a refresh failure must not
-      // affect the run.
-      if (isCreateNewTopic) {
-        void getHomeStoreState()
-          .refreshRecents()
-          .catch(() => {});
-      }
+      // Recents sidebar (`recent:list`) is a separate SWR key, ordered by
+      // `topics.updated_at`. The persist route (aiChat / execAgent) creates
+      // the topic or bumps that timestamp before responding, so a refetch
+      // here returns the new order for both new and existing conversations.
+      // Fire-and-forget: a refresh failure must not affect the run.
+      void getHomeStoreState()
+        .refreshRecents()
+        .catch(() => {});
 
       // Snapshot the working directory's live branch + linked PR onto the topic.
       // Anchored HERE (send) rather than in the ControlBar's mount effect so that
@@ -329,16 +325,13 @@ export const buildRunLifecycle = (
         }
       };
 
-      // The client transport persists `status: 'running'` at run start
-      // (streamingExecutor) but, unlike gateway (see gateway.ts onSessionComplete),
-      // had no terminal write that flips it back for the topic the user is
-      // watching — `markTopicUnread` early-returns on the active topic, so the
-      // persisted status stayed `running` forever and stuck both the sidebar
-      // spinner and the home "任务正在执行" card. Mirror gateway's rule here: a
-      // clean completion the user isn't watching is owned by `markTopicUnread`
-      // (status: 'unread'); every OTHER case (viewing, error, abort) force-resets
-      // to 'active'. Client + top-level + real topic only — sub-agents never wrote
-      // 'running', and gateway/hetero own their own reset.
+      // Client + top-level + real topic only: a completion the user is watching
+      // must not leave a leftover sidebar spinner, because `markTopicUnread`
+      // early-returns on the active topic. Mirror gateway's rule: a clean
+      // completion the user isn't watching is owned by `markTopicUnread`
+      // (status: 'unread'); every OTHER case (viewing, error, abort)
+      // force-resets to 'active'. Sub-agents do not own topic status, and
+      // gateway/hetero own their own reset.
       const resetActiveTopicRunningStatus = () => {
         if (adapter.runtimeType !== 'client') return;
         if (adapter.runScope === 'sub_agent') return;
@@ -451,23 +444,10 @@ export const buildRunLifecycle = (
       }
 
       // Runs past the requeue early-return, so a run that continues into a queued
-      // follow-up (which writes 'running' again) is never reset mid-flight.
+      // follow-up is never reset mid-flight.
       resetActiveTopicRunningStatus();
 
       emitComplete(operationId, runtimeStatus);
-
-      // Recents is ordered by topic `updated_at`. Persist-time refresh is
-      // wasted for existing topics (the bump lands at run start / completion,
-      // after that refetch is already in flight). Revalidate once here so an
-      // existing conversation re-sorts to the top after status/title writes.
-      // One refetch per finished run — skip sub-agents (they don't own the
-      // topic) and the requeue early-return above (the follow-up is still
-      // running). Fire-and-forget: a refresh failure must not fail completion.
-      if (adapter.runScope === 'top_level' && topicId) {
-        void getHomeStoreState()
-          .refreshRecents()
-          .catch(() => {});
-      }
 
       return { requeued: false };
     },
