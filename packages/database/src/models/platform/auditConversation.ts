@@ -15,6 +15,7 @@ import { sessions } from '../../schemas/session';
 import { topics } from '../../schemas/topic';
 import { users } from '../../schemas/user';
 import type { LobeChatDatabase, Transaction } from '../../type';
+import { buildUserSearchConditions } from '../adminUserSearch';
 import {
   clampListLimit,
   encodeCreatedAtCursor as encodeCursor,
@@ -474,18 +475,7 @@ export class PlatformAuditConversationModel {
     if (!params.q) throw new Error('q is required for platform audit user search');
 
     const limit = clampListLimit(params.limit);
-    // lower(field) LIKE 'prefix%' — uses users_*_lower_pattern_idx (DB-007).
-    // Match AdminUserModel: lowercase escaped prefix + ESCAPE '\\'.
-    // Search email/username only (indexed). fullName/id lack prefix indexes and
-    // would force sequential scans on enterprise user tables.
-    const prefix = `${escapeLike(params.q.toLowerCase())}%`;
-    const conditions: SQL[] = [
-      or(
-        sql`lower(${users.email}) LIKE ${prefix} ESCAPE '\\'`,
-        sql`lower(${users.username}) LIKE ${prefix} ESCAPE '\\'`,
-        sql`lower(${users.normalizedEmail}) LIKE ${prefix} ESCAPE '\\'`,
-      )!,
-    ];
+    const conditions: SQL[] = [buildUserSearchConditions(params.q)];
 
     const parsed = parseCursor(params.cursor);
     if (parsed) {

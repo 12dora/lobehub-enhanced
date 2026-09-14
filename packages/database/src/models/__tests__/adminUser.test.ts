@@ -12,6 +12,7 @@ import { getTestDB } from '../../core/getTestDB';
 import { permissions, rolePermissions, roles, userRoles, users } from '../../schemas';
 import { account, passkey, session, twoFactor } from '../../schemas/betterAuth';
 import type { LobeChatDatabase } from '../../type';
+import { pinyinFieldsFromFullName } from '../../utils/pinyin';
 import { seedPlatformRoles } from '../../utils/seedPlatformRoles';
 import {
   AdminUserModel,
@@ -196,6 +197,21 @@ describe('AdminUserModel.list', () => {
 
     const mixed = await model.list({ query: 'ZELDA' });
     expect(mixed.items.map((i) => i.id)).toEqual([IDS.c]);
+  });
+
+  it('matches CJK names by pinyin full / prefix / initials', async () => {
+    await serverDB
+      .update(users)
+      .set({ fullName: '邵军军', ...pinyinFieldsFromFullName('邵军军') })
+      .where(eq(users.id, IDS.c));
+
+    for (const query of ['邵军军', 'shao', 'sjj']) {
+      const page = await model.list({ query });
+      expect(
+        page.items.map((i) => i.id),
+        query,
+      ).toEqual([IDS.c]);
+    }
   });
 
   it('filters by created date range', async () => {
@@ -470,6 +486,22 @@ describe('AdminUserModel credential helpers', () => {
     );
     const row = await serverDB.query.account.findFirst({ where: eq(account.id, 'acc-cred') });
     expect(row?.password).toBe('NEW_HASH');
+  });
+
+  it('writes pinyin columns when creating a credential user', async () => {
+    await model.createCredentialUser({
+      accountId: 'acct-pinyin',
+      email: 'shao@example.com',
+      fullName: '邵军军',
+      normalizedEmail: 'shao@example.com',
+      passwordHash: 'HASH',
+      userId: 'admin-user-shao',
+    });
+    const row = await serverDB.query.users.findFirst({
+      where: eq(users.id, 'admin-user-shao'),
+    });
+    expect(row?.pinyinFull).toBe('shaojunjun');
+    expect(row?.pinyinInitials).toBe('sjj');
   });
 
   it('clears two-factor rows and optionally passkeys', async () => {

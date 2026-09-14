@@ -11,6 +11,7 @@ import { getTestDB } from '../../core/getTestDB';
 import { platformContentModerationRecords } from '../../schemas/platform';
 import { users } from '../../schemas/user';
 import type { LobeChatDatabase } from '../../type';
+import { pinyinFieldsFromFullName } from '../../utils/pinyin';
 import { PlatformContentModerationRecordModel } from './contentModerationRecords';
 
 const db: LobeChatDatabase = await getTestDB();
@@ -84,6 +85,26 @@ describe('PlatformContentModerationRecordModel', () => {
     });
     expect(listed.total).toBe(1);
     expect(listed.items[0]?.userId).toBe('user-alice');
+  });
+
+  it('filters userQuery by pinyin initials of a CJK fullName', async () => {
+    await db.insert(users).values({
+      email: 'synthetic@dingtalk.invalid',
+      fullName: '邵军军',
+      id: 'user-shao',
+      username: null,
+      ...pinyinFieldsFromFullName('邵军军'),
+    });
+    const model = new PlatformContentModerationRecordModel(db);
+    await model.insert({ ...baseInsert(), userId: 'user-shao' });
+
+    const listed = await model.list({
+      limit: 20,
+      offset: 0,
+      userQuery: 'sjj',
+    });
+    expect(listed.total).toBe(1);
+    expect(listed.items[0]?.userId).toBe('user-shao');
   });
 
   it('countUserViolations excludes cache hits and rows before the last auto-ban', async () => {

@@ -61,7 +61,9 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
         AND i.relname IN (
           'users_email_lower_pattern_idx',
           'users_username_lower_pattern_idx',
-          'users_normalized_email_lower_pattern_idx'
+          'users_normalized_email_lower_pattern_idx',
+          'users_pinyin_full_pattern_idx',
+          'users_pinyin_initials_pattern_idx'
         )
     `);
     const opRows =
@@ -83,6 +85,22 @@ describe.skipIf(!isServerDB)('M04 prefix search EXPLAIN (TEST_SERVER_DB=1)', () 
       /Seq Scan/i.test(planText) && !/Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
 
     // Hard gate: pure Seq Scan is a failure at this cardinality/selectivity.
+    expect(pureSeq).toBe(false);
+    expect(hasIndexPath).toBe(true);
+  });
+
+  it('pinyin prefix (1–3 letters) uses text_pattern_ops index path', async () => {
+    const pattern = 'sjj%';
+    const result = await db.execute(sql`
+      EXPLAIN (FORMAT TEXT)
+      SELECT id FROM users
+      WHERE "pinyin_initials" LIKE ${pattern} ESCAPE '\\'
+      LIMIT 10
+    `);
+    const planText = JSON.stringify(result);
+    const hasIndexPath = /Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
+    const pureSeq =
+      /Seq Scan/i.test(planText) && !/Index Scan|Bitmap Index Scan|Index Only Scan/i.test(planText);
     expect(pureSeq).toBe(false);
     expect(hasIndexPath).toBe(true);
   });

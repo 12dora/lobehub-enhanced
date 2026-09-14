@@ -8,12 +8,14 @@ import type {
   ContentModerationRecordListInput,
 } from '@/types/platform/contentModeration';
 
+import { likeContains } from '../../repositories/platformSearch';
 import {
   type NewPlatformContentModerationRecord,
   platformContentModerationRecords,
 } from '../../schemas/platform';
 import { users } from '../../schemas/user';
 import type { LobeChatDatabase, Transaction } from '../../type';
+import { buildUserSearchConditions } from '../adminUserSearch';
 
 const RECORD_SELECT = {
   autoBanned: platformContentModerationRecords.autoBanned,
@@ -50,10 +52,6 @@ const RECORD_SELECT = {
   userSnapshot: platformContentModerationRecords.userSnapshot,
   violationCount: platformContentModerationRecords.violationCount,
 };
-
-const escapeLike = (value: string): string => value.replaceAll(/[%_\\]/g, '\\$&');
-
-const likeContains = (value: string): string => `%${escapeLike(value)}%`;
 
 export type ContentModerationRecordInsert = Omit<NewPlatformContentModerationRecord, 'id'> & {
   id?: string;
@@ -337,14 +335,7 @@ export class PlatformContentModerationRecordModel {
 
     const userQuery = input.userQuery?.trim();
     if (userQuery) {
-      const pattern = likeContains(userQuery);
-      conditions.push(
-        or(
-          ilike(users.email, pattern),
-          ilike(users.username, pattern),
-          ilike(users.fullName, pattern),
-        )!,
-      );
+      conditions.push(buildUserSearchConditions(userQuery));
     }
 
     return conditions;

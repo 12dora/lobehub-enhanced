@@ -3,17 +3,15 @@
  *
  * Safe projections only — never selects account password/token/scope or session tokens.
  * Offset pagination with a matching count(*) plus optional keyset cursor for
- * backward compatibility. Search uses escaped prefix patterns on
- * normalized email / email / username / full name (no unbounded leading-wildcard
- * scans). Page + count + role/provider projections run in one REPEATABLE READ
- * transaction so they share a snapshot.
+ * backward compatibility. Search uses `buildUserSearchConditions` (contains ILIKE
+ * on name/username/email plus pinyin prefix). Page + count + role/provider
+ * projections run in one REPEATABLE READ transaction so they share a snapshot.
  *
  * Index evidence:
  * - users_created_at_idx (createdAt) — list order / keyset
  * - users_*_lower_pattern_idx — lower(field) text_pattern_ops for prefix LIKE
- *   (email / username / normalizedEmail). fullName uses the same prefix LIKE
- *   without a dedicated pattern index — schema/migrations are out of this
- *   slice's ownership.
+ *   (email / username / normalizedEmail)
+ * - users_pinyin_*_pattern_idx — lowercase pinyin prefix LIKE
  * - users_banned_true_created_at_idx — partial banned filter
  * - auth_session_userId_idx / account_userId_idx — aggregates by user
  */
@@ -37,11 +35,13 @@ import { account, passkey, session, twoFactor } from '../schemas/betterAuth';
 import { roles, userRoles } from '../schemas/rbac';
 import { users } from '../schemas/user';
 import type { LobeChatDatabase, Transaction } from '../type';
+import { pinyinFieldsFromFullName } from '../utils/pinyin';
 import {
   effectivelyActiveSql,
   effectivelyBannedSql,
   isEffectivelyBanned as isEffectivelyBannedShared,
 } from '../utils/userBan';
+import { buildUserSearchConditions } from './adminUserSearch';
 
 export type AdminUserStatus = 'active' | 'banned';
 export type AdminUserSource = 'local' | 'sso';
@@ -565,6 +565,7 @@ export class AdminUserModel {
       normalizedEmail: params.normalizedEmail,
       onboarding: { finishedAt: now.toISOString(), version: 1 },
       username: params.username ?? null,
+      ...pinyinFieldsFromFullName(params.fullName),
     });
     await this.db.insert(account).values({
       accountId: params.userId,
@@ -799,17 +800,7 @@ export class AdminUserModel {
     }
 
     if (filters.query) {
-      const escaped = escapeAdminUserLikePattern(filters.query.toLowerCase());
-      // lower(field) LIKE 'prefix%' — uses users_*_lower_pattern_idx (text_pattern_ops).
-      const prefix = `${escaped}%`;
-      conditions.push(
-        or(
-          sql`lower(${users.normalizedEmail}) LIKE ${prefix} ESCAPE '\\'`,
-          sql`lower(${users.email}) LIKE ${prefix} ESCAPE '\\'`,
-          sql`lower(${users.username}) LIKE ${prefix} ESCAPE '\\'`,
-          sql`lower(${users.fullName}) LIKE ${prefix} ESCAPE '\\'`,
-        )!,
-      );
+      conditions.push(buildUserSearchConditions(filters.query));
     }
 
     // Role filter: EXISTS global grant with matching role name (non-expired).

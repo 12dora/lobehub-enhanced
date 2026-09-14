@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getTestDB } from '../../core/getTestDB';
 import { messages, topics, users } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
+import { pinyinFieldsFromFullName } from '../../utils/pinyin';
 import {
   isCredentialKey,
   maskCredentialsDeep,
@@ -154,6 +155,19 @@ describe('PlatformAuditConversationModel', () => {
     expect(page2.items.length).toBeGreaterThanOrEqual(1);
     const ids = new Set([...page1.items, ...page2.items].map((t) => t.id));
     expect(ids.size).toBe(page1.items.length + page2.items.length);
+  });
+
+  it('searchUsers matches CJK fullName via pinyin prefix and initials', async () => {
+    await serverDB
+      .update(users)
+      .set({ fullName: '邵军军', ...pinyinFieldsFromFullName('邵军军') })
+      .where(eq(users.id, userA));
+
+    const byPinyin = await model.searchUsers({ limit: 20, q: 'shao' });
+    expect(byPinyin.items.map((row) => row.id)).toContain(userA);
+
+    const byInitials = await model.searchUsers({ limit: 20, q: 'sjj' });
+    expect(byInitials.items.map((row) => row.id)).toContain(userA);
   });
 });
 
