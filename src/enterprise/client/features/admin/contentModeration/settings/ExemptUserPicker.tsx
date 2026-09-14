@@ -25,12 +25,14 @@ export interface ExemptUserPickerProps {
 const ExemptUserPicker = memo<ExemptUserPickerProps>(({ disabled, enabled, onChange, value }) => {
   const { t } = useTranslation('admin');
   const [labels, setLabels] = useState<Record<string, string>>({});
+  const [pickerKey, setPickerKey] = useState(0);
 
   const add = (userId: string, label?: string) => {
     const trimmed = userId.trim();
     if (!trimmed || value.includes(trimmed)) return;
     if (label) setLabels((prev) => ({ ...prev, [trimmed]: label }));
     onChange([...value, trimmed]);
+    setPickerKey((key) => key + 1);
   };
 
   return (
@@ -39,9 +41,9 @@ const ExemptUserPicker = memo<ExemptUserPickerProps>(({ disabled, enabled, onCha
         allowRawId
         disabled={disabled}
         enabled={enabled}
+        key={pickerKey}
         placeholder={t('contentModeration.settings.scope.userSearchPlaceholder')}
         style={{ width: 320 }}
-        userId={undefined}
         onChange={(userId, ref) => {
           if (!userId) return;
           add(userId, ref ? displayUserLabel(ref) : userId);
