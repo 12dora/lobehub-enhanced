@@ -1575,6 +1575,9 @@ export class ChatTopicActionImpl {
     await refreshTopic();
     // every topic is gone — wipe all cached message lists
     void evictMessageCache(() => true);
+    void getHomeStoreState()
+      .refreshRecents()
+      .catch(() => {});
   };
 
   /**
@@ -1630,6 +1633,10 @@ export class ChatTopicActionImpl {
 
     // switch back to default topic
     if (activeTopicId === id) switchTopic(null);
+
+    void getHomeStoreState()
+      .refreshRecents()
+      .catch(() => {});
   };
 
   removeUnstarredTopic = async (): Promise<void> => {
@@ -1645,6 +1652,10 @@ export class ChatTopicActionImpl {
 
     // Switch to default topic
     switchTopic(null);
+
+    void getHomeStoreState()
+      .refreshRecents()
+      .catch(() => {});
   };
 
   batchMoveTopicsToAgent = async (topicIds: string[], targetAgentId: string): Promise<void> => {
@@ -1782,6 +1793,18 @@ export class ChatTopicActionImpl {
 
   internal_updateTopic = async (id: string, data: Partial<ChatTopic>): Promise<void> => {
     this.#get().internal_dispatchTopic({ type: 'updateTopic', id, value: data });
+
+    // Recents is a separate SWR cache. At persist time the title is the sliced
+    // prompt; the LLM title lands later through this patch. Patch the Recents
+    // store + both SWR keys in place (no refetch). Fire-and-forget: a Recents
+    // miss must never fail the topic rename.
+    if (typeof data.title === 'string') {
+      try {
+        getHomeStoreState().updateRecentTitle(id, data.title);
+      } catch {
+        // Recents is a non-critical cache.
+      }
+    }
 
     this.#get().internal_updateTopicLoading(id, true);
     try {

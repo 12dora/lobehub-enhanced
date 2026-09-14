@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { lambdaClient } from '@/libs/trpc/client';
 import { agentRuntimeClient } from '@/services/agentRuntime';
 import { useChatStore } from '@/store/chat/store';
+import { useHomeStore } from '@/store/home';
 
 // Keep zustand mock as it's needed globally
 vi.mock('zustand/traditional');
@@ -558,6 +559,30 @@ describe('agentGroup actions', () => {
           clearNewKey: true,
           skipRefreshMessage: true,
         });
+      });
+
+      it('refreshes Recents when a new group topic is created', async () => {
+        const { result } = renderHook(() => useChatStore());
+        const refreshRecentsSpy = vi
+          .spyOn(useHomeStore.getState(), 'refreshRecents')
+          .mockResolvedValue(undefined);
+
+        vi.mocked(lambdaClient.aiAgent.execGroupAgent.mutate).mockResolvedValue(
+          createMockExecGroupAgentResponse({
+            isCreateNewTopic: true,
+            topics: { items: [], total: 1 },
+          }),
+        );
+        vi.mocked(agentRuntimeClient.createStreamConnection).mockReturnValue({} as any);
+
+        await act(async () => {
+          await result.current.sendGroupMessage({
+            context: createTestContext(),
+            message: TEST_CONTENT.GROUP_MESSAGE,
+          });
+        });
+
+        expect(refreshRecentsSpy).toHaveBeenCalled();
       });
 
       it('should populate the new topic bucket BEFORE switching into it (no blank flicker)', async () => {

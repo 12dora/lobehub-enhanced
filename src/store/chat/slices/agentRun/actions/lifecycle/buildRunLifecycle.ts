@@ -185,13 +185,18 @@ export const buildRunLifecycle = (
       const { isCreateNewTopic, topicId, assistantMessageId } = event;
       if (!topicId) return;
 
-      // Recents sidebar (`recent:list`) is a separate SWR key ordered by
-      // `updated_at desc`. Touching any top-level topic — new or existing —
-      // must revalidate so the list appears/reorders immediately. Fire-and-
-      // forget: a refresh failure must not affect the run.
-      void getHomeStoreState()
-        .refreshRecents()
-        .catch(() => {});
+      // Recents sidebar (`recent:list`) is a separate SWR key. A new topic
+      // must appear immediately; existing-topic refresh is wasted here
+      // because `topics.updated_at` is not bumped on the persist path, and
+      // the `status: 'running'` write happens at run start AFTER this refetch
+      // would already be in flight. Existing conversations re-sort on
+      // completeRun instead. Fire-and-forget: a refresh failure must not
+      // affect the run.
+      if (isCreateNewTopic) {
+        void getHomeStoreState()
+          .refreshRecents()
+          .catch(() => {});
+      }
 
       // Snapshot the working directory's live branch + linked PR onto the topic.
       // Anchored HERE (send) rather than in the ControlBar's mount effect so that
@@ -450,6 +455,19 @@ export const buildRunLifecycle = (
       resetActiveTopicRunningStatus();
 
       emitComplete(operationId, runtimeStatus);
+
+      // Recents is ordered by topic `updated_at`. Persist-time refresh is
+      // wasted for existing topics (the bump lands at run start / completion,
+      // after that refetch is already in flight). Revalidate once here so an
+      // existing conversation re-sorts to the top after status/title writes.
+      // One refetch per finished run — skip sub-agents (they don't own the
+      // topic) and the requeue early-return above (the follow-up is still
+      // running). Fire-and-forget: a refresh failure must not fail completion.
+      if (adapter.runScope === 'top_level' && topicId) {
+        void getHomeStoreState()
+          .refreshRecents()
+          .catch(() => {});
+      }
 
       return { requeued: false };
     },

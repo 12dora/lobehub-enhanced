@@ -1590,6 +1590,41 @@ describe('topic action', () => {
       expect(refreshTopicSpy).toHaveBeenCalled();
     });
   });
+
+  describe('Recents refresh on topic deletion', () => {
+    it('refreshes Recents after removeTopic, removeUnstarredTopic, and removeAllTopics', async () => {
+      const { result } = renderHook(() => useChatStore());
+      const refreshRecentsSpy = vi
+        .spyOn(useHomeStore.getState(), 'refreshRecents')
+        .mockResolvedValue(undefined);
+
+      await act(async () => {
+        useChatStore.setState({
+          activeAgentId: 'agent-1',
+          topicDataMap: {
+            [topicMapKey({ agentId: 'agent-1' })]: {
+              items: [
+                { id: 'topic-1', favorite: false },
+                { id: 'topic-2', favorite: true },
+              ] as ChatTopic[],
+              total: 2,
+              currentPage: 0,
+              hasMore: false,
+              pageSize: 20,
+            },
+          },
+        });
+      });
+
+      await act(async () => {
+        await result.current.removeTopic('topic-1');
+        await result.current.removeUnstarredTopic();
+        await result.current.removeAllTopics();
+      });
+
+      expect(refreshRecentsSpy).toHaveBeenCalledTimes(3);
+    });
+  });
   describe('removeTopicsByTimeRange', () => {
     const matcherArgs = (argCount: number) =>
       (mutate as Mock).mock.calls.filter((call) => call.length === argCount).map((call) => call[0]);
@@ -2016,6 +2051,22 @@ describe('topic action', () => {
 
       expect(useChatStore.getState().topicLoadingIds).not.toContain(topicId);
       expect(useChatStore.getState().topicLoadingIdCounts[topicId]).toBeUndefined();
+    });
+
+    it('patches Recents title in place when the patch contains a title', async () => {
+      const { result } = renderHook(() => useChatStore());
+      const topicId = 'topic-1';
+      vi.spyOn(topicService, 'updateTopic').mockResolvedValue([] as never);
+
+      const updateRecentTitleSpy = vi
+        .spyOn(useHomeStore.getState(), 'updateRecentTitle')
+        .mockImplementation(() => undefined);
+
+      await act(async () => {
+        await result.current.internal_updateTopic(topicId, { title: 'Summarized Title' });
+      });
+
+      expect(updateRecentTitleSpy).toHaveBeenCalledWith(topicId, 'Summarized Title');
     });
   });
   describe('cleanupStaleRunningTopics', () => {
@@ -2601,6 +2652,12 @@ describe('topic action', () => {
     });
   });
   describe('createTopic', () => {
+    let refreshRecentsSpy: ReturnType<typeof vi.spyOn>;
+
+    afterEach(() => {
+      refreshRecentsSpy?.mockRestore();
+    });
+
     it('should create a new topic and update the store', async () => {
       const { result } = renderHook(() => useChatStore());
       const activeAgentId = 'test-session-id';
@@ -2618,7 +2675,7 @@ describe('topic action', () => {
 
       const createTopicSpy = vi.spyOn(topicService, 'createTopic').mockResolvedValue(newTopicId);
       const refreshTopicSpy = vi.spyOn(result.current, 'refreshTopic');
-      const refreshRecentsSpy = vi
+      refreshRecentsSpy = vi
         .spyOn(useHomeStore.getState(), 'refreshRecents')
         .mockResolvedValue(undefined);
 

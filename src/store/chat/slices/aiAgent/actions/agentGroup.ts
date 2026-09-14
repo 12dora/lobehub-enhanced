@@ -8,6 +8,7 @@ import { lambdaClient } from '@/libs/trpc/client';
 import { type StreamEvent } from '@/services/agentRuntime';
 import { agentRuntimeClient } from '@/services/agentRuntime';
 import { type ChatStore } from '@/store/chat/store';
+import { getHomeStoreState } from '@/store/home';
 import { type StoreSetter } from '@/store/types';
 import { setNamespace } from '@/utils/storeDebug';
 
@@ -142,6 +143,12 @@ export class ChatGroupChatActionImpl {
           clearNewKey: true,
           skipRefreshMessage: true,
         });
+        // Group chat creates the topic server-side and never reaches
+        // afterUserMessagePersisted. Recents includes group topics — refresh
+        // so the new conversation appears immediately. Fire-and-forget.
+        void getHomeStoreState()
+          .refreshRecents()
+          .catch(() => {});
       }
 
       // 7. Clean up temp messages from the original bucket.

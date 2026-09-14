@@ -61,6 +61,7 @@ const makeStore = (afterCompletionCallbacks?: Array<() => void>) => {
       },
     },
     refreshTopic: vi.fn(async () => {}),
+    sendMessage: vi.fn(async () => {}),
     summaryTopicTitle: vi.fn(),
     // topicDataMap / messagesMap reads default to empty (no topic, no messages).
     topicDataMap: {},
@@ -398,14 +399,14 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     expect(refreshRecentsSpy).toHaveBeenCalled();
   });
 
-  it('refreshes Recents for an existing top_level topic so updated_at reorders the sidebar', async () => {
+  it('does NOT refresh Recents for an existing top_level topic at persist time', async () => {
     const { get } = makeStore();
 
     await lifecycle('client', get, 'top_level').afterUserMessagePersisted(
       persistedEvent('client', 'top_level', { isCreateNewTopic: false, topicId: 't1' }),
     );
 
-    expect(refreshRecentsSpy).toHaveBeenCalled();
+    expect(refreshRecentsSpy).not.toHaveBeenCalled();
   });
 
   it('dev-slice title update does not clear the client runtime loading owner', async () => {
@@ -476,6 +477,50 @@ describe('buildRunLifecycle.afterUserMessagePersisted — topic title (all runti
     );
 
     expect(store.summaryTopicTitle).not.toHaveBeenCalled();
+    expect(refreshRecentsSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildRunLifecycle.completeRun — Recents sidebar reorder', () => {
+  let refreshRecentsSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    refreshRecentsSpy = vi
+      .spyOn(useHomeStore.getState(), 'refreshRecents')
+      .mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    refreshRecentsSpy.mockRestore();
+  });
+
+  it('refreshes Recents once when a top_level run with a topicId finishes', async () => {
+    const { get } = makeStore();
+
+    await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(refreshRecentsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT refresh Recents for a sub_agent run', async () => {
+    const { get } = makeStore();
+
+    await lifecycle('client', get, 'sub_agent').completeRun(
+      completeEvent('client', { runScope: 'sub_agent', runtimeStatus: 'done' }),
+    );
+
+    expect(refreshRecentsSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT refresh Recents when a top_level run requeues into a follow-up send', async () => {
+    const { get, store } = makeStore();
+    store.drainQueuedMessages = vi.fn(() => [{ content: 'queued', id: 'q1' } as any]);
+
+    const { requeued } = await lifecycle('client', get).completeRun(
+      completeEvent('client', { runtimeStatus: 'done' }),
+    );
+
+    expect(requeued).toBe(true);
     expect(refreshRecentsSpy).not.toHaveBeenCalled();
   });
 });
