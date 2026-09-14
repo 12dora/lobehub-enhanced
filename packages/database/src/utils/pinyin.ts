@@ -3,6 +3,15 @@ import { pinyin } from 'pinyin-pro';
 const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
 const ASCII_LETTERS_RE = /[^a-z]/g;
 
+const PINYIN_OPTIONS = {
+  nonZh: 'consecutive',
+  separator: '',
+  surname: 'head',
+  toneType: 'none',
+  type: 'string',
+  v: true,
+} as const;
+
 const toAsciiLetters = (value: string): string | null => {
   const letters = value.toLowerCase().replaceAll(ASCII_LETTERS_RE, '');
   return letters.length > 0 ? letters : null;
@@ -31,15 +40,7 @@ export const pinyinFull = (name: string | null | undefined): string | null => {
     return toAsciiLetters(trimmed);
   }
 
-  return toAsciiLetters(
-    pinyin(trimmed, {
-      nonZh: 'consecutive',
-      separator: '',
-      toneType: 'none',
-      type: 'string',
-      v: true,
-    }),
-  );
+  return toAsciiLetters(pinyin(trimmed, PINYIN_OPTIONS));
 };
 
 /**
@@ -58,12 +59,8 @@ export const pinyinInitials = (name: string | null | undefined): string | null =
 
   return toAsciiLetters(
     pinyin(trimmed, {
-      nonZh: 'consecutive',
+      ...PINYIN_OPTIONS,
       pattern: 'first',
-      separator: '',
-      toneType: 'none',
-      type: 'string',
-      v: true,
     }),
   );
 };

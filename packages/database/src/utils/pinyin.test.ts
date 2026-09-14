@@ -12,6 +12,14 @@ describe('pinyinFull', () => {
     expect(pinyinFull('邵军军')).toBe('shaojunjun');
   });
 
+  it('uses surname-head readings for polyphone family names', () => {
+    expect(pinyinFull('曾小贤')).toBe('zengxiaoxian');
+    expect(pinyinFull('单田芳')).toBe('shantianfang');
+    expect(pinyinFull('仇英')).toBe('qiuying');
+    expect(pinyinFull('解晓东')).toBe('xiexiaodong');
+    expect(pinyinFull('查良镛')).toBe('zhaliangyong');
+  });
+
   it('keeps only lowercase ascii letters for non-CJK names', () => {
     expect(pinyinFull('Alice')).toBe('alice');
     expect(pinyinFull('Alice Smith')).toBe('alicesmith');
@@ -30,6 +38,14 @@ describe('pinyinFull', () => {
 describe('pinyinInitials', () => {
   it('returns first-letter initials for CJK names', () => {
     expect(pinyinInitials('邵军军')).toBe('sjj');
+  });
+
+  it('uses surname-head initials for polyphone family names', () => {
+    expect(pinyinInitials('曾小贤')).toBe('zxx');
+    expect(pinyinInitials('单田芳')).toBe('stf');
+    expect(pinyinInitials('仇英')).toBe('qy');
+    expect(pinyinInitials('解晓东')).toBe('xxd');
+    expect(pinyinInitials('查良镛')).toBe('zly');
   });
 
   it('returns first letter of each word for non-CJK names', () => {
