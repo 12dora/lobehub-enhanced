@@ -1,12 +1,19 @@
-import { UserModel } from '@/database/models/user';
-import type { UserItem } from '@/database/schemas';
+import { inArray } from 'drizzle-orm';
+
+import { users } from '@/database/schemas';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
 
 import type { UserPublicRef } from '../../contracts/shared/userPublicRef';
 
 const FIND_BY_IDS_CHUNK = 200;
 
-const toPublicRef = (user: UserItem): UserPublicRef => ({
+const toPublicRef = (user: {
+  avatar: string | null;
+  email: string | null;
+  fullName: string | null;
+  id: string;
+  username: string | null;
+}): UserPublicRef => ({
   avatar: user.avatar ?? null,
   email: user.email ?? null,
   fullName: user.fullName ?? null,
@@ -28,7 +35,16 @@ export const resolveUserRefs = async (
 
   for (let i = 0; i < unique.length; i += FIND_BY_IDS_CHUNK) {
     const chunk = unique.slice(i, i + FIND_BY_IDS_CHUNK);
-    const rows = await UserModel.findByIds(db as LobeChatDatabase, chunk);
+    const rows = await db
+      .select({
+        avatar: users.avatar,
+        email: users.email,
+        fullName: users.fullName,
+        id: users.id,
+        username: users.username,
+      })
+      .from(users)
+      .where(inArray(users.id, chunk));
     for (const row of rows) {
       refs.set(row.id, toPublicRef(row));
     }
