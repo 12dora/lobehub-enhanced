@@ -1,12 +1,13 @@
 'use client';
 
 import { Flexbox } from '@lobehub/ui';
-import { Button, Text } from '@lobehub/ui/base-ui';
-import { Drawer, Spin } from 'antd';
+import { Button, Drawer, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
+
+import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
 
 import UserNameCell from '../../primitives/UserNameCell';
 import { useFetchAuditEventDetail } from '../hooks/useAdminAudit';
@@ -78,7 +79,6 @@ const EventDetailDrawer = memo<EventDetailDrawerProps>(
 
     return (
       <Drawer
-        destroyOnClose
         open={open}
         title={t('audit.logs.detail.title')}
         width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth - 48 : 720)}
@@ -93,7 +93,7 @@ const EventDetailDrawer = memo<EventDetailDrawerProps>(
       >
         {isLoading && !data ? (
           <Flexbox align="center" justify="center" style={{ minHeight: 200 }}>
-            <Spin />
+            <NeuralNetworkLoading size={28} />
           </Flexbox>
         ) : null}
         {error && !data ? <Text type="danger">{t('audit.logs.detail.loadError')}</Text> : null}
