@@ -302,6 +302,22 @@ export const withAllPlatformPermissions = (codes: readonly PlatformPermission[])
     },
   });
 
+/**
+ * tRPC middleware: require at least one listed platform permission (mode: any).
+ */
+export const withAnyPlatformPermissions = (codes: readonly PlatformPermission[]) => {
+  if (codes.length === 0) {
+    throw new TypeError('withAnyPlatformPermissions requires at least one permission');
+  }
+  return withPlatformPermissions({
+    metadata: { mode: 'any', permissions: codes },
+    predicate: async ({ platformAuth }) => {
+      const hit = codes.some((code) => platformAuth.permissions.includes(code));
+      return hit ? { ok: true } : { deniedPermission: codes[0]! };
+    },
+  });
+};
+
 export interface CompoundPlatformPermissionOptions {
   /**
    * Permissions always required (typically `*_PUBLISH`).

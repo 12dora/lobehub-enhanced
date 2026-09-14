@@ -3,12 +3,14 @@
  */
 
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
+import type { LobeChatDatabase } from '@/database/type';
 
 import type {
   AdminAuditUsersSearchInputParsed,
   AdminAuditUsersTimelineInputParsed,
 } from '../../contracts/adminAudit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
+import { UserSearchService } from '../userSearchService';
 import { appendAuditAccessLog, buildAuditFilterSummary } from './accessLog';
 import type { AdminAuditServiceHost } from './adminAuditServiceHost';
 import { isNotFoundError, maskOptionalText } from './adminAuditServiceShared';
@@ -28,8 +30,7 @@ export const searchUsers = async (
     limit: params.input.limit,
   });
   try {
-    const page = await host.conversationModel.searchUsers({
-      cursor: params.input.cursor,
+    const page = await new UserSearchService(host.db as LobeChatDatabase).search({
       limit: params.input.limit,
       q: params.input.q,
     });
@@ -40,7 +41,7 @@ export const searchUsers = async (
       result: 'success',
       targetType: 'user',
     });
-    return page;
+    return { items: page.items, nextCursor: null };
   } catch (error) {
     await appendAuditAccessLog(host.db, {
       action: 'admin.audit.users.search',

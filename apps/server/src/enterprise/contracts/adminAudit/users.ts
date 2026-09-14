@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { userPublicRefSchema } from '../shared/userPublicRef';
 import {
   ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
   ADMIN_AUDIT_Q_MAX_LENGTH,
@@ -25,16 +26,7 @@ export const adminAuditUsersSearchInputSchema = z
     q: input.q.trim().toLowerCase(),
   }));
 
-export const adminAuditUserSearchItemSchema = z
-  .object({
-    createdAt: z.date(),
-    email: z.string().nullable(),
-    fullName: z.string().nullable(),
-    id: z.string(),
-    lastActiveAt: z.date().nullable(),
-    username: z.string().nullable(),
-  })
-  .strict();
+export const adminAuditUserSearchItemSchema = userPublicRefSchema;
 
 export const adminAuditUsersSearchOutputSchema = z
   .object({

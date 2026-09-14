@@ -131,6 +131,18 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_IDENTITY_ACCESS = [
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.USER_SESSION_REVOKE] },
   },
   {
+    kind: 'query',
+    path: 'admin.users.search',
+    permission: {
+      mode: 'any',
+      permissions: [
+        PLATFORM_PERMISSIONS.USER_READ,
+        PLATFORM_PERMISSIONS.AUDIT_READ,
+        PLATFORM_PERMISSIONS.MODERATION_READ,
+      ],
+    },
+  },
+  {
     kind: 'mutation',
     path: 'admin.users.setPassword',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.USER_CREDENTIAL_MANAGE] },

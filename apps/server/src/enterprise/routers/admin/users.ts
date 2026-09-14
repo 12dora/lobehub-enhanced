@@ -16,6 +16,8 @@ import {
   adminUsersDeleteOutputSchema,
   adminUsersDisableTwoFactorInputSchema,
   adminUsersDisableTwoFactorOutputSchema,
+  adminUserSearchInputSchema,
+  adminUserSearchOutputSchema,
   adminUsersGetAuditTrailInputSchema,
   adminUsersGetAuditTrailOutputSchema,
   adminUsersGetInputSchema,
@@ -34,7 +36,10 @@ import {
 import { withActiveUser } from '../../guards/activeUser';
 import { withAdminMutationRateLimit } from '../../guards/adminMutationRateLimit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
-import { withPlatformPermission } from '../../guards/platformPermission';
+import {
+  withAnyPlatformPermissions,
+  withPlatformPermission,
+} from '../../guards/platformPermission';
 import { assertDangerousReauthWithAudit } from '../../guards/reauth';
 import {
   AdminUserEmailConflictError,
@@ -50,6 +55,7 @@ import {
 } from '../../services/adminUserService';
 import type { AuditAction } from '../../services/audit/auditActionCatalog';
 import { LastSuperAdminError } from '../../services/platformRbac';
+import { UserSearchService } from '../../services/userSearchService';
 
 const adminBase = authedProcedure
   .use(serverDatabase)
@@ -176,6 +182,21 @@ export const adminUsersRouter = router({
     .query(async ({ ctx, input }) => {
       const service = new AdminUserService(ctx.serverDB);
       return service.list(input, { actorUserId: ctx.userId! });
+    }),
+
+  search: adminBase
+    .use(
+      withAnyPlatformPermissions([
+        PLATFORM_PERMISSIONS.USER_READ,
+        PLATFORM_PERMISSIONS.AUDIT_READ,
+        PLATFORM_PERMISSIONS.MODERATION_READ,
+      ]),
+    )
+    .input(adminUserSearchInputSchema)
+    .output(adminUserSearchOutputSchema)
+    .query(async ({ ctx, input }) => {
+      const service = new UserSearchService(ctx.serverDB);
+      return service.search(input);
     }),
 
   get: adminBase
