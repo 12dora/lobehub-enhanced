@@ -1,11 +1,11 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button, Switch } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Button, Switch, Text } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import AuditUserSearchSelect from '../shared/AuditUserSearchSelect';
+import UserSearchSelect from '../../primitives/UserSearchSelect';
 import { formatAdminDateTime } from '../shared/format';
 import { styles } from './liveStyles';
 
@@ -37,11 +37,11 @@ const LiveToolbar = memo<LiveToolbarProps>(
     return (
       <div className={styles.toolbar}>
         <div style={{ minWidth: 240, flex: '1 1 240px', maxWidth: 360 }}>
-          <AuditUserSearchSelect
+          <UserSearchSelect
             enabled={canAuditRead}
             placeholder={t('audit.live.filters.user')}
             style={{ width: '100%' }}
-            value={userId}
+            userId={userId}
             onChange={onUserChange}
           />
         </div>

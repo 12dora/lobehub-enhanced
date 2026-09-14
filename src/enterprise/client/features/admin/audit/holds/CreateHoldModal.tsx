@@ -1,7 +1,7 @@
 'use client';
 
-import { Input, Text } from '@lobehub/ui';
-import { Modal, Select } from '@lobehub/ui/base-ui';
+import { Input } from '@lobehub/ui';
+import { Modal, Select, Text } from '@lobehub/ui/base-ui';
 import { DatePicker } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import type dayjs from 'dayjs';
@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { AdminReauthAuthMethod } from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
 import type { AdminAuditLegalHoldsCreateInput } from '@/enterprise/client/services/adminAudit';
 
-import AuditUserSearchSelect from '../shared/AuditUserSearchSelect';
+import UserSearchSelect from '../../primitives/UserSearchSelect';
 import { openAuditReasonModal } from '../shared/openAuditReasonModal';
 
 const styles = createStaticStyles(({ css }) => ({
@@ -120,9 +120,10 @@ const CreateHoldModal = memo<CreateHoldModalProps>(
           <div className={styles.field}>
             <Text>{t('audit.holds.create.scopeId')}</Text>
             {newScopeType === 'user' ? (
-              <AuditUserSearchSelect
+              <UserSearchSelect
+                allowRawId
                 enabled={canAuditRead}
-                value={newScopeId || undefined}
+                userId={newScopeId || undefined}
                 onChange={(id) => setNewScopeId(id ?? '')}
               />
             ) : (

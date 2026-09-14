@@ -1,11 +1,13 @@
 'use client';
 
-import { Tag, Text } from '@lobehub/ui';
-import { Button, Input, Select, Switch } from '@lobehub/ui/base-ui';
+import { Button, Input, Select, Switch, Tag, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { UserPublicRef } from '../primitives/userLabel';
+import UserNameCell from '../primitives/UserNameCell';
+import UserSearchSelect from '../primitives/UserSearchSelect';
 import type { AssignmentEntry, AssignmentMode, AssignmentTargetType } from './assignmentDraft';
 import { assignmentTargetKey } from './assignmentDraft';
 import { FieldLabel } from './dependencyEditorShared';
@@ -109,8 +111,11 @@ export const AssignmentPolicySection = memo<AssignmentPolicySectionProps>(
   ({ assignments, isDefaultInbox = false }) => {
     const { t } = useTranslation('admin');
     const { draft, truncated } = assignments;
+    const [userRefs, setUserRefs] = useState<Record<string, UserPublicRef>>({});
     const describe = (entry: AssignmentEntry) =>
       entry.targetType === 'global' ? t('agentCatalog.assignment.target.global') : entry.targetId;
+    const targetUser = (entry: AssignmentEntry): UserPublicRef | null =>
+      userRefs[entry.targetId] ?? entry.targetUser ?? null;
     /**
      * The mandatory global row IS the default assistant's delivery to every member — dropping it
      * would silently demote the platform default. The server owns it; the editor shows it.
@@ -152,18 +157,33 @@ export const AssignmentPolicySection = memo<AssignmentPolicySectionProps>(
           </div>
           <div className={styles.field}>
             <FieldLabel htmlFor={TARGET_ID}>{t('agentCatalog.assignment.targetId')}</FieldLabel>
-            <Input
-              aria-label={t('agentCatalog.assignment.targetId')}
-              disabled={draft.targetType === 'global'}
-              id={TARGET_ID}
-              value={draft.targetType === 'global' ? '' : draft.targetId}
-              placeholder={
-                draft.targetType === 'global'
-                  ? t('agentCatalog.assignment.targetIdGlobal')
-                  : t('agentCatalog.assignment.targetId')
-              }
-              onChange={(event) => assignments.patchDraft('targetId', event.target.value)}
-            />
+            {draft.targetType === 'user' ? (
+              <UserSearchSelect
+                aria-label={t('agentCatalog.assignment.targetId')}
+                id={TARGET_ID}
+                placeholder={t('primitives.userSearch.placeholder')}
+                userId={draft.targetId || undefined}
+                onChange={(userId, ref) => {
+                  assignments.patchDraft('targetId', userId ?? '');
+                  if (userId && ref) {
+                    setUserRefs((current) => ({ ...current, [userId]: ref }));
+                  }
+                }}
+              />
+            ) : (
+              <Input
+                aria-label={t('agentCatalog.assignment.targetId')}
+                disabled={draft.targetType === 'global'}
+                id={TARGET_ID}
+                value={draft.targetType === 'global' ? '' : draft.targetId}
+                placeholder={
+                  draft.targetType === 'global'
+                    ? t('agentCatalog.assignment.targetIdGlobal')
+                    : t('agentCatalog.assignment.targetId')
+                }
+                onChange={(event) => assignments.patchDraft('targetId', event.target.value)}
+              />
+            )}
           </div>
         </div>
 
@@ -234,7 +254,13 @@ export const AssignmentPolicySection = memo<AssignmentPolicySectionProps>(
                     </Tag>
                   )}
                 </span>
-                <span className={styles.target}>{describe(entry)}</span>
+                <span className={styles.target}>
+                  {entry.targetType === 'user' ? (
+                    <UserNameCell fallbackId={entry.targetId} user={targetUser(entry)} />
+                  ) : (
+                    describe(entry)
+                  )}
+                </span>
                 <span className={styles.rowActions} hidden={truncated}>
                   {locked(entry) ? (
                     <span className={styles.hint}>{t('agentCatalog.assignment.lockedTag')}</span>

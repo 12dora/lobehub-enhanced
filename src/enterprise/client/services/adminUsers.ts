@@ -8,6 +8,8 @@ import type {
   AdminUsersDeleteOutput,
   AdminUsersDisableTwoFactorInput,
   AdminUsersDisableTwoFactorOutput,
+  AdminUserSearchInput,
+  AdminUserSearchOutput,
   AdminUsersGetAuditTrailInput,
   AdminUsersGetAuditTrailOutput,
   AdminUsersGetInput,
@@ -35,6 +37,10 @@ class AdminUsersService {
 
   get = async (input: AdminUsersGetInput): Promise<AdminUsersGetOutput> => {
     return lambdaClient.admin.users.get.query(input);
+  };
+
+  search = async (input: AdminUserSearchInput): Promise<AdminUserSearchOutput> => {
+    return lambdaClient.admin.users.search.query(input);
   };
 
   getAuditTrail = async (
@@ -94,6 +100,8 @@ export type {
   AdminUsersDeleteOutput,
   AdminUsersDisableTwoFactorInput,
   AdminUsersDisableTwoFactorOutput,
+  AdminUserSearchInput,
+  AdminUserSearchOutput,
   AdminUsersGetAuditTrailInput,
   AdminUsersGetAuditTrailOutput,
   AdminUsersGetInput,

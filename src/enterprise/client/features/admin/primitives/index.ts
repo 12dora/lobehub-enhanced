@@ -56,20 +56,22 @@ export {
   getAdminStatusPresentation,
   normalizeAdminStatus,
 } from './statusBadge.utils';
-export { default as UserNameCell, type UserNameCellProps } from './UserNameCell';
 export { useModalPhaseGuard, type UseModalPhaseGuardOptions } from './useModalPhaseGuard';
-export {
-  displayUserLabel,
-  displayUserSecondary,
-  type UserLabelSource,
-  type UserPublicRef,
-} from './userLabel';
 export {
   type AdminReauthBusyPhase,
   type RunReauthedSubmitOptions,
   useReauthMutation,
   type UseReauthMutationOptions,
 } from './useReauthMutation';
+export {
+  displayUserLabel,
+  displayUserSecondary,
+  pickResolvedUserRef,
+  type UserLabelSource,
+  type UserPublicRef,
+} from './userLabel';
+export { default as UserNameCell, type UserNameCellProps } from './UserNameCell';
+export { default as UserSearchSelect, type UserSearchSelectProps } from './UserSearchSelect';
 export {
   createUnsavedNavigationDecision,
   type UnsavedChangesGuardMessages,

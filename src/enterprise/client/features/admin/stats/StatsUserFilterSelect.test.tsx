@@ -6,10 +6,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StatsUserFilterSelect from './StatsUserFilterSelect';
 
 const mocks = vi.hoisted(() => ({
-  list: vi.fn(),
+  search: vi.fn(),
 }));
 
-vi.mock('antd-style', () => ({ cssVar: {} }));
+vi.mock('antd-style', () => ({
+  createStaticStyles: () => new Proxy({}, { get: () => '' }),
+  cssVar: {},
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -23,6 +26,7 @@ vi.mock('@lobehub/ui', () => ({
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   AutoComplete: ({
     onChange,
     onSearch,
@@ -60,15 +64,22 @@ vi.mock('@lobehub/ui/base-ui', () => ({
 }));
 
 vi.mock('@/enterprise/client/services/adminUsers', () => ({
-  adminUsersService: { list: mocks.list },
+  adminUsersService: { search: mocks.search },
 }));
 
 describe('StatsUserFilterSelect', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mocks.list.mockReset().mockResolvedValue({
-      items: [{ avatar: null, email: 'ada@example.com', fullName: 'Ada Lovelace', id: 'u1' }],
-      nextCursor: null,
+    mocks.search.mockReset().mockResolvedValue({
+      items: [
+        {
+          avatar: null,
+          email: 'ada@example.com',
+          fullName: 'Ada Lovelace',
+          id: 'u1',
+          username: null,
+        },
+      ],
     });
   });
 
@@ -82,10 +93,10 @@ describe('StatsUserFilterSelect', () => {
     render(<StatsUserFilterSelect onChange={onChange} />);
 
     type('ada');
-    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.search).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(300);
-    await waitFor(() => expect(mocks.list).toHaveBeenCalledWith({ limit: 20, query: 'ada' }));
+    await waitFor(() => expect(mocks.search).toHaveBeenCalledWith({ limit: 20, q: 'ada' }));
 
     const option = await screen.findByRole('button', { name: /Ada Lovelace/ });
     fireEvent.click(option);
@@ -96,7 +107,7 @@ describe('StatsUserFilterSelect', () => {
     const input = screen.getByPlaceholderText('stats.userFilter.allUsers') as HTMLInputElement;
     expect(input.value).toBe('Ada Lovelace');
     vi.advanceTimersByTime(500);
-    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.search).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
@@ -110,16 +121,16 @@ describe('StatsUserFilterSelect', () => {
 
     expect(onChange).toHaveBeenCalledWith(undefined);
     vi.advanceTimersByTime(500);
-    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.search).not.toHaveBeenCalled();
   });
 
   it('surfacesAHintWhenTheDirectoryLookupIsDeniedInsteadOfAnEmptyDropdown', async () => {
-    mocks.list.mockRejectedValue(new Error('FORBIDDEN'));
+    mocks.search.mockRejectedValue(new Error('FORBIDDEN'));
     render(<StatsUserFilterSelect onChange={vi.fn()} />);
 
     type('ada');
     vi.advanceTimersByTime(300);
 
-    expect(await screen.findByText('stats.userFilter.searchFailed')).toBeTruthy();
+    expect(await screen.findByText('primitives.userSearch.failed')).toBeTruthy();
   });
 });

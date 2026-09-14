@@ -10,6 +10,7 @@ vi.mock('@/libs/trpc/client', () => ({
         list: { query: (...a: unknown[]) => query('list', ...a) },
         get: { query: (...a: unknown[]) => query('get', ...a) },
         getAuditTrail: { query: (...a: unknown[]) => query('audit', ...a) },
+        search: { query: (...a: unknown[]) => query('search', ...a) },
         create: { mutate: (...a: unknown[]) => mutate('create', ...a) },
         ban: { mutate: (...a: unknown[]) => mutate('ban', ...a) },
         unban: { mutate: (...a: unknown[]) => mutate('unban', ...a) },
@@ -40,6 +41,7 @@ describe('adminUsersService', () => {
       reason: 'provision',
     });
     await adminUsersService.get({ userId: 'u1' });
+    await adminUsersService.search({ q: 'ada' });
     await adminUsersService.getAuditTrail({ userId: 'u1', limit: 10 });
     await adminUsersService.ban({ userId: 'u1', reason: 'abuse' });
     await adminUsersService.unban({ userId: 'u1', reason: 'appeal' });
@@ -58,6 +60,7 @@ describe('adminUsersService', () => {
       source: 'local',
     });
     expect(query).toHaveBeenCalledWith('get', { userId: 'u1' });
+    expect(query).toHaveBeenCalledWith('search', { q: 'ada' });
     expect(query).toHaveBeenCalledWith('audit', { userId: 'u1', limit: 10 });
     expect(mutate).toHaveBeenCalledWith('create', {
       email: 'new@example.com',

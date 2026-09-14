@@ -44,6 +44,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   Modal: ({
     children,
     footer,
@@ -108,7 +109,7 @@ vi.mock('../hooks/useAdminAudit', () => ({
   }),
 }));
 
-vi.mock('../shared/AuditUserSearchSelect', () => ({
+vi.mock('../../primitives/UserSearchSelect', () => ({
   default: () => <div data-testid="user-search" />,
 }));
 

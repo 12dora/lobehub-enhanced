@@ -18,10 +18,29 @@ vi.mock('antd-style', () => ({
   cssVar: new Proxy({}, { get: (_t, key) => `var(--${String(key)})` }),
 }));
 vi.mock('@lobehub/ui', () => ({
+  Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Tag: ({ children, size }: { children?: ReactNode; size?: string }) => (
     <span data-size={size}>{children}</span>
   ),
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+vi.mock('../primitives/UserSearchSelect', () => ({
+  default: (props: {
+    'aria-label'?: string;
+    'id'?: string;
+    'onChange'?: (userId: string | undefined) => void;
+    'placeholder'?: string;
+    'userId'?: string;
+  }) => (
+    <input
+      aria-label={props['aria-label']}
+      id={props.id}
+      placeholder={props.placeholder}
+      value={props.userId ?? ''}
+      onChange={(event) => props.onChange?.(event.target.value)}
+    />
+  ),
 }));
 vi.mock('@lobehub/ui/base-ui', () => ({
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
@@ -58,6 +77,10 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       onChange={(event) => props.onChange?.(event.target.checked)}
     />
   ),
+  Tag: ({ children, size }: { children?: ReactNode; size?: string }) => (
+    <span data-size={size}>{children}</span>
+  ),
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
 const entry = (over: Partial<AssignmentEntry> = {}): AssignmentEntry => ({
@@ -168,6 +191,24 @@ describe('AssignmentPolicySection', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       'agentCatalog.assignment.errors.targetRequired',
     );
+  });
+
+  it('renders a resolved user target instead of the raw id', () => {
+    assignments = draftState({
+      entries: [
+        entry({
+          targetUser: {
+            avatar: null,
+            email: 'ada@ex.com',
+            fullName: 'Ada Lovelace',
+            id: 'user-1',
+            username: 'ada',
+          },
+        }),
+      ],
+    });
+    render(<AssignmentPolicySection assignments={assignments} />);
+    expect(screen.getByText('Ada Lovelace')).toBeTruthy();
   });
 
   it('falls back to a read-only view when the loaded list is incomplete', () => {

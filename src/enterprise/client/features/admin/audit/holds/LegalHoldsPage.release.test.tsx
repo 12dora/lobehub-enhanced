@@ -32,6 +32,7 @@ vi.mock('@lobehub/ui', () => ({
   Flexbox: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+  Tooltip: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -40,6 +41,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   Modal: ({
     children,
     okText,
@@ -102,6 +104,14 @@ vi.mock('../hooks/useAdminAudit', () => ({
         items: [
           {
             createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            createdBy: 'u-creator',
+            createdByUser: {
+              avatar: null,
+              email: null,
+              fullName: 'Hold Creator',
+              id: 'u-creator',
+              username: 'creator',
+            },
             expiresAt: null,
             id: 'hold-9',
             reason: 'litigation',
@@ -127,22 +137,22 @@ vi.mock('../shared/openAuditReasonModal', () => ({
   }) => openAuditReasonModal(opts),
 }));
 
-vi.mock('../shared/AuditUserSearchSelect', () => ({
+vi.mock('../../primitives/UserSearchSelect', () => ({
   default: ({
     enabled,
     onChange,
-    value,
+    userId,
   }: {
     enabled?: boolean;
     onChange?: (id: string | undefined) => void;
-    value?: string;
+    userId?: string;
   }) => {
     holdsAccess.searchEnabled.push(enabled !== false);
     return (
       <input
         data-enabled={enabled !== false ? '1' : '0'}
         data-testid="user-search"
-        value={value ?? ''}
+        value={userId ?? ''}
         onChange={(e) => onChange?.(e.target.value)}
       />
     );
@@ -188,6 +198,7 @@ vi.mock('../../primitives/DataTable', () => ({
   }) => {
     holdsAccess.tableOnChange = onChange;
     const actionCol = columns?.find((c) => c.key === 'actions');
+    const createdByCol = columns?.find((c) => c.key === 'createdBy');
     return (
       <div data-testid="holds-table">
         {(dataSource ?? []).map((row) => (
@@ -195,6 +206,7 @@ vi.mock('../../primitives/DataTable', () => ({
             <button type="button" onClick={() => onRowActivate?.(row)}>
               open
             </button>
+            {createdByCol?.render?.(null, row)}
             {actionCol?.render?.(null, row)}
           </div>
         ))}
@@ -247,6 +259,11 @@ describe('LegalHoldsPage release', () => {
       id: 'hold-9',
       releaseReason: 'case closed',
     });
+  });
+
+  it('renders the creator through UserNameCell using the resolved ref', () => {
+    render(<LegalHoldsPage />);
+    expect(screen.getByText('Hold Creator')).toBeTruthy();
   });
 
   it('disables AUDIT_READ user search for legal-hold-only actors on create', () => {

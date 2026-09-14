@@ -37,6 +37,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Switch: ({ checked, onChange }: { checked?: boolean; onChange?: (v: boolean) => void }) => (
     <input
       checked={checked}
@@ -96,11 +97,18 @@ vi.mock('../hooks/useAdminAudit', () => ({
     isValidating: false,
     mutate: vi.fn(),
   }),
+  useFetchAuditUserSummary: () => ({
+    data: { id: 'A' },
+    error: undefined,
+    isLoading: false,
+    isValidating: false,
+    mutate: vi.fn(),
+  }),
 }));
 
-vi.mock('../shared/AuditUserSearchSelect', () => ({
-  default: ({ value }: { value?: string }) => (
-    <div data-testid="user-search" data-value={value ?? ''} />
+vi.mock('../../primitives/UserSearchSelect', () => ({
+  default: ({ userId }: { userId?: string }) => (
+    <div data-testid="user-search" data-value={userId ?? ''} />
   ),
 }));
 

@@ -12,6 +12,13 @@ const sampleList = {
   items: [
     {
       action: 'admin.users.ban',
+      actorUser: {
+        avatar: null,
+        email: 'admin@ex.com',
+        fullName: 'Ops Admin',
+        id: 'u-admin',
+        username: 'ops',
+      },
       actorUserId: 'u-admin',
       configRevision: 1,
       createdAt: new Date('2026-01-02T10:00:00.000Z'),
@@ -217,6 +224,9 @@ vi.mock('../../primitives/DataTable', async () => {
               {dataSource.map((row: any) => (
                 <div data-testid={`row-${row.id}`} key={row.id}>
                   {row.action}
+                  {columns
+                    ?.find((col: { key?: string }) => col.key === 'actorUserId')
+                    ?.render?.(row.actorUserId, row)}
                 </div>
               ))}
             </div>
@@ -259,10 +269,10 @@ vi.mock('@lobehub/ui/base-ui', async (importOriginal) => {
   };
 });
 
-vi.mock('../shared/AuditUserSearchSelect', () => ({
-  default: ({ onChange, value }: { onChange?: (id?: string) => void; value?: string }) => (
+vi.mock('../../primitives/UserSearchSelect', () => ({
+  default: ({ onChange, userId }: { onChange?: (id?: string) => void; userId?: string }) => (
     <button data-testid="user-search" type="button" onClick={() => onChange?.('u-picked')}>
-      {value ?? 'none'}
+      {userId ?? 'none'}
     </button>
   ),
 }));
@@ -544,6 +554,18 @@ describe('OperationLogsPage', () => {
       expect(screen.getByTestId('col-requestId').dataset.filtered).toBe(
         JSON.stringify(['req-xyz']),
       );
+    });
+  });
+
+  it('renders the actor through UserNameCell using the resolved ref', async () => {
+    render(
+      <MemoryRouter>
+        <OperationLogsPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('row-evt-1').textContent).toContain('Ops Admin');
     });
   });
 

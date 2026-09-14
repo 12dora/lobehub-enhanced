@@ -1,5 +1,6 @@
 import { PLATFORM_AGENT_GLOBAL_TARGET_ID } from '@lobechat/types';
 
+import type { UserPublicRef } from '../primitives/userLabel';
 import type {
   AdminPlatformAgentAssignmentListOutput,
   AdminPlatformAgentAssignmentUpsertInput,
@@ -93,8 +94,13 @@ export const assignmentTargetKey = (draft: {
 export interface AssignmentEntry extends AssignmentDraftFields {
   id: string | null;
   pinnedVersionId: string | null;
+  /** Resolved when the server sent `targetUser`; display-only, not part of the write fingerprint. */
+  targetUser?: UserPublicRef | null;
   versionPolicy: AssignmentVersionPolicy;
 }
+
+const readTargetUser = (assignment: Assignment): UserPublicRef | null =>
+  assignment.targetUser ?? null;
 
 /** The server row exactly as it is — the comparison baseline, never a write payload. */
 export const toAssignmentBaselineEntry = (assignment: Assignment): AssignmentEntry => ({
@@ -104,6 +110,7 @@ export const toAssignmentBaselineEntry = (assignment: Assignment): AssignmentEnt
   pinnedVersionId: assignment.pinnedVersionId,
   targetId: assignment.targetId,
   targetType: assignment.targetType,
+  targetUser: readTargetUser(assignment),
   versionPolicy: assignment.versionPolicy,
 });
 
@@ -116,6 +123,7 @@ export const toAssignmentEntry = (assignment: Assignment): AssignmentEntry => ({
     targetType: assignment.targetType,
   }),
   id: assignment.id,
+  targetUser: readTargetUser(assignment),
 });
 
 export interface AssignmentPlan {

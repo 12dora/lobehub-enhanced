@@ -1,6 +1,7 @@
 'use client';
 
-import { Empty, Text } from '@lobehub/ui';
+import { Empty } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,11 +9,12 @@ import { useNavigate } from 'react-router';
 
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import { useAdminAccess } from '@/enterprise/client/providers/AdminAccessProvider';
-import type { AdminAuditUserSearchItem } from '@/enterprise/client/services/adminAudit';
+import type { UserPublicRef } from '@/server/enterprise/contracts/adminUsers';
 
 import AdminPageTemplate from '../../primitives/AdminPageTemplate';
-import AuditUserSearchSelect from '../shared/AuditUserSearchSelect';
-import { displayAuditUserLabel, formatAdminDateTime, hasPermission } from '../shared/format';
+import { displayUserLabel } from '../../primitives/userLabel';
+import UserSearchSelect from '../../primitives/UserSearchSelect';
+import { hasPermission } from '../shared/format';
 
 const styles = createStaticStyles(({ css }) => ({
   hero: css`
@@ -46,14 +48,13 @@ const ConversationsSearchPage = memo(() => {
     permissions,
     PLATFORM_PERMISSIONS.AUDIT_CONVERSATION_READ,
   );
-  // users.search requires AUDIT_READ; conversation-only actors fall back to free-form ID entry.
   const canAuditRead = hasPermission(permissions, PLATFORM_PERMISSIONS.AUDIT_READ);
-  const [picked, setPicked] = useState<AdminAuditUserSearchItem | undefined>();
+  const [picked, setPicked] = useState<UserPublicRef | undefined>();
 
   const onSelect = useCallback(
-    (userId: string | undefined, user?: AdminAuditUserSearchItem) => {
+    (nextId: string | undefined, user?: UserPublicRef) => {
       setPicked(user);
-      if (userId) navigate(`/admin/audit/conversations/${userId}`);
+      if (nextId) navigate(`/admin/audit/conversations/${nextId}`);
     },
     [navigate],
   );
@@ -77,23 +78,16 @@ const ConversationsSearchPage = memo(() => {
         </Text>
         <Text type="secondary">{t('audit.conversations.search.hint')}</Text>
         <div className={styles.search}>
-          <AuditUserSearchSelect
+          <UserSearchSelect
             enabled={canAuditRead}
             placeholder={t('audit.conversations.search.placeholder')}
             style={{ width: '100%' }}
-            value={picked?.id}
-            valueLabel={picked ? displayAuditUserLabel(picked) : undefined}
+            userId={picked?.id}
+            valueLabel={picked ? displayUserLabel(picked) : undefined}
             onChange={onSelect}
           />
         </div>
-        {picked ? (
-          <Text type="secondary">
-            {displayAuditUserLabel(picked)}
-            {picked.lastActiveAt
-              ? ` · ${t('audit.conversations.search.lastActive')}: ${formatAdminDateTime(picked.lastActiveAt)}`
-              : ''}
-          </Text>
-        ) : null}
+        {picked ? <Text type="secondary">{displayUserLabel(picked)}</Text> : null}
         <Text style={{ fontSize: 12 }} type="secondary">
           {t('audit.conversations.search.policyNote')}
         </Text>

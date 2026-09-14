@@ -1,7 +1,7 @@
 'use client';
 
-import { Flexbox, Input, Text } from '@lobehub/ui';
-import { Button, Modal, Switch } from '@lobehub/ui/base-ui';
+import { Flexbox, Input } from '@lobehub/ui';
+import { Button, Modal, Switch, Text } from '@lobehub/ui/base-ui';
 import { DatePicker } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import dayjs from 'dayjs';
@@ -13,8 +13,8 @@ import type { AdminReauthAuthMethod } from '@/enterprise/client/features/admin/r
 import { useAdminAccess } from '@/enterprise/client/providers/AdminAccessProvider';
 import type { AdminAuditExportsCreateInput } from '@/enterprise/client/services/adminAudit';
 
+import UserSearchSelect from '../../primitives/UserSearchSelect';
 import { useFetchAuditPolicy } from '../hooks/useAdminAudit';
-import AuditUserSearchSelect from '../shared/AuditUserSearchSelect';
 import { hasPermission } from '../shared/format';
 import { openAuditReasonModal } from '../shared/openAuditReasonModal';
 import { getDefaultAuditTimeWindow } from '../shared/timeWindow';
@@ -219,9 +219,10 @@ const CreateExportModal = memo<CreateExportModalProps>(
                 </div>
                 <div className={styles.field}>
                   <Text>{t('audit.exports.create.actor')}</Text>
-                  <AuditUserSearchSelect
+                  <UserSearchSelect
+                    allowRawId
                     enabled={canSearchUsers}
-                    value={actorUserId}
+                    userId={actorUserId}
                     onChange={(id) => setDraft((d) => ({ ...d, actorUserId: id }))}
                   />
                 </div>
@@ -230,9 +231,10 @@ const CreateExportModal = memo<CreateExportModalProps>(
             {kind === 'conversations' || kind === 'user_timeline' ? (
               <div className={styles.field}>
                 <Text>{t('audit.exports.create.user')}</Text>
-                <AuditUserSearchSelect
+                <UserSearchSelect
+                  allowRawId
                   enabled={canSearchUsers}
-                  value={userId}
+                  userId={userId}
                   onChange={(id) => setDraft((d) => ({ ...d, userId: id }))}
                 />
               </div>
