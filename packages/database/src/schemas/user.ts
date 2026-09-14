@@ -18,6 +18,10 @@ export const users = pgTable(
     firstName: text('first_name'),
     lastName: text('last_name'),
     fullName: text('full_name'),
+    /** Lowercase ASCII pinyin of fullName (e.g. 邵军军 → shaojunjun). Null when empty. */
+    pinyinFull: text('pinyin_full'),
+    /** Lowercase ASCII pinyin initials of fullName (e.g. 邵军军 → sjj). Null when empty. */
+    pinyinInitials: text('pinyin_initials'),
     interests: varchar('interests', { length: 64 }).array(),
 
     /** @deprecated */
@@ -94,6 +98,18 @@ export const users = pgTable(
     index('users_normalized_email_lower_pattern_idx').using(
       'btree',
       sql`lower(${table.normalizedEmail}) text_pattern_ops`,
+    ),
+    /**
+     * Prefix search on denormalized pinyin (already lowercase).
+     * Opclass is part of the expression so drizzle-kit serializes it into SQL + snapshot.
+     */
+    index('users_pinyin_full_pattern_idx').using(
+      'btree',
+      sql`${table.pinyinFull} text_pattern_ops`,
+    ),
+    index('users_pinyin_initials_pattern_idx').using(
+      'btree',
+      sql`${table.pinyinInitials} text_pattern_ops`,
     ),
   ],
 );

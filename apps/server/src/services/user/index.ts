@@ -26,6 +26,8 @@ export class UserService {
   }
 
   async initUser(user: CreatedUser) {
+    await UserModel.syncPinyin(this.db, user.id);
+
     if (ENABLE_BUSINESS_FEATURES) {
       try {
         await initNewUserForBusiness(user.id, user.createdAt);

@@ -18,6 +18,7 @@ import { today } from '@/utils/time';
 import type { NewUser, UserItem, UserSettingsItem } from '../schemas';
 import { messages, nextauthAccounts, sessions, topics, users, userSettings } from '../schemas';
 import type { LobeChatDatabase, Transaction } from '../type';
+import { pinyinFieldsFromFullName, withUserPinyinFields } from '../utils/pinyin';
 
 /** JSONB user-settings columns. Nested objects merge; arrays replace wholesale. */
 const USER_SETTINGS_JSON_KEYS = [
@@ -393,7 +394,7 @@ export class UserModel {
   };
 
   updateUser = async (value: Partial<UserItem>) => {
-    const nextValue = UserModel.normalizeUniqueUserFields(value);
+    const nextValue = withUserPinyinFields(UserModel.normalizeUniqueUserFields(value));
 
     return this.db
       .update(users)
@@ -528,7 +529,7 @@ export class UserModel {
       if (!!user) return { duplicate: true };
     }
 
-    const normalizedParams = this.normalizeUniqueUserFields(params);
+    const normalizedParams = withUserPinyinFields(this.normalizeUniqueUserFields(params));
     const [user] = await db.insert(users).values(normalizedParams).returning();
 
     return { duplicate: false, user };
@@ -677,5 +678,50 @@ export class UserModel {
       responseLanguage: general?.responseLanguage || 'en-US',
       userName: user?.fullName || user?.firstName || 'User',
     };
+  };
+
+  /**
+   * Recompute pinyin columns from the stored fullName. Used after Better Auth
+   * SSO inserts that bypass UserModel.createUser.
+   */
+  static syncPinyin = async (db: LobeChatDatabase, userId: string): Promise<void> => {
+    const [row] = await db
+      .select({ fullName: users.fullName })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!row) return;
+    await db.update(users).set(pinyinFieldsFromFullName(row.fullName)).where(eq(users.id, userId));
+  };
+
+  /**
+   * One-shot backfill for rows that have a name but no pinyin yet.
+   * Names that yield no ASCII letters stay null and are skipped via the CJK/letter regex
+   * so the scan cannot loop.
+   */
+  static backfillMissingPinyin = async (db: LobeChatDatabase, batchSize = 200): Promise<number> => {
+    let updated = 0;
+    for (;;) {
+      const rows = await db
+        .select({ fullName: users.fullName, id: users.id })
+        .from(users)
+        .where(
+          and(
+            isNull(users.pinyinFull),
+            sql`${users.fullName} IS NOT NULL AND ${users.fullName} ~ '[A-Za-z\\u3400-\\u9FFF]'`,
+          ),
+        )
+        .limit(batchSize);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        await db
+          .update(users)
+          .set(pinyinFieldsFromFullName(row.fullName))
+          .where(eq(users.id, row.id));
+      }
+      updated += rows.length;
+      if (rows.length < batchSize) break;
+    }
+    return updated;
   };
 }

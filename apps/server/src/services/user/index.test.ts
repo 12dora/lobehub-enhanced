@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { UserService } from './index';
@@ -26,7 +27,7 @@ vi.mock('@/business/server/user', () => ({
 }));
 
 vi.mock('@/database/models/user', () => ({
-  UserModel: { getUserApiKeys: vi.fn() },
+  UserModel: { getUserApiKeys: vi.fn(), syncPinyin: vi.fn() },
 }));
 
 vi.mock('@/libs/trpc/lambda/middleware/telemetry', () => ({
@@ -69,6 +70,7 @@ describe('UserService.initUser registration analytics', () => {
     expect(initializeServerAnalytics).not.toHaveBeenCalled();
     expect(identify).not.toHaveBeenCalled();
     expect(track).not.toHaveBeenCalled();
+    expect(UserModel.syncPinyin).toHaveBeenCalledWith({}, 'user-1');
   });
 
   it('identifies and tracks registration when telemetry is enabled', async () => {

@@ -32,6 +32,10 @@ vi.mock('../services/settings/lockVisiblePolicy', () => ({
   repairLockVisiblePublishedPolicies: mocks.repairLockVisiblePublishedPolicies,
 }));
 
+vi.mock('@/database/models/user', () => ({
+  UserModel: { backfillMissingPinyin: vi.fn().mockResolvedValue(0) },
+}));
+
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: mocks.getServerDB,
 }));

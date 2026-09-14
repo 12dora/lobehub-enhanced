@@ -21,6 +21,7 @@
     "@lobechat/conversation-flow": "workspace:*",
     "@lobechat/types": "workspace:*",
     "@lobechat/utils": "workspace:*",
+    "pinyin-pro": "^3.29.4",
     "random-words": "^2.0.1",
     "ts-md5": "^2.0.1",
     "type-fest": "^5.7.0",

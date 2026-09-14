@@ -13,11 +13,13 @@
  *  3. Repair published lock-visible policies (currently `general.telemetry`) that
  *     were stored as locked+hidden before the control stayed on-screen. Idempotent;
  *     does not bump the settings revision. Failures never block boot.
- *  4. Optional super-admin bootstrap, driven by the same `BOOTSTRAP_*` env vars
+ *  4. Backfill `users.pinyin_full` / `pinyin_initials` for existing named rows.
+ *     Failures never block boot.
+ *  5. Optional super-admin bootstrap, driven by the same `BOOTSTRAP_*` env vars
  *     the CLI script accepts. Promotes an existing user, or (with
  *     `BOOTSTRAP_ALLOW_CREATE=1`) creates a local break-glass account and prints
  *     the generated one-time password exactly once.
- *  5. Independent managed-agents default-inbox provision. Runs after template
+ *  6. Independent managed-agents default-inbox provision. Runs after template
  *     seeding when the admin bootstrap ran, and still runs when the admin console
  *     is off but `ENABLE_PLATFORM_MANAGED_AGENTS` is on.
  *
@@ -111,6 +113,19 @@ export const runStartupPlatformBootstrap = async (
       await repairLockVisiblePublishedPolicies(db);
     } catch (error) {
       console.error(`${LOG_PREFIX} lock-visible policy repair failed (non-blocking)`, {
+        errorCategory: classifyError(error),
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    try {
+      const { UserModel } = await import('@/database/models/user');
+      const backfilled = await UserModel.backfillMissingPinyin(db);
+      if (backfilled > 0) {
+        console.info(`${LOG_PREFIX} user pinyin backfill complete`, { backfilled });
+      }
+    } catch (error) {
+      console.error(`${LOG_PREFIX} user pinyin backfill failed (non-blocking)`, {
         errorCategory: classifyError(error),
         message: error instanceof Error ? error.message : String(error),
       });

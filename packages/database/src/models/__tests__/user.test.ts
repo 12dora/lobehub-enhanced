@@ -202,6 +202,8 @@ describe('UserModel', () => {
 
       expect(updated?.fullName).toBe('Updated Name');
       expect(updated?.avatar).toBe('https://example.com/avatar.jpg');
+      expect(updated?.pinyinFull).toBe('updatedname');
+      expect(updated?.pinyinInitials).toBe('un');
     });
 
     it('should normalize empty string email to null', async () => {
@@ -599,6 +601,17 @@ describe('UserModel', () => {
         expect(result.user?.email).toBe('new@example.com');
       });
 
+      it('stores pinyin columns when creating a user with a CJK fullName', async () => {
+        const result = await UserModel.createUser(serverDB, {
+          email: 'shao@example.com',
+          fullName: '邵军军',
+          id: 'pinyin-create-user',
+        });
+
+        expect(result.user?.pinyinFull).toBe('shaojunjun');
+        expect(result.user?.pinyinInitials).toBe('sjj');
+      });
+
       it('should return duplicate flag for existing user', async () => {
         const result = await UserModel.createUser(serverDB, {
           id: userId,
@@ -606,6 +619,24 @@ describe('UserModel', () => {
         });
 
         expect(result.duplicate).toBe(true);
+      });
+    });
+
+    describe('backfillMissingPinyin', () => {
+      it('fills pinyin for existing rows that lack it', async () => {
+        await serverDB.insert(users).values({
+          fullName: '邵军军',
+          id: 'pinyin-backfill-user',
+        });
+
+        const n = await UserModel.backfillMissingPinyin(serverDB);
+        expect(n).toBeGreaterThanOrEqual(1);
+
+        const row = await serverDB.query.users.findFirst({
+          where: eq(users.id, 'pinyin-backfill-user'),
+        });
+        expect(row?.pinyinFull).toBe('shaojunjun');
+        expect(row?.pinyinInitials).toBe('sjj');
       });
     });
 
