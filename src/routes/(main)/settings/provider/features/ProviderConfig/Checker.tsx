@@ -29,13 +29,23 @@ const styles = createStaticStyles(({ css }) => ({
     width: 380px;
   `,
 }));
+
+const stringifyCheckError = (error: ChatMessageError) => {
+  try {
+    return JSON.stringify(error.body || error, null, 2);
+  } catch {
+    // tRPC `cause` (stored as `body` on the admin path) can be circular.
+    return String(error.message ?? error);
+  }
+};
+
 /**
  * `title` overrides the error-type headline. The platform probe answers with its own sanitized
  * reason ("authentication rejected", "check model is not enabled", …); rendering the generic
  * `ConnectionCheckFailed` copy over it told operators to inspect a `/v1` proxy suffix that had
  * nothing to do with the failure, and buried the real reason in the expandable JSON.
  */
-const Error = memo<{ error: ChatMessageError; title?: string }>(({ error, title }) => {
+export const Error = memo<{ error: ChatMessageError; title?: string }>(({ error, title }) => {
   const { t } = useTranslation(['error', 'modelRuntime']);
   const providerName = useProviderName(error.body?.provider);
   // A runtime code without `modelRuntime:` copy used to render its raw key as the headline;
@@ -50,9 +60,6 @@ const Error = memo<{ error: ChatMessageError; title?: string }>(({ error, title 
     <Flexbox gap={8} style={{ maxWidth: 600, width: '100%' }}>
       <Alert
         showIcon
-        title={
-          title ?? getRuntimeErrorMessage(t, error.type, { provider: providerName }, fallbackMessage)
-        }
         type={'error'}
         extra={
           <Flexbox paddingBlock={8} paddingInline={16}>
@@ -62,9 +69,13 @@ const Error = memo<{ error: ChatMessageError; title?: string }>(({ error, title 
               variant={'borderless'}
               wrap={true}
             >
-              {JSON.stringify(error.body || error, null, 2)}
+              {stringifyCheckError(error)}
             </Highlighter>
           </Flexbox>
+        }
+        title={
+          title ??
+          getRuntimeErrorMessage(t, error.type, { provider: providerName }, fallbackMessage)
         }
       />
     </Flexbox>
@@ -305,9 +316,8 @@ const Checker = memo<ConnectionCheckerProps>(
       <Flexbox gap={8}>
         <Flexbox horizontal gap={8}>
           <Select
-            virtual
+            // base-ui Select's virtual list throws on open in @lobehub/ui 5.46.x — do not pass `virtual`.
             disabled={!canManageProvider}
-            listItemHeight={36}
             options={sortedModels.map((id) => ({ label: id, value: id }))}
             popupClassName={cx(styles.popup)}
             suffixIcon={isProviderConfigUpdating && <Icon spin icon={Loader2Icon} />}

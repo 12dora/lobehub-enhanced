@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import type { FC, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProviderSettingsContext } from '../ModelList/ProviderSettingsContext';
-import Checker from './Checker';
+import Checker, { Error as CheckError } from './Checker';
 
 const missingTranslationKeys = vi.hoisted(() => new Set<string>());
 
@@ -24,11 +24,16 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('antd-style', () => ({
-  createStaticStyles: () => new Proxy({}, { get: (_t, p) => String(p) }),
-  cssVar: new Proxy({}, { get: (_t, p) => `var(--${String(p)})` }),
-  cx: (...args: unknown[]) => args.filter(Boolean).join(' '),
-}));
+vi.mock('antd-style', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    createStaticStyles: () => new Proxy({}, { get: (_t, p) => String(p) }),
+    cssVar: new Proxy({}, { get: (_t, p) => `var(--${String(p)})` }),
+    cx: (...args: unknown[]) => args.filter(Boolean).join(' '),
+    useThemeMode: () => ({ isDarkMode: false }),
+  };
+});
 
 vi.mock('@ant-design/icons', () => ({ CheckCircleFilled: () => <span>ok</span> }));
 vi.mock('@lobehub/icons', () => ({ ModelIcon: () => <span>icon</span> }));
@@ -50,9 +55,24 @@ vi.mock('@lobehub/ui', () => ({
   Icon: () => <span>spin</span>,
 }));
 
-vi.mock('@lobehub/ui/base-ui', () => ({
-  Select: ({ value }: { value?: string }) => <div data-testid="check-model">{value}</div>,
+const selectHarness = vi.hoisted(() => ({
+  lastProps: undefined as Record<string, unknown> | undefined,
+  useReal: false,
 }));
+
+vi.mock('@lobehub/ui/base-ui', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const RealSelect = actual.Select as FC<Record<string, unknown> & { value?: string }>;
+
+  return {
+    ...actual,
+    Select: (props: Record<string, unknown> & { value?: string }) => {
+      selectHarness.lastProps = props;
+      if (selectHarness.useReal) return <RealSelect {...props} />;
+      return <div data-testid="check-model">{props.value}</div>;
+    },
+  };
+});
 
 vi.mock('@/hooks/usePermission', () => ({ usePermission: () => ({ allowed: true }) }));
 vi.mock('@/hooks/useProviderName', () => ({ useProviderName: () => 'ChatGPT' }));
@@ -93,6 +113,8 @@ const clickCheck = () => fireEvent.click(screen.getByRole('button'));
 beforeEach(() => {
   vi.clearAllMocks();
   missingTranslationKeys.clear();
+  selectHarness.lastProps = undefined;
+  selectHarness.useReal = false;
   mocks.aiProviderModelList = [
     { enabled: false, id: 'gpt-5.5', type: 'chat' },
     { enabled: true, id: 'gpt-5.6-sol', type: 'chat' },
@@ -311,5 +333,49 @@ describe('Checker — user surface model selection', () => {
         }),
       ),
     );
+  });
+});
+
+describe('Checker — Error body stringify', () => {
+  it('renders Error with a circular body without throwing', () => {
+    const body: Record<string, unknown> = { provider: 'chatgpt' };
+    body.cause = body;
+
+    expect(() =>
+      render(
+        <CheckError
+          error={{ body, message: 'connection check failed', type: 'ConnectionCheckFailed' }}
+        />,
+      ),
+    ).not.toThrow();
+
+    expect(screen.getByText('connection check failed')).toBeTruthy();
+  });
+});
+
+describe('Checker — admin model dropdown', () => {
+  beforeEach(() => {
+    selectHarness.useReal = true;
+    mocks.aiProviderModelList = [
+      { enabled: true, id: 'gpt-5.6-luna', type: 'chat' },
+      ...Array.from({ length: 9 }, (_, index) => ({
+        enabled: index % 2 === 0,
+        id: `gpt-admin-${index + 1}`,
+        type: 'chat',
+      })),
+    ];
+  });
+
+  it('opens the model list without throwing and does not pass virtual', async () => {
+    expect(() => renderChecker(true, 'gpt-5.6-luna')).not.toThrow();
+    expect(selectHarness.lastProps).not.toHaveProperty('virtual');
+    expect(selectHarness.lastProps).not.toHaveProperty('listItemHeight');
+
+    // user-event click can stall on base-ui pointer capture in happy-dom.
+    fireEvent.click(screen.getByRole('combobox'));
+
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(10));
+    expect(screen.getByRole('option', { name: /gpt-admin-1/ })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /gpt-5.6-luna/ })).toBeTruthy();
   });
 });
