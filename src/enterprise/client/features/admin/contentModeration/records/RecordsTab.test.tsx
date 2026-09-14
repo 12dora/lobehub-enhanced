@@ -79,6 +79,7 @@ vi.mock('@lobehub/ui', () => ({
   Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Tag: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
 }));
 
 vi.mock('../ManageGuard', () => ({
@@ -111,6 +112,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       onChange={(event) => onChange?.(event.target.checked)}
     />
   ),
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 

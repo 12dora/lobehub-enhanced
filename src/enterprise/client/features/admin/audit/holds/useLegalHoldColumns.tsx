@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import type { AdminAuditLegalHoldItem } from '@/enterprise/client/services/adminAudit';
 
 import { enumColumnFilter } from '../../primitives/columnFilters';
+import UserNameCell from '../../primitives/UserNameCell';
 import AuditStatusTag from '../shared/AuditStatusTag';
 import { formatAdminDateTime, truncateText } from '../shared/format';
 
@@ -67,6 +68,9 @@ export const useLegalHoldColumns = ({
         key: 'createdBy',
         title: t('audit.holds.columns.createdBy'),
         width: 120,
+        render: (_value: string, row: AdminAuditLegalHoldItem) => (
+          <UserNameCell fallbackId={row.createdBy} user={row.createdByUser} />
+        ),
       },
       {
         dataIndex: 'createdAt',
@@ -86,9 +90,14 @@ export const useLegalHoldColumns = ({
         key: 'release',
         title: t('audit.holds.columns.releaseInfo'),
         render: (_, row) =>
-          row.status === 'released'
-            ? `${row.releasedBy ?? '—'} · ${formatAdminDateTime(row.releasedAt)}`
-            : '—',
+          row.status === 'released' ? (
+            <span>
+              <UserNameCell fallbackId={row.releasedBy} user={row.releasedByUser} />
+              {` · ${formatAdminDateTime(row.releasedAt)}`}
+            </span>
+          ) : (
+            '—'
+          ),
       },
       {
         key: 'actions',

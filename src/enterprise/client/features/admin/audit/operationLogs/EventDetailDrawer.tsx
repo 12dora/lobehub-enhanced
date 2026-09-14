@@ -1,13 +1,14 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Button, Text } from '@lobehub/ui/base-ui';
 import { Drawer, Spin } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 
+import UserNameCell from '../../primitives/UserNameCell';
 import { useFetchAuditEventDetail } from '../hooks/useAdminAudit';
 import AuditStatusTag from '../shared/AuditStatusTag';
 import {
@@ -105,7 +106,9 @@ const EventDetailDrawer = memo<EventDetailDrawerProps>(
               <Field label={t('audit.logs.columns.action')}>
                 {auditActionLabel(t, data.action)}
               </Field>
-              <Field label={t('audit.logs.columns.actor')}>{data.actorUserId ?? '—'}</Field>
+              <Field label={t('audit.logs.columns.actor')}>
+                <UserNameCell fallbackId={data.actorUserId} user={data.actorUser} />
+              </Field>
               <Field label={t('audit.logs.columns.result')}>
                 <AuditStatusTag kind="result" value={data.result} />
               </Field>

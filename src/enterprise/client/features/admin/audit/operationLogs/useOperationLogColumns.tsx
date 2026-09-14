@@ -1,4 +1,4 @@
-import { Text } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { type TableColumnsType } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { UserIcon } from 'lucide-react';
@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import type { AdminAuditEventListItem } from '@/enterprise/client/services/adminAudit';
 
 import { enumColumnFilter, searchColumnFilter } from '../../primitives/columnFilters';
+import UserNameCell from '../../primitives/UserNameCell';
 import AuditStatusTag from '../shared/AuditStatusTag';
 import {
   auditActionLabel,
@@ -91,7 +92,9 @@ export const useOperationLogColumns = ({
         ),
         filterOnClose: false,
         filteredValue: filters.actorUserId ? [filters.actorUserId] : null,
-        render: (value: string | null) => value ?? '—',
+        render: (_value: string | null, row: AdminAuditEventListItem) => (
+          <UserNameCell fallbackId={row.actorUserId} user={row.actorUser} />
+        ),
       },
       {
         dataIndex: 'result',

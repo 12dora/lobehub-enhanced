@@ -1,14 +1,15 @@
 'use client';
 
-import { Flexbox, Text, Tooltip } from '@lobehub/ui';
+import { Flexbox, Tooltip } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { memo } from 'react';
 
 import {
-  type UserPublicRef,
   displayUserLabel,
   displayUserSecondary,
   type UserLabelSource,
+  type UserPublicRef,
 } from './userLabel';
 
 const styles = createStaticStyles(({ css }) => ({
@@ -24,6 +25,7 @@ const styles = createStaticStyles(({ css }) => ({
   `,
   secondary: css`
     overflow: hidden;
+
     min-width: 0;
 
     font-size: ${cssVar.fontSizeSM};
@@ -47,7 +49,7 @@ const UserNameCell = memo<UserNameCellProps>(({ user, fallbackId }) => {
   const source: UserLabelSource | null = user ?? (fallbackId ? { id: fallbackId } : null);
   if (!source) {
     return (
-      <Text type="secondary" className={styles.name}>
+      <Text className={styles.name} type="secondary">
         —
       </Text>
     );

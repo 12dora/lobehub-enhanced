@@ -24,6 +24,15 @@ let policyData = {
   operationLogRetentionDays: 90,
   redactionProfile: 'standard' as const,
   revision: 1,
+  updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  updatedBy: null as string | null,
+  updatedByUser: null as {
+    avatar: string | null;
+    email: string | null;
+    fullName: string | null;
+    id: string;
+    username: string | null;
+  } | null,
 };
 let runsData: { items: any[]; nextCursor: null } | undefined = {
   items: [],
@@ -112,6 +121,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
     </select>
   ),
   Switch: () => <input type="checkbox" />,
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   toast: { error: (...args: unknown[]) => toastError(...args) },
 }));
 
@@ -246,6 +256,9 @@ describe('RetentionPage execute confirmation payload', () => {
       operationLogRetentionDays: 90,
       redactionProfile: 'standard',
       revision: 1,
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedBy: null,
+      updatedByUser: null,
     };
     runsData = { items: [], nextCursor: null };
     retentionRun.mockResolvedValue({ items: [{ id: 'run-1', status: 'pending' }] });
@@ -417,5 +430,23 @@ describe('RetentionPage execute confirmation payload', () => {
       target: { value: 'all' },
     });
     expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the policy updater through UserNameCell instead of the raw id', () => {
+    policyData = {
+      ...policyData,
+      updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+      updatedBy: 'u-raw',
+      updatedByUser: {
+        avatar: null,
+        email: null,
+        fullName: 'Ada Lovelace',
+        id: 'u-raw',
+        username: 'ada',
+      },
+    };
+    render(<RetentionPage />);
+    expect(screen.getByText('Ada Lovelace')).toBeTruthy();
+    expect(screen.queryByText('u-raw')).toBeNull();
   });
 });

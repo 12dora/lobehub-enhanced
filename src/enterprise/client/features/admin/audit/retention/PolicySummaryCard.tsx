@@ -1,7 +1,7 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Button, Text } from '@lobehub/ui/base-ui';
 import { Descriptions } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { memo } from 'react';
@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { AdminAuditPolicy } from '@/enterprise/client/services/adminAudit';
 
+import UserNameCell from '../../primitives/UserNameCell';
 import { formatAdminDateTime } from '../shared/format';
 import { CONTENT_ACCESS_MODE_KEYS } from './policyBounds';
 
@@ -81,7 +82,7 @@ const PolicySummaryCard = memo<PolicySummaryCardProps>(
               {p.messageBodyInExport ? t('audit.shared.yes') : t('audit.shared.no')}
             </Descriptions.Item>
             <Descriptions.Item label={t('audit.retention.policy.updatedBy')}>
-              {p.updatedBy ?? '—'}
+              <UserNameCell fallbackId={p.updatedBy} user={p.updatedByUser} />
             </Descriptions.Item>
             <Descriptions.Item label={t('audit.retention.policy.updatedAt')}>
               {formatAdminDateTime(p.updatedAt)}

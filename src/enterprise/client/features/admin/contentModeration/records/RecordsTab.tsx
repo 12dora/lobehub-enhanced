@@ -1,7 +1,7 @@
 'use client';
 
-import { Flexbox, Text } from '@lobehub/ui';
-import { Button, Input, Switch, toast } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Button, Input, Switch, Text, toast } from '@lobehub/ui/base-ui';
 import type { TableColumnsType } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +21,8 @@ import { openDangerConfirm } from '../../primitives/DangerConfirm';
 import type { AdminTableChangeMeta } from '../../primitives/DataTable';
 import DataTable from '../../primitives/DataTable';
 import { runAdminMutation } from '../../primitives/runAdminMutation';
+import type { UserPublicRef } from '../../primitives/userLabel';
+import UserNameCell from '../../primitives/UserNameCell';
 import { invalidateModerationRecords, useModerationRecords } from '../hooks';
 import ManageGuard from '../ManageGuard';
 import { adminContentModerationService } from '../service';
@@ -117,6 +119,18 @@ const RecordsTab = memo<RecordsTabProps>(({ canBanUsers, canManage, enabled }) =
   const { data, error, isLoading, mutate } = useModerationRecords(enabled, listInput);
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const filteredUser: UserPublicRef | null = useMemo(() => {
+    if (!userId) return null;
+    const row = (data?.items ?? []).find((item) => item.userId === userId);
+    if (!row?.userSnapshot) return null;
+    return {
+      avatar: null,
+      email: row.userSnapshot.email ?? null,
+      fullName: row.userSnapshot.fullName ?? null,
+      id: userId,
+      username: row.userSnapshot.username ?? null,
+    };
+  }, [data?.items, userId]);
 
   const handleTableChange = useCallback(
     ({ filters: next }: AdminTableChangeMeta) => {
@@ -185,7 +199,8 @@ const RecordsTab = memo<RecordsTabProps>(({ canBanUsers, canManage, enabled }) =
     <Flexbox className={styles.stack} gap={12}>
       {userId ? (
         <Flexbox horizontal align="center" gap={8}>
-          <Text type="secondary">{t('contentModeration.records.filteredByUser', { userId })}</Text>
+          <Text type="secondary">{t('contentModeration.records.filteredByUser')}</Text>
+          <UserNameCell fallbackId={userId} user={filteredUser} />
           <Button size="small" type="text" onClick={() => setQueryParam('userId', undefined)}>
             {t('contentModeration.records.clearUserFilter')}
           </Button>
