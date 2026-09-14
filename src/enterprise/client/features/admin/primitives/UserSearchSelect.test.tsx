@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UserSearchSelect from './UserSearchSelect';
 
 const search = vi.fn();
+const autocompleteMode = vi.hoisted(() => ({ real: false }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -18,19 +19,23 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('antd-style', () => ({
-  createStaticStyles: () => new Proxy({}, { get: () => '' }),
-  cssVar: {},
-}));
+vi.mock('antd-style', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    createStaticStyles: () => new Proxy({}, { get: () => '' }),
+    cssVar: {},
+  };
+});
 
 vi.mock('@lobehub/ui', () => ({
   Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
-vi.mock('@lobehub/ui/base-ui', () => ({
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-  AutoComplete: ({
+vi.mock('@lobehub/ui/base-ui', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const MockAutoComplete = ({
     onChange,
     options,
     value,
@@ -53,8 +58,16 @@ vi.mock('@lobehub/ui/base-ui', () => ({
         ))}
       </ul>
     </div>
-  ),
-}));
+  );
+  const RealAutoComplete = actual.AutoComplete as typeof MockAutoComplete;
+
+  return {
+    ...actual,
+    AutoComplete: (props: Parameters<typeof MockAutoComplete>[0]) =>
+      autocompleteMode.real ? <RealAutoComplete {...props} /> : <MockAutoComplete {...props} />,
+    Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  };
+});
 
 vi.mock('@/enterprise/client/services/adminUsers', () => ({
   adminUsersService: {
@@ -62,8 +75,17 @@ vi.mock('@/enterprise/client/services/adminUsers', () => ({
   },
 }));
 
+const aliceRef = {
+  avatar: null,
+  email: 'alice@ex.com',
+  fullName: 'Alice Chen',
+  id: 'user-xyz',
+  username: 'alice',
+};
+
 describe('UserSearchSelect request sequencing', () => {
   beforeEach(() => {
+    autocompleteMode.real = false;
     search.mockReset();
     vi.useFakeTimers();
   });
@@ -152,5 +174,59 @@ describe('UserSearchSelect request sequencing', () => {
     expect(option).toBeTruthy();
     fireEvent.click(option);
     expect(onChange).toHaveBeenCalledWith('alice');
+  });
+});
+
+describe('UserSearchSelect real AutoComplete', () => {
+  beforeEach(() => {
+    autocompleteMode.real = true;
+    search.mockReset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    autocompleteMode.real = false;
+    vi.useRealTimers();
+  });
+
+  it('keeps option rows whose value does not match the query (filter=null)', async () => {
+    search.mockResolvedValue({ items: [aliceRef] });
+    render(<UserSearchSelect enabled onChange={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'alice' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    // Option value is `user-xyz`, which would be hidden by the default substring filter.
+    expect(screen.getByRole('option', { name: /Alice Chen/ })).toBeTruthy();
+  });
+
+  it('renders the controlled valueLabel in the input', () => {
+    render(
+      <UserSearchSelect enabled userId="user-xyz" valueLabel="Alice Chen" onChange={vi.fn()} />,
+    );
+
+    expect(screen.getByRole('combobox')).toHaveValue('Alice Chen');
+  });
+
+  it('commits the picked option as onChange(id, ref)', async () => {
+    const onChange = vi.fn();
+    search.mockResolvedValue({ items: [aliceRef] });
+    render(<UserSearchSelect enabled onChange={onChange} />);
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'alice' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    fireEvent.click(screen.getByRole('option', { name: /Alice Chen/ }));
+    expect(onChange).toHaveBeenCalledWith('user-xyz', aliceRef);
+  });
+
+  it('exposes aria-label on the combobox input', () => {
+    render(<UserSearchSelect enabled aria-label="Target user" onChange={vi.fn()} />);
+
+    expect(screen.getByRole('combobox', { name: 'Target user' })).toBeTruthy();
   });
 });
