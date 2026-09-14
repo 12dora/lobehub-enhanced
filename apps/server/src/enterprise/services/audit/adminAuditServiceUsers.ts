@@ -1,59 +1,17 @@
 /**
- * User search / summary / timeline for AdminAuditService (SAO-009).
+ * User summary / timeline for AdminAuditService (SAO-009).
+ * User search lives on `admin.users.search` (`UserSearchService`).
  */
 
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
-import type { LobeChatDatabase } from '@/database/type';
 
-import type {
-  AdminAuditUsersSearchInputParsed,
-  AdminAuditUsersTimelineInputParsed,
-} from '../../contracts/adminAudit';
+import type { AdminAuditUsersTimelineInputParsed } from '../../contracts/adminAudit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
-import { UserSearchService } from '../userSearchService';
 import { appendAuditAccessLog, buildAuditFilterSummary } from './accessLog';
 import type { AdminAuditServiceHost } from './adminAuditServiceHost';
 import { isNotFoundError, maskOptionalText } from './adminAuditServiceShared';
 import { assertConversationAccessEnabled } from './contentPolicy';
 import { resolveAuditTimeWindow } from './timeWindow';
-
-export const searchUsers = async (
-  host: AdminAuditServiceHost,
-  params: {
-    actorUserId: string;
-    input: AdminAuditUsersSearchInputParsed;
-  },
-) => {
-  const filterSummary = buildAuditFilterSummary({
-    cursor: params.input.cursor,
-    hasQ: true,
-    limit: params.input.limit,
-  });
-  try {
-    const page = await new UserSearchService(host.db as LobeChatDatabase).search({
-      limit: params.input.limit,
-      q: params.input.q,
-    });
-    await appendAuditAccessLog(host.db, {
-      action: 'admin.audit.users.search',
-      actorUserId: params.actorUserId,
-      filterSummary,
-      result: 'success',
-      targetType: 'user',
-    });
-    return { items: page.items, nextCursor: null };
-  } catch (error) {
-    await appendAuditAccessLog(host.db, {
-      action: 'admin.audit.users.search',
-      actorUserId: params.actorUserId,
-      afterDiff: { error: 'failure' },
-      filterSummary,
-      result: 'failure',
-      targetType: 'user',
-    });
-    throw error;
-  }
-};
 
 export const getUserSummary = async (
   host: AdminAuditServiceHost,

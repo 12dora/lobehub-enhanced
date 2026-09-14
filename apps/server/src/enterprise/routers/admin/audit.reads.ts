@@ -18,8 +18,6 @@ import {
   adminAuditPolicyGetOutputSchema,
   adminAuditPolicyUpdateInputSchema,
   adminAuditPolicyUpdateOutputSchema,
-  adminAuditUsersSearchInputSchema,
-  adminAuditUsersSearchOutputSchema,
   adminAuditUsersSummaryInputSchema,
   adminAuditUsersSummaryOutputSchema,
   adminAuditUsersTimelineInputSchema,
@@ -127,14 +125,6 @@ export const conversationsRouter = router({
 });
 
 export const usersRouter = router({
-  search: auditRead
-    .input(adminAuditUsersSearchInputSchema)
-    .output(adminAuditUsersSearchOutputSchema)
-    .query(async ({ ctx, input }) => {
-      const service = new AdminAuditService(ctx.serverDB);
-      return service.searchUsers({ actorUserId: ctx.userId!, input });
-    }),
-
   summary: auditRead
     .input(adminAuditUsersSummaryInputSchema)
     .output(adminAuditUsersSummaryOutputSchema)

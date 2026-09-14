@@ -133,10 +133,6 @@ export {
   platformAuditRetentionScopeSchema,
 } from './adminAudit/retention';
 export {
-  adminAuditUserSearchItemSchema,
-  type AdminAuditUsersSearchInputParsed,
-  adminAuditUsersSearchInputSchema,
-  adminAuditUsersSearchOutputSchema,
   adminAuditUsersSummaryInputSchema,
   adminAuditUsersSummaryOutputSchema,
   type AdminAuditUsersTimelineInputParsed,

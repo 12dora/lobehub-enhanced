@@ -109,10 +109,11 @@ describe('admin procedure authorization registry', () => {
     // +1 mutation since: admin.skills.setEnabled (org-wide catalog enable/disable).
     // +1 mutation since: admin.agents.uploadAvatar (image avatar for the platform Agent editor).
     // +1 query since: admin.users.search (shared admin picker; USER_READ | AUDIT_READ | MODERATION_READ).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(246);
+    // −1 query since: admin.audit.users.search removed (pickers use admin.users.search).
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(245);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
-    ).toHaveLength(110);
+    ).toHaveLength(109);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
     ).toHaveLength(136);

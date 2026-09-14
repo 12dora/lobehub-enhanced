@@ -462,10 +462,11 @@ describe('AdminAuditService', () => {
   });
 
   it('writes self-audit without free-text q or message body', async () => {
-    await service.searchUsers({
-      actorUserId: actor,
-      input: { limit: 5, q: 'super-secret-query-term' },
-    });
+    const { UserSearchService } = await import('../userSearchService');
+    await new UserSearchService(serverDB).search(
+      { limit: 5, q: 'super-secret-query-term' },
+      { actorUserId: actor },
+    );
 
     const logs = await serverDB.select().from(platformAuditLogs);
     const searchLogs = logs.filter((l) => l.action === 'admin.audit.users.search');

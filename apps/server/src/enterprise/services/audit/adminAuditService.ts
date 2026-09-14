@@ -26,7 +26,6 @@ import type {
   AdminAuditLegalHoldsListInputParsed,
   AdminAuditLegalHoldsReleaseInput,
   AdminAuditPolicyUpdateInput,
-  AdminAuditUsersSearchInputParsed,
   AdminAuditUsersTimelineInputParsed,
 } from '../../contracts/adminAudit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
@@ -52,7 +51,7 @@ import {
   toEventListItem,
   toPolicyPublic,
 } from './adminAuditServiceShared';
-import { getUserSummary, listUserTimeline, searchUsers } from './adminAuditServiceUsers';
+import { getUserSummary, listUserTimeline } from './adminAuditServiceUsers';
 import type { AuditExportArtifactStorage } from './exportStorage';
 import { resolveAuditTimeWindow } from './timeWindow';
 
@@ -411,9 +410,6 @@ export class AdminAuditService {
   }) => listConversationMessages(this.host(), params);
 
   // ── users (delegated) ─────────────────────────────────────────────────────
-
-  searchUsers = async (params: { actorUserId: string; input: AdminAuditUsersSearchInputParsed }) =>
-    searchUsers(this.host(), params);
 
   getUserSummary = async (params: { actorUserId: string; userId: string }) =>
     getUserSummary(this.host(), params);

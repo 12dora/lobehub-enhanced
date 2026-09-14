@@ -196,7 +196,10 @@ export const adminUsersRouter = router({
     .output(adminUserSearchOutputSchema)
     .query(async ({ ctx, input }) => {
       const service = new UserSearchService(ctx.serverDB);
-      return service.search(input);
+      return service.search(input, {
+        actorPermissions: ctx.platformAuth.permissions,
+        actorUserId: ctx.userId!,
+      });
     }),
 
   get: adminBase

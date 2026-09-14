@@ -136,11 +136,6 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_AUDIT_CONNECTORS = [
   },
   {
     kind: 'query',
-    path: 'admin.audit.users.search',
-    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.AUDIT_READ] },
-  },
-  {
-    kind: 'query',
     path: 'admin.audit.users.summary',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.AUDIT_READ] },
   },

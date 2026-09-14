@@ -1,9 +1,7 @@
 import { z } from 'zod';
 
-import { userPublicRefSchema } from '../shared/userPublicRef';
 import {
   ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
-  ADMIN_AUDIT_Q_MAX_LENGTH,
   adminAuditCursorSchema,
   dateInputSchema,
   limitSchema,
@@ -12,28 +10,6 @@ import {
 } from './common';
 
 // ── users ────────────────────────────────────────────────────────────────────
-
-export const adminAuditUsersSearchInputSchema = z
-  .object({
-    cursor: adminAuditCursorSchema.optional(),
-    limit: limitSchema,
-    q: z.string().trim().min(1).max(ADMIN_AUDIT_Q_MAX_LENGTH),
-  })
-  .strict()
-  .transform((input) => ({
-    ...input,
-    limit: input.limit ?? ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
-    q: input.q.trim().toLowerCase(),
-  }));
-
-export const adminAuditUserSearchItemSchema = userPublicRefSchema;
-
-export const adminAuditUsersSearchOutputSchema = z
-  .object({
-    items: z.array(adminAuditUserSearchItemSchema),
-    nextCursor: z.string().nullable(),
-  })
-  .strict();
 
 export const adminAuditUsersSummaryInputSchema = z
   .object({
@@ -89,7 +65,6 @@ export const adminAuditUsersTimelineOutputSchema = z
   })
   .strict();
 
-export type AdminAuditUsersSearchInputParsed = z.output<typeof adminAuditUsersSearchInputSchema>;
 export type AdminAuditUsersTimelineInputParsed = z.output<
   typeof adminAuditUsersTimelineInputSchema
 >;

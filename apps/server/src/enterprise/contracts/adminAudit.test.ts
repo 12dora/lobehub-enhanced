@@ -15,7 +15,6 @@ import {
   adminAuditLegalHoldsListInputSchema,
   adminAuditPolicyUpdateInputSchema,
   adminAuditRetentionRunItemSchema,
-  adminAuditUsersSearchInputSchema,
   adminAuditUsersTimelineOutputSchema,
   dateInputSchema,
 } from './adminAudit';
@@ -131,12 +130,6 @@ describe('adminAudit contracts', () => {
         redactionProfile: 'off',
       }).redactionProfile,
     ).toBe('off');
-  });
-
-  it('normalizes user search q and never allows empty', () => {
-    expect(() => adminAuditUsersSearchInputSchema.parse({ q: '   ' })).toThrow();
-    const ok = adminAuditUsersSearchInputSchema.parse({ q: '  Alice@Example.COM  ' });
-    expect(ok.q).toBe('alice@example.com');
   });
 
   it('export create requires userId for conversation kinds and rejects cross-kind filters', () => {

@@ -45,4 +45,21 @@ describe('UserSearchService', () => {
       });
     }
   });
+
+  it('writes an audit access log when the actor is recorded', async () => {
+    const { platformAuditLogs } = await import('@/database/schemas/platform');
+    const { sql } = await import('drizzle-orm');
+
+    await serverDB.transaction(async (tx) => {
+      await tx.execute(sql`SELECT set_config('lobe.allow_platform_audit_log_delete', 'on', true)`);
+      await tx.delete(platformAuditLogs);
+    });
+
+    await service.search({ limit: 5, q: 'secret-picker-query' }, { actorUserId: id });
+
+    const logs = await serverDB.select().from(platformAuditLogs);
+    const searchLogs = logs.filter((row) => row.action === 'admin.audit.users.search');
+    expect(searchLogs.length).toBeGreaterThan(0);
+    expect(JSON.stringify(searchLogs)).not.toContain('secret-picker-query');
+  });
 });

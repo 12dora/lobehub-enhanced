@@ -5,7 +5,8 @@
  * - policy.get / policy.update
  * - events.list / get / facets / stats (+ list/get aliases)
  * - conversations.list / get / messages
- * - users.search / summary / timeline
+ * - users.search moved to admin.users.search; users.summary / timeline remain
+ * - legalHolds.list / get / create / release
  * - legalHolds.list / get / create / release
  * - exports.create / list / get / download / cancel
  * - retention.dryRun / run / listRuns / getRun / status / cancel
