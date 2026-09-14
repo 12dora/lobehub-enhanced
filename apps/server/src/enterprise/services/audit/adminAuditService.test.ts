@@ -38,7 +38,13 @@ beforeEach(async () => {
   await serverDB.delete(users).where(eq(users.id, actor));
   await serverDB.delete(users).where(eq(users.id, userA));
   await serverDB.delete(users).where(eq(users.id, userB));
-  await serverDB.insert(users).values([{ id: actor }, { id: userA }, { id: userB }]);
+  await serverDB
+    .insert(users)
+    .values([
+      { fullName: 'Break-glass Super Admin', id: actor },
+      { fullName: '邵军军', id: userA },
+      { id: userB },
+    ]);
 });
 
 afterEach(async () => {
@@ -527,6 +533,55 @@ describe('AdminAuditService', () => {
     });
     const elapsed = listedAll.items.find((h) => h.id === 'hold-elapsed-1');
     expect(elapsed?.status).toBe('expired');
+    expect(elapsed?.createdByUser).toEqual({
+      avatar: null,
+      email: null,
+      fullName: 'Break-glass Super Admin',
+      id: actor,
+      username: null,
+    });
+    expect(elapsed?.releasedByUser).toBeNull();
+  });
+
+  it('resolves known actor ids and returns null for unknown ids', async () => {
+    await serverDB.insert(platformAuditLogs).values([
+      {
+        action: 'admin.settings.publish',
+        actorUserId: actor,
+        id: 'op-actor-known',
+        result: 'success',
+        targetType: 'settings',
+      },
+      {
+        action: 'admin.settings.publish',
+        actorUserId: 'missing-user',
+        id: 'op-actor-missing',
+        result: 'success',
+        targetType: 'settings',
+      },
+    ]);
+
+    const list = await service.listEvents({ actorUserId: actor, input: { limit: 20 } });
+    expect(list.items.find((row) => row.id === 'op-actor-known')?.actorUser).toEqual({
+      avatar: null,
+      email: null,
+      fullName: 'Break-glass Super Admin',
+      id: actor,
+      username: null,
+    });
+    expect(list.items.find((row) => row.id === 'op-actor-missing')?.actorUser).toBeNull();
+
+    const policy = await service.updatePolicy({
+      actorUserId: actor,
+      input: { expectedRevision: 0, reason: 'name the updater' },
+    });
+    expect(policy.updatedByUser).toEqual({
+      avatar: null,
+      email: null,
+      fullName: 'Break-glass Super Admin',
+      id: actor,
+      username: null,
+    });
   });
 });
 

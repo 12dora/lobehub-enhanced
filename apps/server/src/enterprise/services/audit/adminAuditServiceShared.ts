@@ -10,13 +10,18 @@ import type {
 } from '@/database/models/platform';
 import { applyAuditConversationRedaction } from '@/database/models/platform';
 
+import type { UserPublicRef } from '../../contracts/shared/userPublicRef';
 import { getEnterpriseErrorBody } from '../../guards/enterpriseErrors';
 import { toPublicPlatformAuditItem } from '../platformAudit';
+import { userRefOf } from '../shared/userRefResolver';
 
 export type ConversationsGetInput = { topicId: string; userId: string };
 export type EventsStatsInput = { from?: Date; to?: Date };
 
-export const toPolicyPublic = (policy: PlatformAuditPolicyItem) => ({
+export const toPolicyPublic = (
+  policy: PlatformAuditPolicyItem,
+  refs: Map<string, UserPublicRef> = new Map(),
+) => ({
   contentAccessMode: policy.contentAccessMode,
   conversationRetentionDays: policy.conversationRetentionDays,
   createdAt: policy.createdAt,
@@ -30,10 +35,15 @@ export const toPolicyPublic = (policy: PlatformAuditPolicyItem) => ({
   revision: policy.revision,
   updatedAt: policy.updatedAt,
   updatedBy: policy.updatedBy,
+  updatedByUser: userRefOf(policy.updatedBy, refs),
 });
 
-export const toEventListItem = (row: PlatformAuditLogItem) => ({
+export const toEventListItem = (
+  row: PlatformAuditLogItem,
+  refs: Map<string, UserPublicRef> = new Map(),
+) => ({
   action: row.action,
+  actorUser: userRefOf(row.actorUserId, refs),
   actorUserId: row.actorUserId,
   configRevision: row.configRevision,
   createdAt: row.createdAt,
@@ -48,10 +58,13 @@ export const toEventListItem = (row: PlatformAuditLogItem) => ({
 });
 
 /** Detail projection shares the read-time security boundary used by all audit reads. */
-export const toEventDetail = (row: PlatformAuditLogItem) => {
+export const toEventDetail = (
+  row: PlatformAuditLogItem,
+  refs: Map<string, UserPublicRef> = new Map(),
+) => {
   const publicRow = toPublicPlatformAuditItem(row);
   return {
-    ...toEventListItem(publicRow),
+    ...toEventListItem(publicRow, refs),
     afterDiff: publicRow.afterDiff,
     beforeDiff: publicRow.beforeDiff,
   };
@@ -71,15 +84,21 @@ export const effectiveLegalHoldStatus = (
   return 'active';
 };
 
-export const toLegalHoldPublic = (row: PlatformAuditLegalHoldItem, now: Date = new Date()) => ({
+export const toLegalHoldPublic = (
+  row: PlatformAuditLegalHoldItem,
+  refs: Map<string, UserPublicRef> = new Map(),
+  now: Date = new Date(),
+) => ({
   createdAt: row.createdAt,
   createdBy: row.createdBy,
+  createdByUser: userRefOf(row.createdBy, refs),
   expiresAt: row.expiresAt,
   id: row.id,
   reason: row.reason,
   releaseReason: row.releaseReason,
   releasedAt: row.releasedAt,
   releasedBy: row.releasedBy,
+  releasedByUser: userRefOf(row.releasedBy, refs),
   scopeId: row.scopeId,
   scopeType: row.scopeType,
   status: effectiveLegalHoldStatus(row, now),

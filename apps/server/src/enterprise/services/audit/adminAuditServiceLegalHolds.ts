@@ -15,6 +15,7 @@ import type {
   AdminAuditLegalHoldsReleaseInput,
 } from '../../contracts/adminAudit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
+import { resolveUserRefs } from '../shared/userRefResolver';
 import { appendAuditAccessLog, buildAuditFilterSummary } from './accessLog';
 import type { AdminAuditServiceHost } from './adminAuditServiceHost';
 import { isNotFoundError, toLegalHoldPublic } from './adminAuditServiceShared';
@@ -47,9 +48,13 @@ export const listLegalHolds = async (
       result: 'success',
       targetType: 'legal_hold',
     });
+    const refs = await resolveUserRefs(
+      host.db as LobeChatDatabase,
+      page.items.flatMap((row) => [row.createdBy, row.releasedBy ?? '']),
+    );
     return {
       // Explicit row callback — map would pass index as the second arg (`now`).
-      items: page.items.map((row) => toLegalHoldPublic(row)),
+      items: page.items.map((row) => toLegalHoldPublic(row, refs)),
       nextCursor: page.nextCursor,
     };
   } catch (error) {
@@ -95,7 +100,10 @@ export const getLegalHold = async (
       targetId: params.id,
       targetType: 'legal_hold',
     });
-    return toLegalHoldPublic(row);
+    return toLegalHoldPublic(
+      row,
+      await resolveUserRefs(host.db as LobeChatDatabase, [row.createdBy, row.releasedBy ?? '']),
+    );
   } catch (error) {
     if (isNotFoundError(error)) throw error;
     await appendAuditAccessLog(host.db, {
@@ -185,7 +193,10 @@ export const createLegalHold = async (
       });
       return created;
     });
-    return toLegalHoldPublic(row);
+    return toLegalHoldPublic(
+      row,
+      await resolveUserRefs(host.db as LobeChatDatabase, [row.createdBy, row.releasedBy ?? '']),
+    );
   } catch (error) {
     if (
       error instanceof LegalHoldPurgeInProgressError ||
@@ -266,7 +277,10 @@ export const releaseLegalHold = async (
         httpCode: 'NOT_FOUND',
       });
     }
-    return toLegalHoldPublic(row);
+    return toLegalHoldPublic(
+      row,
+      await resolveUserRefs(host.db as LobeChatDatabase, [row.createdBy, row.releasedBy ?? '']),
+    );
   } catch (error) {
     if (isNotFoundError(error)) throw error;
     await appendAuditAccessLog(host.db, {

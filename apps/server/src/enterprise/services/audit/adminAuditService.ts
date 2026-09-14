@@ -30,6 +30,7 @@ import type {
   AdminAuditUsersTimelineInputParsed,
 } from '../../contracts/adminAudit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
+import { resolveUserRefs } from '../shared/userRefResolver';
 import { appendAuditAccessLog, buildAuditFilterSummary } from './accessLog';
 import {
   getConversation,
@@ -90,7 +91,8 @@ export class AdminAuditService {
         targetId: policy.id,
         targetType: 'audit_policy',
       });
-      return toPolicyPublic(policy);
+      const refs = await resolveUserRefs(this.db as LobeChatDatabase, [policy.updatedBy ?? '']);
+      return toPolicyPublic(policy, refs);
     } catch (error) {
       await appendAuditAccessLog(this.db, {
         action: 'admin.audit.policy.get',
@@ -150,7 +152,8 @@ export class AdminAuditService {
         });
         return next;
       });
-      return toPolicyPublic(updated);
+      const refs = await resolveUserRefs(this.db as LobeChatDatabase, [updated.updatedBy ?? '']);
+      return toPolicyPublic(updated, refs);
     } catch (error) {
       if (error instanceof PlatformRevisionConflictError) {
         await appendAuditAccessLog(this.db, {
@@ -240,8 +243,12 @@ export class AdminAuditService {
         targetType: 'audit_event',
       });
 
+      const refs = await resolveUserRefs(
+        this.db as LobeChatDatabase,
+        page.items.map((row) => row.actorUserId ?? ''),
+      );
       return {
-        items: page.items.map(toEventListItem),
+        items: page.items.map((row) => toEventListItem(row, refs)),
         nextCursor: page.nextCursor,
       };
     } catch (error) {
@@ -293,7 +300,10 @@ export class AdminAuditService {
         targetType: 'audit_event',
       });
 
-      return toEventDetail(row);
+      return toEventDetail(
+        row,
+        await resolveUserRefs(this.db as LobeChatDatabase, [row.actorUserId ?? '']),
+      );
     } catch (error) {
       if (isNotFoundError(error)) throw error;
       await appendAuditAccessLog(this.db, {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { userPublicRefSchema } from '../shared/userPublicRef';
 import {
   auditReasonSchema,
   platformAuditContentAccessModeSchema,
@@ -23,6 +24,7 @@ export const adminAuditPolicyGetOutputSchema = z
     revision: z.number().int().nonnegative(),
     updatedAt: z.date(),
     updatedBy: z.string().nullable(),
+    updatedByUser: userPublicRefSchema.nullable(),
   })
   .strict();
 

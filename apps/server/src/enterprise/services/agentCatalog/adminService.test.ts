@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   createAssignment: vi.fn(),
   createIdentity: vi.fn(),
   deleteAssignment: vi.fn(),
+  findByIds: vi.fn(async (): Promise<unknown[]> => []),
   getDefaultIdentity: vi.fn(),
   getDefaultIdentityForUpdate: vi.fn(),
   getExactVersion: vi.fn(),
@@ -49,6 +50,9 @@ const mocks = vi.hoisted(() => ({
   updateDraftCas: vi.fn(),
 }));
 
+vi.mock('@/database/models/user', () => ({
+  UserModel: { findByIds: mocks.findByIds },
+}));
 vi.mock('@/database/repositories/platformAgentCatalog', () => ({
   acquirePlatformAgentReferenceLock: mocks.acquireReferenceLock,
   PlatformAgentCatalogRepository: class {
@@ -160,6 +164,7 @@ describe('PlatformAgentAdminService', () => {
     observed.length = 0;
     setEnterprisePlatformObserverForTest({ record: (event) => observed.push(event) });
     mocks.appendAudit.mockResolvedValue(undefined);
+    mocks.findByIds.mockResolvedValue([]);
     mocks.isModuleEnabled.mockResolvedValue(true);
   });
 
@@ -219,6 +224,62 @@ describe('PlatformAgentAdminService', () => {
         versionPolicy: 'latest_published',
       }),
     ).rejects.toBeInstanceOf(PlatformAgentRevisionConflictError);
+  });
+
+  it('attaches targetUser for user targets and null for unknown ids', async () => {
+    const known = {
+      avatar: 'https://cdn.example/a.png',
+      email: null,
+      fullName: '邵军军',
+      id: 'user-known',
+      username: null,
+    };
+    mocks.findByIds.mockResolvedValue([known]);
+    mocks.listAssignments.mockResolvedValue({
+      items: [
+        {
+          agentId: 'agent-id',
+          enabled: true,
+          id: 'assign-user',
+          mode: 'optional',
+          pinnedVersionId: null,
+          targetId: 'user-known',
+          targetType: 'user',
+          versionPolicy: 'latest_published',
+        },
+        {
+          agentId: 'agent-id',
+          enabled: true,
+          id: 'assign-missing',
+          mode: 'optional',
+          pinnedVersionId: null,
+          targetId: 'user-missing',
+          targetType: 'user',
+          versionPolicy: 'latest_published',
+        },
+        {
+          agentId: 'agent-id',
+          enabled: true,
+          id: 'assign-global',
+          mode: 'optional',
+          pinnedVersionId: null,
+          targetId: '__global__',
+          targetType: 'global',
+          versionPolicy: 'latest_published',
+        },
+      ],
+      nextCursor: null,
+    });
+
+    const result = await new PlatformAgentAdminService(db).listAssignments({
+      agentId: 'agent-id',
+      limit: 50,
+    });
+
+    expect(result.items[0]?.targetUser).toEqual(known);
+    expect(result.items[1]?.targetUser).toBeNull();
+    expect(result.items[2]?.targetUser).toBeNull();
+    expect(mocks.findByIds).toHaveBeenCalledWith(db, ['user-known', 'user-missing']);
   });
 
   it('switches default Inbox by clearing the old row before promoting the new row', async () => {

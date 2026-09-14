@@ -22,12 +22,14 @@ import type {
   AdminPlatformAgentVersionsListInput,
 } from '../../contracts/platformAgents';
 import { withLatestPublishedAssignmentVersion } from '../../contracts/platformAgents/assignmentCore';
+import type { UserPublicRef } from '../../contracts/shared/userPublicRef';
 import { parseEnterpriseFeatureFlags } from '../../featureFlags';
 import type { AuditAction } from '../audit/auditActionCatalog';
 import { isModuleEnabled } from '../moduleSettings';
 import { PlatformAuditService } from '../platformAudit';
 import type { PlatformConfigInvalidationPublisher } from '../platformConfigInvalidation';
 import { acquirePlatformDefaultInboxLock } from '../platformDependencyLock';
+import { resolveUserRefs, userRefOf } from '../shared/userRefResolver';
 import {
   buildDefaultInboxSeed,
   DEFAULT_INBOX_GLOBAL_ASSIGNMENT,
@@ -136,7 +138,10 @@ const failureAuditCategory = (error: unknown): string => {
   return 'platform_agent_mutation_failed';
 };
 
-const assignmentView = (assignment: PlatformAgentAssignmentSafeItem) => ({
+const assignmentView = (
+  assignment: PlatformAgentAssignmentSafeItem,
+  refs: Map<string, UserPublicRef> = new Map(),
+) => ({
   agentId: assignment.agentId,
   enabled: assignment.enabled,
   id: assignment.id,
@@ -144,6 +149,7 @@ const assignmentView = (assignment: PlatformAgentAssignmentSafeItem) => ({
   pinnedVersionId: assignment.pinnedVersionId,
   targetId: assignment.targetId,
   targetType: assignment.targetType,
+  targetUser: assignment.targetType === 'user' ? userRefOf(assignment.targetId, refs) : null,
   versionPolicy: assignment.versionPolicy,
 });
 
@@ -499,7 +505,14 @@ export class PlatformAgentAdminService {
 
   listAssignments = async (input: AdminPlatformAgentAssignmentListInput) => {
     const page = await new PlatformAgentCatalogRepository(this.db).listAssignments(input);
-    return { items: page.items.map(assignmentView), nextCursor: page.nextCursor };
+    const refs = await resolveUserRefs(
+      this.db,
+      page.items.flatMap((item) => (item.targetType === 'user' ? [item.targetId] : [])),
+    );
+    return {
+      items: page.items.map((item) => assignmentView(item, refs)),
+      nextCursor: page.nextCursor,
+    };
   };
 
   previewAssignment = async (input: AdminPlatformAgentAssignmentPreviewInput) => {
@@ -564,9 +577,13 @@ export class PlatformAgentAdminService {
           patch: { updatedBy: actorUserId },
         });
         if (!updated) throw new PlatformAgentRevisionConflictError();
+        const refs = await resolveUserRefs(
+          tx,
+          assignment.targetType === 'user' ? [assignment.targetId] : [],
+        );
         // Return the refreshed CAS alongside the row: the write bumped `draftSequence`, so any
         // follow-up assignment write in the same submit would otherwise need a re-GET first.
-        return { assignment: assignmentView(assignment), ...mutationView(updated) };
+        return { assignment: assignmentView(assignment, refs), ...mutationView(updated) };
       },
       summarize: ({ assignment }) => ({ assignmentId: assignment.id }),
       targetId: input.agentId,

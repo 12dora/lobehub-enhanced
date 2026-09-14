@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { userPublicRefSchema } from '../shared/userPublicRef';
 import {
   ADMIN_AUDIT_FACET_DEFAULT_LIMIT,
   ADMIN_AUDIT_FACET_MAX_LIMIT,
@@ -41,6 +42,7 @@ export type AdminAuditEventsListInputParsed = z.output<typeof adminAuditEventsLi
 export const adminAuditEventListItemSchema = z
   .object({
     action: z.string(),
+    actorUser: userPublicRefSchema.nullable(),
     actorUserId: z.string().nullable(),
     configRevision: z.number().nullable(),
     createdAt: z.date(),

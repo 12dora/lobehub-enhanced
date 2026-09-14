@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { userPublicRefSchema } from '../shared/userPublicRef';
 import {
   ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
   adminAuditCursorSchema,
@@ -120,12 +121,14 @@ export const adminAuditLegalHoldItemSchema = z
   .object({
     createdAt: z.date(),
     createdBy: z.string(),
+    createdByUser: userPublicRefSchema.nullable(),
     expiresAt: z.date().nullable(),
     id: z.string(),
     reason: z.string(),
     releaseReason: z.string().nullable(),
     releasedAt: z.date().nullable(),
     releasedBy: z.string().nullable(),
+    releasedByUser: userPublicRefSchema.nullable(),
     scopeId: z.string().nullable(),
     scopeType: platformAuditLegalHoldScopeTypeSchema,
     status: platformAuditLegalHoldStatusSchema,

@@ -4,6 +4,7 @@ import {
 } from '@lobechat/types';
 import { z } from 'zod';
 
+import { userPublicRefSchema } from '../shared/userPublicRef';
 import {
   platformAgentAssignmentCoreFields,
   refinePlatformAgentAssignmentInvariants,
@@ -59,6 +60,7 @@ export const platformAgentAssignmentSchema = z
     agentId: idSchema,
     id: idSchema,
     ...platformAgentAssignmentCoreFields,
+    targetUser: userPublicRefSchema.nullable().optional(),
   })
   .strict()
   .superRefine(refinePlatformAgentAssignmentInvariants);
