@@ -346,6 +346,39 @@ export class PlatformAgentPublicationService {
   }): void => observePlatformAgentPublication(params);
 
   /**
+   * Rollback is a publish: if the default-inbox pair changed, clear per-user inbox
+   * model/provider overrides in the same transaction as the pointer move.
+   */
+  private maybeResetInboxModelProviderOnPublish = async (params: {
+    actorUserId: string;
+    identity: PlatformAgentItem;
+    nextSnapshot: ExactPlatformAgentVersion['dependencySnapshot'];
+    repository: PlatformAgentCatalogRepository;
+    tx: Transaction;
+  }): Promise<number | undefined> => {
+    if (params.identity.systemKey !== PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY) return undefined;
+
+    const previous = params.identity.currentVersionId
+      ? await params.repository.getExactVersion(
+          params.identity.id,
+          params.identity.currentVersionId,
+        )
+      : undefined;
+    if (
+      !shouldResetInboxModelProviderOnPublish(previous?.dependencySnapshot, params.nextSnapshot)
+    ) {
+      return undefined;
+    }
+
+    const inboxModelReset = await new AgentModel(
+      params.tx,
+      params.actorUserId,
+    ).resetInboxModelProviderForAllUsers();
+    log('reset inbox model/provider agent=%s rows=%d', params.identity.id, inboxModelReset);
+    return inboxModelReset;
+  };
+
+  /**
    * The single de-drafted write: append an immutable version and publish it live in ONE
    * transaction (lock → CAS → dependency publication lock → revalidate → append → point →
    * audit), then invalidate caches after the commit.
@@ -375,24 +408,13 @@ export class PlatformAgentPublicationService {
           },
         });
 
-        let inboxModelReset: number | undefined;
-        if (locked.systemKey === PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY) {
-          const previous = locked.currentVersionId
-            ? await repository.getExactVersion(locked.id, locked.currentVersionId)
-            : undefined;
-          if (
-            shouldResetInboxModelProviderOnPublish(
-              previous?.dependencySnapshot,
-              version.dependencySnapshot,
-            )
-          ) {
-            inboxModelReset = await new AgentModel(
-              tx,
-              actorUserId,
-            ).resetInboxModelProviderForAllUsers();
-            log('reset inbox model/provider agent=%s rows=%d', locked.id, inboxModelReset);
-          }
-        }
+        const inboxModelReset = await this.maybeResetInboxModelProviderOnPublish({
+          actorUserId,
+          identity: locked,
+          nextSnapshot: version.dependencySnapshot,
+          repository,
+          tx,
+        });
 
         await new PlatformAuditService(tx).append({
           action: 'admin.agents.save',
@@ -473,10 +495,20 @@ export class PlatformAgentPublicationService {
           versionId: target.id,
         });
         if (!identity) throw new PlatformAgentRevisionConflictError();
+
+        const inboxModelReset = await this.maybeResetInboxModelProviderOnPublish({
+          actorUserId,
+          identity: locked,
+          nextSnapshot: target.dependencySnapshot,
+          repository,
+          tx,
+        });
+
         await new PlatformAuditService(tx).append({
           action: 'admin.agents.rollback',
           actorUserId,
           afterDiff: {
+            ...(inboxModelReset === undefined ? {} : { inboxModelReset }),
             revision: identity.revision,
             version: target.version,
             versionChecksum: target.checksum,

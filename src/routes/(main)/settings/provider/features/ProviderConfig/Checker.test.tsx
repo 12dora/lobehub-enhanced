@@ -3,7 +3,7 @@ import type { FC, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProviderSettingsContext } from '../ModelList/ProviderSettingsContext';
-import Checker, { Error as CheckError } from './Checker';
+import Checker, { ConnectionCheckError } from './Checker';
 
 const missingTranslationKeys = vi.hoisted(() => new Set<string>());
 
@@ -343,7 +343,7 @@ describe('Checker — Error body stringify', () => {
 
     expect(() =>
       render(
-        <CheckError
+        <ConnectionCheckError
           error={{ body, message: 'connection check failed', type: 'ConnectionCheckFailed' }}
         />,
       ),
@@ -370,6 +370,7 @@ describe('Checker — admin model dropdown', () => {
     expect(() => renderChecker(true, 'gpt-5.6-luna')).not.toThrow();
     expect(selectHarness.lastProps).not.toHaveProperty('virtual');
     expect(selectHarness.lastProps).not.toHaveProperty('listItemHeight');
+    expect(selectHarness.lastProps).toMatchObject({ showSearch: true });
 
     // user-event click can stall on base-ui pointer capture in happy-dom.
     fireEvent.click(screen.getByRole('combobox'));

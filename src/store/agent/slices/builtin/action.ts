@@ -3,7 +3,7 @@ import type { AgentItem, LobeAgentConfig } from '@lobechat/types';
 import type { SWRResponse } from 'swr';
 import type { PartialDeep } from 'type-fest';
 
-import { useClientDataSWR } from '@/libs/swr';
+import { useOnlyFetchOnceSWR } from '@/libs/swr';
 import { builtinAgentKeys } from '@/libs/swr/keys';
 import { agentService } from '@/services/agent';
 import type { StoreSetter } from '@/store/types';
@@ -129,6 +129,8 @@ export class BuiltinAgentSliceActionImpl {
     );
   };
 
+  // Fetch-once: chat-route `useFetchAgentConfig` already revalidates `agentMap[inbox]`
+  // on mount and on focus; this hook must not add a second getBuiltinAgent on every focus.
   useInitBuiltinAgent = (
     slug: string,
     context?: UseInitBuiltinAgentContext,
@@ -142,7 +144,7 @@ export class BuiltinAgentSliceActionImpl {
     );
     const isInboxRequestEnabled = slug !== INBOX_SESSION_ID || Boolean(inboxRequestScope);
 
-    return useClientDataSWR(
+    return useOnlyFetchOnceSWR(
       context?.isLogin === false || !isInboxRequestEnabled ? null : cacheKey,
       async () => {
         const data = await agentService.getBuiltinAgent(slug);

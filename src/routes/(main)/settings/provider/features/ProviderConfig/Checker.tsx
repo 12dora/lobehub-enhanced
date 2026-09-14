@@ -45,42 +45,44 @@ const stringifyCheckError = (error: ChatMessageError) => {
  * `ConnectionCheckFailed` copy over it told operators to inspect a `/v1` proxy suffix that had
  * nothing to do with the failure, and buried the real reason in the expandable JSON.
  */
-export const Error = memo<{ error: ChatMessageError; title?: string }>(({ error, title }) => {
-  const { t } = useTranslation(['error', 'modelRuntime']);
-  const providerName = useProviderName(error.body?.provider);
-  // A runtime code without `modelRuntime:` copy used to render its raw key as the headline;
-  // show whatever the server actually said instead, and only then the generic unknown-error copy.
-  const bodyMessage = isRecord(error.body)
-    ? pickTrimmedString(error.body.message)
-    : pickTrimmedString(error.body);
-  const fallbackMessage =
-    pickTrimmedString(error.message) ?? bodyMessage ?? t('response.UnknownChatFetchError');
+export const ConnectionCheckError = memo<{ error: ChatMessageError; title?: string }>(
+  ({ error, title }) => {
+    const { t } = useTranslation(['error', 'modelRuntime']);
+    const providerName = useProviderName(error.body?.provider);
+    // A runtime code without `modelRuntime:` copy used to render its raw key as the headline;
+    // show whatever the server actually said instead, and only then the generic unknown-error copy.
+    const bodyMessage = isRecord(error.body)
+      ? pickTrimmedString(error.body.message)
+      : pickTrimmedString(error.body);
+    const fallbackMessage =
+      pickTrimmedString(error.message) ?? bodyMessage ?? t('response.UnknownChatFetchError');
 
-  return (
-    <Flexbox gap={8} style={{ maxWidth: 600, width: '100%' }}>
-      <Alert
-        showIcon
-        type={'error'}
-        extra={
-          <Flexbox paddingBlock={8} paddingInline={16}>
-            <Highlighter
-              actionIconSize={'small'}
-              language={'json'}
-              variant={'borderless'}
-              wrap={true}
-            >
-              {stringifyCheckError(error)}
-            </Highlighter>
-          </Flexbox>
-        }
-        title={
-          title ??
-          getRuntimeErrorMessage(t, error.type, { provider: providerName }, fallbackMessage)
-        }
-      />
-    </Flexbox>
-  );
-});
+    return (
+      <Flexbox gap={8} style={{ maxWidth: 600, width: '100%' }}>
+        <Alert
+          showIcon
+          type={'error'}
+          extra={
+            <Flexbox paddingBlock={8} paddingInline={16}>
+              <Highlighter
+                actionIconSize={'small'}
+                language={'json'}
+                variant={'borderless'}
+                wrap={true}
+              >
+                {stringifyCheckError(error)}
+              </Highlighter>
+            </Flexbox>
+          }
+          title={
+            title ??
+            getRuntimeErrorMessage(t, error.type, { provider: providerName }, fallbackMessage)
+          }
+        />
+      </Flexbox>
+    );
+  },
+);
 
 export type CheckErrorRender = (props: {
   defaultError: ReactNode;
@@ -202,8 +204,7 @@ const Checker = memo<ConnectionCheckerProps>(
             cursor = pageResult.nextCursor;
           }
           if (!platformId) {
-            // `Error` is shadowed by the local alert component in this file.
-            throw new globalThis.Error(`Platform provider not found: ${provider}`);
+            throw new Error(`Platform provider not found: ${provider}`);
           }
           const result = await lambdaClient.admin.aiProviders.test.mutate({
             id: platformId,
@@ -303,7 +304,7 @@ const Checker = memo<ConnectionCheckerProps>(
     };
 
     const defaultError = error ? (
-      <Error error={error as ChatMessageError} title={errorTitle} />
+      <ConnectionCheckError error={error as ChatMessageError} title={errorTitle} />
     ) : null;
 
     const errorContent = CheckErrorRender ? (
@@ -317,6 +318,7 @@ const Checker = memo<ConnectionCheckerProps>(
         <Flexbox horizontal gap={8}>
           <Select
             // base-ui Select's virtual list throws on open in @lobehub/ui 5.46.x — do not pass `virtual`.
+            showSearch
             disabled={!canManageProvider}
             options={sortedModels.map((id) => ({ label: id, value: id }))}
             popupClassName={cx(styles.popup)}

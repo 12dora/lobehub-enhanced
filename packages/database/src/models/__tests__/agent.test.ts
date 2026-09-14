@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
@@ -2894,6 +2894,73 @@ describe('AgentModel', () => {
         .from(messages)
         .where(eq(messages.id, 'inbox-msg-keep'));
       expect(message).toMatchObject({ agentId: 'inbox-u1', content: 'keep-message' });
+    });
+
+    it('excludes already-null inbox rows, does not bump updatedAt, and leaves another user non-inbox row alone', async () => {
+      const frozenUpdatedAt = new Date('2024-06-01T00:00:00.000Z');
+      await serverDB.insert(agents).values([
+        {
+          id: 'inbox-reset-u1',
+          model: 'gpt-6-astra',
+          provider: 'chatgpt',
+          slug: INBOX_SESSION_ID,
+          updatedAt: frozenUpdatedAt,
+          userId,
+          virtual: true,
+        },
+        {
+          id: 'inbox-null',
+          model: null,
+          provider: null,
+          slug: INBOX_SESSION_ID,
+          updatedAt: frozenUpdatedAt,
+          userId: userId2,
+          virtual: true,
+        },
+        {
+          id: 'other-u2',
+          model: 'keep-u2',
+          provider: 'keep-p2',
+          slug: 'other',
+          updatedAt: frozenUpdatedAt,
+          userId: userId2,
+        },
+      ]);
+
+      const before = await serverDB
+        .select({
+          id: agents.id,
+          updatedAt: agents.updatedAt,
+        })
+        .from(agents)
+        .where(inArray(agents.id, ['inbox-reset-u1', 'inbox-null', 'other-u2']));
+      const updatedAtBefore = Object.fromEntries(
+        before.map((row) => [row.id, row.updatedAt?.getTime()]),
+      );
+
+      const count = await agentModel.resetInboxModelProviderForAllUsers();
+
+      expect(count).toBe(1);
+
+      const after = await serverDB
+        .select({
+          id: agents.id,
+          model: agents.model,
+          provider: agents.provider,
+          updatedAt: agents.updatedAt,
+        })
+        .from(agents)
+        .where(inArray(agents.id, ['inbox-reset-u1', 'inbox-null', 'other-u2']));
+      const byId = Object.fromEntries(after.map((row) => [row.id, row]));
+
+      expect(byId['inbox-reset-u1']).toMatchObject({ model: null, provider: null });
+      expect(byId['inbox-reset-u1']?.updatedAt?.getTime()).toBe(updatedAtBefore['inbox-reset-u1']);
+
+      expect(byId['inbox-null']).toMatchObject({ model: null, provider: null });
+      expect(byId['inbox-null']?.updatedAt?.getTime()).toBe(updatedAtBefore['inbox-null']);
+
+      expect(byId['other-u2']).toMatchObject({ model: 'keep-u2', provider: 'keep-p2' });
+      expect(byId['other-u2']?.updatedAt?.getTime()).toBe(updatedAtBefore['other-u2']);
     });
   });
 });

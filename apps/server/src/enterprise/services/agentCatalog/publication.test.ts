@@ -436,6 +436,105 @@ describe('PlatformAgentPublicationService', () => {
       const afterDiff = mocks.appendAudit.mock.calls[0]?.[0]?.afterDiff as Record<string, unknown>;
       expect(afterDiff).not.toHaveProperty('inboxModelReset');
     });
+
+    it('resets when the new published snapshot has no model pair', async () => {
+      const locked = { ...defaultInboxIdentity, currentVersionId: 'old-version-id' };
+      mocks.getExactVersion.mockResolvedValue({
+        dependencySnapshot,
+        id: 'old-version-id',
+      });
+      mocks.appendVersionCas.mockResolvedValue({
+        ...version,
+        dependencySnapshot: {
+          ...dependencySnapshot,
+          model: { ...dependencySnapshot.model, modelKey: '', providerKey: '' },
+        },
+      });
+      mocks.resetInbox.mockResolvedValue(5);
+
+      await saveDefaultInbox(locked);
+
+      expect(mocks.resetInbox).toHaveBeenCalledTimes(1);
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterDiff: expect.objectContaining({ inboxModelReset: 5 }),
+        }),
+      );
+    });
+  });
+
+  describe('default-inbox inbox model reset on rollback', () => {
+    const defaultInboxIdentity = {
+      ...identity,
+      currentVersionId: 'live-version-id',
+      isDefault: true,
+      systemKey: 'default-inbox' as const,
+    };
+
+    const rollbackDefaultInbox = (targetVersionId: string) => {
+      mocks.lockIdentity.mockResolvedValue(defaultInboxIdentity);
+      return new PlatformAgentPublicationService(db, {
+        invalidation: { publish: vi.fn() },
+      }).rollback('admin-id', {
+        agentId: defaultInboxIdentity.id,
+        expectedDraftToken: platformAgentDraftToken(defaultInboxIdentity),
+        expectedRevision: 0,
+        reason: 'roll back inbox model',
+        targetVersionId,
+      });
+    };
+
+    it('resets every member inbox pair when the rolled-back model pair differs', async () => {
+      mocks.getExactVersion.mockImplementation(async (_agentId: string, versionId: string) => {
+        if (versionId === 'older-version-id') {
+          return {
+            checksum: 'f'.repeat(64),
+            dependencySnapshot,
+            id: 'older-version-id',
+            version: '1.0.0',
+          };
+        }
+        return {
+          checksum: 'a'.repeat(64),
+          dependencySnapshot: {
+            ...dependencySnapshot,
+            model: {
+              ...dependencySnapshot.model,
+              modelKey: 'gpt-6-astra',
+              providerKey: 'chatgpt',
+            },
+          },
+          id: 'live-version-id',
+          version: '1.0.1',
+        };
+      });
+      mocks.resetInbox.mockResolvedValue(4);
+
+      await rollbackDefaultInbox('older-version-id');
+
+      expect(mocks.resetInbox).toHaveBeenCalledTimes(1);
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'admin.agents.rollback',
+          afterDiff: expect.objectContaining({ inboxModelReset: 4 }),
+        }),
+      );
+    });
+
+    it('does not reset when the rolled-back model pair is unchanged', async () => {
+      mocks.getExactVersion.mockResolvedValue({
+        checksum: 'f'.repeat(64),
+        dependencySnapshot,
+        id: 'older-version-id',
+        version: '1.0.0',
+      });
+
+      await rollbackDefaultInbox('older-version-id');
+
+      expect(mocks.resetInbox).not.toHaveBeenCalled();
+      const afterDiff = mocks.appendAudit.mock.calls[0]?.[0]?.afterDiff as Record<string, unknown>;
+      expect(afterDiff).not.toHaveProperty('inboxModelReset');
+    });
   });
 });
 
