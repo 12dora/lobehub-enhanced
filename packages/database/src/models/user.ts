@@ -711,12 +711,15 @@ export class UserModel {
     let lastId: string | null = null;
 
     for (let batch = 0; batch < batchLimit; batch += 1) {
-      const base = db.select({ fullName: users.fullName, id: users.id }).from(users);
-      const scoped = lastId === null ? base : base.where(gt(users.id, lastId));
-      const rows = await scoped.orderBy(asc(users.id)).limit(size);
+      const rows: Array<{ fullName: string | null; id: string }> = await db
+        .select({ fullName: users.fullName, id: users.id })
+        .from(users)
+        .where(lastId === null ? undefined : gt(users.id, lastId))
+        .orderBy(asc(users.id))
+        .limit(size);
       if (rows.length === 0) break;
 
-      const tuples = rows.map((row) => {
+      const tuples = rows.map((row: { fullName: string | null; id: string }) => {
         const fields = pinyinFieldsFromFullName(row.fullName);
         return sql`(${row.id}::text, ${fields.pinyinFull}::text, ${fields.pinyinInitials}::text)`;
       });
