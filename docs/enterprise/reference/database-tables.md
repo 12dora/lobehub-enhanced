@@ -66,6 +66,8 @@ AIHub 二开的表统一位于**平台域**，以 `platform_` 前缀与上游用
 | `platform_user_agent_materializations`           | 按用户的延迟物化状态与本地 Agent 映射        |
 | `platform_user_agent_materialization_tombstones` | 平台 Agent 硬删除后遗留本地 Agent 的溯源墓碑 |
 
+`system_key='default-inbox'` 是平台默认助理。管理员 `admin.agents.save` 发布且新版本 `dependency_snapshot.model` 的 `{providerKey, modelKey}` 相对上一已发布版本变化（或上一版本没有 pair）时，同一事务内将所有用户 `agents.slug='inbox'` 行的 `model`/`provider` 置空；已有会话与消息不动，新会话跟随新默认。
+
 ## 身份提供方（Authentik OIDC，`identity.ts`）
 
 | 表                                            | 用途                                      |

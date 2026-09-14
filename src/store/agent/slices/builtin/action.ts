@@ -3,7 +3,7 @@ import type { AgentItem, LobeAgentConfig } from '@lobechat/types';
 import type { SWRResponse } from 'swr';
 import type { PartialDeep } from 'type-fest';
 
-import { useOnlyFetchOnceSWR } from '@/libs/swr';
+import { useClientDataSWR } from '@/libs/swr';
 import { builtinAgentKeys } from '@/libs/swr/keys';
 import { agentService } from '@/services/agent';
 import type { StoreSetter } from '@/store/types';
@@ -142,7 +142,7 @@ export class BuiltinAgentSliceActionImpl {
     );
     const isInboxRequestEnabled = slug !== INBOX_SESSION_ID || Boolean(inboxRequestScope);
 
-    return useOnlyFetchOnceSWR(
+    return useClientDataSWR(
       context?.isLogin === false || !isInboxRequestEnabled ? null : cacheKey,
       async () => {
         const data = await agentService.getBuiltinAgent(slug);

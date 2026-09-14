@@ -817,6 +817,21 @@ export class AgentModel {
   };
 
   /**
+   * Cross-user (ignores `this.userId`): clear `model`/`provider` on every raw `agents` row
+   * whose slug is the builtin inbox. Used when the platform default-inbox published model
+   * pair changes so new conversations pick up the admin default. Does not touch other
+   * slugs, topics, or messages.
+   */
+  resetInboxModelProviderForAllUsers = async (): Promise<number> => {
+    const updated = await this.db
+      .update(agents)
+      .set({ model: null, provider: null, updatedAt: new Date() })
+      .where(eq(agents.slug, INBOX_SESSION_ID))
+      .returning({ id: agents.id });
+    return updated.length;
+  };
+
+  /**
    * Strip fields the Agent Builder's own row must never carry (see
    * {@link AGENT_BUILDER_PROTECTED_FIELDS}). Only looks up the target row's `slug` when the
    * incoming patch actually touches a protected field, so normal updates pay no extra query.

@@ -13,6 +13,7 @@ AIHub 是基于 LobeHub 的企业内部版二次开发。本目录是这套二�
 7. **Branding 只替换用户可见信息**：内部包名、协议 ID、数据库标识、许可证文本保持稳定。
 8. **企业代码集中隔离**：企业代码集中在少数新增目录（见下方 "代码落点"）与少量稳定挂载点；上游直接修改点由 `scripts/enterprise/rebase-report.ts` 自动巡检，不再手工维护补丁台账。
 9. **Secret 主密钥经 KMS/Vault**：平台 Secret 采用信封加密（KEK 版本化）；私网 / 本机地址默认放行、云 Metadata（169.254.169.254）恒阻断。
+10. **默认助理换模型即重置用户 inbox 行**：管理员保存/发布 `system_key=default-inbox` 且新版本 `dependency_snapshot.model` 的 `{providerKey, modelKey}` 相对上一已发布版本变化（或上一版本没有 pair）时，同一事务内将所有用户 `agents.slug='inbox'` 的 `model`/`provider` 置空。新会话跟随新默认；已有会话与消息不动。观察模式下用户之后仍可再选模型。
 
 ## 代码落点
 

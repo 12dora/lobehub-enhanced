@@ -2,7 +2,7 @@ import { INBOX_SESSION_ID } from '@lobechat/const';
 import type { AgentItem } from '@lobechat/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useOnlyFetchOnceSWR } from '@/libs/swr';
+import { useClientDataSWR } from '@/libs/swr';
 import { initialAgentSliceState } from '@/store/agent/slices/agent/initialState';
 
 import { builtinAgentSelectors } from '../../selectors/builtinAgentSelectors';
@@ -11,7 +11,7 @@ import { BuiltinAgentSliceActionImpl } from './action';
 import { initialBuiltinAgentSliceState } from './initialState';
 
 vi.mock('@/libs/swr', () => ({
-  useOnlyFetchOnceSWR: vi.fn(() => ({ data: undefined })),
+  useClientDataSWR: vi.fn(() => ({ data: undefined })),
 }));
 
 describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
@@ -27,7 +27,7 @@ describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
   const inboxAgent = (title: string): AgentItem => ({ id: 'inbox-agent', title }) as AgentItem;
 
   const succeed = (requestIndex: number, data: AgentItem | null): void => {
-    const options = vi.mocked(useOnlyFetchOnceSWR).mock.calls[requestIndex][2] as {
+    const options = vi.mocked(useClientDataSWR).mock.calls[requestIndex][2] as {
       onSuccess: (value: AgentItem | null) => void;
     };
     options.onSuccess(data);
@@ -53,11 +53,26 @@ describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
       isLogin: true,
     });
 
-    expect(useOnlyFetchOnceSWR).toHaveBeenCalledWith(
+    expect(useClientDataSWR).toHaveBeenCalledWith(
       ['builtinAgent:init', 'inbox', '12', 'user-a:workspace-a'],
       expect.any(Function),
       expect.any(Object),
     );
+  });
+
+  it('revalidates on focus via useClientDataSWR and does not disable revalidateOnFocus', () => {
+    const action = new BuiltinAgentSliceActionImpl(set, get);
+
+    action.useInitBuiltinAgent(INBOX_SESSION_ID, {
+      brandingRevision: '12',
+      cacheScope: 'user-a:workspace-a',
+      isLogin: true,
+    });
+
+    expect(useClientDataSWR).toHaveBeenCalledTimes(1);
+    const options = vi.mocked(useClientDataSWR).mock.calls[0][2] as
+      { revalidateOnFocus?: boolean } | undefined;
+    expect(options?.revalidateOnFocus).not.toBe(false);
   });
 
   it('changes the inbox request key when the active workspace changes at the same revision', () => {
@@ -74,13 +89,13 @@ describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
       isLogin: true,
     });
 
-    expect(vi.mocked(useOnlyFetchOnceSWR).mock.calls[0][0]).toEqual([
+    expect(vi.mocked(useClientDataSWR).mock.calls[0][0]).toEqual([
       'builtinAgent:init',
       'inbox',
       '12',
       'user-a:workspace-a',
     ]);
-    expect(vi.mocked(useOnlyFetchOnceSWR).mock.calls[1][0]).toEqual([
+    expect(vi.mocked(useClientDataSWR).mock.calls[1][0]).toEqual([
       'builtinAgent:init',
       'inbox',
       '12',
@@ -149,11 +164,7 @@ describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
       isLogin: false,
     });
 
-    expect(useOnlyFetchOnceSWR).toHaveBeenCalledWith(
-      null,
-      expect.any(Function),
-      expect.any(Object),
-    );
+    expect(useClientDataSWR).toHaveBeenCalledWith(null, expect.any(Function), expect.any(Object));
   });
 
   it('does not reuse a persisted user key across logout and the next login', () => {
@@ -175,7 +186,7 @@ describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
       isLogin: true,
     });
 
-    expect(vi.mocked(useOnlyFetchOnceSWR).mock.calls.map(([key]) => key)).toEqual([
+    expect(vi.mocked(useClientDataSWR).mock.calls.map(([key]) => key)).toEqual([
       ['builtinAgent:init', 'inbox', '12', 'user-a:workspace-a'],
       null,
       ['builtinAgent:init', 'inbox', '12', 'user-b:workspace-a'],
@@ -268,7 +279,7 @@ describe('BuiltinAgentSliceActionImpl.useInitBuiltinAgent', () => {
 
     action.useInitBuiltinAgent('page-agent', { brandingRevision: '12', isLogin: true });
 
-    expect(useOnlyFetchOnceSWR).toHaveBeenCalledWith(
+    expect(useClientDataSWR).toHaveBeenCalledWith(
       ['builtinAgent:init', 'page-agent'],
       expect.any(Function),
       expect.any(Object),

@@ -1,5 +1,7 @@
+import { PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY } from '@lobechat/types';
 import debug from 'debug';
 
+import { AgentModel } from '@/database/models/agent';
 import { checksumPayload } from '@/database/models/platform/checksum';
 import {
   type ExactPlatformAgentVersion,
@@ -158,6 +160,28 @@ export const nextPlatformAgentVersion = (existing: readonly string[]): string =>
   }
   if (!highest) return `0.0.${existing.length + 1}`;
   return `${highest[0]}.${highest[1]}.${highest[2] + 1}`;
+};
+
+const inboxModelPairKey = (
+  snapshot: ExactPlatformAgentVersion['dependencySnapshot'] | null | undefined,
+): string | null => {
+  const model = snapshot?.model;
+  if (!model?.providerKey || !model?.modelKey) return null;
+  return `${model.providerKey}\0${model.modelKey}`;
+};
+
+/**
+ * New conversations should follow a newly published default-inbox pair. Reset member inbox
+ * rows when the previous published version had no pair, or when `{providerKey, modelKey}`
+ * differs. Checksum / revision changes alone do not count.
+ */
+export const shouldResetInboxModelProviderOnPublish = (
+  previous: ExactPlatformAgentVersion['dependencySnapshot'] | null | undefined,
+  next: ExactPlatformAgentVersion['dependencySnapshot'],
+): boolean => {
+  const previousPair = inboxModelPairKey(previous);
+  if (previousPair === null) return true;
+  return previousPair !== inboxModelPairKey(next);
 };
 
 /**
@@ -351,6 +375,25 @@ export class PlatformAgentPublicationService {
           },
         });
 
+        let inboxModelReset: number | undefined;
+        if (locked.systemKey === PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY) {
+          const previous = locked.currentVersionId
+            ? await repository.getExactVersion(locked.id, locked.currentVersionId)
+            : undefined;
+          if (
+            shouldResetInboxModelProviderOnPublish(
+              previous?.dependencySnapshot,
+              version.dependencySnapshot,
+            )
+          ) {
+            inboxModelReset = await new AgentModel(
+              tx,
+              actorUserId,
+            ).resetInboxModelProviderForAllUsers();
+            log('reset inbox model/provider agent=%s rows=%d', locked.id, inboxModelReset);
+          }
+        }
+
         await new PlatformAuditService(tx).append({
           action: 'admin.agents.save',
           actorUserId,
@@ -359,6 +402,7 @@ export class PlatformAgentPublicationService {
               connectors: version.dependencySnapshot.connectors.length,
               skills: version.dependencySnapshot.skills.length,
             },
+            ...(inboxModelReset === undefined ? {} : { inboxModelReset }),
             revision: identity.revision,
             version: version.version,
             versionChecksum: version.checksum,

@@ -9,6 +9,7 @@ import {
   nextPlatformAgentVersion,
   platformAgentDraftToken,
   PlatformAgentPublicationService,
+  shouldResetInboxModelProviderOnPublish,
 } from './publication';
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   listVersionLabels: vi.fn(),
   lockIdentity: vi.fn(),
   pointToVersionCas: vi.fn(),
+  resetInbox: vi.fn(),
 }));
 
 vi.mock('@/database/repositories/platformAgentCatalog', () => ({
@@ -29,6 +31,11 @@ vi.mock('@/database/repositories/platformAgentCatalog', () => ({
     listVersionLabels = mocks.listVersionLabels;
     lockIdentity = mocks.lockIdentity;
     pointToVersionCas = mocks.pointToVersionCas;
+  },
+}));
+vi.mock('@/database/models/agent', () => ({
+  AgentModel: class {
+    resetInboxModelProviderForAllUsers = mocks.resetInbox;
   },
 }));
 vi.mock('../platformAudit', () => ({
@@ -147,6 +154,7 @@ describe('PlatformAgentPublicationService', () => {
       version: '1.0.0',
     });
     mocks.pointToVersionCas.mockResolvedValue(published);
+    mocks.resetInbox.mockResolvedValue(0);
   });
 
   afterEach(() => setEnterprisePlatformObserverForTest(null));
@@ -181,6 +189,7 @@ describe('PlatformAgentPublicationService', () => {
     expect(mocks.appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'admin.agents.save', result: 'success' }),
     );
+    expect(mocks.resetInbox).not.toHaveBeenCalled();
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({ resourceId: 'agent-id', revision: 1 }),
     );
@@ -341,5 +350,126 @@ describe('PlatformAgentPublicationService', () => {
       '[enterprise-observability] metric sink failed',
       expect.objectContaining({ errorClass: 'UnexpectedError' }),
     );
+  });
+
+  describe('default-inbox inbox model reset on save', () => {
+    const defaultInboxIdentity = {
+      ...identity,
+      isDefault: true,
+      systemKey: 'default-inbox' as const,
+    };
+
+    const saveDefaultInbox = (
+      locked: Omit<typeof defaultInboxIdentity, 'currentVersionId'> & {
+        currentVersionId: string | null;
+      },
+    ) => {
+      mocks.lockIdentity.mockResolvedValue(locked);
+      return new PlatformAgentPublicationService(db, { invalidation: { publish: vi.fn() } }).save(
+        'admin-id',
+        {
+          ...input,
+          agentId: locked.id,
+          expectedDraftToken: platformAgentDraftToken(locked),
+        },
+      );
+    };
+
+    it('resets every member inbox pair when the published model pair changes', async () => {
+      const locked = { ...defaultInboxIdentity, currentVersionId: 'old-version-id' };
+      mocks.getExactVersion.mockResolvedValue({
+        dependencySnapshot: {
+          ...dependencySnapshot,
+          model: {
+            modelKey: 'gpt-6-astra',
+            providerChecksum: 'a'.repeat(64),
+            providerKey: 'chatgpt',
+            providerRevision: 1,
+          },
+        },
+        id: 'old-version-id',
+      });
+      mocks.resetInbox.mockResolvedValue(4);
+
+      await saveDefaultInbox(locked);
+
+      expect(mocks.getExactVersion).toHaveBeenCalledWith(defaultInboxIdentity.id, 'old-version-id');
+      expect(mocks.resetInbox).toHaveBeenCalledTimes(1);
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterDiff: expect.objectContaining({ inboxModelReset: 4 }),
+        }),
+      );
+    });
+
+    it('resets when the previous published version had no model pair', async () => {
+      mocks.resetInbox.mockResolvedValue(2);
+
+      await saveDefaultInbox({ ...defaultInboxIdentity, currentVersionId: null });
+
+      expect(mocks.getExactVersion).not.toHaveBeenCalled();
+      expect(mocks.resetInbox).toHaveBeenCalledTimes(1);
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterDiff: expect.objectContaining({ inboxModelReset: 2 }),
+        }),
+      );
+    });
+
+    it('does not reset when the published model pair is unchanged', async () => {
+      const locked = { ...defaultInboxIdentity, currentVersionId: 'old-version-id' };
+      mocks.getExactVersion.mockResolvedValue({
+        dependencySnapshot: {
+          ...dependencySnapshot,
+          model: {
+            ...dependencySnapshot.model,
+            providerChecksum: 'c'.repeat(64),
+            providerRevision: 9,
+          },
+        },
+        id: 'old-version-id',
+      });
+
+      await saveDefaultInbox(locked);
+
+      expect(mocks.resetInbox).not.toHaveBeenCalled();
+      const afterDiff = mocks.appendAudit.mock.calls[0]?.[0]?.afterDiff as Record<string, unknown>;
+      expect(afterDiff).not.toHaveProperty('inboxModelReset');
+    });
+  });
+});
+
+describe('shouldResetInboxModelProviderOnPublish', () => {
+  const next = dependencySnapshot;
+
+  it('resets when the previous version had no pair', () => {
+    expect(shouldResetInboxModelProviderOnPublish(undefined, next)).toBe(true);
+    expect(
+      shouldResetInboxModelProviderOnPublish({ ...next, model: undefined as never }, next),
+    ).toBe(true);
+  });
+
+  it('resets when providerKey or modelKey changes', () => {
+    expect(
+      shouldResetInboxModelProviderOnPublish(
+        {
+          ...next,
+          model: { ...next.model, modelKey: 'gpt-6-astra', providerKey: 'chatgpt' },
+        },
+        next,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not reset when only checksum or revision changes', () => {
+    expect(
+      shouldResetInboxModelProviderOnPublish(
+        {
+          ...next,
+          model: { ...next.model, providerChecksum: 'c'.repeat(64), providerRevision: 9 },
+        },
+        next,
+      ),
+    ).toBe(false);
   });
 });

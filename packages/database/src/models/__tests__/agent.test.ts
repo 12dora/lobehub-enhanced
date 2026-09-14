@@ -14,6 +14,7 @@ import {
   documents,
   files,
   knowledgeBases,
+  messages,
   sessionGroups,
   sessions,
   topics,
@@ -2819,6 +2820,80 @@ describe('AgentModel', () => {
       const result = await agentModel.listMessengerBindableAgents();
 
       expect(result.map((r) => r.id)).toEqual(['mb-mine']);
+    });
+  });
+
+  describe('resetInboxModelProviderForAllUsers', () => {
+    it('clears model and provider on every inbox row and leaves other agents, topics, and messages alone', async () => {
+      await serverDB.insert(agents).values([
+        {
+          id: 'inbox-u1',
+          model: 'gpt-6-astra',
+          provider: 'chatgpt',
+          slug: INBOX_SESSION_ID,
+          userId,
+          virtual: true,
+        },
+        {
+          id: 'inbox-u2',
+          model: 'grok-4.6',
+          provider: 'supergrok',
+          slug: INBOX_SESSION_ID,
+          userId: userId2,
+          virtual: true,
+        },
+        {
+          id: 'other-u1',
+          model: 'keep-me',
+          provider: 'keep-provider',
+          slug: 'other',
+          userId,
+        },
+      ]);
+      await serverDB.insert(topics).values({
+        agentId: 'inbox-u1',
+        id: 'inbox-topic-keep',
+        title: 'keep-topic',
+        userId,
+      });
+      await serverDB.insert(messages).values({
+        agentId: 'inbox-u1',
+        content: 'keep-message',
+        id: 'inbox-msg-keep',
+        role: 'user',
+        userId,
+      });
+
+      const count = await agentModel.resetInboxModelProviderForAllUsers();
+
+      expect(count).toBe(2);
+      const inboxRows = await serverDB
+        .select({
+          id: agents.id,
+          model: agents.model,
+          provider: agents.provider,
+        })
+        .from(agents)
+        .where(eq(agents.slug, INBOX_SESSION_ID));
+      expect(inboxRows).toEqual(
+        expect.arrayContaining([
+          { id: 'inbox-u1', model: null, provider: null },
+          { id: 'inbox-u2', model: null, provider: null },
+        ]),
+      );
+      expect(inboxRows).toHaveLength(2);
+
+      const [other] = await serverDB.select().from(agents).where(eq(agents.id, 'other-u1'));
+      expect(other).toMatchObject({ model: 'keep-me', provider: 'keep-provider' });
+
+      const [topic] = await serverDB.select().from(topics).where(eq(topics.id, 'inbox-topic-keep'));
+      expect(topic).toMatchObject({ agentId: 'inbox-u1', title: 'keep-topic' });
+
+      const [message] = await serverDB
+        .select()
+        .from(messages)
+        .where(eq(messages.id, 'inbox-msg-keep'));
+      expect(message).toMatchObject({ agentId: 'inbox-u1', content: 'keep-message' });
     });
   });
 });

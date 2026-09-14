@@ -944,6 +944,28 @@ describe('AgentService', () => {
       expect(result.agent?.provider).toBe('admin-provider');
     });
 
+    it('does not stamp the effective pair on a write that contains neither model nor provider', async () => {
+      const mockAgentModel = {
+        getAgentConfig: vi.fn(),
+        getAgentConfigById: vi.fn().mockResolvedValue({
+          id: 'inbox-1',
+          model: null,
+          provider: null,
+          slug: 'inbox',
+        }),
+        updateConfig: vi.fn().mockResolvedValue(undefined),
+      };
+
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({});
+
+      const newService = new AgentService(mockDb, mockUserId);
+      await newService.updateAgentConfig('inbox-1', { title: 'keep' });
+
+      expect(mockAgentModel.updateConfig).toHaveBeenCalledWith('inbox-1', { title: 'keep' });
+      expect(mockAgentModel.getAgentConfig).not.toHaveBeenCalled();
+    });
+
     it('completes a provider-only inbox write from the effective pair', async () => {
       const mockAgentModel = {
         getAgentConfig: vi.fn().mockResolvedValue({
