@@ -5,6 +5,7 @@ import {
   useFetchAuditConversationMessages,
   useFetchAuditConversationsList,
   useFetchAuditPolicy,
+  useFetchAuditUserSummary,
 } from '../hooks/useAdminAudit';
 import { AUDIT_LIST_POLL_MS } from '../shared/useCursorPagination';
 import { MSG_LIMIT } from './useLiveMessageFeed';
@@ -57,5 +58,7 @@ export const useLiveAuditSources = ({
     { refreshInterval: poll && !!topicId ? AUDIT_LIST_POLL_MS : 0 },
   );
 
-  return { messagesLive, policy, topicDetail, topics };
+  const summary = useFetchAuditUserSummary(userId, canAuditRead && !!userId);
+
+  return { messagesLive, policy, summary, topicDetail, topics };
 };

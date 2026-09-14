@@ -3,6 +3,8 @@
 import type { TFunction } from 'i18next';
 import { useMemo } from 'react';
 
+import { isNotFoundError } from '@/enterprise/client/features/admin/users/detail/isNotFoundError';
+
 import { mergeMessagePages, stripMessageBodies } from '../shared/liveMessageUtils';
 import {
   emptyRedactionSlots,
@@ -40,7 +42,7 @@ export const useLiveAuditFeeds = ({
   topicId,
   userId,
 }: LiveAuditFeedsArgs) => {
-  const { messagesLive, policy, topicDetail, topics } = useLiveAuditSources({
+  const { messagesLive, policy, summary, topicDetail, topics } = useLiveAuditSources({
     canAuditRead,
     canConversationRead,
     poll,
@@ -217,6 +219,7 @@ export const useLiveAuditFeeds = ({
       },
       loading: (topics.isLoading && !topics.data) || loadingMoreTopics,
       pageError: topicPageError,
+      userNotFound: Boolean(userId) && isNotFoundError(summary.error),
     },
   };
 };

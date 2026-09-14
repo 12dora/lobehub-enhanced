@@ -1,7 +1,6 @@
 'use client';
 
-import { Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { memo, useEffect, useState } from 'react';
@@ -74,10 +73,11 @@ export interface TopicListPaneProps {
   onLoadMore: () => void;
   onSelect: (topicId: string) => void;
   selectedTopicId?: string;
+  userNotFound?: boolean;
 }
 
 const TopicListPane = memo<TopicListPaneProps>(
-  ({ items, selectedTopicId, onSelect, hasMore, onLoadMore, loading }) => {
+  ({ items, selectedTopicId, onSelect, hasMore, onLoadMore, loading, userNotFound }) => {
     const { t } = useTranslation('admin');
     const reduceMotion = useReducedMotion();
     const [now, setNow] = useState(() => Date.now());
@@ -90,7 +90,9 @@ const TopicListPane = memo<TopicListPaneProps>(
     if (!items.length && !loading) {
       return (
         <div className={styles.root}>
-          <Text type="secondary">{t('audit.live.topics.empty')}</Text>
+          <Text type="secondary">
+            {t(userNotFound ? 'audit.live.empty.userNotFound' : 'audit.live.topics.empty')}
+          </Text>
         </div>
       );
     }

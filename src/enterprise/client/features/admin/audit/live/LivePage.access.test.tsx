@@ -68,6 +68,13 @@ const evidence = vi.hoisted(() => {
       isValidating: false,
       mutate: vi.fn(),
     },
+    summary: {
+      data: { email: null, fullName: 'Ada', id: 'u1', username: 'ada' } as
+        | { email: string | null; fullName: string | null; id: string; username: string | null }
+        | undefined,
+      error: undefined as unknown,
+      isLoading: false,
+    },
     listConversationMessages: vi.fn(),
     listConversations: vi.fn(),
     subscribe(listener: () => void) {
@@ -106,6 +113,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Switch: ({ checked, onChange }: { checked?: boolean; onChange?: (v: boolean) => void }) => (
     <input
       checked={checked}
@@ -184,12 +192,22 @@ vi.mock('../hooks/useAdminAudit', async () => {
         mutate: vi.fn(),
       };
     },
+    useFetchAuditUserSummary: (_userId?: string, _enabled?: boolean) => {
+      useTick();
+      return {
+        data: evidence.summary.data,
+        error: evidence.summary.error,
+        isLoading: evidence.summary.isLoading,
+        isValidating: false,
+        mutate: vi.fn(),
+      };
+    },
   };
 });
 
-vi.mock('../shared/AuditUserSearchSelect', () => ({
-  default: ({ value }: { value?: string }) => (
-    <div data-testid="user-search" data-value={value ?? ''} />
+vi.mock('../../primitives/UserSearchSelect', () => ({
+  default: ({ userId }: { userId?: string }) => (
+    <div data-testid="user-search" data-value={userId ?? ''} />
   ),
 }));
 
@@ -229,12 +247,17 @@ vi.mock('./TopicListPane', () => ({
     hasMore,
     items,
     onLoadMore,
+    userNotFound,
   }: {
     hasMore?: boolean;
     items?: Array<{ id: string }>;
     onLoadMore?: () => void;
+    userNotFound?: boolean;
   }) => (
     <div data-has-more={hasMore ? '1' : '0'} data-testid="topic-list">
+      {(items ?? []).length === 0 ? (
+        <span>{userNotFound ? 'audit.live.empty.userNotFound' : 'audit.live.topics.empty'}</span>
+      ) : null}
       {(items ?? []).map((item) => (
         <div data-testid={`live-topic-${item.id}`} key={item.id}>
           {item.id}
@@ -368,6 +391,9 @@ describe('LivePage access / feed characterization', () => {
     evidence.topicDetail.isLoading = false;
     evidence.topicDetail.isValidating = false;
     evidence.topicDetail.mutate = vi.fn().mockResolvedValue(undefined);
+    evidence.summary.data = { email: null, fullName: 'Ada', id: 'u1', username: 'ada' };
+    evidence.summary.error = undefined;
+    evidence.summary.isLoading = false;
     evidence.listConversationMessages.mockReset();
     evidence.listConversations.mockReset();
     evidence.listConversationMessages.mockResolvedValue({
@@ -853,5 +879,15 @@ describe('LivePage access / feed characterization', () => {
     fireEvent.click(screen.getByTestId('load-more-topics'));
     expect(evidence.listConversationMessages).not.toHaveBeenCalled();
     expect(evidence.listConversations).not.toHaveBeenCalled();
+  });
+
+  it('shows user-not-found instead of empty conversations when the subject cannot be resolved', async () => {
+    evidence.summary.error = { data: { errorData: { code: 'PLATFORM_NOT_FOUND' } } };
+    evidence.topics.data = { items: [], nextCursor: null, redactionProfile: 'strict' };
+
+    renderLive('/admin/audit/live?userId=missing-user');
+
+    expect(screen.getByText('audit.live.empty.userNotFound')).toBeInTheDocument();
+    expect(screen.queryByText('audit.live.topics.empty')).toBeNull();
   });
 });

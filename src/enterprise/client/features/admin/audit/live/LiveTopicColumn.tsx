@@ -25,6 +25,7 @@ const LiveTopicColumn = memo<LiveTopicColumnProps>(({ feed, onSelect, selectedTo
         items={feed.items}
         loading={feed.loading}
         selectedTopicId={selectedTopicId}
+        userNotFound={feed.userNotFound}
         onLoadMore={feed.loadMore}
         onSelect={onSelect}
       />
