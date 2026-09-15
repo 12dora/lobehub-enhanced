@@ -2504,7 +2504,7 @@ describe('MessengerRouter DingTalk drain serialization (real queue.ts)', () => {
     await bGate;
 
     vi.mocked(releaseDingTalkThreadBusy).mockClear();
-    AgentBridgeService.requestStop.mockClear();
+    vi.mocked(AgentBridgeService.requestStop).mockClear();
     mockDingTalkBinder.sendDmText.mockClear();
 
     await handler(
