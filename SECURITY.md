@@ -32,8 +32,12 @@ managed resources, shared OAuth, audit, database-driven identity providers, and 
 encryption.
 
 Authenticated `GET /f/:id` (non-`pba_*`) requires a Better Auth session and one of: file owner,
-workspace member (public/NULL visibility), topic link-share attachment owned by the file owner,
-or auditor with conversation body access.
+workspace member (public/NULL visibility), or auditor with conversation body access.
+
+Anonymous `GET /f/:id?share=<shareId>` is allowed when the share is a live `link` topic share
+and the file is attached to a message in that topic by the share owner (who also owns the file).
+An invalid or missing `share` falls through to the session flow. Revoking the share takes effect
+on the next request.
 
 **Out of scope**
 

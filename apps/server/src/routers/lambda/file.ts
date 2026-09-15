@@ -4,6 +4,7 @@ import {
   DERIVED_DOCUMENT_SOURCE_TYPE,
 } from '@lobechat/const';
 import { TRPCError } from '@trpc/server';
+import debug from 'debug';
 import { z } from 'zod';
 
 import {
@@ -25,9 +26,11 @@ import { DocumentService } from '@/server/services/document';
 import { FileService } from '@/server/services/file';
 import { hasWorkspaceScopedPermission } from '@/server/services/workspacePermission';
 import { AsyncTaskStatus, AsyncTaskType, type IAsyncTaskError } from '@/types/asyncTask';
-import type { FileListItem, KnowledgeItemStatus } from '@/types/files';
+import type { CheckFileHashResult, FileListItem, KnowledgeItemStatus } from '@/types/files';
 import { QueryFileListSchema, UploadFileSchema } from '@/types/files';
 import { TransferErrorCode } from '@/types/transferError';
+
+const log = debug('lobe-lambda-router:file');
 
 const fileTransferEntityTypeSchema = z.enum(['document', 'file', 'folder']);
 
@@ -128,6 +131,24 @@ const isStoredObjectAvailable = async (fileService: FileService, url: string): P
   }
 };
 
+const toPublicHashCheck = (
+  existingFile:
+    | {
+        fileType?: string;
+        isExist: boolean;
+        size?: number;
+      }
+    | null
+    | undefined,
+): CheckFileHashResult => {
+  if (!existingFile?.isExist) return { isExist: false };
+
+  const result: CheckFileHashResult = { isExist: true };
+  if (existingFile.fileType) result.fileType = existingFile.fileType;
+  if (typeof existingFile.size === 'number') result.size = existingFile.size;
+  return result;
+};
+
 const fileProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
   const wsId = ctx.workspaceId ?? undefined;
@@ -150,29 +171,49 @@ export const fileRouter = router({
     .use(withScopedPermission('file:upload'))
     .use(checkFileStorageUsage)
     .input(z.object({ hash: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input }): Promise<CheckFileHashResult> => {
       const existingFile = await ctx.fileModel.checkHash(input.hash);
       const existingHashUrl = existingFile?.isExist ? existingFile.url : undefined;
-      if (!existingHashUrl) return existingFile;
+      if (!existingHashUrl) return { isExist: false };
 
       const isStorageAvailable = await isStoredObjectAvailable(ctx.fileService, existingHashUrl);
 
-      return isStorageAvailable ? existingFile : { isExist: false };
+      return isStorageAvailable ? toPublicHashCheck(existingFile) : { isExist: false };
     }),
 
   createFile: fileProcedure
     .use(withScopedPermission('file:upload'))
     .use(checkFileStorageUsage)
     .input(
-      UploadFileSchema.omit({ url: true }).extend({
+      UploadFileSchema.extend({
         parentId: z.string().optional(),
-        url: z.string(),
         visibility: z.enum(['private', 'public']).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const existingFile = await ctx.fileModel.checkHash(input.hash!);
-      const { isExist } = existingFile;
+      const existingFile = input.hash
+        ? await ctx.fileModel.checkHash(input.hash)
+        : { isExist: false as const };
+      const isExist = Boolean(existingFile?.isExist);
+      const storedKey = existingFile?.isExist ? existingFile.url : undefined;
+
+      let reusedStoredKey = false;
+      if (storedKey) {
+        reusedStoredKey = await isStoredObjectAvailable(ctx.fileService, storedKey);
+        if (reusedStoredKey && input.url && input.url !== storedKey) {
+          log(
+            'createFile: ignoring client url %s; using global_files key %s for hash %s',
+            input.url,
+            storedKey,
+            input.hash,
+          );
+        }
+      }
+
+      const resolvedUrl = reusedStoredKey && storedKey ? storedKey : input.url;
+      if (!resolvedUrl) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'File url is required' });
+      }
 
       // Resolve parentId if it's a slug
       let resolvedParentId = input.parentId;
@@ -199,14 +240,22 @@ export const fileRouter = router({
         ? (input.visibility ?? parentVisibility ?? 'private')
         : undefined;
 
-      let actualSize = input.size;
-      try {
-        const { contentLength } = await ctx.fileService.getFileMetadata(input.url);
-        if (contentLength >= 1) {
-          actualSize = contentLength;
+      let actualSize =
+        reusedStoredKey &&
+        existingFile &&
+        'size' in existingFile &&
+        typeof existingFile.size === 'number'
+          ? existingFile.size
+          : input.size;
+      if (!reusedStoredKey) {
+        try {
+          const { contentLength } = await ctx.fileService.getFileMetadata(resolvedUrl);
+          if (contentLength >= 1) {
+            actualSize = contentLength;
+          }
+        } catch {
+          // If metadata fetch fails, use original size from input
         }
-      } catch {
-        // If metadata fetch fails, use original size from input
       }
 
       if (actualSize < 0) {
@@ -214,7 +263,7 @@ export const fileRouter = router({
           actualSize,
           clientIp: ctx.clientIp ?? undefined,
           inputSize: input.size,
-          url: input.url,
+          url: resolvedUrl,
           userId: ctx.userId,
           workspaceId: ctx.workspaceId,
         });
@@ -227,18 +276,14 @@ export const fileRouter = router({
           clientIp: ctx.clientIp ?? undefined,
           inputSize: input.size,
           transaction: trx,
-          url: input.url,
+          url: resolvedUrl,
           userId: ctx.userId,
           workspaceId: ctx.workspaceId,
         });
 
-        let shouldRefreshGlobalFile = false;
-        if (isExist && existingFile.url && existingFile.url !== input.url) {
-          shouldRefreshGlobalFile = !(await isStoredObjectAvailable(
-            ctx.fileService,
-            existingFile.url,
-          ));
-        }
+        const shouldRefreshGlobalFile = Boolean(
+          isExist && storedKey && storedKey !== resolvedUrl && input.hash,
+        );
 
         if (shouldRefreshGlobalFile) {
           // A user may re-upload the same bytes after the old object key was
@@ -248,7 +293,7 @@ export const fileRouter = router({
             input.hash!,
             {
               metadata: input.metadata,
-              url: input.url,
+              url: resolvedUrl,
             },
             trx,
           );
@@ -263,7 +308,7 @@ export const fileRouter = router({
             name: input.name,
             parentId: resolvedParentId,
             size: actualSize,
-            url: input.url,
+            url: resolvedUrl,
             ...(resolvedVisibility ? { visibility: resolvedVisibility } : {}),
           },
           // if the file is not exist in global file, create a new one
@@ -280,7 +325,7 @@ export const fileRouter = router({
           console.error('Failed to enqueue document render job', error);
         });
 
-      return { id, url: await ctx.fileService.getFileAccessUrl({ id, url: input.url }) };
+      return { id, url: await ctx.fileService.getFileAccessUrl({ id, url: resolvedUrl }) };
     }),
   findById: fileProcedure
     .input(

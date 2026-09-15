@@ -523,6 +523,10 @@ describe('FileService', () => {
     it('should not insert to global files when hash already exists', async () => {
       mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'files/test.txt' });
       mockFileModel.create.mockResolvedValue({ id: 'file-id' });
+      vi.mocked(service['impl'].getFileMetadata).mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
 
       await service.createFileRecord({
         fileHash: 'existing-hash',
@@ -535,10 +539,89 @@ describe('FileService', () => {
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           fileHash: 'existing-hash',
+          url: 'files/test.txt',
         }),
         false, // insertToGlobalFiles = false when hash exists
       );
       expect(mockFileModel.updateGlobalFile).not.toHaveBeenCalled();
+    });
+
+    it('should persist the stored key and ignore a different client url on a hash hit', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'old/path.txt' });
+      mockFileModel.create.mockResolvedValue({ id: 'file-id' });
+      vi.mocked(service['impl'].getFileMetadata).mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
+
+      await service.createFileRecord({
+        fileHash: 'existing-hash',
+        fileType: 'text/plain',
+        metadata: { dirname: 'new', filename: 'test.txt', path: 'new/path.txt' },
+        name: 'test.txt',
+        size: 100,
+        url: 'new/path.txt',
+      });
+
+      expect(mockFileModel.updateGlobalFile).not.toHaveBeenCalled();
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileHash: 'existing-hash',
+          url: 'old/path.txt',
+        }),
+        false,
+      );
+    });
+
+    it('should allow omitting url when a hash hit is still stored', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'old/path.txt' });
+      mockFileModel.create.mockResolvedValue({ id: 'file-id' });
+      vi.mocked(service['impl'].getFileMetadata).mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
+
+      await service.createFileRecord({
+        fileHash: 'existing-hash',
+        fileType: 'text/plain',
+        name: 'test.txt',
+        size: 100,
+      });
+
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileHash: 'existing-hash',
+          url: 'old/path.txt',
+        }),
+        false,
+      );
+    });
+
+    it('should reject when the hash is missing and url is omitted', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: false });
+
+      await expect(
+        service.createFileRecord({
+          fileHash: 'missing-hash',
+          fileType: 'text/plain',
+          name: 'test.txt',
+          size: 100,
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'File url is required' });
+    });
+
+    it('should require url when a hash hit points at a vanished object', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'old/path.txt' });
+      vi.mocked(service['impl'].getFileMetadata).mockRejectedValue(new Error('NoSuchKey'));
+
+      await expect(
+        service.createFileRecord({
+          fileHash: 'existing-hash',
+          fileType: 'text/plain',
+          name: 'test.txt',
+          size: 100,
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'File url is required' });
     });
 
     it('should update global file metadata when an existing hash points to a missing object', async () => {
@@ -591,7 +674,7 @@ describe('FileService', () => {
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           fileHash: 'existing-hash',
-          url: 'new/path.txt',
+          url: 'old/path.txt',
         }),
         false,
       );

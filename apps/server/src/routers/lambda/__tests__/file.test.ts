@@ -261,25 +261,38 @@ describe('fileRouter', () => {
   });
 
   describe('checkFileHash', () => {
-    it('should handle when fileModel.checkHash returns undefined', async () => {
-      ctx.fileModel.checkHash.mockResolvedValue(undefined);
-      await expect(caller.checkFileHash({ hash: 'test-hash' })).resolves.toBeUndefined();
+    it('should treat a missing hash lookup as not exist', async () => {
+      mockFileModelCheckHash.mockResolvedValue(undefined);
+
+      const result = await caller.checkFileHash({ hash: 'test-hash' });
+
+      expect(result).toEqual({ isExist: false });
+      expect(result).not.toHaveProperty('url');
+      expect(result).not.toHaveProperty('metadata');
     });
 
     it('should return existing hash when the stored object is still available', async () => {
-      const checkResult = {
+      mockFileModelCheckHash.mockResolvedValue({
+        fileType: 'image/png',
         isExist: true,
         metadata: { path: 'files/existing.png' },
+        size: 2048,
         url: 'files/existing.png',
-      };
-      mockFileModelCheckHash.mockResolvedValue(checkResult);
+      });
       mockFileServiceGetFileMetadata.mockResolvedValue({
-        contentLength: 100,
+        contentLength: 2048,
         contentType: 'image/png',
       });
 
-      await expect(caller.checkFileHash({ hash: 'test-hash' })).resolves.toEqual(checkResult);
+      const result = await caller.checkFileHash({ hash: 'test-hash' });
 
+      expect(result).toEqual({
+        fileType: 'image/png',
+        isExist: true,
+        size: 2048,
+      });
+      expect(result).not.toHaveProperty('url');
+      expect(result).not.toHaveProperty('metadata');
       expect(mockFileServiceGetFileMetadata).toHaveBeenCalledWith('files/existing.png');
     });
 
@@ -292,10 +305,13 @@ describe('fileRouter', () => {
       });
       mockFileServiceGetFileMetadata.mockRejectedValue(new Error('NoSuchKey'));
 
-      await expect(caller.checkFileHash({ hash: 'test-hash' })).resolves.toEqual({
+      const result = await caller.checkFileHash({ hash: 'test-hash' });
+
+      expect(result).toEqual({
         isExist: false,
       });
-
+      expect(result).not.toHaveProperty('url');
+      expect(result).not.toHaveProperty('metadata');
       expect(mockFileServiceGetFileMetadata).toHaveBeenCalledWith(
         'generations/images/missing_raw.jpg',
       );
@@ -309,18 +325,135 @@ describe('fileRouter', () => {
   });
 
   describe('createFile', () => {
-    it('should throw if fileModel.checkHash returns undefined', async () => {
-      ctx.fileModel.checkHash.mockResolvedValue(undefined);
+    it('should create from the client url when checkHash returns no match', async () => {
+      mockFileModelCheckHash.mockResolvedValue(undefined);
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+
+      const result = await caller.createFile({
+        hash: 'test-hash',
+        fileType: 'text',
+        name: 'test.txt',
+        size: 100,
+        url: 'files/test.txt',
+        metadata: {},
+      });
+
+      expect(result).toEqual({
+        id: 'new-file-id',
+        url: 'https://lobehub.com/f/new-file-id',
+      });
+      expect(mockFileModelCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ url: 'files/test.txt' }),
+        true,
+        routerMocks.transactionClient,
+      );
+    });
+
+    it('should reject when there is no hash match and the client omits url', async () => {
+      mockFileModelCheckHash.mockResolvedValue({ isExist: false });
+
       await expect(
         caller.createFile({
           hash: 'test-hash',
           fileType: 'text',
           name: 'test.txt',
           size: 100,
-          url: 'test-url',
           metadata: {},
         }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'File url is required' });
+    });
+
+    it('should reject when hash and url are both omitted', async () => {
+      await expect(
+        caller.createFile({
+          fileType: 'text',
+          name: 'test.txt',
+          size: 100,
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'File url is required' });
+
+      expect(mockFileModelCheckHash).not.toHaveBeenCalled();
+    });
+
+    it('should persist the global_files key and ignore the client url on a hash hit', async () => {
+      mockFileModelCheckHash.mockResolvedValue({
+        fileType: 'text/plain',
+        isExist: true,
+        metadata: { path: 'old/path.txt' },
+        size: 100,
+        url: 'old/path.txt',
+      });
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+      mockFileServiceGetFileMetadata.mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
+
+      await caller.createFile({
+        hash: 'test-hash',
+        fileType: 'text',
+        metadata: { path: 'attacker/path.txt' },
+        name: 'test.txt',
+        size: 100,
+        url: 'files/attacker/path.txt',
+      });
+
+      expect(mockFileServiceGetFileMetadata).toHaveBeenCalledWith('old/path.txt');
+      expect(mockFileServiceGetFileMetadata).not.toHaveBeenCalledWith('files/attacker/path.txt');
+      expect(mockFileModelUpdateGlobalFile).not.toHaveBeenCalled();
+      expect(mockFileModelCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ fileHash: 'test-hash', url: 'old/path.txt' }),
+        false,
+        routerMocks.transactionClient,
+      );
+    });
+
+    it('should allow omitting url when a hash hit still has an available object', async () => {
+      mockFileModelCheckHash.mockResolvedValue({
+        isExist: true,
+        size: 100,
+        url: 'old/path.txt',
+      });
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+      mockFileServiceGetFileMetadata.mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
+
+      await caller.createFile({
+        hash: 'test-hash',
+        fileType: 'text',
+        name: 'test.txt',
+        size: 100,
+      });
+
+      expect(mockFileModelCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ url: 'old/path.txt' }),
+        false,
+        routerMocks.transactionClient,
+      );
+    });
+
+    it('should require url when a hash hit points at a vanished object', async () => {
+      mockFileModelCheckHash.mockResolvedValue({
+        isExist: true,
+        metadata: { path: 'old/path.txt' },
+        url: 'old/path.txt',
+      });
+      mockFileServiceGetFileMetadata.mockRejectedValue(new Error('NoSuchKey'));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(
+        caller.createFile({
+          hash: 'test-hash',
+          fileType: 'text',
+          name: 'test.txt',
+          size: 100,
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'File url is required' });
+
+      expect(mockFileModelCreate).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
     });
 
     it('should return proxy URL format ${APP_URL}/f/:id', async () => {
@@ -350,8 +483,8 @@ describe('fileRouter', () => {
       });
       mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
       mockFileServiceGetFileMetadata
-        .mockResolvedValueOnce({ contentLength: 100, contentType: 'text/plain' })
-        .mockRejectedValueOnce(new Error('NoSuchKey'));
+        .mockRejectedValueOnce(new Error('NoSuchKey'))
+        .mockResolvedValueOnce({ contentLength: 100, contentType: 'text/plain' });
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       await caller.createFile({
@@ -383,6 +516,7 @@ describe('fileRouter', () => {
       mockFileModelCheckHash.mockResolvedValue({
         isExist: true,
         metadata: { path: 'old/path.txt' },
+        size: 100,
         url: 'old/path.txt',
       });
       mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
@@ -402,7 +536,7 @@ describe('fileRouter', () => {
 
       expect(mockFileModelUpdateGlobalFile).not.toHaveBeenCalled();
       expect(mockFileModelCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ fileHash: 'test-hash', url: 'new/path.txt' }),
+        expect.objectContaining({ fileHash: 'test-hash', url: 'old/path.txt' }),
         false,
         routerMocks.transactionClient,
       );

@@ -113,9 +113,6 @@ const messageBatchOperationSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-/** Presign lifetime for files rendered on anonymous topic-share pages. */
-const SHARED_TOPIC_FILE_URL_EXPIRES_IN = 15 * 60;
-
 export const messageRouter = router({
   addFilesToMessage: messageProcedure
     .use(withScopedPermission('message:update'))
@@ -350,17 +347,13 @@ export const messageRouter = router({
         const messageModel = new MessageModel(ctx.serverDB, share.ownerId);
         const fileService = new FileService(ctx.serverDB, share.ownerId);
 
-        // Anonymous share pages cannot fetch cookie-gated `/f/:id`; give
-        // short-lived presigned object URLs instead. 15 minutes bounds the
-        // revocation lag after the owner un-shares the topic.
+        // Anonymous share pages hit GET /f/:id?share= (no session). The proxy
+        // re-checks the share row on every request, so revocation is immediate.
         return messageModel.query(
           { ...queryParams, topicId: share.topicId },
           {
-            postProcessUrl: (path, file) =>
-              fileService.getMachineReadableUrl(
-                { id: file.id, url: path },
-                SHARED_TOPIC_FILE_URL_EXPIRES_IN,
-              ),
+            postProcessUrl: async (_path, file) =>
+              fileService.getShareFileUrl(file.id ?? '', share.shareId),
           },
         );
       }

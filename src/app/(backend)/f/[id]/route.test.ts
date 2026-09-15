@@ -33,6 +33,10 @@ const fileAccessMocks = vi.hoisted(() => ({
   resolveFileAccess: vi.fn(),
 }));
 
+const shareFileAccessMocks = vi.hoisted(() => ({
+  resolveShareFileAccess: vi.fn(),
+}));
+
 vi.mock('@/auth', () => ({
   auth: {
     api: {
@@ -62,6 +66,10 @@ vi.mock('@/server/services/file', () => ({
 vi.mock('@/server/services/file/fileAccess', () => ({
   recordAuditorFileOpen: fileAccessMocks.recordAuditorFileOpen,
   resolveFileAccess: fileAccessMocks.resolveFileAccess,
+}));
+
+vi.mock('@/server/services/file/shareFileAccess', () => ({
+  resolveShareFileAccess: shareFileAccessMocks.resolveShareFileAccess,
 }));
 
 vi.mock('@/server/services/file/impls', () => ({
@@ -105,6 +113,7 @@ describe('file proxy route', () => {
     } as FileItem);
     fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
     fileAccessMocks.recordAuditorFileOpen.mockResolvedValue(undefined);
+    shareFileAccessMocks.resolveShareFileAccess.mockResolvedValue(false);
     fileServiceMocks.instance.createCachedPreSignedUrlForPreview.mockResolvedValue(
       'https://s3.example.com/presigned-preview-url',
     );
@@ -313,5 +322,81 @@ describe('file proxy route', () => {
     expect(await response.text()).toBe('Internal server error');
     expectPrivateNoStore(response);
     expect(FileModel.getFileById).not.toHaveBeenCalled();
+  });
+
+  it('redirects an anonymous request with a valid share capability and does not look up a session', async () => {
+    vi.mocked(auth.api.getSession).mockResolvedValue(null as never);
+    shareFileAccessMocks.resolveShareFileAccess.mockResolvedValue(true);
+
+    const response = await GET(new Request('https://lobehub.com/f/file-id?share=share-123'), {
+      params: Promise.resolve({ id: 'file-id' }),
+    });
+
+    expect(shareFileAccessMocks.resolveShareFileAccess).toHaveBeenCalledWith({
+      db,
+      fileId: 'file-id',
+      shareId: 'share-123',
+    });
+    expect(auth.api.getSession).not.toHaveBeenCalled();
+    expect(fileAccessMocks.resolveFileAccess).not.toHaveBeenCalled();
+    expect(fileAccessMocks.recordAuditorFileOpen).not.toHaveBeenCalled();
+    expect(FileService).toHaveBeenCalledWith(db, 'owner-user-id');
+    expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).toHaveBeenCalledWith(
+      'files/user-id/image.png',
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://s3.example.com/presigned-preview-url');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('vary')).toBe('Cookie');
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('falls through to 401 when an anonymous request carries an invalid share', async () => {
+    vi.mocked(auth.api.getSession).mockResolvedValue(null as never);
+    shareFileAccessMocks.resolveShareFileAccess.mockResolvedValue(false);
+
+    const response = await GET(new Request('https://lobehub.com/f/file-id?share=bad-share'), {
+      params: Promise.resolve({ id: 'file-id' }),
+    });
+
+    expect(shareFileAccessMocks.resolveShareFileAccess).toHaveBeenCalledWith({
+      db,
+      fileId: 'file-id',
+      shareId: 'bad-share',
+    });
+    expect(auth.api.getSession).toHaveBeenCalled();
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe('Unauthorized');
+    expectPrivateNoStore(response);
+    expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the owner session path when the share is invalid', async () => {
+    shareFileAccessMocks.resolveShareFileAccess.mockResolvedValue(false);
+
+    const response = await GET(new Request('https://lobehub.com/f/file-id?share=bad-share'), {
+      params: Promise.resolve({ id: 'file-id' }),
+    });
+
+    expect(shareFileAccessMocks.resolveShareFileAccess).toHaveBeenCalledWith({
+      db,
+      fileId: 'file-id',
+      shareId: 'bad-share',
+    });
+    expect(auth.api.getSession).toHaveBeenCalled();
+    expect(fileAccessMocks.resolveFileAccess).toHaveBeenCalledWith({
+      db,
+      file: {
+        id: 'file-id',
+        userId: 'owner-user-id',
+        visibility: 'public',
+        workspaceId: null,
+      },
+      viewerUserId: 'owner-user-id',
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://s3.example.com/presigned-preview-url');
+    expectPrivateNoStore(response);
   });
 });

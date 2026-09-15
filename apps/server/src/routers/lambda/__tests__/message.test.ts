@@ -15,6 +15,10 @@ import { messageRouter } from '../message';
 const fileServiceMocks = vi.hoisted(() => ({
   getFileAccessUrl: vi.fn(),
   getMachineReadableUrl: vi.fn(),
+  getShareFileUrl: vi.fn(
+    (fileId: string, shareId: string) =>
+      `https://lobehub.com/f/${fileId}?share=${encodeURIComponent(shareId)}`,
+  ),
 }));
 
 vi.mock('@/database/models/message', () => ({
@@ -31,6 +35,7 @@ vi.mock('@/server/services/file', () => ({
   FileService: vi.fn(() => ({
     getFileAccessUrl: fileServiceMocks.getFileAccessUrl,
     getMachineReadableUrl: fileServiceMocks.getMachineReadableUrl,
+    getShareFileUrl: fileServiceMocks.getShareFileUrl,
   })),
 }));
 
@@ -401,9 +406,6 @@ describe('messageRouter', () => {
       ];
 
       const mockQuery = vi.fn().mockResolvedValue(mockMessages);
-      fileServiceMocks.getMachineReadableUrl.mockImplementation(
-        async ({ url }: { url: string }) => `https://s3.example/${url}`,
-      );
 
       vi.mocked(TopicShareModel.findByShareIdWithAccessCheck).mockResolvedValue(mockShare as any);
       vi.mocked(MessageModel).mockImplementation(
@@ -417,6 +419,7 @@ describe('messageRouter', () => {
           ({
             getFileAccessUrl: fileServiceMocks.getFileAccessUrl,
             getMachineReadableUrl: fileServiceMocks.getMachineReadableUrl,
+            getShareFileUrl: fileServiceMocks.getShareFileUrl,
           }) as any,
       );
 
@@ -440,15 +443,10 @@ describe('messageRouter', () => {
         file: { id: string },
       ) => Promise<string>;
       await expect(postProcessUrl('files/cat.png', { id: 'file-1' })).resolves.toBe(
-        'https://s3.example/files/cat.png',
+        'https://lobehub.com/f/file-1?share=share-123',
       );
-      expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith(
-        {
-          id: 'file-1',
-          url: 'files/cat.png',
-        },
-        900,
-      );
+      expect(fileServiceMocks.getShareFileUrl).toHaveBeenCalledWith('file-1', 'share-123');
+      expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
       expect(fileServiceMocks.getFileAccessUrl).not.toHaveBeenCalled();
       expect(result).toEqual(mockMessages);
     });

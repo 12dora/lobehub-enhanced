@@ -6,6 +6,7 @@ import {
   uuid,
 } from '@lobechat/utils';
 import { TRPCError } from '@trpc/server';
+import debug from 'debug';
 import { sha256 } from 'js-sha256';
 
 import { serverDBEnv } from '@/config/db';
@@ -18,6 +19,8 @@ import { isDev } from '@/utils/env';
 import { createFileServiceModule } from './impls';
 import type { FileServiceImpl, PreSignedUpload } from './impls/type';
 import { resolveOwnDeploymentOrigins } from './ownDeploymentOrigins';
+
+const log = debug('lobe-server:file');
 
 export const getFileProxyUrl = (fileId: string): string => `${appEnv.APP_URL}/f/${fileId}`;
 
@@ -144,6 +147,14 @@ export class FileService {
   }
 
   /**
+   * Stable proxy URL for a file on an anonymous topic-share page.
+   * Authorization is re-checked on every GET /f/:id?share= against the share row.
+   */
+  public getShareFileUrl(fileId: string, shareId: string): string {
+    return `${appEnv.APP_URL}/f/${fileId}?share=${encodeURIComponent(shareId)}`;
+  }
+
+  /**
    * URL for cookie-less machine consumers (LLM providers, server-side fetchers).
    * Always a public or short-lived presigned object URL — never `/f/<id>`.
    */
@@ -219,23 +230,39 @@ export class FileService {
     metadata?: Record<string, unknown>;
     name: string;
     size: number;
-    url: string;
+    url?: string;
   }): Promise<{ fileId: string; url: string }> {
     // Check if hash already exists in globalFiles
     const existingFile = await this.fileModel.checkHash(params.fileHash);
-    const { isExist } = existingFile;
+    const isExist = Boolean(existingFile?.isExist);
+    const storedKey = existingFile?.isExist ? existingFile.url : undefined;
 
-    let shouldRefreshGlobalFile = false;
-    if (isExist && existingFile.url && existingFile.url !== params.url) {
-      shouldRefreshGlobalFile = !(await this.isStoredFileAvailable(existingFile.url));
+    let reusedStoredKey = false;
+    if (storedKey) {
+      reusedStoredKey = await this.isStoredFileAvailable(storedKey);
+      if (reusedStoredKey && params.url && params.url !== storedKey) {
+        log(
+          'createFileRecord: ignoring client url %s; using global_files key %s for hash %s',
+          params.url,
+          storedKey,
+          params.fileHash,
+        );
+      }
     }
+
+    const resolvedUrl = reusedStoredKey && storedKey ? storedKey : params.url;
+    if (!resolvedUrl) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'File url is required' });
+    }
+
+    const shouldRefreshGlobalFile = Boolean(isExist && storedKey && storedKey !== resolvedUrl);
 
     if (shouldRefreshGlobalFile) {
       // Keep global hash dedup usable when the same file is uploaded again to a
       // fresh object key after the previous storage object has been removed.
       await this.fileModel.updateGlobalFile(params.fileHash, {
         metadata: params.metadata,
-        url: params.url,
+        url: resolvedUrl,
       });
     }
 
@@ -249,7 +276,7 @@ export class FileService {
         metadata: params.metadata,
         name: params.name,
         size: params.size,
-        url: params.url,
+        url: resolvedUrl,
       },
       !isExist, // insertToGlobalFiles
     );
@@ -258,7 +285,7 @@ export class FileService {
 
     return {
       fileId: id,
-      url: await this.getFileAccessUrl({ id, url: params.url }),
+      url: await this.getFileAccessUrl({ id, url: resolvedUrl }),
     };
   }
 

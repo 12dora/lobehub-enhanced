@@ -6,13 +6,13 @@
 
 - 302 到短期预签名对象地址；所有响应 `Cache-Control: private, no-store` + `Vary: Cookie`。
 - `pba_*`（平台品牌资源：Logo、Favicon、平台助理头像）保持公开，登录页与邮件依赖它。
-- 其余 ID 必须携带 Better Auth 会话 Cookie：匿名 401，找不到 404，无权 403。
+- 其余 ID：匿名可凭 `?share=` 能力访问（见下）；否则必须携带 Better Auth 会话 Cookie：匿名 401，找不到 404，无权 403。
 - 授权规则依次（`apps/server/src/services/file/fileAccess.ts` → `resolveFileAccess`）：
   1. 文件所有者（`files.user_id`）。
   2. 文件属于某工作区且可见性为 `public`/NULL，访问者是该工作区在册成员。
   3. 审计员：平台管理开关开启、审计模块启用、持有 `platform_audit:conversation_read:all`，且审计策略「内容访问模式」为「允许正文和附件」（`content_allowed`）。
      每次打开都写审计日志 `admin.audit.files.open`（目标类型 `file`，写失败则拒绝访问）。
-- 话题链接分享页不走 `/f/`：`message.getMessages({ topicShareId })` 直接返回 15 分钟预签名对象地址。
+- 话题链接分享页走 `GET /f/:id?share=<shareId>`：`message.getMessages({ topicShareId })` 对每个附件返回该地址（不会过期）。代理在 `pba_*` 之后、会话之前校验 `topic_shares` 为 `visibility=link`，附件行与文件行都属于分享所有者且消息属于该话题；无效或缺失的 `share` 回落到原会话流程。撤销分享后下一次请求即拒绝。
 
 ## 机器路径：模型、沙箱与服务端取数
 
@@ -20,17 +20,17 @@
 
 - 内联运行时（ChatGPT/ChatGPT Web/Cursor/Grok/SuperGrok）：先尝试内联字节，失败或超限时改为预签名地址。
 - 其他所有运行时：`beforeChat` / `beforeCreateImage` / `beforeCreateVideo` 仅做地址改写（image/file/video/audio 部件与 `imageUrl`/`imageUrls`/`endImageUrl` 参数）。
-- 机器路径的授权复用 `resolveFileAccess`，但只接受「所有者/工作区成员」两种理由，不信任请求头里的工作区 ID。
+- 机器路径的授权复用 `resolveFileAccess`，但只接受「所有者 / 工作区成员」两种理由，不信任请求头里的工作区 ID。
 - 注意：改写后的预签名地址（默认 2 小时；若配置 `S3_SET_ACL=1` + `S3_PUBLIC_DOMAIN` 则是永久公开地址）会以文本形式出现在 `<files_info>` 提示词中，模型可能原样复述到回复与追踪记录里。
 
 ## 对象键与存储桶
 
 - 存储桶必须私有（`mc anonymous set none`），不得开放匿名 `GetObject`；应用只通过预签名地址读取。
-- 客户端提供的对象键统一经 `assertClientObjectKey` 校验：相对路径、无 `..`/`.`/空段、无 `\`、无 `%`、无控制字符，且前缀受限：
+- 客户端提供的对象键统一经 `assertClientObjectKey` 校验：相对路径、无 `..`/`.`/ 空段、无 `\`、无 `%`、无控制字符，且前缀受限：
   - 预签名上传：`files`（含配置的 `NEXT_PUBLIC_S3_FILE_PATH`）、`import_config`、`ragEval`、`eval-datasets`、`skills`；已存在的对象拒绝覆盖（HEAD 非 404 一律失败关闭）。
   - 导入 `importByFile` 只读 `import_config/`；RAG 评测只读 `ragEval/`；Agent 评测只读 `eval-datasets/`。
-  - OpenAPI 上传的 `directory` 走同一允许列表（默认 `files/`），文件名会清洗分隔符/`%`/控制字符。
-- 已知遗留：`file.checkFileHash` 仍返回同哈希对象的存储键（内容寻址去重需要），下一步应改为服务端按哈希解析键并从响应中去掉 `url`。
+  - OpenAPI 上传的 `directory` 走同一允许列表（默认 `files/`），文件名会清洗分隔符 /`%`/ 控制字符。
+- `file.checkFileHash` 只返回 `{ isExist, fileType?, size? }`，不再返回存储键或 metadata。`createFile` 在哈希命中且对象仍可用时由服务端写入 `global_files` 的键并忽略客户端 `url`；对象已消失或无哈希命中时客户端必须提供 `url`。
 
 ## 其他跨账户面
 

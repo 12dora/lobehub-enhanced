@@ -10,6 +10,7 @@ import { isPlatformBrandingAssetId } from '@/server/enterprise/contracts/adminBr
 import { FileService } from '@/server/services/file';
 import { recordAuditorFileOpen, resolveFileAccess } from '@/server/services/file/fileAccess';
 import { createFileServiceModule } from '@/server/services/file/impls';
+import { resolveShareFileAccess } from '@/server/services/file/shareFileAccess';
 
 const log = debug('lobe-file:proxy');
 
@@ -49,9 +50,11 @@ const unauthorized = () => textResponse('Unauthorized', 401);
  * presigned object URLs or data URIs from FileService instead.
  *
  * Platform branding assets (`pba_*`) remain public (login chrome, emails).
+ * Anonymous topic-share pages may pass `?share=<shareId>` (evaluated after
+ * `pba_*`, before the session branch); an invalid/absent share falls through.
  *
- * Access: file owner, workspace member (public/NULL visibility), topic
- * link-share attachment, or auditor with conversation body access. Success is a
+ * Access: share capability, file owner, workspace member (public/NULL
+ * visibility), or auditor with conversation body access. Success is a
  * 302 to a cached S3 presigned URL with private/no-store headers.
  */
 export const GET = async (req: Request, segmentData: { params: Params }) => {
@@ -84,6 +87,20 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
         asset.objectKey,
       );
       return redirectToObject(redirectUrl, asset.mimeType);
+    }
+
+    const shareId = new URL(req.url).searchParams.get('share');
+    if (shareId) {
+      const shareAllowed = await resolveShareFileAccess({ db, fileId: id, shareId });
+      if (shareAllowed) {
+        const file = await FileModel.getFileById(db, id);
+        if (!file) return textResponse('File not found', 404);
+
+        const fileService = new FileService(db, file.userId);
+        const redirectUrl = await fileService.createCachedPreSignedUrlForPreview(file.url);
+        log('Share S3 presigned URL generated');
+        return redirectToObject(redirectUrl, file.fileType || 'application/octet-stream');
+      }
     }
 
     const session = await auth.api.getSession({
