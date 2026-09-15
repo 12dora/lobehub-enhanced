@@ -183,8 +183,11 @@ export function defineConfig(
    * rejects the link when `requireLocalEmailVerified` (default true) and the local user is
    * unverified — even for a trusted provider. Do not flip that flag globally. Kinds that cannot
    * assert a verified email — DingTalk usually returns none and we synthesize one — must stay
-   * out of `trustedProviders`: a DingTalk login always creates or reuses its own account and
-   * can never take over a pre-existing one.
+   * out of `trustedProviders`. The `dingtalk` kind links per login instead: `toDingTalkLoginClaims`
+   * marks `emailVerified` only when the unionId resolved to an internal corp userId and the email is
+   * the canonical `<userid>@<DINGTALK_IDENTITY_EMAIL_DOMAIN>` address (the same address Authentik and
+   * DingTalk JIT provisioning use), so all three entry paths converge on one account while a DingTalk
+   * login can still never attach to an arbitrary pre-existing mailbox.
    */
   const untrustedForLinkingProviderKeys = new Set(
     activeDatabaseProviders
