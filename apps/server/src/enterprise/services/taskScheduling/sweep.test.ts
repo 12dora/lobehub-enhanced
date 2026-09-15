@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { LocalTaskScheduler } from '@/server/services/taskScheduler/impls/local';
 import type { ScheduledTaskForDispatch } from '@/server/workflows-hono/task/handlers/scheduleDispatch';
-import { selectDueScheduledTasks } from '@/server/workflows-hono/task/handlers/scheduleDispatch';
 
 import {
+  HEARTBEAT_SWEEP_EXCLUDED_STATUSES,
+  heartbeatSweepWhere,
   resetTaskSchedulingSweepGuardForTest,
   runGuardedSweep,
   runTaskSchedulingSweep,
@@ -55,9 +57,26 @@ vi.mock('@/server/services/taskNotification', () => ({
   },
 }));
 
-const SHANGHAI = 'Asia/Shanghai';
-const shanghaiLocal = (iso: string) => new Date(`${iso}+08:00`);
 const utc = (iso: string) => new Date(`${iso}Z`);
+
+const flattenSql = (value: unknown, seen: Set<unknown> = new Set()): string => {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    if (seen.has(value)) return '';
+    seen.add(value);
+  }
+  if (Array.isArray(value)) return value.map((item) => flattenSql(item, seen)).join(' ');
+  const record = value as Record<string, unknown>;
+  if ('queryChunks' in record) return flattenSql(record.queryChunks, seen);
+  if (typeof record.value === 'string' || typeof record.value === 'number') {
+    return String(record.value);
+  }
+  return Object.values(record)
+    .map((item) => flattenSql(item, seen))
+    .join(' ');
+};
 
 const scheduled = (
   overrides: Partial<ScheduledTaskForDispatch> & Pick<ScheduledTaskForDispatch, 'id'>,
@@ -80,6 +99,8 @@ const heartbeat = (
   ...overrides,
 });
 
+const emptyCounts = { dispatched: 0, failed: 0, notDue: 0, skipped: 0 };
+
 const baseDeps = (overrides: TaskSchedulingSweepDeps = {}): TaskSchedulingSweepDeps => ({
   acquireSweepLock: async () => 'acquired',
   getHeartbeatSnapshot: async (taskId) =>
@@ -94,42 +115,22 @@ const baseDeps = (overrides: TaskSchedulingSweepDeps = {}): TaskSchedulingSweepD
   ...overrides,
 });
 
-describe('selectDueScheduledTasks (timezone)', () => {
-  it('selects a 09:00 Asia/Shanghai task at local 09:00 and skips the same UTC instant in UTC', () => {
-    const now = shanghaiLocal('2026-04-29T09:00:00');
-    const shanghaiTask = scheduled({
-      id: 'sh',
-      scheduleTimezone: SHANGHAI,
-    });
-    const utcTask = scheduled({
-      id: 'utc',
-      scheduleTimezone: 'UTC',
-    });
-
-    const due = selectDueScheduledTasks([shanghaiTask, utcTask], now);
-    expect(due.map((d) => d.taskId)).toEqual(['sh']);
-  });
-
-  it('does not select a daily 09:00 Shanghai task at 08:00 Shanghai', () => {
-    const due = selectDueScheduledTasks(
-      [scheduled({ id: 'sh', scheduleTimezone: SHANGHAI })],
-      shanghaiLocal('2026-04-29T08:00:00'),
-    );
-    expect(due).toEqual([]);
-  });
-
-  it('dedups a daily UTC 09:00 task that already ran at 09:00 today', () => {
-    const due = selectDueScheduledTasks(
-      [
-        scheduled({
-          id: 'utc',
-          lastHeartbeatAt: utc('2026-04-29T09:00:00'),
-          scheduleTimezone: 'UTC',
-        }),
-      ],
-      utc('2026-04-29T09:03:00'),
-    );
-    expect(due).toEqual([]);
+describe('heartbeatSweepWhere', () => {
+  it('filters automationMode=heartbeat and excludes non-dispatchable statuses', () => {
+    expect([...HEARTBEAT_SWEEP_EXCLUDED_STATUSES]).toEqual([
+      'canceled',
+      'completed',
+      'failed',
+      'paused',
+      'running',
+    ]);
+    const sql = flattenSql(heartbeatSweepWhere());
+    expect(sql).toContain('heartbeat');
+    expect(sql).toMatch(/automation_mode/);
+    expect(sql).toMatch(/heartbeat_interval/);
+    for (const status of HEARTBEAT_SWEEP_EXCLUDED_STATUSES) {
+      expect(sql).toContain(status);
+    }
   });
 });
 
@@ -159,10 +160,20 @@ describe('runTaskSchedulingSweep', () => {
     );
 
     expect(result.lock).toBe('held');
-    expect(result.counts).toEqual({ dispatched: 0, failed: 0, skipped: 0 });
+    expect(result.counts).toEqual(emptyCounts);
     expect(runScheduleTick).not.toHaveBeenCalled();
     expect(runHeartbeatTick).not.toHaveBeenCalled();
     expect(runWatchdogScan).not.toHaveBeenCalled();
+  });
+
+  it('releases an acquired sweep lock after the sweep finishes', async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    await runTaskSchedulingSweep(
+      baseDeps({
+        acquireSweepLock: async () => ({ release, result: 'acquired' }),
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it('still runs when Redis is unavailable', async () => {
@@ -202,7 +213,8 @@ describe('runTaskSchedulingSweep', () => {
     expect(runWatchdogScan).toHaveBeenCalledOnce();
     expect(result.watchdogChecked).toBe(2);
     expect(result.counts.dispatched).toBe(1);
-    expect(result.counts.skipped).toBe(1);
+    expect(result.counts.notDue).toBe(1);
+    expect(result.counts.skipped).toBe(0);
   });
 
   it('catches up a heartbeat task after restart when no local timer is pending', async () => {
@@ -231,6 +243,22 @@ describe('runTaskSchedulingSweep', () => {
     expect(result.counts.dispatched).toBe(1);
   });
 
+  it('does not kick a heartbeat task that has never run (null lastHeartbeatAt)', async () => {
+    const runHeartbeatTick = vi.fn();
+
+    const result = await runTaskSchedulingSweep(
+      baseDeps({
+        getHeartbeatTasks: async () => [heartbeat({ id: 'hb-1', lastHeartbeatAt: null })],
+        now: utc('2026-04-29T08:15:00'),
+        runHeartbeatTick,
+      }),
+    );
+
+    expect(runHeartbeatTick).not.toHaveBeenCalled();
+    expect(result.counts.notDue).toBe(1);
+    expect(result.counts.dispatched).toBe(0);
+  });
+
   it('does not double-fire a heartbeat that still has a pending local timer', async () => {
     const lastHeartbeatAt = utc('2026-04-29T08:00:00');
     const runHeartbeatTick = vi.fn();
@@ -254,6 +282,42 @@ describe('runTaskSchedulingSweep', () => {
     expect(result.counts.skipped).toBe(1);
   });
 
+  it('skips a heartbeat while the LocalTaskScheduler callback is still unresolved', async () => {
+    const scheduler = new LocalTaskScheduler();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const callback = vi.fn().mockImplementation(() => gate);
+    scheduler.setExecutionCallback(callback);
+
+    await scheduler.scheduleNextTopic({ delay: 0, taskId: 'hb-1', userId: 'user-1' });
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledOnce());
+    expect(scheduler.hasPendingForTask('hb-1')).toBe(true);
+
+    const runHeartbeatTick = vi.fn();
+    const result = await runTaskSchedulingSweep(
+      baseDeps({
+        getHeartbeatTasks: async () => [
+          heartbeat({
+            heartbeatInterval: 600,
+            id: 'hb-1',
+            lastHeartbeatAt: utc('2026-04-29T08:00:00'),
+          }),
+        ],
+        hasPendingLocalTimer: (taskId) => scheduler.hasPendingForTask(taskId),
+        now: utc('2026-04-29T08:15:00'),
+        runHeartbeatTick,
+      }),
+    );
+
+    expect(runHeartbeatTick).not.toHaveBeenCalled();
+    expect(result.counts.skipped).toBe(1);
+
+    release();
+    await vi.waitFor(() => expect(scheduler.hasPendingForTask('hb-1')).toBe(false));
+  });
+
   it('skips a heartbeat whose lastHeartbeatAt changed (DB guard)', async () => {
     const selected = utc('2026-04-29T08:00:00');
     const runHeartbeatTick = vi.fn();
@@ -275,6 +339,46 @@ describe('runTaskSchedulingSweep', () => {
 
     expect(runHeartbeatTick).not.toHaveBeenCalled();
     expect(result.counts.skipped).toBe(1);
+  });
+
+  it('dispatches due heartbeat ticks with the same concurrency cap as cron', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runHeartbeatTick = vi.fn().mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await gate;
+      inFlight -= 1;
+      return { ran: true, taskIdentifier: 'hb' };
+    });
+
+    const lastHeartbeatAt = utc('2026-04-29T08:00:00');
+    const pending = runTaskSchedulingSweep(
+      baseDeps({
+        cronConcurrency: 3,
+        getHeartbeatSnapshot: async () => lastHeartbeatAt,
+        getHeartbeatTasks: async () =>
+          ['a', 'b', 'c', 'd'].map((id) =>
+            heartbeat({
+              id,
+              lastHeartbeatAt,
+            }),
+          ),
+        now: utc('2026-04-29T08:15:00'),
+        runHeartbeatTick,
+      }),
+    );
+
+    await vi.waitFor(() => expect(runHeartbeatTick).toHaveBeenCalledTimes(3));
+    expect(maxInFlight).toBe(3);
+    release();
+    const result = await pending;
+    expect(runHeartbeatTick).toHaveBeenCalledTimes(4);
+    expect(result.counts.dispatched).toBe(4);
   });
 });
 

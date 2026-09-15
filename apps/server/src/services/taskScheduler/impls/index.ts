@@ -66,7 +66,8 @@ export type { TaskSchedulerImpl } from './type';
 
 /**
  * Whether the in-process LocalTaskScheduler already has a setTimeout armed
- * for this task. Always false in QStash mode (no in-memory timers).
+ * for this task, or is still awaiting that timer's execution callback.
+ * Always false in QStash mode (no in-memory timers).
  */
 export const hasPendingLocalTimer = (taskId: string): boolean =>
   cachedScheduler instanceof LocalTaskScheduler && cachedScheduler.hasPendingForTask(taskId);

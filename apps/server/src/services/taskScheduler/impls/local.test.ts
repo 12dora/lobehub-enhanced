@@ -96,6 +96,26 @@ describe('LocalTaskScheduler', () => {
       expect(callback).toHaveBeenCalledOnce();
     });
 
+    it('keeps the pending entry until the execution callback resolves', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const callback = vi.fn().mockImplementation(() => gate);
+      scheduler.setExecutionCallback(callback);
+
+      await scheduler.scheduleNextTopic({ delay: 1, taskId: 'task-hold', userId: 'user-1' });
+      expect(scheduler.hasPendingForTask('task-hold')).toBe(true);
+
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+      await vi.waitFor(() => expect(callback).toHaveBeenCalledOnce());
+      expect(scheduler.hasPendingForTask('task-hold')).toBe(true);
+
+      release();
+      await vi.waitFor(() => expect(scheduler.hasPendingForTask('task-hold')).toBe(false));
+    });
+
     it('should report pending timers by task id and replace a prior timer for the same task', async () => {
       const callback = vi.fn().mockResolvedValue(undefined);
       scheduler.setExecutionCallback(callback);

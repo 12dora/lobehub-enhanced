@@ -25,40 +25,65 @@ vi.mock('@/server/services/taskRunner/heartbeatTick', () => ({
 }));
 
 const shanghaiLocal = (iso: string) => new Date(`${iso}+08:00`);
+const utc = (iso: string) => new Date(`${iso}Z`);
+
+const dailyNine = (overrides: {
+  id: string;
+  identifier?: string;
+  lastHeartbeatAt?: Date | null;
+  scheduleTimezone: string;
+}) => ({
+  createdByUserId: 'u',
+  identifier: overrides.identifier ?? overrides.id,
+  lastHeartbeatAt: overrides.lastHeartbeatAt ?? null,
+  schedulePattern: '0 9 * * *',
+  ...overrides,
+});
 
 describe('selectDueScheduledTasks', () => {
   it('honours Asia/Shanghai vs UTC for a daily 09:00 pattern', () => {
     const now = shanghaiLocal('2026-04-29T09:00:00');
     const due = selectDueScheduledTasks(
       [
-        {
-          createdByUserId: 'u',
-          id: 'sh',
-          identifier: 'T-SH',
-          lastHeartbeatAt: null,
-          schedulePattern: '0 9 * * *',
-          scheduleTimezone: 'Asia/Shanghai',
-        },
-        {
-          createdByUserId: 'u',
-          id: 'utc',
-          identifier: 'T-UTC',
-          lastHeartbeatAt: null,
-          schedulePattern: '0 9 * * *',
-          scheduleTimezone: 'UTC',
-        },
+        dailyNine({ id: 'sh', identifier: 'T-SH', scheduleTimezone: 'Asia/Shanghai' }),
+        dailyNine({ id: 'utc', identifier: 'T-UTC', scheduleTimezone: 'UTC' }),
       ],
       now,
     );
     expect(due.map((d) => d.taskId)).toEqual(['sh']);
+  });
+
+  it('does not select a daily 09:00 Shanghai task at 08:00 Shanghai', () => {
+    const due = selectDueScheduledTasks(
+      [dailyNine({ id: 'sh', scheduleTimezone: 'Asia/Shanghai' })],
+      shanghaiLocal('2026-04-29T08:00:00'),
+    );
+    expect(due).toEqual([]);
+  });
+
+  it('dedups a daily UTC 09:00 task that already ran at 09:00 today', () => {
+    const due = selectDueScheduledTasks(
+      [
+        dailyNine({
+          id: 'utc',
+          lastHeartbeatAt: utc('2026-04-29T09:00:00'),
+          scheduleTimezone: 'UTC',
+        }),
+      ],
+      utc('2026-04-29T09:03:00'),
+    );
+    expect(due).toEqual([]);
   });
 });
 
 describe('isHeartbeatTickDue', () => {
   const now = new Date('2026-04-29T08:15:00Z');
 
-  it('is due when lastHeartbeatAt is missing (restart catch-up)', () => {
-    expect(isHeartbeatTickDue({ heartbeatInterval: 600, lastHeartbeatAt: null, now })).toBe(true);
+  it('is not due when lastHeartbeatAt is missing or invalid (never ran)', () => {
+    expect(isHeartbeatTickDue({ heartbeatInterval: 600, lastHeartbeatAt: null, now })).toBe(false);
+    expect(isHeartbeatTickDue({ heartbeatInterval: 600, lastHeartbeatAt: 'not-a-date', now })).toBe(
+      false,
+    );
   });
 
   it('is due when lastHeartbeatAt + interval has passed', () => {

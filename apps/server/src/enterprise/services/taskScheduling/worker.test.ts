@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { acquireSweepLock, TASK_SCHEDULING_SWEEP_LOCK_KEY } from './lock';
+import {
+  acquireSweepLock,
+  RELEASE_SWEEP_LOCK_SCRIPT,
+  TASK_SCHEDULING_SWEEP_LOCK_KEY,
+  TASK_SCHEDULING_SWEEP_LOCK_TTL_SECONDS,
+} from './lock';
 import {
   ensureTaskSchedulingWorkerStarted,
   getTaskSchedulingStatus,
@@ -10,6 +15,7 @@ import {
 } from './worker';
 
 const redisMocks = vi.hoisted(() => ({
+  eval: vi.fn(),
   getRedis: vi.fn(),
   set: vi.fn(),
 }));
@@ -66,36 +72,53 @@ describe('acquireSweepLock', () => {
   beforeEach(() => {
     redisMocks.getRedis.mockReset();
     redisMocks.set.mockReset();
+    redisMocks.eval.mockReset();
   });
 
   it('returns unavailable and warns when Redis is missing', async () => {
     redisMocks.getRedis.mockReturnValue(null);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(acquireSweepLock()).resolves.toBe('unavailable');
+    const lock = await acquireSweepLock();
+    expect(lock.result).toBe('unavailable');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 
   it('returns held when SET NX does not acquire', async () => {
     redisMocks.set.mockResolvedValue(null);
-    redisMocks.getRedis.mockReturnValue({ set: redisMocks.set });
+    redisMocks.getRedis.mockReturnValue({ eval: redisMocks.eval, set: redisMocks.set });
 
-    await expect(acquireSweepLock()).resolves.toBe('held');
+    const lock = await acquireSweepLock();
+    expect(lock.result).toBe('held');
     expect(redisMocks.set).toHaveBeenCalledWith(
       TASK_SCHEDULING_SWEEP_LOCK_KEY,
-      expect.any(String),
+      expect.stringMatching(/^[0-9a-f-]{36}$/i),
       'EX',
-      55,
+      TASK_SCHEDULING_SWEEP_LOCK_TTL_SECONDS,
       'NX',
     );
+    expect(TASK_SCHEDULING_SWEEP_LOCK_TTL_SECONDS).toBeGreaterThanOrEqual(5 * 60);
   });
 
-  it('returns acquired when SET NX succeeds', async () => {
+  it('returns acquired when SET NX succeeds and releases with compare-and-delete', async () => {
     redisMocks.set.mockResolvedValue('OK');
-    redisMocks.getRedis.mockReturnValue({ set: redisMocks.set });
+    redisMocks.eval.mockResolvedValue(1);
+    redisMocks.getRedis.mockReturnValue({ eval: redisMocks.eval, set: redisMocks.set });
 
-    await expect(acquireSweepLock()).resolves.toBe('acquired');
+    const lock = await acquireSweepLock();
+    expect(lock.result).toBe('acquired');
+    const token = redisMocks.set.mock.calls[0]![1] as string;
+
+    await lock.release();
+    expect(redisMocks.eval).toHaveBeenCalledWith(
+      RELEASE_SWEEP_LOCK_SCRIPT,
+      1,
+      TASK_SCHEDULING_SWEEP_LOCK_KEY,
+      token,
+    );
+    expect(RELEASE_SWEEP_LOCK_SCRIPT).toContain("redis.call('get'");
+    expect(RELEASE_SWEEP_LOCK_SCRIPT).toContain("redis.call('del'");
   });
 });
 
@@ -150,7 +173,27 @@ describe('ensureTaskSchedulingWorkerStarted', () => {
     await vi.waitFor(() => {
       const status = getTaskSchedulingStatus();
       expect(status.lastSweepAt).toBeTruthy();
-      expect(status.lastCounts).toEqual({ dispatched: 0, failed: 0, skipped: 0 });
+      expect(status.lastCounts).toEqual({ dispatched: 0, failed: 0, notDue: 0, skipped: 0 });
     });
+  });
+
+  it('does not start the interval when local scheduler init fails', async () => {
+    const { createTaskSchedulerModule } = await import('@/server/services/taskScheduler');
+    vi.mocked(createTaskSchedulerModule).mockImplementationOnce(() => {
+      throw new Error('no scheduler');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    ensureTaskSchedulingWorkerStarted({
+      acquireSweepLock: async () => 'acquired',
+      getHeartbeatTasks: async () => [],
+      getScheduledTasks: async () => [],
+      runWatchdogScan: async () => ({ checked: 0, failed: [] }),
+    });
+
+    expect(warn).toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getTaskSchedulingStatus()).toEqual({ lastCounts: null, lastSweepAt: null });
+    warn.mockRestore();
   });
 });

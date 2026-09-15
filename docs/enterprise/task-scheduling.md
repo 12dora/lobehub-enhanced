@@ -17,21 +17,21 @@
 | 步骤     | 行为                                                                                                                                                                              |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Cron     | `TaskModel.getScheduledTasks` + `isExecutionTime`（时区 + `lastHeartbeatAt` 去重），到期则 `runScheduleTick`，并发 ≤ 3                                                            |
-| 心跳     | `automationMode=heartbeat` 且可调度；`lastHeartbeatAt + heartbeatInterval` 已到期、且本进程没有 pending `setTimeout` 时补跑 `runHeartbeatTick`。用内存 + `lastHeartbeatAt` 防双发 |
+| 心跳     | `automationMode=heartbeat` 且可调度；`lastHeartbeatAt + heartbeatInterval` 已到期、且本进程没有 pending `setTimeout` / 进行中的 tick 时补跑 `runHeartbeatTick`。从未跑过的任务（`lastHeartbeatAt` 为空）不会被扫到；并发与 cron 相同（≤ 3） |
 | Watchdog | 调用与 QStash `/watchdog` 相同的 `runWatchdogScan`：超时 running 任务标 `failed` 并写 brief                                                                                       |
 
-多副本用 Redis 锁 `task-scheduling:sweep`（TTL 55 秒，ioredis，与 messenger `linkTokenStore` 同一客户端）。Redis 不可用时打警告后仍执行。
+多副本用 Redis 锁 `task-scheduling:sweep`（ioredis，与 messenger `linkTokenStore` 同一客户端）：`SET` NX 写入随机 token，TTL 5 分钟，扫完后用 Lua compare-and-delete 释放。选长 TTL + 显式释放，而不是持锁期间续期：一次 sweep 是整段临界区，应一次跑完或等 TTL 过期，避免另一副本在 kickoff 尚未结束时再扫一遍。Redis 不可用时打警告后仍执行。
 
-状态查询：`getTaskSchedulingStatus()` → `{ lastSweepAt, lastCounts: { dispatched, skipped, failed } }`，供后续管理页。
+状态查询：`getTaskSchedulingStatus()` → `{ lastSweepAt, lastCounts: { dispatched, skipped, notDue, failed } }`，供后续管理页。`notDue` 是尚未到点的行；`skipped` 是已到点但本轮未真正发出的 tick（pending timer、inflight、快照变化、tick 自身拒绝）。
 
 日志命名空间：`lobe-server:task-scheduling`（`DEBUG=lobe-server:task-scheduling`）。
 
 ## 上线后如何验证
 
 1. 确认进程日志出现 `started interval=60000ms`（或 `DEBUG=lobe-server:task-scheduling` 下的 sweep 计数）。
-2. 在任务页给某任务设 cron 为 `* * * * *`（或每分钟 `*/1 * * * *`），时区选实际时区，状态保持可调度（不要用 paused、completed）。
+2. 在任务页给某任务设 cron 为 `*/1 * * * *`（每分钟），时区选实际时区，状态保持可调度（不要用 paused、completed）。不要用 `* * * * *`：`isExecutionTime` 把 `cronHour === '*'` 当成「每小时的某一分钟」（例如 `30 * * * *`），有过 `lastExecutedAt` 后最多每 60 分钟再跑一次，不会每分钟触发。
 3. 等最多约 1 分钟，打开该任务的运行记录：应新增 `task_topics` 行，`trigger = 'schedule'`。
-4. 心跳模式：间隔设为允许的最小值（≥ 600 秒），手动跑一次后再重启服务；重启后若已过间隔，应补一次 `trigger = 'heartbeat'` 的 topic，而不会在同一分钟内双跑。
+4. 心跳模式：间隔设为允许的最小值（≥ 600 秒），手动跑一次后再重启服务；重启后若已过间隔，应补一次 `trigger = 'heartbeat'` 的 topic，而不会在同一分钟内双跑。从未手动跑过的心跳任务不会在 sweep 里被踢起来。
 5. Watchdog：将某任务置 `running`，把 `lastHeartbeatAt` 改到超过 `heartbeatTimeout` 之前，下一轮扫描后应变 `failed` 并出现 error brief。
 
 不在本环境对真实库做联调；以上步骤在部署后的实例上执行。

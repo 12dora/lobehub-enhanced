@@ -13,7 +13,10 @@ export type TaskExecutionCallback = (taskId: string, userId: string) => Promise<
 export class LocalTaskScheduler implements TaskSchedulerImpl {
   private executionCallback: TaskExecutionCallback | null = null;
   private pendingSchedules: Map<string, NodeJS.Timeout> = new Map();
-  /** One pending timer per task — used by the local sweep worker to avoid double ticks. */
+  /**
+   * One pending entry per task — armed timer *or* in-flight execution callback.
+   * The local sweep worker uses this to avoid double ticks.
+   */
   private pendingByTaskId: Map<string, string> = new Map();
   private taskIdByScheduleId: Map<string, string> = new Map();
 
@@ -40,18 +43,21 @@ export class LocalTaskScheduler implements TaskSchedulerImpl {
     log('Scheduling next topic for task %s (delay: %ds)', taskId, delay);
 
     const timer = setTimeout(async () => {
-      this.clearPending(scheduleId, taskId);
-
-      if (!this.executionCallback) {
-        log('Warning: No execution callback set');
-        return;
-      }
-
       try {
+        if (!this.executionCallback) {
+          log('Warning: No execution callback set');
+          return;
+        }
+
         log('Executing next topic for task %s', taskId);
         await this.executionCallback(taskId, userId);
       } catch (error) {
         log('Failed to execute next topic for task %s: %O', taskId, error);
+      } finally {
+        // Stay pending for the whole tick so a sweep at the due instant cannot
+        // also fire. Re-arm from `onTopicComplete` replaces this scheduleId, so
+        // the new timer is not deleted here.
+        this.clearPending(scheduleId, taskId);
       }
     }, delay * 1000);
 

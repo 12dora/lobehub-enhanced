@@ -3,6 +3,9 @@ import type { ScheduledTaskForDispatch } from '@/server/workflows-hono/task/hand
 export interface TaskSchedulingCounts {
   dispatched: number;
   failed: number;
+  /** Loaded rows whose cron/heartbeat window has not elapsed yet. */
+  notDue: number;
+  /** Due rows skipped (pending timer, inflight, snapshot changed, tick declined). */
   skipped: number;
 }
 
@@ -12,6 +15,11 @@ export interface TaskSchedulingStatus {
 }
 
 export type SweepLockResult = 'acquired' | 'held' | 'unavailable';
+
+export interface SweepLockHandle {
+  release: () => Promise<void>;
+  result: SweepLockResult;
+}
 
 export interface HeartbeatTaskForSweep {
   createdByUserId: string;
@@ -28,7 +36,7 @@ export interface TaskSchedulingSweepResult {
 }
 
 export interface TaskSchedulingSweepDeps {
-  acquireSweepLock?: () => Promise<SweepLockResult>;
+  acquireSweepLock?: () => Promise<SweepLockHandle | SweepLockResult>;
   cronConcurrency?: number;
   getHeartbeatSnapshot?: (taskId: string) => Promise<Date | string | null | undefined>;
   getHeartbeatTasks?: () => Promise<HeartbeatTaskForSweep[]>;
