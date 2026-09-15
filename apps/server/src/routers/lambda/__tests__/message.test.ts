@@ -442,10 +442,13 @@ describe('messageRouter', () => {
       await expect(postProcessUrl('files/cat.png', { id: 'file-1' })).resolves.toBe(
         'https://s3.example/files/cat.png',
       );
-      expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith({
-        id: 'file-1',
-        url: 'files/cat.png',
-      });
+      expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith(
+        {
+          id: 'file-1',
+          url: 'files/cat.png',
+        },
+        900,
+      );
       expect(fileServiceMocks.getFileAccessUrl).not.toHaveBeenCalled();
       expect(result).toEqual(mockMessages);
     });

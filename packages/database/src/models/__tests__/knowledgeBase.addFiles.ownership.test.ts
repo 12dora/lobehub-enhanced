@@ -24,6 +24,7 @@ const createDb = () => {
       values: (rows: Array<{ fileId: string; knowledgeBaseId: string; userId: string }>) => {
         inserted.push(...rows);
         return {
+          onConflictDoNothing: () => ({ returning: async () => rows }),
           returning: async () => rows,
         };
       },

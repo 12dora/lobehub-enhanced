@@ -131,7 +131,6 @@ describe('resolveFileAccess', () => {
     ).resolves.toEqual({ allowed: false });
 
     expect(mocks.getMember).not.toHaveBeenCalled();
-    expect(select).toHaveBeenCalled();
   });
 
   it('skips workspace lookup when the file has no workspaceId', async () => {
@@ -146,20 +145,6 @@ describe('resolveFileAccess', () => {
     ).resolves.toEqual({ allowed: false });
 
     expect(mocks.getMember).not.toHaveBeenCalled();
-  });
-
-  it('allows a file attached to a topic with visibility=link', async () => {
-    const { db } = createDb([{ shareId: 'share-1' }]);
-
-    await expect(
-      resolveFileAccess({
-        db,
-        file: { ...file, workspaceId: null },
-        viewerUserId: 'stranger',
-      }),
-    ).resolves.toEqual({ allowed: true, reason: 'topic_share' });
-
-    expect(mocks.loadPlatformAuthContext).not.toHaveBeenCalled();
   });
 
   it('allows an auditor with conversation body access', async () => {

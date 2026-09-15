@@ -1,10 +1,8 @@
 import type { LobeChatDatabase } from '@lobechat/database';
-import { and, eq } from 'drizzle-orm';
 
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import { PlatformAuditPolicyModel } from '@/database/models/platform';
 import { WorkspaceMemberModel } from '@/database/models/workspaceMember';
-import { messages, messagesFiles, topicShares } from '@/database/schemas';
 import { isPlatformAdminFeatureEnabled } from '@/server/enterprise/featureFlags';
 import { loadPlatformAuthContext } from '@/server/enterprise/guards/platformPermission';
 import { appendAuditAccessLog } from '@/server/enterprise/services/audit/accessLog';
@@ -19,32 +17,12 @@ export type FileAccessFile = {
 };
 
 export type FileAccessDecision =
-  { allowed: true; reason: 'owner' | 'workspace' | 'topic_share' | 'auditor' } | { allowed: false };
+  { allowed: true; reason: 'owner' | 'workspace' | 'auditor' } | { allowed: false };
 
+// Topic link-shares are served by `message.getMessages({ topicShareId })` with
+// short-lived presigned object URLs, so they never need `/f/:id` access here.
 const isWorkspaceMemberVisible = (visibility?: string | null): boolean =>
   visibility == null || visibility === 'public';
-
-const hasLinkSharedTopicAttachment = async (
-  db: LobeChatDatabase,
-  file: Pick<FileAccessFile, 'id' | 'userId'>,
-): Promise<boolean> => {
-  const rows = await db
-    .select({ shareId: topicShares.id })
-    .from(messagesFiles)
-    .innerJoin(messages, eq(messagesFiles.messageId, messages.id))
-    .innerJoin(topicShares, eq(topicShares.topicId, messages.topicId))
-    .where(
-      and(
-        eq(messagesFiles.fileId, file.id),
-        eq(messagesFiles.userId, file.userId),
-        eq(topicShares.userId, file.userId),
-        eq(topicShares.visibility, 'link'),
-      ),
-    )
-    .limit(1);
-
-  return rows.length > 0;
-};
 
 const tryAuditorAccess = async (db: LobeChatDatabase, viewerUserId: string): Promise<boolean> => {
   if (!isPlatformAdminFeatureEnabled()) return false;
@@ -89,10 +67,6 @@ export const resolveFileAccess = async (params: {
       viewerUserId,
     );
     if (member) return { allowed: true, reason: 'workspace' };
-  }
-
-  if (await hasLinkSharedTopicAttachment(db, file)) {
-    return { allowed: true, reason: 'topic_share' };
   }
 
   if (await tryAuditorAccess(db, viewerUserId)) {

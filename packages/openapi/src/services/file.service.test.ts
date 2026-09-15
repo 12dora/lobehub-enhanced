@@ -64,7 +64,8 @@ vi.mock('@/utils/isChunkingUnsupported', () => ({
   isChunkingUnsupported: vi.fn(() => false),
 }));
 
-type FileUploadServiceWithMetadata = FileUploadService & {
+// `generateFileMetadata` is private; reach it through a structural type instead of the class.
+type FileUploadServiceWithMetadata = {
   generateFileMetadata: (file: { name: string }, directory?: string) => FileMetadata;
 };
 
@@ -76,7 +77,10 @@ describe('FileUploadService.generateFileMetadata directory policy', () => {
   });
 
   const createService = () =>
-    new FileUploadService({} as LobeChatDatabase, 'user-1') as FileUploadServiceWithMetadata;
+    new FileUploadService(
+      {} as LobeChatDatabase,
+      'user-1',
+    ) as unknown as FileUploadServiceWithMetadata;
 
   it('defaults to files/ and accepts allowlisted directories', () => {
     const service = createService();

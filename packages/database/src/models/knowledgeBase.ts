@@ -105,6 +105,7 @@ export class KnowledgeBaseModel {
           workspaceId: this.workspaceId ?? null,
         })),
       )
+      .onConflictDoNothing()
       .returning();
   };
 

@@ -153,7 +153,7 @@ describe('resolveFileAccess (real DB)', () => {
     ).resolves.toEqual({ allowed: false });
   });
 
-  it('allows a stranger when the owner attached the file and link-shared the topic', async () => {
+  it('denies a stranger even when the owner attached the file and link-shared the topic (share pages use presigned URLs)', async () => {
     await serverDB
       .insert(topics)
       .values({ id: 'fa-acl-topic-link', title: 'Link', userId: ownerId });
@@ -183,7 +183,7 @@ describe('resolveFileAccess (real DB)', () => {
         file: { id: 'fa-acl-file-link', userId: ownerId, workspaceId: null },
         viewerUserId: strangerId,
       }),
-    ).resolves.toEqual({ allowed: true, reason: 'topic_share' });
+    ).resolves.toEqual({ allowed: false });
   });
 
   it('denies a stranger when the owner share is private rather than link', async () => {
