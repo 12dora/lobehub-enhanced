@@ -2,10 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FileService } from './index';
 
-const { mockGetDocumentById, mockGetFileItemById } = vi.hoisted(() => ({
-  mockGetDocumentById: vi.fn(),
-  mockGetFileItemById: vi.fn(),
-}));
+const { mockGetDocumentById, mockGetFileItemById, mockCheckFileHash, mockCreateFile } = vi.hoisted(
+  () => ({
+    mockCheckFileHash: vi.fn(),
+    mockCreateFile: vi.fn(),
+    mockGetDocumentById: vi.fn(),
+    mockGetFileItemById: vi.fn(),
+  }),
+);
 
 vi.mock('@/libs/trpc/client', () => ({
   lambdaClient: {
@@ -13,6 +17,8 @@ vi.mock('@/libs/trpc/client', () => ({
       getDocumentById: { query: mockGetDocumentById },
     },
     file: {
+      checkFileHash: { mutate: mockCheckFileHash },
+      createFile: { mutate: mockCreateFile },
       getFileItemById: { query: mockGetFileItemById },
     },
   },
@@ -86,5 +92,48 @@ describe('FileService.getKnowledgeItem', () => {
       name: 'Native page',
       sourceType: 'document',
     });
+  });
+});
+
+describe('FileService.checkFileHash / createFile', () => {
+  const service = new FileService();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('passes checkFileHash through and returns the hash-existence result', async () => {
+    mockCheckFileHash.mockResolvedValue({ fileType: 'image/png', isExist: true, size: 12 });
+
+    await expect(service.checkFileHash('abc')).resolves.toEqual({
+      fileType: 'image/png',
+      isExist: true,
+      size: 12,
+    });
+    expect(mockCheckFileHash).toHaveBeenCalledWith({ hash: 'abc' });
+  });
+
+  it('forwards createFile without a url when the caller omits it', async () => {
+    mockCreateFile.mockResolvedValue({ id: 'file_1', url: '/f/file_1' });
+
+    await expect(
+      service.createFile({
+        fileType: 'image/png',
+        hash: 'abc',
+        metadata: {},
+        name: 'generated.png',
+        size: 12,
+      }),
+    ).resolves.toEqual({ id: 'file_1', url: '/f/file_1' });
+
+    expect(mockCreateFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileType: 'image/png',
+        hash: 'abc',
+        name: 'generated.png',
+        size: 12,
+      }),
+    );
+    expect(mockCreateFile.mock.calls[0][0]).not.toHaveProperty('url');
   });
 });

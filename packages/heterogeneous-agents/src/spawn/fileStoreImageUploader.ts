@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 
+import { nanoid } from 'nanoid';
+
 import type { UploadHeterogeneousImage } from './agentStreamPipeline';
 
 /** Extension seed for an uploaded tool_result image, by IANA media type. */
@@ -13,10 +15,10 @@ const IMAGE_EXT_BY_MEDIA_TYPE: Record<string, string> = {
 export interface FileStoreCreateFileInput {
   fileType: string;
   hash: string;
-  metadata: { date: string; dirname: string; filename: string; path: string };
+  metadata: { date?: string; dirname?: string; filename?: string; path?: string };
   name: string;
   size: number;
-  url: string;
+  url?: string;
 }
 
 /**
@@ -26,7 +28,11 @@ export interface FileStoreCreateFileInput {
  * runtime that spawned the CLI holds those credentials.
  */
 export interface FileStorePort {
-  checkFileHash: (input: { hash: string }) => Promise<{ isExist?: boolean; url?: string }>;
+  checkFileHash: (input: { hash: string }) => Promise<{
+    fileType?: string;
+    isExist?: boolean;
+    size?: number;
+  }>;
   createFile: (input: FileStoreCreateFileInput) => Promise<{ id: string; url: string }>;
   createS3PreSignedUrl: (input: { pathname: string }) => Promise<string | { url: string }>;
 }
@@ -47,19 +53,20 @@ export const createFileStoreImageUploader =
 
     const buffer = Buffer.from(data, 'base64');
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-    const ext = IMAGE_EXT_BY_MEDIA_TYPE[mediaType] ?? 'png';
+    const rawExt = IMAGE_EXT_BY_MEDIA_TYPE[mediaType] ?? 'png';
+    const ext = rawExt.replaceAll(/[^\w-]/g, '').slice(0, 16);
     const fileName = `cc-read-image.${ext}`;
     const date = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
 
     // Dedup: if the same bytes are already stored (and the object still
-    // exists), skip the S3 upload entirely and reuse the existing pathname.
+    // exists), skip the S3 upload. The server resolves the stored key from `hash`.
     const existing = await port.checkFileHash({ hash });
 
-    let pathname: string;
-    if (existing?.isExist && existing.url) {
-      pathname = existing.url;
-    } else {
-      pathname = `files/${date}/${hash}.${ext}`;
+    let pathname: string | undefined;
+    if (!existing?.isExist) {
+      // Nonce the key per attempt: a deterministic `files/<date>/<hash>.<ext>`
+      // would CONFLICT forever after an orphaned PUT.
+      pathname = `files/${date}/${hash}-${nanoid(8)}.${ext}`;
       const presigned = await port.createS3PreSignedUrl({ pathname });
       const presignedUrl = typeof presigned === 'string' ? presigned : presigned.url;
 
@@ -76,10 +83,10 @@ export const createFileStoreImageUploader =
     const record = await port.createFile({
       fileType: mediaType,
       hash,
-      metadata: { date, dirname: '', filename: fileName, path: pathname },
+      metadata: pathname ? { date, dirname: '', filename: fileName, path: pathname } : {},
       name: fileName,
       size: buffer.length,
-      url: pathname,
+      ...(pathname ? { url: pathname } : {}),
     });
 
     return { fileId: record.id, url: record.url };

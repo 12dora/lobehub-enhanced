@@ -215,6 +215,38 @@ describe('file command', () => {
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('already exists'));
     });
 
+    it('should print only isExist/fileType/size when --hash matches and --json is set', async () => {
+      mockTrpcClient.file.checkFileHash.mutate.mockResolvedValue({
+        fileType: 'application/pdf',
+        isExist: true,
+        metadata: { path: 'files/secret/key.pdf' },
+        size: 2048,
+        url: 'files/secret/key.pdf',
+      });
+
+      const program = createProgram();
+      await program.parseAsync([
+        'node',
+        'test',
+        'file',
+        'upload',
+        'https://example.com/doc.pdf',
+        '--hash',
+        'abc123',
+        '--json',
+      ]);
+
+      const jsonDump = consoleSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes('"isExist"'));
+      expect(jsonDump).toBeDefined();
+      const parsed = JSON.parse(jsonDump!);
+      expect(parsed).toEqual({ fileType: 'application/pdf', isExist: true, size: 2048 });
+      expect(jsonDump).not.toContain('files/secret');
+      expect(jsonDump).not.toContain('url');
+      expect(jsonDump).not.toContain('metadata');
+    });
+
     it('should upload a local file passed as a positional argument', async () => {
       const tmpFile = path.join(os.tmpdir(), `lh-upload-${process.pid}.txt`);
       fs.writeFileSync(tmpFile, 'hello world');
@@ -242,7 +274,7 @@ describe('file command', () => {
           expect.objectContaining({
             fileType: 'text/plain',
             name: path.basename(tmpFile),
-            url: expect.stringContaining('.txt'),
+            url: expect.stringMatching(/^files\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}-[\w-]{8}\.txt$/),
           }),
         );
         expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('File created'));
@@ -283,7 +315,6 @@ describe('file command', () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
       mockTrpcClient.file.checkFileHash.mutate.mockResolvedValue({
         isExist: true,
-        url: 'files/2024-01-01/existing.txt',
       });
       mockTrpcClient.file.createFile.mutate.mockResolvedValue({ id: 'f-dedup' });
 
@@ -294,10 +325,13 @@ describe('file command', () => {
         // No pre-sign and no S3 PUT should happen
         expect(mockTrpcClient.upload.createS3PreSignedUrl.mutate).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
-        // The record reuses the existing url
         expect(mockTrpcClient.file.createFile.mutate).toHaveBeenCalledWith(
-          expect.objectContaining({ url: 'files/2024-01-01/existing.txt' }),
+          expect.objectContaining({
+            hash: expect.any(String),
+            metadata: {},
+          }),
         );
+        expect(mockTrpcClient.file.createFile.mutate.mock.calls[0][0]).not.toHaveProperty('url');
       } finally {
         fetchSpy.mockRestore();
         fs.rmSync(tmpFile, { force: true });

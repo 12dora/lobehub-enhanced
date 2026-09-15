@@ -322,21 +322,13 @@ describe('FileUploadAction', () => {
 
   describe('uploadWithProgress', () => {
     describe('file already exists (hash match)', () => {
-      it('should skip upload when file exists and use existing metadata', async () => {
+      it('should skip upload when file exists and omit url', async () => {
         const { result } = renderHook(() => useStore());
 
         const mockFile = new File(['test content'], 'test.png', { type: 'image/png' });
         const mockDimensions = { height: 100, ratio: 2, width: 200 };
-        const mockExistingMetadata = {
-          date: '12345',
-          dirname: '/test',
-          filename: 'existing.png',
-          path: '/test/existing.png',
-        };
         const mockCheckResult = {
           isExist: true,
-          metadata: mockExistingMetadata,
-          url: 'https://example.com/existing.png',
         };
         const mockFileResponse = {
           id: 'file-id-789',
@@ -367,13 +359,13 @@ describe('FileUploadAction', () => {
           {
             fileType: mockFile.type,
             hash: 'mock-hash-value',
-            metadata: { ...mockExistingMetadata, ...mockDimensions },
+            metadata: mockDimensions,
             name: mockFile.name,
             size: mockFile.size,
-            url: mockExistingMetadata.path, // Uses metadata.path when available
           },
           undefined,
         );
+        expect(vi.mocked(fileService.createFile).mock.calls[0][0]).not.toHaveProperty('url');
         expect(uploadResult).toEqual({
           ...mockFileResponse,
           dimensions: mockDimensions,
@@ -381,15 +373,12 @@ describe('FileUploadAction', () => {
         });
       });
 
-      it('should reuse the existing hash url when existing metadata is null', async () => {
+      it('skips upload and omits url when the hash exists', async () => {
         const { result } = renderHook(() => useStore());
 
         const mockFile = new File(['test content'], 'generated.png', { type: 'image/png' });
-        const mockDimensions = { height: 100, ratio: 2, width: 200 };
         const mockCheckResult = {
           isExist: true,
-          metadata: null,
-          url: 'assets/generations/2026-06-19/W4ipNrmH.png',
         };
         const mockFileResponse = {
           id: 'file-id-generated',
@@ -397,7 +386,7 @@ describe('FileUploadAction', () => {
         };
         const onStatusUpdate = vi.fn();
 
-        vi.mocked(getImageDimensions).mockResolvedValue(mockDimensions);
+        vi.mocked(getImageDimensions).mockResolvedValue(undefined);
         vi.spyOn(fileService, 'checkFileHash').mockResolvedValue(mockCheckResult);
         vi.spyOn(fileService, 'createFile').mockResolvedValue(mockFileResponse);
         const uploadToS3Spy = vi.spyOn(uploadService, 'uploadFileToS3');
@@ -414,16 +403,16 @@ describe('FileUploadAction', () => {
           {
             fileType: mockFile.type,
             hash: 'mock-hash-value',
-            metadata: mockDimensions,
+            metadata: {},
             name: mockFile.name,
             size: mockFile.size,
-            url: mockCheckResult.url,
           },
           undefined,
         );
+        expect(vi.mocked(fileService.createFile).mock.calls[0][0]).not.toHaveProperty('url');
         expect(uploadResult).toEqual({
           ...mockFileResponse,
-          dimensions: mockDimensions,
+          dimensions: undefined,
           filename: mockFile.name,
         });
       });

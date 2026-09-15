@@ -179,11 +179,19 @@ export function registerFileCommand(program: Command) {
 
         // Check hash first if provided
         if (options.hash) {
-          const check = await client.file.checkFileHash.mutate({ hash: options.hash });
-          if ((check as any)?.isExist) {
+          const check = (await client.file.checkFileHash.mutate({ hash: options.hash })) as {
+            fileType?: string;
+            isExist?: boolean;
+            size?: number;
+          };
+          if (check?.isExist) {
             console.log(`${pc.yellow('!')} File with this hash already exists.`);
             if (options.json !== undefined) {
-              outputJson(check);
+              outputJson({
+                isExist: true,
+                ...(typeof check.fileType === 'string' ? { fileType: check.fileType } : {}),
+                ...(typeof check.size === 'number' ? { size: check.size } : {}),
+              });
             }
             return;
           }

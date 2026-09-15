@@ -43,13 +43,13 @@ describe('createFileStoreImageUploader', () => {
       name: 'cc-read-image.png',
       size: Buffer.from(PNG_BASE64, 'base64').length,
     });
-    // `url` is the S3 pathname, not the pre-signed URL.
-    expect(createFileInput.url).toMatch(/^files\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.png$/);
+    // `url` is a nonce'd S3 pathname, not the pre-signed URL.
+    expect(createFileInput.url).toMatch(/^files\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}-[\w-]{8}\.png$/);
   });
 
   it('reuses the stored object and skips the S3 PUT when the hash already exists', async () => {
     const port = createPort({
-      checkFileHash: vi.fn().mockResolvedValue({ isExist: true, url: 'files/old/abc.png' }),
+      checkFileHash: vi.fn().mockResolvedValue({ isExist: true }),
     });
     const upload = createFileStoreImageUploader(async () => port);
 
@@ -57,7 +57,25 @@ describe('createFileStoreImageUploader', () => {
 
     expect(port.createS3PreSignedUrl).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
-    expect(vi.mocked(port.createFile).mock.calls[0][0].url).toBe('files/old/abc.png');
+    expect(vi.mocked(port.createFile).mock.calls[0][0]).toMatchObject({
+      hash: PNG_HASH,
+      metadata: {},
+    });
+    expect(vi.mocked(port.createFile).mock.calls[0][0]).not.toHaveProperty('url');
+  });
+
+  it('mints a unique object key per upload attempt', async () => {
+    const port = createPort();
+    const upload = createFileStoreImageUploader(async () => port);
+
+    await upload({ data: PNG_BASE64, mediaType: 'image/png' });
+    await upload({ data: PNG_BASE64, mediaType: 'image/png' });
+
+    const first = vi.mocked(port.createFile).mock.calls[0][0].url;
+    const second = vi.mocked(port.createFile).mock.calls[1][0].url;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first).not.toBe(second);
   });
 
   it('hashes the decoded bytes so identical images dedup across runs', async () => {

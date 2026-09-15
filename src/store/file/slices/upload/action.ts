@@ -80,13 +80,6 @@ const normalizeUploadedImageFileType = async (
 
 type ExistingFileMetadata = Record<string, unknown> & { path?: string };
 
-const normalizeExistingFileMetadata = (metadata: unknown): ExistingFileMetadata => {
-  // Existing hash records can come from generated assets or older upload paths where metadata is null.
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
-
-  return metadata as ExistingFileMetadata;
-};
-
 const parseMimeTypeFromDataUri = (dataUri: string): string | undefined =>
   /^data:([^;,]+)/.exec(dataUri)?.[1];
 
@@ -183,9 +176,10 @@ export class FileUploadActionImpl {
       const checkStatus = await fileService.checkFileHash(hash);
       let metadata: ExistingFileMetadata;
 
-      // 3. if file exist, just skip upload
+      // 3. if file exist, just skip upload. The server resolves the stored key
+      // from `hash` on createFile, so we must not send (or learn) a storage url.
       if (checkStatus.isExist) {
-        metadata = normalizeExistingFileMetadata(checkStatus.metadata);
+        metadata = {};
         onStatusUpdate?.({
           id: statusId,
           type: 'updateFile',
@@ -238,9 +232,11 @@ export class FileUploadActionImpl {
       if (audioMime && !fileType.startsWith('audio/')) fileType = audioMime;
 
       // 5. create file to db
-      // Fall back to the global file URL when legacy/generated metadata has no `path`.
-      const fileUrl = metadata.path || checkStatus.url;
-      if (!fileUrl) throw new Error('File upload failed: missing file url');
+      // Hash hits omit `url`; the server looks the object up from global_files.
+      const fileUrl = checkStatus.isExist ? undefined : metadata.path;
+      if (!checkStatus.isExist && !fileUrl) {
+        throw new Error('File upload failed: missing file url');
+      }
 
       const data = await fileService.createFile(
         {
@@ -251,7 +247,7 @@ export class FileUploadActionImpl {
           parentId,
           size: normalizedFile.size,
           source,
-          url: fileUrl,
+          ...(fileUrl ? { url: fileUrl } : {}),
           visibility,
         },
         knowledgeBaseId,

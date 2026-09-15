@@ -39,12 +39,14 @@ describe('createLambdaFileStorePort', () => {
   });
 
   it('POSTs a superjson-serialized input to the lambda procedure and deserializes the result', async () => {
-    vi.mocked(fetch).mockResolvedValue(trpcOk({ isExist: true, url: 'files/a/b.png' }) as any);
+    vi.mocked(fetch).mockResolvedValue(
+      trpcOk({ isExist: true, fileType: 'image/png', size: 12 }) as any,
+    );
 
     const port = await createLambdaFileStorePort(auth);
     const result = await port!.checkFileHash({ hash: 'abc' });
 
-    expect(result).toEqual({ isExist: true, url: 'files/a/b.png' });
+    expect(result).toEqual({ fileType: 'image/png', isExist: true, size: 12 });
     expect(fetch).toHaveBeenCalledWith('https://cloud.lobehub.com/trpc/lambda/file.checkFileHash', {
       body: JSON.stringify(superjson.serialize({ hash: 'abc' })),
       headers: { 'Content-Type': 'application/json', 'Oidc-Auth': 'token-123' },

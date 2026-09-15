@@ -15,7 +15,7 @@ import {
 interface CreateFileParams extends Omit<UploadFileParams, 'url'> {
   knowledgeBaseId?: string;
   parentId?: string;
-  url: string;
+  url?: string;
   visibility?: 'private' | 'public';
 }
 

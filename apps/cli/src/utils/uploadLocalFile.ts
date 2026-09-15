@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { nanoid } from 'nanoid';
+
 import type { TrpcClient } from '../api/client';
 
 /**
@@ -57,6 +59,23 @@ export interface UploadFileBufferInput {
 }
 
 /**
+ * Sanitize a filename's extension the same way the web uploader does
+ * (`src/services/upload.ts`): never leak the raw name, `%`, or separators
+ * into the object key (the server rejects those characters).
+ */
+const fileExtensionForObjectKey = (fileName: string): string => {
+  const dotIndex = fileName.lastIndexOf('.');
+  const rawExtension = dotIndex > 0 ? fileName.slice(dotIndex + 1) : '';
+  return rawExtension.replaceAll(/[^\w-]/g, '').slice(0, 16);
+};
+
+const mintClientObjectKey = (hash: string, fileName: string, date: string): string => {
+  const ext = fileExtensionForObjectKey(fileName);
+  const nonce = nanoid(8);
+  return ext ? `files/${date}/${hash}-${nonce}.${ext}` : `files/${date}/${hash}-${nonce}`;
+};
+
+/**
  * Upload an in-memory buffer to S3 via a pre-signed URL and create the file
  * record — the buffer-based core behind {@link uploadLocalFile}.
  *
@@ -70,22 +89,22 @@ const uploadFileBuffer = async (
   // Compute SHA-256 hash for deduplication
   const hash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-  const ext = path.extname(fileName).toLowerCase().slice(1);
   const date = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
 
   // 1. Dedup: if the same bytes are already stored (and the object still
-  // exists), skip the S3 upload entirely and reuse the existing url.
+  // exists), skip the S3 upload. The server resolves the stored key from `hash`.
   const existing = (await client.file.checkFileHash.mutate({ hash })) as {
+    fileType?: string;
     isExist?: boolean;
-    url?: string;
+    size?: number;
   };
 
-  let pathname: string;
-  if (existing?.isExist && existing.url) {
-    pathname = existing.url;
-  } else {
-    // 2. Get a pre-signed upload URL and PUT the bytes to S3
-    pathname = ext ? `files/${date}/${hash}.${ext}` : `files/${date}/${hash}`;
+  let pathname: string | undefined;
+  if (!existing?.isExist) {
+    // 2. Get a pre-signed upload URL and PUT the bytes to S3.
+    // Nonce the key per attempt: a deterministic `files/<date>/<hash>.<ext>`
+    // would CONFLICT forever after an orphaned PUT.
+    pathname = mintClientObjectKey(hash, fileName, date);
     const presigned = await client.upload.createS3PreSignedUrl.mutate({ pathname });
 
     const presignedUrl = typeof presigned === 'string' ? presigned : (presigned as any).url;
@@ -99,21 +118,24 @@ const uploadFileBuffer = async (
     }
   }
 
-  // 3. Create the file record
+  // 3. Create the file record. Hash hits omit `url` so the server uses the
+  // stored global_files key and never learns a client-supplied pathname.
   return await client.file.createFile.mutate({
     fileType,
     hash,
     knowledgeBaseId: options.knowledgeBaseId,
-    metadata: {
-      date,
-      dirname: '',
-      filename: fileName,
-      path: pathname,
-    },
+    metadata: pathname
+      ? {
+          date,
+          dirname: '',
+          filename: fileName,
+          path: pathname,
+        }
+      : {},
     name: fileName,
     parentId: options.parentId,
     size: buffer.length,
-    url: pathname,
+    ...(pathname ? { url: pathname } : {}),
   });
 };
 
