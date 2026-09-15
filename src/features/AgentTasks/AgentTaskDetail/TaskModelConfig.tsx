@@ -1,14 +1,20 @@
 import { memo, useCallback } from 'react';
 
 import ModelSelect from '@/features/ModelSelect';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { usePermission } from '@/hooks/usePermission';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors, agentSelectors } from '@/store/agent/selectors';
 import { useTaskStore } from '@/store/task';
 import { taskDetailSelectors } from '@/store/task/selectors';
 
+// `ModelSelect` hard-codes `minWidth: 200`, which cannot share a row with the
+// assignee chip on a phone — let it shrink and fill the wrapped row instead.
+const MOBILE_SELECT_STYLE = { flex: '1 1 160px', minWidth: 0, width: 'auto' } as const;
+
 const TaskModelConfig = memo(() => {
   const { allowed: canEditTask } = usePermission('create_content');
+  const isMobile = useIsMobile();
   const taskId = useTaskStore(taskDetailSelectors.activeTaskId);
   const taskModel = useTaskStore(taskDetailSelectors.activeTaskModel);
   const taskProvider = useTaskStore(taskDetailSelectors.activeTaskProvider);
@@ -53,7 +59,8 @@ const TaskModelConfig = memo(() => {
     <ModelSelect
       initialWidth
       disabled={!canEditTask}
-      popupWidth={400}
+      popupWidth={isMobile ? 280 : 400}
+      style={isMobile ? MOBILE_SELECT_STYLE : undefined}
       value={{ model, provider }}
       onChange={handleChange}
     />

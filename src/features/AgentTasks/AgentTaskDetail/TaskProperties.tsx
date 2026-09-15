@@ -3,6 +3,7 @@ import { Block, Text } from '@lobehub/ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTaskStore } from '@/store/task';
 import { taskDetailSelectors } from '@/store/task/selectors';
 
@@ -39,6 +40,9 @@ const PRIORITY_META: Record<TaskPriority, PriorityMeta> = {
 
 const TaskProperties = memo(() => {
   const { t } = useTranslation(['chat', 'common']);
+  // Mobile stacks the properties panel under the title instead of pinning it to
+  // a fixed 200px right column that would be pushed off a ~390px viewport.
+  const isMobile = useIsMobile();
 
   const taskId = useTaskStore(taskDetailSelectors.activeTaskId);
   const status = useTaskStore(taskDetailSelectors.activeTaskStatus) as TaskStatus | undefined;
@@ -54,7 +58,13 @@ const TaskProperties = memo(() => {
   const priorityMeta = PRIORITY_META[priority as TaskPriority] ?? PRIORITY_META[0];
 
   return (
-    <Block gap={4} padding={4} variant={'outlined'} width={200}>
+    <Block
+      data-testid={'task-properties'}
+      gap={4}
+      padding={4}
+      variant={'outlined'}
+      width={isMobile ? '100%' : 200}
+    >
       <TaskStatusTag status={status} taskIdentifier={taskId}>
         <Block
           clickable

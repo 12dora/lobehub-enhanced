@@ -17,6 +17,7 @@ import { taskListSelectors } from '@/store/task/selectors';
 import type { TaskViewMode } from '@/store/task/slices/list/initialState';
 
 import { createTaskModal } from '../CreateTaskModal';
+import TaskListMobileHeader from '../mobile/TaskListMobileHeader';
 import ReminderSettingsButton from '../ReminderSettings';
 import Breadcrumb from '../shared/Breadcrumb';
 import { taskDetailPath } from '../shared/taskDetailPath';
@@ -127,41 +128,48 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
 
   const showTaskAgentPanelToggle = shouldRenderTaskAgentPanelToggle(isMobile);
 
+  // Same toolbar on both shells — the reminder bell and the inbox bell stay
+  // reachable on mobile, they just move into the mobile ChatHeader's right slot.
+  const headerActions = (
+    <Flexbox horizontal align={'center'} gap={4}>
+      {!agentId && <TaskListVisibilityFilter />}
+      {(inlineCollapsed || viewMode === 'kanban') && (
+        <ActionIcon
+          disabled={createActionBehavior.disabled}
+          icon={Plus}
+          size={DESKTOP_HEADER_ICON_SMALL_SIZE}
+          title={createActionBehavior.disabled ? reason : undefined}
+          onClick={handleCreateTask}
+        />
+      )}
+      <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />
+      <ReminderSettingsButton />
+      <InboxButton />
+      {showTaskAgentPanelToggle && (
+        <ToggleRightPanelButton
+          hideWhenExpanded
+          expand={showTaskAgentPanel}
+          onToggle={() => toggleTaskAgentPanel()}
+        />
+      )}
+    </Flexbox>
+  );
+
   return (
     <Flexbox flex={1} height={'100%'}>
-      <NavHeader
-        left={<Breadcrumb />}
-        right={
-          <Flexbox horizontal align={'center'} gap={4}>
-            {!agentId && <TaskListVisibilityFilter />}
-            {(inlineCollapsed || viewMode === 'kanban') && (
-              <ActionIcon
-                disabled={createActionBehavior.disabled}
-                icon={Plus}
-                size={DESKTOP_HEADER_ICON_SMALL_SIZE}
-                title={createActionBehavior.disabled ? reason : undefined}
-                onClick={handleCreateTask}
-              />
-            )}
-            <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />
-            <ReminderSettingsButton />
-            <InboxButton />
-            {showTaskAgentPanelToggle && (
-              <ToggleRightPanelButton
-                hideWhenExpanded
-                expand={showTaskAgentPanel}
-                onToggle={() => toggleTaskAgentPanel()}
-              />
-            )}
-          </Flexbox>
-        }
-        styles={{
-          left: {
-            paddingLeft: 4,
-            gap: 8,
-          },
-        }}
-      />
+      <TaskListMobileHeader actions={headerActions} />
+      {!isMobile && (
+        <NavHeader
+          left={<Breadcrumb />}
+          right={headerActions}
+          styles={{
+            left: {
+              paddingLeft: 4,
+              gap: 8,
+            },
+          }}
+        />
+      )}
       {isEmptyHero ? (
         <EmptyState agentId={agentId} />
       ) : viewMode === 'kanban' ? (

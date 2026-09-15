@@ -1,6 +1,8 @@
 import { Flexbox } from '@lobehub/ui';
 import { memo } from 'react';
 
+import { useIsMobile } from '@/hooks/useIsMobile';
+
 import TaskActivities from './TaskActivities';
 import TaskArtifacts from './TaskArtifacts';
 import TaskDetailAssignee from './TaskDetailAssignee';
@@ -20,21 +22,40 @@ import TaskVerifyConfig from './TaskVerifyConfig';
  * `activeTaskId` (e.g. via `setActiveTaskId`) before rendering this.
  */
 const TaskDetailSections = memo(() => {
+  // Desktop keeps the two-column header (controls left, properties pinned right).
+  // A phone cannot fit 200px of properties next to a 200px model picker, so the
+  // whole header collapses into a single stack under the title.
+  const isMobile = useIsMobile();
+
   return (
     <>
       <Flexbox gap={4} style={{ paddingBlock: '24px 36px' }}>
         <TaskDetailTitleInput />
-        <Flexbox horizontal align={'flex-start'} gap={16} justify={'space-between'}>
-          <Flexbox align={'flex-start'} flex={1} gap={16}>
+        {isMobile ? (
+          <Flexbox align={'stretch'} gap={12} style={{ width: '100%' }}>
             <TaskParentBar />
-            <Flexbox horizontal align={'center'} gap={8}>
+            <Flexbox horizontal align={'center'} gap={8} style={{ flexWrap: 'wrap' }}>
               <TaskDetailAssignee />
               <TaskModelConfig />
             </Flexbox>
-            <TaskDetailRunPauseAction />
+            <TaskProperties />
+            <Flexbox align={'stretch'}>
+              <TaskDetailRunPauseAction />
+            </Flexbox>
           </Flexbox>
-          <TaskProperties />
-        </Flexbox>
+        ) : (
+          <Flexbox horizontal align={'flex-start'} gap={16} justify={'space-between'}>
+            <Flexbox align={'flex-start'} flex={1} gap={16}>
+              <TaskParentBar />
+              <Flexbox horizontal align={'center'} gap={8}>
+                <TaskDetailAssignee />
+                <TaskModelConfig />
+              </Flexbox>
+              <TaskDetailRunPauseAction />
+            </Flexbox>
+            <TaskProperties />
+          </Flexbox>
+        )}
       </Flexbox>
       <Flexbox gap={24} style={{ paddingBottom: 120 }}>
         <TaskInstruction />

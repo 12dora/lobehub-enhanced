@@ -11,11 +11,14 @@ import DocumentPreviewModal from '@/features/DocumentModal/Preview';
 import NavHeader from '@/features/NavHeader';
 import ToggleRightPanelButton from '@/features/RightPanel/ToggleRightPanelButton';
 import WideScreenContainer from '@/features/WideScreenContainer';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { useGlobalStore } from '@/store/global';
 import { systemStatusSelectors } from '@/store/global/selectors';
 import { useTaskStore } from '@/store/task';
 import { taskDetailSelectors } from '@/store/task/selectors';
 
+import { shouldRenderTaskAgentPanelToggle } from '../AgentTaskList/taskAgentPanelToggle';
+import TaskDetailMobileHeader from '../mobile/TaskDetailMobileHeader';
 import Breadcrumb from '../shared/Breadcrumb';
 import TaskDetailHeaderActions from './TaskDetailHeaderActions';
 import TaskDetailSections from './TaskDetailSections';
@@ -29,6 +32,9 @@ interface TaskDetailPageProps {
 
 const TaskDetailPage = memo<TaskDetailPageProps>(({ taskId, showTaskAgentPanelToggle = true }) => {
   const { t } = useTranslation('chat');
+  // `TaskWorkspaceLayout` never mounts `AgentTaskManager` on mobile, so the
+  // right-panel toggle would flip invisible state — same gate as the list page.
+  const isMobile = useIsMobile();
   const saveStatus = useTaskStore(taskDetailSelectors.taskSaveStatus);
   const [showTaskAgentPanel, toggleTaskAgentPanel] = useGlobalStore((s) => [
     systemStatusSelectors.showTaskAgentPanel(s),
@@ -36,16 +42,21 @@ const TaskDetailPage = memo<TaskDetailPageProps>(({ taskId, showTaskAgentPanelTo
   ]);
 
   const { isInitialLoading, isNotFound, error, onRetry } = useActiveTaskDetail(taskId);
+  const showRightPanelToggle =
+    showTaskAgentPanelToggle && shouldRenderTaskAgentPanelToggle(isMobile);
 
   // A transient fetch failure (network / 500) is not a 404 — keep the URL and
   // offer Reload instead of the terminal "task was deleted" dead-end below.
   if (error) {
     return (
       <Flexbox flex={1} height={'100%'} style={{ minHeight: 0, position: 'relative' }}>
-        <NavHeader
-          left={<Breadcrumb taskId={taskId} />}
-          styles={{ left: { paddingLeft: 4, gap: 8 } }}
-        />
+        <TaskDetailMobileHeader taskId={taskId} />
+        {!isMobile && (
+          <NavHeader
+            left={<Breadcrumb taskId={taskId} />}
+            styles={{ left: { paddingLeft: 4, gap: 8 } }}
+          />
+        )}
         <Flexbox flex={1} style={{ minHeight: 0, overflowY: 'auto' }}>
           <AsyncError error={error} variant={'page'} onRetry={onRetry} />
         </Flexbox>
@@ -56,10 +67,13 @@ const TaskDetailPage = memo<TaskDetailPageProps>(({ taskId, showTaskAgentPanelTo
   if (isNotFound) {
     return (
       <Flexbox flex={1} height={'100%'} style={{ minHeight: 0, position: 'relative' }}>
-        <NavHeader
-          left={<Breadcrumb taskId={taskId} />}
-          styles={{ left: { paddingLeft: 4, gap: 8 } }}
-        />
+        <TaskDetailMobileHeader taskId={taskId} />
+        {!isMobile && (
+          <NavHeader
+            left={<Breadcrumb taskId={taskId} />}
+            styles={{ left: { paddingLeft: 4, gap: 8 } }}
+          />
+        )}
         <Flexbox flex={1} style={{ minHeight: 0, overflowY: 'auto' }}>
           <NotFound
             desc={t('taskDetail.notFound.desc')}
@@ -77,32 +91,35 @@ const TaskDetailPage = memo<TaskDetailPageProps>(({ taskId, showTaskAgentPanelTo
 
   return (
     <Flexbox flex={1} height={'100%'} style={{ minHeight: 0, position: 'relative' }}>
-      <NavHeader
-        left={
-          <>
-            <Breadcrumb taskId={taskId} />
-            <TaskDetailHeaderActions />
-            {saveStatus === 'saving' || saveStatus === 'failed' ? (
-              <AutoSaveHint saveStatus={saveStatus} />
-            ) : undefined}
-          </>
-        }
-        right={
-          showTaskAgentPanelToggle ? (
-            <ToggleRightPanelButton
-              hideWhenExpanded
-              expand={showTaskAgentPanel}
-              onToggle={() => toggleTaskAgentPanel()}
-            />
-          ) : undefined
-        }
-        styles={{
-          left: {
-            paddingLeft: 4,
-            gap: 8,
-          },
-        }}
-      />
+      <TaskDetailMobileHeader taskId={taskId} />
+      {!isMobile && (
+        <NavHeader
+          left={
+            <>
+              <Breadcrumb taskId={taskId} />
+              <TaskDetailHeaderActions />
+              {saveStatus === 'saving' || saveStatus === 'failed' ? (
+                <AutoSaveHint saveStatus={saveStatus} />
+              ) : undefined}
+            </>
+          }
+          right={
+            showRightPanelToggle ? (
+              <ToggleRightPanelButton
+                hideWhenExpanded
+                expand={showTaskAgentPanel}
+                onToggle={() => toggleTaskAgentPanel()}
+              />
+            ) : undefined
+          }
+          styles={{
+            left: {
+              paddingLeft: 4,
+              gap: 8,
+            },
+          }}
+        />
+      )}
       <Flexbox flex={1} style={{ minHeight: 0, overflowY: 'auto' }}>
         <WideScreenContainer>
           {isInitialLoading ? <Loading debugId="TaskDetail" /> : <TaskDetailSections />}

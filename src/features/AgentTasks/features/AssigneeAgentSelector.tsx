@@ -18,6 +18,8 @@ import { useHomeStore } from '@/store/home';
 import { homeAgentListSelectors } from '@/store/home/selectors';
 import { useTaskStore } from '@/store/task';
 
+import { applyInboxAssigneeIdentity } from './inboxAssigneeIdentity';
+
 interface AssigneeAgentSelectorProps {
   children: ReactNode;
   currentAgentId?: string | null;
@@ -60,6 +62,10 @@ const triggerStyle: CSSProperties = {
   display: 'inline-flex',
   justifyContent: 'center',
   lineHeight: 1,
+  // Let the chip inside ellipsis instead of wrapping when the row is squeezed
+  // (task detail header at ~390px).
+  maxWidth: '100%',
+  minWidth: 0,
 };
 
 const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
@@ -94,30 +100,20 @@ const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
 
     // Workspace bucket: pinned + grouped + ungrouped. In personal mode this is the
     // entire list (private buckets stay empty). The inbox agent is shared content,
-    // so it is injected at the top of this bucket when missing.
+    // so it is injected at the top of this bucket when missing — and when it *is*
+    // present the sidebar row still carries the builtin avatar/title, so the
+    // effective platform identity is overlaid either way.
     const workspaceAgents = useMemo<SidebarAgentItem[]>(() => {
       const groupedItems = agentGroups.flatMap((group) => group.items);
       const available = [...pinnedAgents, ...groupedItems, ...ungroupedAgents].filter(
         (agent) => agent.type === 'agent',
       );
-      const hasInbox = available.some((agent) => agent.id === inboxAgentId);
 
-      if (inboxAgentId && !hasInbox) {
-        return [
-          {
-            avatar: inboxAvatar,
-            description: null,
-            id: inboxAgentId,
-            pinned: false,
-            title: inboxTitle,
-            type: 'agent' as const,
-            updatedAt: new Date(),
-          },
-          ...available,
-        ];
-      }
-
-      return available;
+      return applyInboxAssigneeIdentity(available, {
+        avatar: inboxAvatar,
+        id: inboxAgentId,
+        title: inboxTitle,
+      });
     }, [pinnedAgents, agentGroups, ungroupedAgents, inboxAgentId, inboxAvatar, inboxTitle]);
 
     const privateAgents = useMemo<SidebarAgentItem[]>(() => {

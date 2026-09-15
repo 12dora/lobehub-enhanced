@@ -17,7 +17,9 @@ export const openReminderSettingsModal = (): ModalInstance =>
     maskClosable: true,
     styles: { header: { borderBottom: 'none' } },
     title: t('task.reminder.title', { ns: 'notification' }),
-    width: 'min(90vw, 560px)',
+    // Phones (DingTalk in-app browser, ~390px) get an effectively full-bleed
+    // sheet with a 16px gutter instead of a 90vw box that clips its content.
+    width: 'min(calc(100vw - 32px), 560px)',
   });
 
 /**

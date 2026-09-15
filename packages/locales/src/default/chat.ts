@@ -1114,6 +1114,7 @@ export default {
   'taskList.unassigned': 'Unassigned',
   'taskList.unassignedHint': '{{name}} will run this task when no assignee is set',
   'taskList.assigneeSearch.empty': 'No matching agent',
+  'taskList.mobileNav.menu': 'Navigation menu',
   'taskList.assigneeSearch.placeholder': 'Search agent...',
   'taskList.contextMenu.copyConfirm': 'Copy',
   'taskList.contextMenu.copyDescription':

@@ -1,5 +1,5 @@
 import type { TaskStatus } from '@lobechat/types';
-import { Block, Icon, Text, Tooltip } from '@lobehub/ui';
+import { Block, Flexbox, Icon, Text, Tooltip } from '@lobehub/ui';
 import { cssVar, useThemeMode } from 'antd-style';
 import { UserCircle2 } from 'lucide-react';
 import { memo } from 'react';
@@ -15,6 +15,8 @@ import { taskDetailSelectors } from '@/store/task/selectors';
 import AssigneeAgentSelector from '../features/AssigneeAgentSelector';
 import AssigneeAvatar from '../features/AssigneeAvatar';
 import { useAgentDisplayMeta } from '../shared/useAgentDisplayMeta';
+
+const LABEL_STYLE = { minWidth: 0, whiteSpace: 'nowrap' } as const;
 
 const TaskDetailAssignee = memo(() => {
   const { t } = useTranslation('chat');
@@ -47,19 +49,30 @@ const TaskDetailAssignee = memo(() => {
           gap={8}
           paddingBlock={4}
           paddingInline={11}
-          style={{ minHeight: 32 }}
+          style={{ maxWidth: '100%', minHeight: 32, minWidth: 0 }}
           variant={isDarkMode ? 'filled' : 'outlined'}
         >
           {assigneeAgentId ? (
             <>
-              <AssigneeAvatar agentId={assigneeAgentId} size={20} />
-              <Text weight={500}>{assigneeMeta?.title}</Text>
+              <Flexbox flex={'none'}>
+                <AssigneeAvatar agentId={assigneeAgentId} size={20} />
+              </Flexbox>
+              {/* Narrow viewports (DingTalk in-app browser, ~390px) squeeze this
+                  chip hardest, and CJK labels have no break opportunity — pin the
+                  label to one line and ellipsis it instead of wrapping per glyph. */}
+              <Text ellipsis style={LABEL_STYLE} weight={500}>
+                {assigneeMeta?.title}
+              </Text>
               <HeterogeneousTag type={assigneeHeterogeneousType} />
             </>
           ) : (
             <>
               <Icon color={cssVar.colorTextDescription} icon={UserCircle2} size={18} />
-              <Text style={{ color: cssVar.colorTextDescription }} weight={500}>
+              <Text
+                ellipsis
+                style={{ ...LABEL_STYLE, color: cssVar.colorTextDescription }}
+                weight={500}
+              >
                 {t('taskList.unassigned')}
               </Text>
             </>
