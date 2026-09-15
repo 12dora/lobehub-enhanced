@@ -86,8 +86,15 @@ type WithOptionalContent = TimedMessage & { content?: string | null };
  * Drop retained message bodies when policy/permission no longer allows them.
  * Used by live view so cached pages cannot outlive authorization.
  */
-export const stripMessageBodies = <T extends WithOptionalContent>(messages: T[]): T[] =>
-  messages.map((m) => (m.content == null ? m : { ...m, content: null }));
+export const stripMessageBodies = <T extends WithOptionalContent & { attachments?: unknown }>(
+  messages: T[],
+): T[] =>
+  messages.map((m) => {
+    if (m.content == null && m.attachments === undefined) return m;
+    // Attachments are body-level evidence: drop them together with the text.
+    const { attachments: _attachments, ...rest } = m;
+    return { ...rest, content: null } as T;
+  });
 
 export interface LiveBodyAccess {
   /** Conceal bodies in the UI (policy or permission denied). */

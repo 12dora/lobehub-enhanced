@@ -62,7 +62,13 @@ export const getTestDB = async (): Promise<LobeChatDatabase> => {
   // pg_trgm trigram indexes). Per-statement (not per-file) so a squashed single-file baseline
   // still applies every PGlite-compatible statement. Real Postgres (paradedb) runs them all.
   const isPgliteIncompatible = (stmt: string): boolean => {
-    const lower = stmt.toLowerCase();
+    // Judge the statement itself, not its leading comments (0030 mentions
+    // pg_trgm in a comment above a plain ADD COLUMN).
+    const lower = stmt
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n')
+      .toLowerCase();
     return (
       lower.includes('pg_search') ||
       lower.includes('bm25') ||

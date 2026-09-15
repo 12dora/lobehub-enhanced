@@ -58,6 +58,25 @@ describe('liveMessageUtils', () => {
     ]);
   });
 
+  it('strips attachments together with bodies', () => {
+    const stripped = stripMessageBodies([
+      {
+        attachments: [
+          { fileId: 'file_1', fileType: 'image/png', name: 'a.png', size: 1, url: '/f/file_1' },
+        ],
+        content: 'secret body',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        id: 'a',
+      },
+      { attachments: [], content: null, createdAt: '2026-01-02T00:00:00.000Z', id: 'b' },
+    ]);
+    expect(stripped).toEqual([
+      { content: null, createdAt: '2026-01-01T00:00:00.000Z', id: 'a' },
+      { content: null, createdAt: '2026-01-02T00:00:00.000Z', id: 'b' },
+    ]);
+    expect(stripped.every((m) => !('attachments' in m))).toBe(true);
+  });
+
   it('resolveLiveBodyAccess: policy/permission loss requires purge and stops serving', () => {
     const authorized = resolveLiveBodyAccess({
       canConversationRead: true,
