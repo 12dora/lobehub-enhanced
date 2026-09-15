@@ -64,6 +64,13 @@ import type {
  * File upload service class
  * Handles file upload and management functionality in server mode
  */
+const sanitizeUploadFileName = (name: string): string => {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = name.replaceAll(/[%\\/\u0000-\u001F\u007F]/g, '_').trim();
+  if (!cleaned || cleaned === '.' || cleaned === '..') return 'file';
+  return cleaned;
+};
+
 export class FileUploadService extends BaseService {
   private fileModel: FileModel;
   private documentModel: DocumentModel;
@@ -1114,7 +1121,9 @@ export class FileUploadService extends BaseService {
     } catch {
       throw this.createValidationError('Invalid upload directory');
     }
-    const filename = `${nanoid()}_${file.name}`;
+    // The multipart filename is caller-controlled: keep it inside the validated
+    // directory (no separators, traversal segments, percent-encoding or control chars).
+    const filename = `${nanoid()}_${sanitizeUploadFileName(file.name)}`;
     const path = `${dir}/${datePath}/${filename}`;
 
     return {

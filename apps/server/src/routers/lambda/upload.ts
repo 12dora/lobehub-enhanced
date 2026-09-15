@@ -39,6 +39,7 @@ export const uploadRouter = router({
       } catch (error) {
         if (!isS3NotFoundError(error)) {
           throw new TRPCError({
+            cause: error,
             code: 'INTERNAL_SERVER_ERROR',
             message: 'Failed to check object',
           });

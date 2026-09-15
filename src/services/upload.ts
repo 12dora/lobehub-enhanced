@@ -34,9 +34,13 @@ const generateFilePathMetadata = (
   filename: string;
   pathname: string;
 } => {
-  // Generate unique filename with UUID prefix and original extension
-  const extension = originalFilename.split('.').at(-1);
-  const filename = `${uuid()}.${extension}`;
+  // Generate unique filename with UUID prefix and original extension.
+  // A dot-less name has no extension; never let the raw name leak into the key
+  // (the server rejects keys with `%`, separators or control characters).
+  const dotIndex = originalFilename.lastIndexOf('.');
+  const rawExtension = dotIndex > 0 ? originalFilename.slice(dotIndex + 1) : '';
+  const extension = rawExtension.replaceAll(/[^\w-]/g, '').slice(0, 16);
+  const filename = extension ? `${uuid()}.${extension}` : uuid();
 
   // Generate timestamp-based directory path
   const date = (Date.now() / 1000 / 60 / 60).toFixed(0);
