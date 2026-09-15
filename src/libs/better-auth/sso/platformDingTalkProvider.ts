@@ -12,7 +12,7 @@ import {
   type DingTalkClaims,
   exchangeDingTalkAuthorizationCode,
   fetchDingTalkUserProfile,
-  toDingTalkClaims,
+  toDingTalkLoginClaims,
 } from '@/server/enterprise/services/identityProvider/kinds';
 
 import {
@@ -184,7 +184,15 @@ export const buildPlatformDingTalkProvider = (
 
       let claims: DingTalkClaims;
       try {
-        claims = toDingTalkClaims(profile, { providerKey: provider.providerKey });
+        // Per-login linking hook: `toDingTalkLoginClaims` sets `emailVerified: true` only
+        // when unionId resolved to a corp userId and the email is the canonical identity
+        // address. better-auth `handleOAuthUserInfo` then allows implicit linking via
+        // `userInfo.emailVerified` without putting `dingtalk` in `trustedProviders`.
+        claims = await toDingTalkLoginClaims(profile, {
+          clientId: provider.clientId,
+          clientSecret: provider.clientSecret,
+          providerKey: provider.providerKey,
+        });
       } catch (error) {
         await markPlatformOidcLoginStage('userinfo', 'subject_mismatch');
         await observePlatformOidcLoginFailure();

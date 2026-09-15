@@ -164,6 +164,29 @@ describe('reserved synthetic-identity email namespace', () => {
     }
   });
 
+  it('refuses self-service sign-up on the canonical DingTalk identity domain', () => {
+    delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+    for (const email of ['staff-1@dingtalk.jiefakj.com', '  STAFF-1@DingTalk.JieFaKj.COM ']) {
+      expect(() => assertNonReservedIdentityEmail(email)).toThrowError(APIError);
+      expect(() => enforceRegistrationPolicy(email, openSettings)).toThrowError(APIError);
+    }
+  });
+
+  it('also reserves a runtime DINGTALK_IDENTITY_EMAIL_DOMAIN override', () => {
+    process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN = 'corp.example.test';
+    try {
+      expect(() => assertNonReservedIdentityEmail('staff-1@corp.example.test')).toThrowError(
+        APIError,
+      );
+      // Documented default stays reserved even when the override is set.
+      expect(() => assertNonReservedIdentityEmail('staff-1@dingtalk.jiefakj.com')).toThrowError(
+        APIError,
+      );
+    } finally {
+      delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+    }
+  });
+
   it('leaves ordinary addresses — including look-alikes — untouched', () => {
     for (const email of [
       'ada@example.test',

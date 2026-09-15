@@ -3,10 +3,16 @@ import {
   DINGTALK_IDENTITY_PROVIDER_ISSUER,
   isDingTalkCorpAllowed,
   isDingTalkIdentityProviderIssuer,
+  isReservedDingTalkCanonicalIdentityEmail,
   type PlatformIdentityProviderAllowedCorp,
   type PlatformOidcDiscoveryMetadata,
 } from '@lobechat/types';
 import { z } from 'zod';
+
+import {
+  buildDingTalkIdentityEmail,
+  resolveDingTalkIdentityEmailDomain,
+} from '@/server/services/messenger/platforms/dingtalk/identityEmail';
 
 import type { SafeOutboundHttpClient } from '../../../security/outboundHttp';
 
@@ -75,6 +81,11 @@ export type DingTalkUserProfile = z.infer<typeof userProfileSchema>;
 
 /** Normalised DingTalk profile in the shape Better Auth and the claim mapping consume. */
 export interface DingTalkClaims extends DingTalkUserProfile {
+  /**
+   * Corp userId (staffId) when `topapi/user/getbyunionid` resolved this unionId to an
+   * internal member. Account id stays `unionId`; this field is the canonical identity.
+   */
+  corpUserId?: string;
   email: string;
   emailVerified: boolean;
   id: string;
@@ -285,6 +296,10 @@ export const fetchDingTalkUserProfile = async (input: {
 };
 
 export const DINGTALK_APP_TOKEN_ENDPOINT = 'https://api.dingtalk.com/v1.0/oauth2/accessToken';
+/** Legacy oapi token — required by `topapi/user/getbyunionid` (same pattern as messenger SSO). */
+export const DINGTALK_LEGACY_TOKEN_ENDPOINT = 'https://oapi.dingtalk.com/gettoken';
+export const DINGTALK_GET_BY_UNIONID_ENDPOINT =
+  'https://oapi.dingtalk.com/topapi/user/getbyunionid';
 export const DINGTALK_ORG_AUTH_INFO_ENDPOINT =
   'https://api.dingtalk.com/v1.0/contact/organizations/authInfos';
 export const DINGTALK_CORP_NAME_MAX_LENGTH = 128;
@@ -431,26 +446,179 @@ const readDingTalkRequiredScope = async (
   }
 };
 
+export type DingTalkCorpUserIdLookupReason =
+  'app_token_rejected' | 'external_contact' | 'network' | 'userid_absent';
+
+const legacyTokenResponseSchema = z
+  .object({
+    access_token: z.string().min(1).optional(),
+    errcode: z.number().optional(),
+  })
+  .passthrough();
+
+const getByUnionIdResponseSchema = z
+  .object({
+    errcode: z.number().optional(),
+    result: z
+      .object({
+        contact_type: z.number().optional(),
+        userid: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+/** Reject empty / email-breaking / oversized corp userIds rather than mint a bad address. */
+export const parseDingTalkCorpUserId = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 128 || /[\s@]/.test(trimmed)) return undefined;
+  return trimmed;
+};
+
+const isDingTalkOapiFailure = (errcode: unknown): boolean =>
+  typeof errcode === 'number' && errcode !== 0;
+
+const logCorpUserIdLookupUnavailable = (input: {
+  reason: DingTalkCorpUserIdLookupReason;
+  status?: number;
+}): void => {
+  console.error('[dingtalk] corp userId lookup unavailable', {
+    reason: input.reason,
+    ...(input.status === undefined ? {} : { status: input.status }),
+  });
+};
+
+const fetchDingTalkLegacyAppToken = async (input: {
+  clientId: string;
+  clientSecret: string;
+}): Promise<string | undefined> => {
+  const url = new URL(DINGTALK_LEGACY_TOKEN_ENDPOINT);
+  url.searchParams.set('appkey', input.clientId);
+  url.searchParams.set('appsecret', input.clientSecret);
+  try {
+    // Native fetch: SafeOutboundHttpClient rejects credential-bearing query strings
+    // (`appsecret`). Same gettoken pattern as messenger SSO (`sso.ts`).
+    const response = await fetch(url.toString(), {
+      cache: 'no-store',
+      method: 'GET',
+      redirect: 'error',
+    });
+    if (!response.ok) {
+      logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
+      return undefined;
+    }
+    const parsed = legacyTokenResponseSchema.parse(await response.json());
+    if (isDingTalkOapiFailure(parsed.errcode) || !parsed.access_token?.trim()) {
+      logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
+      return undefined;
+    }
+    return parsed.access_token.trim();
+  } catch {
+    logCorpUserIdLookupUnavailable({ reason: 'network' });
+    return undefined;
+  }
+};
+
+/**
+ * Resolve a DingTalk unionId to the corp userId (staffId) using the app's legacy token.
+ *
+ * Fail-closed: any API/network/shape failure, or an external contact (`contact_type !== 0`),
+ * returns `undefined` so the caller keeps today's synthetic `*.dingtalk.sso` address and
+ * does not enable implicit linking.
+ */
+export const resolveDingTalkCorpUserId = async (input: {
+  clientId: string;
+  clientSecret: string;
+  unionId: string;
+}): Promise<string | undefined> => {
+  const unionId = input.unionId.trim();
+  if (!unionId) return undefined;
+  const accessToken = await fetchDingTalkLegacyAppToken(input);
+  if (!accessToken) return undefined;
+  const url = new URL(DINGTALK_GET_BY_UNIONID_ENDPOINT);
+  url.searchParams.set('access_token', accessToken);
+  try {
+    const response = await fetch(url.toString(), {
+      body: JSON.stringify({ unionid: unionId }),
+      cache: 'no-store',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      method: 'POST',
+      redirect: 'error',
+    });
+    if (!response.ok) {
+      logCorpUserIdLookupUnavailable({ reason: 'userid_absent', status: response.status });
+      return undefined;
+    }
+    const parsed = getByUnionIdResponseSchema.parse(await response.json());
+    if (isDingTalkOapiFailure(parsed.errcode)) {
+      logCorpUserIdLookupUnavailable({ reason: 'userid_absent', status: response.status });
+      return undefined;
+    }
+    const contactType = parsed.result?.contact_type;
+    if (contactType !== undefined && contactType !== 0) {
+      logCorpUserIdLookupUnavailable({ reason: 'external_contact', status: response.status });
+      return undefined;
+    }
+    const userid = parseDingTalkCorpUserId(parsed.result?.userid);
+    if (!userid) {
+      logCorpUserIdLookupUnavailable({ reason: 'userid_absent', status: response.status });
+      return undefined;
+    }
+    return userid;
+  } catch {
+    logCorpUserIdLookupUnavailable({ reason: 'network' });
+    return undefined;
+  }
+};
+
+/**
+ * Per-login implicit-linking allowance for kind `dingtalk`.
+ *
+ * better-auth `handleOAuthUserInfo` links when `isTrustedProvider || userInfo.emailVerified`
+ * (GenericOAuthConfig does not expose `isTrustedProvider`; DingTalk stays out of global
+ * `trustedProviders`). The runtime adapter therefore sets `emailVerified: true` on the
+ * profile ONLY when this predicate is true — i.e. the email is the canonical
+ * `<corpUserId>@<identity domain>` address derived from a successful lookup.
+ */
+export const isDingTalkCanonicalLinkingEmail = (email: string | null | undefined): boolean =>
+  isReservedDingTalkCanonicalIdentityEmail(email, resolveDingTalkIdentityEmailDomain());
+
 /**
  * Project a DingTalk profile onto the claim record the shared claim mapping consumes.
  *
  * - subject: `unionId` ONLY, and it is mandatory. `openId` is app-scoped: falling back to it
  *   would rebind an identity to a different account after an AppKey change, so a profile
  *   without a unionId is rejected rather than downgraded.
- * - email: DingTalk usually returns none, so a deterministic address inside the reserved,
- *   per-provider synthetic namespace (`<unionId>@<providerKey>.dingtalk.sso`) is synthesized —
- *   the env-preset Feishu provider does the same, namespaced here so two login methods (or a
- *   local sign-up, which `registrationGuard` blocks on this namespace) cannot collide.
- *   `emailVerified` stays false and DingTalk is excluded from `trustedProviders`, so this
- *   address can never implicitly link onto a pre-existing account.
+ * - email, when `corpUserId` is present: canonical `<userid>@<identity domain>` (Authentik /
+ *   robot/免登 JIT). `emailVerified` is true so better-auth may implicitly link onto the
+ *   existing user that already owns that exact address. DingTalk stays out of
+ *   `trustedProviders`, so this is not a global trust grant.
+ * - email, otherwise: DingTalk's own address if any, else a deterministic address inside the
+ *   reserved per-provider synthetic namespace (`<unionId>@<providerKey>.dingtalk.sso`).
+ *   `emailVerified` stays false — no implicit linking.
  */
 export const toDingTalkClaims = (
   profile: DingTalkUserProfile,
-  input: { errorCode?: string; providerKey: string },
+  input: { corpUserId?: string; errorCode?: string; providerKey: string },
 ): DingTalkClaims => {
   const errorCode = input.errorCode ?? 'PLATFORM_DINGTALK_SUBJECT_MISSING';
   const subject = profile.unionId?.trim();
   if (!subject) throw failure(errorCode);
+  const corpUserId = parseDingTalkCorpUserId(input.corpUserId);
+  if (corpUserId) {
+    const email = buildDingTalkIdentityEmail(corpUserId);
+    return {
+      ...profile,
+      corpUserId,
+      email,
+      emailVerified: isDingTalkCanonicalLinkingEmail(email),
+      id: subject,
+      nick: profile.nick?.trim() || subject,
+      sub: subject,
+    };
+  }
   const email = profile.email?.trim().toLowerCase();
   return {
     ...profile,
@@ -462,4 +630,33 @@ export const toDingTalkClaims = (
     // OIDC-shaped account-linking path see the same stable subject.
     sub: subject,
   };
+};
+
+/**
+ * Login-time claim projection: after `contact/users/me`, resolve unionId → corp userId and
+ * mint the canonical identity email. Fail-closed lookup keeps today's synthetic address
+ * and disables linking.
+ */
+export const toDingTalkLoginClaims = async (
+  profile: DingTalkUserProfile,
+  input: {
+    clientId: string;
+    clientSecret: string;
+    errorCode?: string;
+    providerKey: string;
+  },
+): Promise<DingTalkClaims> => {
+  const unionId = profile.unionId?.trim();
+  const corpUserId = unionId
+    ? await resolveDingTalkCorpUserId({
+        clientId: input.clientId,
+        clientSecret: input.clientSecret,
+        unionId,
+      })
+    : undefined;
+  return toDingTalkClaims(profile, {
+    ...(corpUserId ? { corpUserId } : {}),
+    ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+    providerKey: input.providerKey,
+  });
 };

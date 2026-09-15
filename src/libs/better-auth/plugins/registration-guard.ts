@@ -1,5 +1,9 @@
 import { getCurrentAuthContext } from '@better-auth/core/context';
-import { isReservedSyntheticIdentityEmail } from '@lobechat/types';
+import {
+  DINGTALK_IDENTITY_EMAIL_DOMAIN,
+  isReservedDingTalkCanonicalIdentityEmail,
+  isReservedSyntheticIdentityEmail,
+} from '@lobechat/types';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { type BetterAuthPlugin } from 'better-auth/types';
 import debug from 'debug';
@@ -80,15 +84,38 @@ export const loadRegistrationSettings = async (): Promise<PlatformAuthSettings> 
  * Throws APIError with a stable code on denial.
  */
 /**
+ * Canonical DingTalk identity-email hosts the registration guard must reserve.
+ * Always includes the documented default; also includes the runtime env override
+ * so a local sign-up cannot claim a corp user after `DINGTALK_IDENTITY_EMAIL_DOMAIN` is set.
+ */
+export const reservedDingTalkCanonicalIdentityDomains = (): string[] => {
+  const domains = [DINGTALK_IDENTITY_EMAIL_DOMAIN];
+  const override = process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN?.trim();
+  if (override && override.toLowerCase() !== DINGTALK_IDENTITY_EMAIL_DOMAIN.toLowerCase()) {
+    domains.push(override);
+  }
+  return domains;
+};
+
+export const isReservedIdentityEmail = (email: string | null | undefined): boolean =>
+  isReservedSyntheticIdentityEmail(email) ||
+  reservedDingTalkCanonicalIdentityDomains().some((domain) =>
+    isReservedDingTalkCanonicalIdentityEmail(email, domain),
+  );
+
+/**
  * The synthetic-identity email namespace belongs to the platform, not to self-service sign-up.
  * Without this a local account could pre-claim `<unionId>@<providerKey>.dingtalk.sso` and wait
- * for the matching SSO identity to arrive. OAuth/SSO callbacks are exempt from this hook, so
- * the providers that legitimately mint these addresses are unaffected.
+ * for the matching SSO identity to arrive. The canonical DingTalk identity domain
+ * (`<staffId>@dingtalk.jiefakj.com`, plus any `DINGTALK_IDENTITY_EMAIL_DOMAIN` override) is
+ * reserved the same way so a local account cannot claim a corp user's Authentik/JIT address.
+ * OAuth/SSO callbacks are exempt from this hook, so the providers that legitimately mint
+ * these addresses are unaffected.
  *
  * Unlike the open-registration / allowlist rules this is NOT waived for an existing user.
  */
 export const assertNonReservedIdentityEmail = (email: string): void => {
-  if (!isReservedSyntheticIdentityEmail(email)) return;
+  if (!isReservedIdentityEmail(email)) return;
   throw new APIError('FORBIDDEN', {
     code: 'EMAIL_NOT_ALLOWED',
     message: 'EMAIL_NOT_ALLOWED',

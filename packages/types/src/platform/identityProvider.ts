@@ -194,7 +194,10 @@ export const isCanonicalDingTalkIdentityContract = (input: {
  * `false` means the kind must NOT appear in Better Auth `accountLinking.trustedProviders`:
  * a trusted provider may implicitly link its identity onto an existing account that merely
  * shares an email address. DingTalk usually returns no email at all (we synthesize one) and
- * never asserts verification, so a DingTalk login must never attach to a pre-existing account.
+ * never asserts verification, so a DingTalk login must never attach to a pre-existing account
+ * **via the global trusted list**. Per-login linking for kind `dingtalk` is a separate,
+ * fail-closed allowance: only the canonical corp-userId address (see
+ * `DINGTALK_IDENTITY_EMAIL_DOMAIN`) may set `emailVerified` on that login's profile.
  */
 export const identityProviderAssertsVerifiedEmail = (type: PlatformIdentityProviderType): boolean =>
   type !== 'dingtalk';
@@ -311,6 +314,16 @@ export const buildDingTalkLoginCallbackUrl = (origin: string, providerKey: strin
  */
 export const SYNTHETIC_IDENTITY_EMAIL_ROOT_DOMAIN = 'dingtalk.sso';
 
+/**
+ * Canonical DingTalk identity-email domain (Authentik, robot/免登 JIT, and direct DingTalk
+ * login after a successful unionId → corp userId lookup).
+ *
+ * Documented default only: the messenger helper may override the runtime domain via env
+ * `DINGTALK_IDENTITY_EMAIL_DOMAIN`. The registration guard always reserves this default
+ * **and** the runtime override so a local sign-up cannot claim a corp user's address.
+ */
+export const DINGTALK_IDENTITY_EMAIL_DOMAIN = 'dingtalk.jiefakj.com';
+
 export const buildDingTalkSyntheticEmail = (providerKey: string, subject: string): string =>
   `${subject}@${providerKey}.${SYNTHETIC_IDENTITY_EMAIL_ROOT_DOMAIN}`;
 
@@ -331,6 +344,24 @@ export const isReservedSyntheticIdentityEmail = (email: string | null | undefine
     domain === SYNTHETIC_IDENTITY_EMAIL_ROOT_DOMAIN ||
     domain.endsWith(`.${SYNTHETIC_IDENTITY_EMAIL_ROOT_DOMAIN}`)
   );
+};
+
+/**
+ * True when `email` is exactly `<local>@<domain>` for the canonical DingTalk identity
+ * domain (default `dingtalk.jiefakj.com`). Unlike `*.dingtalk.sso`, this is a single
+ * host — sub-domains are not reserved.
+ */
+export const isReservedDingTalkCanonicalIdentityEmail = (
+  email: string | null | undefined,
+  domain: string = DINGTALK_IDENTITY_EMAIL_DOMAIN,
+): boolean => {
+  if (typeof email !== 'string' || typeof domain !== 'string') return false;
+  const normalizedDomain = domain.trim().toLowerCase();
+  if (!normalizedDomain) return false;
+  const trimmed = email.trim();
+  const separator = trimmed.lastIndexOf('@');
+  if (separator <= 0) return false;
+  return trimmed.slice(separator + 1).toLowerCase() === normalizedDomain;
 };
 
 /**

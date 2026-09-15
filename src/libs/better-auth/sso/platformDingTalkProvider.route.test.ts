@@ -11,13 +11,17 @@
  * - a non-allowed organisation is rejected before any user or account row is written;
  * - a DingTalk identity never links onto a pre-existing local account with the same email.
  */
-import { buildDingTalkLoginCallbackUrl, DINGTALK_IDENTITY_PROVIDER_ISSUER } from '@lobechat/types';
+import {
+  buildDingTalkLoginCallbackUrl,
+  DINGTALK_IDENTITY_EMAIL_DOMAIN,
+  DINGTALK_IDENTITY_PROVIDER_ISSUER,
+} from '@lobechat/types';
 import { betterAuth } from 'better-auth';
 import type { MemoryDB } from 'better-auth/adapters/memory';
 import { memoryAdapter } from 'better-auth/adapters/memory';
 import { genericOAuth } from 'better-auth/plugins';
 import { NextRequest } from 'next/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { handleDingTalkLoginCallback } from '@/enterprise/server/dingtalkLoginCallback';
 import {
@@ -95,14 +99,37 @@ const runtimeProvider = (
   usePkce: true,
 });
 
+const jsonFetchResponse = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), {
+    headers: { 'content-type': 'application/json' },
+    status,
+  });
+
 const createHarness = (options?: {
   allowlist?: RuntimeIdentityProvider['dingtalkAllowedCorps'];
   corpId?: string;
   email?: string;
+  lookup?: { contactType?: number; fail?: boolean; userid?: string };
 }) => {
   const database: MemoryDB = { account: [], session: [], user: [], verification: [] };
   // Any escape to the real network is a test failure, not a silent live call.
-  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected native OAuth fetch'));
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/gettoken') {
+      if (options?.lookup?.fail) return jsonFetchResponse({ errcode: 40014, errmsg: 'invalid' });
+      return jsonFetchResponse({ access_token: 'legacy-token', errcode: 0 });
+    }
+    if (url.pathname.endsWith('/topapi/user/getbyunionid')) {
+      return jsonFetchResponse({
+        errcode: 0,
+        result: {
+          contact_type: options?.lookup?.contactType ?? 0,
+          userid: options?.lookup?.userid ?? 'staff-1',
+        },
+      });
+    }
+    throw new Error(`Unexpected native OAuth fetch: ${url}`);
+  });
   const transport = vi.fn<PinnedTransport>(async (request) => {
     if (request.url.pathname.endsWith('/oauth2/userAccessToken')) {
       return jsonResponse({
@@ -226,6 +253,14 @@ const createHarness = (options?: {
 const isSuccessfulLogin = (response: Response) =>
   response.headers.getSetCookie().some((cookie) => cookie.includes('session_token='));
 
+beforeEach(() => {
+  delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('DingTalk production login: authorize → shim → Better Auth callback', () => {
   it('asks DingTalk to redirect to the shim, not to the Better Auth callback', async () => {
     const harness = createHarness();
@@ -284,7 +319,7 @@ describe('DingTalk login through the Better Auth genericOAuth handler', () => {
     const response = await harness.callback(flow);
     expect(isSuccessfulLogin(response)).toBe(true);
     expect(harness.database.user).toHaveLength(1);
-    expect(harness.database.user[0]!.email).toBe('union-1@dingtalk.dingtalk.sso');
+    expect(harness.database.user[0]!.email).toBe(`staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`);
     expect(harness.database.account).toHaveLength(1);
     expect(harness.database.account[0]!.accountId).toBe('union-1');
     expect(harness.database.account[0]!.providerId).toBe('dingtalk');
@@ -332,8 +367,9 @@ describe('DingTalk login through the Better Auth genericOAuth handler', () => {
     expect(harness.database.user).toHaveLength(0);
   });
 
-  it('never links a DingTalk identity onto a pre-existing local account with the same email', async () => {
-    const harness = createHarness({ email: 'ada@example.test' });
+  it('never links a DingTalk identity onto a pre-existing local account with a non-canonical email', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const harness = createHarness({ email: 'ada@example.test', lookup: { fail: true } });
     await harness.signUpLocal('ada@example.test');
     expect(harness.database.user).toHaveLength(1);
     const localUserId = harness.database.user[0]!.id;
@@ -343,7 +379,7 @@ describe('DingTalk login through the Better Auth genericOAuth handler', () => {
     const flow = await harness.start();
     const response = await harness.callback(flow);
 
-    // Better Auth answers "account not linked" — no DingTalk account is attached to the local user.
+    // Lookup failed → synthetic/real email, emailVerified false, not in trustedProviders.
     expect(isSuccessfulLogin(response)).toBe(false);
     expect(
       harness.database.account.filter((account) => account.providerId === 'dingtalk'),
@@ -352,5 +388,28 @@ describe('DingTalk login through the Better Auth genericOAuth handler', () => {
       harness.database.account.filter((account) => account.userId === localUserId),
     ).toHaveLength(1);
     expect(harness.database.user).toHaveLength(1);
+    errorSpy.mockRestore();
+  });
+
+  it('links onto an existing user only when the email is the canonical corp identity address', async () => {
+    const canonical = `staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`;
+    const harness = createHarness();
+    await harness.signUpLocal(canonical);
+    expect(harness.database.user).toHaveLength(1);
+    const existingUserId = harness.database.user[0]!.id;
+    harness.database.user[0]!.emailVerified = true;
+
+    const flow = await harness.start();
+    const response = await harness.callback(flow);
+
+    expect(isSuccessfulLogin(response)).toBe(true);
+    expect(harness.database.user).toHaveLength(1);
+    expect(harness.database.user[0]!.id).toBe(existingUserId);
+    expect(
+      harness.database.account.filter((account) => account.providerId === 'dingtalk'),
+    ).toHaveLength(1);
+    expect(
+      harness.database.account.find((account) => account.providerId === 'dingtalk'),
+    ).toMatchObject({ accountId: 'union-1', userId: existingUserId });
   });
 });

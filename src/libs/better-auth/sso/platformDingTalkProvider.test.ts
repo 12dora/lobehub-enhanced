@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { DINGTALK_IDENTITY_PROVIDER_ISSUER } from '@lobechat/types';
 import type { getOAuthState } from 'better-auth/api';
 import type { GenericOAuthConfig } from 'better-auth/plugins';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type PinnedTransport,
@@ -61,12 +61,44 @@ const runtimeProvider = (
   usePkce: true,
 });
 
+const jsonFetchResponse = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), {
+    headers: { 'content-type': 'application/json' },
+    status,
+  });
+
+const mockLegacyLookupFetch = (options?: {
+  contactType?: number;
+  fail?: boolean;
+  userid?: string;
+}) => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/gettoken') {
+      if (options?.fail) return jsonFetchResponse({ errcode: 40014, errmsg: 'invalid' });
+      return jsonFetchResponse({ access_token: 'legacy-token', errcode: 0 });
+    }
+    if (url.pathname.endsWith('/topapi/user/getbyunionid')) {
+      return jsonFetchResponse({
+        errcode: 0,
+        result: {
+          contact_type: options?.contactType ?? 0,
+          userid: options?.userid ?? 'staff-1',
+        },
+      });
+    }
+    throw new Error(`Unexpected native fetch: ${url}`);
+  });
+};
+
 const setup = (options?: {
   allowlist?: RuntimeIdentityProvider['dingtalkAllowedCorps'];
+  lookup?: { contactType?: number; fail?: boolean; userid?: string };
   profile?: Record<string, unknown>;
   stateProviderId?: string;
   token?: Record<string, unknown>;
 }) => {
+  mockLegacyLookupFetch(options?.lookup);
   const transport = vi.fn<PinnedTransport>(async (request) => {
     if (request.url.pathname.endsWith('/oauth2/userAccessToken')) {
       return jsonResponse(
@@ -109,6 +141,13 @@ const setup = (options?: {
 };
 
 describe('DingTalk platform identity provider adapter', () => {
+  beforeEach(() => {
+    delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   it('builds a non-OIDC generic OAuth config with PKCE disabled', () => {
     const { config } = setup();
     expect(config.providerId).toBe('dingtalk');
@@ -183,19 +222,38 @@ describe('DingTalk platform identity provider adapter', () => {
     await expect(exchange(empty.config)).rejects.toThrow('PLATFORM_DINGTALK_CORP_NOT_ALLOWED');
   });
 
-  it('maps the profile through the shared claim mapping with a synthetic email', async () => {
+  it('maps the profile through the shared claim mapping with the canonical identity email', async () => {
     const { config } = setup({
       profile: { avatarUrl: 'https://cdn.example.test/a.png', nick: 'Ada', unionId: 'union-1' },
     });
     const profile = await config.getUserInfo!({ accessToken: 'access-token' } as never);
-    expect(profile).toMatchObject({ email: 'union-1@dingtalk.dingtalk.sso', sub: 'union-1' });
+    expect(profile).toMatchObject({
+      email: 'staff-1@dingtalk.jiefakj.com',
+      emailVerified: true,
+      sub: 'union-1',
+    });
     expect(config.mapProfileToUser!(profile as never)).toMatchObject({
       dingtalkUserId: 'union-1',
-      email: 'union-1@dingtalk.dingtalk.sso',
+      email: 'staff-1@dingtalk.jiefakj.com',
       id: 'union-1',
       image: 'https://cdn.example.test/a.png',
       name: 'Ada',
     });
+  });
+
+  it('falls back to the synthetic address and does not mark the email verified when lookup fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { config } = setup({
+      lookup: { fail: true },
+      profile: { nick: 'Ada', unionId: 'union-1' },
+    });
+    const profile = await config.getUserInfo!({ accessToken: 'access-token' } as never);
+    expect(profile).toMatchObject({
+      email: 'union-1@dingtalk.dingtalk.sso',
+      emailVerified: false,
+      sub: 'union-1',
+    });
+    errorSpy.mockRestore();
   });
 
   it('rejects a callback whose OAuth state was bound to another provider', async () => {

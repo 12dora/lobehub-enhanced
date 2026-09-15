@@ -26,33 +26,45 @@
 下列内容由协议固定，**不是**可编辑的模板 —— 服务端在写入（create/update 的 zod 校验）与读取
 （发布快照 / LKG 解析）两处都会强制校验，API 直连也改不了：
 
-| 项          | 值                                                                        |
-| ----------- | ------------------------------------------------------------------------- |
-| issuer      | 必须恰好是 `https://login.dingtalk.com`                                   |
-| 授权        | `https://login.dingtalk.com/oauth2/auth`（`prompt=consent`）              |
-| 令牌        | `https://api.dingtalk.com/v1.0/oauth2/userAccessToken`（JSON body）       |
-| 用户资料    | `https://api.dingtalk.com/v1.0/contact/users/me`                          |
-| Scope       | 必须恰好是 `openid corpid`                                                |
-| 账号标识    | `unionId`（**必需**；缺失即拒绝登录）                                     |
-| 昵称 / 头像 | `nick` / `avatarUrl`                                                      |
-| 邮箱        | 钉钉返回则使用（转小写）；否则合成 `<unionId>@<providerKey>.dingtalk.sso` |
+| 项          | 值                                                                                                                                                                                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| issuer      | 必须恰好是 `https://login.dingtalk.com`                                                                                                                                                                                                                                       |
+| 授权        | `https://login.dingtalk.com/oauth2/auth`（`prompt=consent`）                                                                                                                                                                                                                  |
+| 令牌        | `https://api.dingtalk.com/v1.0/oauth2/userAccessToken`（JSON body）                                                                                                                                                                                                           |
+| 用户资料    | `https://api.dingtalk.com/v1.0/contact/users/me`                                                                                                                                                                                                                              |
+| Scope       | 必须恰好是 `openid corpid`                                                                                                                                                                                                                                                    |
+| 账号标识    | `unionId`（**必需**；缺失即拒绝登录）                                                                                                                                                                                                                                         |
+| 昵称 / 头像 | `nick` / `avatarUrl`                                                                                                                                                                                                                                                          |
+| 邮箱        | 企业内成员：用应用凭证把 `unionId` 解析成 corp userId 后，邮箱为 `<userid>@dingtalk.jiefakj.com`（与 Authentik / 机器人免登同一套）。解析失败（外部联系人 / 接口失败）时退回 `<unionId>@<providerKey>.dingtalk.sso`，且不做账号绑定。钉钉若返回真实邮箱，仅在解析失败时使用。 |
 
 > 为什么 `unionId` 不能回退到 `openId`：`openId` 是**按应用**分配的，一旦更换 AppKey 就会变，
 > 老账号会被重新绑定到别人身上。缺 `unionId` 时直接拒绝登录。
 >
-> 合成邮箱的做法与飞书 SSO 预置服务商（`src/libs/better-auth/sso/providers/feishu.ts`）一致：
-> `users.email` 可空但唯一，用确定性的合成地址可以避免唯一约束冲突，并保证同一个人每次登录落到同一账号。
-> 该域名不收信、不可解析，且：
+> 企业内成员的规范身份是 DingTalk corp userId（staffId）。Authentik、机器人 / 免登 JIT、以及
+> 解析成功的直接钉钉登录都使用 `<userid>@dingtalk.jiefakj.com`（可用环境变量
+> `DINGTALK_IDENTITY_EMAIL_DOMAIN` 覆盖域名），因此三条入口无论先后都会落到同一个 AIHub 用户。
+> 账号行的 `accountId` 仍是 `unionId`（钉钉侧稳定主体），邮箱才是跨入口的汇合键。
+>
+> 解析失败时的合成邮箱做法与飞书 SSO 预置服务商（`src/libs/better-auth/sso/providers/feishu.ts`）一致：
+> `users.email` 可空但唯一，用确定性的合成地址可以避免唯一约束冲突。该域名不收信、不可解析，且：
 >
 > - 每个登录方式有自己的子域（`<providerKey>.dingtalk.sso`），两个钉钉登录方式互不冲突；
-> - `*.dingtalk.sso` 是**保留命名空间**，注册守卫（`registrationGuard`）会拒绝任何自助注册 /
->   magic-link / 邮箱验证码使用该域名，本地账号无法抢占某个 unionId 的合成邮箱。
+> - `*.dingtalk.sso` **以及**规范身份域 `@dingtalk.jiefakj.com`（含运行时覆盖）都是**保留命名空间**，
+>   注册守卫（`registrationGuard`）会拒绝任何自助注册、magic-link、邮箱验证码使用这些域名，
+>   本地账号无法抢占某个 unionId 的合成邮箱或某个 corp userId 的规范地址。
 
 ### 账号绑定安全
 
-`dingtalk` **不会**被放进 Better Auth 的 `accountLinking.trustedProviders`：钉钉不能证明邮箱已验证
-（我们还常常自己合成邮箱），受信任的服务商会把身份**隐式挂到同邮箱的已有账号**上。因此钉钉登录
-永远只会创建 / 复用它自己的账号，不会接管已存在的本地账号。
+`dingtalk` **不会**被放进 Better Auth 的 `accountLinking.trustedProviders`：钉钉不能在全局意义上
+证明邮箱已验证。受信任的服务商会把身份**隐式挂到同邮箱的已有账号**上，因此钉钉登录默认
+只会创建 / 复用它自己的账号，不会接管任意已存在的本地账号。
+
+企业内成员有一条**按次登录**的例外，且只对规范地址生效：unionId → corp userId 解析成功后，
+适配器在该次 `getUserInfo` 返回的 profile 上把 `emailVerified` 设为 `true`。Better Auth
+`handleOAuthUserInfo` 的判定是 `isTrustedProvider || userInfo.emailVerified`（GenericOAuthConfig
+不暴露 `isTrustedProvider` 选项），于是这次登录可以挂到**已经拥有该规范邮箱**的账号上
+（Authentik 或 JIT 先到的那条），而不会对 `*.dingtalk.sso` 或其它邮箱放行。解析失败时
+`emailVerified` 保持 `false`，行为与原先完全一致。
 
 ## 2. 钉钉开放平台侧
 
@@ -88,7 +100,7 @@
    第二条地址与 providerKey 无关，全实例共用一条。
 
 4. **权限管理**：开通 **通讯录个人信息读权限**（`Contact.User.Read`）与 **`corpid`**。
-   可选：再开通 **企业信息读权限**（`Contact.Org.Read`），管理端「允许的企业」表格就能自动显示企业名称而不只是 `ding…` 编号（未开通时仍可正常添加，只是名称列显示“暂未获取到企业名称”，并提示需要开通的权限）。
+   可选：再开通 **企业信息读权限**（`Contact.Org.Read`），管理端「允许的企业」表格就能自动显示企业名称而不只是 `ding…` 编号（未开通时仍可正常添加，只是名称列显示 “暂未获取到企业名称”，并提示需要开通的权限）。
    缺前者会在读取用户资料时被钉钉拒绝（403）；缺后者拿不到企业 ID，无法添加企业。
 
 5. 在 **凭证与基础信息** 记下 **AppKey**（= Client ID）与 **AppSecret**（= Client Secret）。
@@ -118,7 +130,7 @@
    - 需要允许多个企业时，重复点该按钮，用各企业的账号分别登录一次
 4. **策略 → 其它**
    - 自动开号：首次登录是否自动建账号
-   - 邮箱域名白名单：钉钉常常没有真实邮箱、会用合成的 `@…dingtalk.sso` 地址，**开启白名单会把这些用户挡在门外**；除非确认所有成员在钉钉里都绑定了企业邮箱，否则请留空
+   - 邮箱域名白名单：企业内成员解析成功后使用 `@dingtalk.jiefakj.com`；解析失败才会落到合成的 `@…dingtalk.sso` 地址。**开启白名单却未写入规范身份域会把这些用户挡在门外**；除非确认所有成员都属于允许的域名，否则请留空
 5. **发布**
    - 允许列表为空时**不能发布**（提示「请先添加至少一个允许的企业」）；运行时同样是 fail-closed，空列表等于谁都不能登录
    - 发布前需要一次有效的 "安全登录测试"；上一步的 "添加企业" 本身就是一次真实登录测试，因此常见顺序是：
