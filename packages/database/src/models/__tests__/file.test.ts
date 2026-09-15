@@ -31,16 +31,21 @@ const userId = 'file-model-test-user-id';
 const fileModel = new FileModel(serverDB, userId);
 
 const knowledgeBase = { id: 'kb1', userId, name: 'knowledgeBase' };
-beforeEach(async () => {
+// `global_files.creator` is NOT NULL with `onDelete: set null`, so file rows must go before users.
+const resetDb = async () => {
+  await serverDB.delete(files);
+  await serverDB.delete(globalFiles);
   await serverDB.delete(users);
+};
+
+beforeEach(async () => {
+  await resetDb();
   await serverDB.insert(users).values([{ id: userId }, { id: 'user2' }]);
   await serverDB.insert(knowledgeBases).values(knowledgeBase);
 });
 
 afterEach(async () => {
-  await serverDB.delete(users);
-  await serverDB.delete(files);
-  await serverDB.delete(globalFiles);
+  await resetDb();
 });
 
 describe('FileModel', () => {
