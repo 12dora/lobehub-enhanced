@@ -46,6 +46,10 @@ vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   rememberDingTalkCard: vi.fn(),
 }));
 
+vi.mock('./branding', () => ({
+  resolveDingTalkBrandingDisplayName: vi.fn(async () => 'AI 平台'),
+}));
+
 vi.mock('@/server/services/bot/platforms/dingtalk/sendAttachments', () => ({
   sendDingTalkAttachments: vi.fn(),
 }));
@@ -58,6 +62,8 @@ const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const { getDingTalkSession, isSessionWebhookLive } =
   await import('@lobechat/chat-adapter-dingtalk');
 const { MessengerDingTalkBinder } = await import('./binder');
+const { resolveDingTalkBrandingDisplayName } = await import('./branding');
+const { formatDingTalkUnknownUserReply } = await import('./const');
 
 const VALID_CONFIG = {
   aiCardTemplateId: null,
@@ -124,6 +130,24 @@ describe('MessengerDingTalkBinder.sendDmText', () => {
         msgtype: 'markdown',
       }),
     );
+  });
+});
+
+describe('MessengerDingTalkBinder.handleUnlinkedMessage', () => {
+  it('sends the branding-aware unknown-user sentence', async () => {
+    vi.mocked(resolveDingTalkBrandingDisplayName).mockResolvedValueOnce('某某平台');
+
+    await new MessengerDingTalkBinder().handleUnlinkedMessage({
+      authorUserId: 'staff_1',
+      chatId: 'staff_1',
+    });
+
+    expect(sendOtoMessage).toHaveBeenCalledWith({
+      msgKey: 'sampleText',
+      msgParam: JSON.stringify({ content: formatDingTalkUnknownUserReply('某某平台') }),
+      robotCode: 'robot_1',
+      userIds: ['staff_1'],
+    });
   });
 });
 

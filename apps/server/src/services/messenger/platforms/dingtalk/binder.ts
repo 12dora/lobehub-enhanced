@@ -20,8 +20,9 @@ import type {
   MessengerPlatformBinder,
   UnlinkedMessageContext,
 } from '../../types';
+import { resolveDingTalkBrandingDisplayName } from './branding';
 import { sendDingTalkChoiceList } from './cards';
-import { DINGTALK_MARKDOWN_TITLE_FALLBACK, DINGTALK_UNKNOWN_USER_REPLY } from './const';
+import { DINGTALK_MARKDOWN_TITLE_FALLBACK, formatDingTalkUnknownUserReply } from './const';
 
 const log = debug('lobe-server:messenger:dingtalk');
 
@@ -66,7 +67,8 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     // Auto-link is the primary path (MessengerRouter). This is a safety net
     // if the router still falls through to the binder.
     try {
-      await this.sendDmText(ctx.chatId, DINGTALK_UNKNOWN_USER_REPLY);
+      const displayName = await resolveDingTalkBrandingDisplayName();
+      await this.sendDmText(ctx.chatId, formatDingTalkUnknownUserReply(displayName));
     } catch (error) {
       log('handleUnlinkedMessage: failed: %O', error);
     }

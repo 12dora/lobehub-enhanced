@@ -9,9 +9,11 @@ import { getServerDB } from '@/database/core/db-adaptor';
 import { AgentOperationModel } from '@/database/models/agentOperation';
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
 import { TopicModel } from '@/database/models/topic';
+import { UserModel } from '@/database/models/user';
 import { WorkspaceModel } from '@/database/models/workspace';
 import type { MessengerAccountLinkItem } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
+import { isEffectivelyBanned } from '@/database/utils/userBan';
 import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
 import { getServerFeatureFlagsStateFromRuntimeConfig } from '@/server/featureFlags';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
@@ -33,6 +35,7 @@ import type { InstallationCredentials } from './installations/types';
 import { messengerPlatformRegistry } from './platforms';
 import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
 import { tryAutoLinkDingTalk } from './platforms/dingtalk/autoLink';
+import { resolveDingTalkBrandingDisplayName } from './platforms/dingtalk/branding';
 import {
   clearDingTalkReplySink,
   createDingTalkReplySink,
@@ -80,6 +83,7 @@ import {
   formatDingTalkCurrentAgent,
   formatDingTalkCurrentScope,
   formatDingTalkScopeSwitched,
+  formatDingTalkUnknownUserReply,
 } from './platforms/dingtalk/const';
 import {
   clearDingTalkPendingQuestion,
@@ -196,6 +200,46 @@ export const resetDingTalkLiveThreadsForTests = (): void => {
   for (const timer of dingtalkLiveThreadTimers.values()) clearTimeout(timer);
   dingtalkLiveThreadTimers.clear();
   dingtalkLiveThreads.clear();
+};
+
+/** In-process TTL so inbound DingTalk does not hit users on every message. */
+const DINGTALK_BAN_CHECK_TTL_MS = 60_000;
+
+const dingtalkBanCheckCache = new Map<string, { banned: boolean; expiresAt: number }>();
+
+/** Test-only: drop the per-userId ban cache between cases. */
+export const resetDingTalkBanCheckCacheForTests = (): void => {
+  dingtalkBanCheckCache.clear();
+};
+
+const replyDingTalkUnknownUser = async (
+  binder: MessengerPlatformBinder,
+  chatId: string,
+): Promise<void> => {
+  try {
+    const displayName = await resolveDingTalkBrandingDisplayName();
+    await binder.sendDmText(chatId, formatDingTalkUnknownUserReply(displayName));
+  } catch (error) {
+    log('dingtalk unknown-user reply failed: %O', error);
+  }
+};
+
+/**
+ * Same predicate as DingTalk auto-link / 免登 (`banned` + unexpired
+ * `banExpires`). Missing users are treated as blocked. Cached per userId.
+ */
+const isDingTalkLinkedUserEffectivelyBanned = async (
+  serverDB: LobeChatDatabase,
+  userId: string,
+): Promise<boolean> => {
+  const now = Date.now();
+  const cached = dingtalkBanCheckCache.get(userId);
+  if (cached && cached.expiresAt > now) return cached.banned;
+
+  const user = await UserModel.findById(serverDB, userId);
+  const banned = !user || isEffectivelyBanned(user);
+  dingtalkBanCheckCache.set(userId, { banned, expiresAt: now + DINGTALK_BAN_CHECK_TTL_MS });
+  return banned;
 };
 
 /** Test-only: whether drain still has the Chat-SDK thread for this id. */
@@ -747,6 +791,14 @@ export class MessengerRouter {
           // through to the verify-im link-token flow.
           if (!link) return;
           justLinked = true;
+        }
+
+        // Existing links skip auto-link, so a later ban would still chat
+        // without this check. Reuse the unknown-user sentence (no ban leak).
+        if (await isDingTalkLinkedUserEffectivelyBanned(serverDB, link.userId)) {
+          log('dingtalk inbound: banned userId=%s', link.userId);
+          await replyDingTalkUnknownUser(binder, chatId);
+          return;
         }
 
         if (justLinked) {

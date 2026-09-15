@@ -8,6 +8,7 @@ import { AgentBridgeService } from '@/server/services/bot/AgentBridgeService';
 import {
   hasDingTalkLiveThreadForTests,
   MessengerRouter,
+  resetDingTalkBanCheckCacheForTests,
   resetDingTalkLiveThreadsForTests,
 } from './MessengerRouter';
 import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
@@ -212,6 +213,11 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
   },
 }));
 
+const mockFindUserById = vi.fn();
+vi.mock('@/database/models/user', () => ({
+  UserModel: { findById: (...args: unknown[]) => mockFindUserById(...args) },
+}));
+
 // `/switch` and the dispatch-time membership re-validation both enumerate the
 // user's workspaces. Default to membership of `workspace-1` so the existing
 // workspace-scoped dispatch tests pass; individual tests can override.
@@ -411,6 +417,9 @@ beforeEach(() => {
     telegram: mockWebhookHandler,
   };
   mockFindLink.mockReset();
+  mockFindUserById.mockReset();
+  mockFindUserById.mockResolvedValue({ banned: false, id: 'user_dt' });
+  resetDingTalkBanCheckCacheForTests();
   mockSetActiveScope.mockReset();
   mockListUserWorkspaces.mockReset();
   mockListUserWorkspaces.mockResolvedValue([
@@ -2000,6 +2009,57 @@ describe('MessengerRouter DingTalk G2a glue', () => {
     expect(mockDingTalkBinder.handleUnlinkedMessage).not.toHaveBeenCalled();
     expect(sendDingTalkWelcomeCard).not.toHaveBeenCalled();
     expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch an existing link when the user is effectively banned', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    mockFindUserById.mockResolvedValue({
+      banExpires: null,
+      banned: true,
+      id: 'user_dt',
+    });
+
+    await runInbound();
+
+    const subscribed = mockChatBot.onSubscribedMessage.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await subscribed(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: 'follow up',
+      }),
+    );
+
+    expect(mockFindUserById).toHaveBeenCalledWith(expect.anything(), 'user_dt');
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      DINGTALK_UNKNOWN_USER_REPLY,
+    );
+    expect(mockHandleMention).not.toHaveBeenCalled();
+    expect(mockHandleSubscribed).not.toHaveBeenCalled();
+    expect(tryAutoLinkDingTalk).not.toHaveBeenCalled();
+    expect(sendDingTalkWelcomeCard).not.toHaveBeenCalled();
+  });
+
+  it('reuses the in-memory ban check for 60s so a second message skips the user read', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    mockFindUserById.mockResolvedValue({
+      banExpires: null,
+      banned: true,
+      id: 'user_dt',
+    });
+
+    await runInbound();
+    await runInbound();
+
+    expect(mockFindUserById).toHaveBeenCalledTimes(1);
+    expect(mockHandleMention).not.toHaveBeenCalled();
+    expect(mockHandleSubscribed).not.toHaveBeenCalled();
   });
 
   it('drops inbound when chat is disabled and sends the daily notice once', async () => {
