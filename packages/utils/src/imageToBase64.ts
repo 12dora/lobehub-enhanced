@@ -4,7 +4,12 @@ import debug from 'debug';
 import { resolveMimeTypeFromBytes } from './imageMimeType';
 import { resolveBoundOwnDeploymentOrigins } from './ownDeploymentOriginsBinding';
 import type { OwnDeploymentOrigins } from './url';
-import { isOwnDeploymentFileUrl, resolveOwnDeploymentFetchUrl, sanitizedUrlHost } from './url';
+import {
+  isOwnDeploymentFileUrl,
+  isOwnDeploymentStorageObjectUrl,
+  resolveOwnDeploymentFetchUrl,
+  sanitizedUrlHost,
+} from './url';
 
 const log = debug('lobe-utils:imageToBase64');
 
@@ -196,14 +201,20 @@ export const imageUrlToBase64 = async (
 
   try {
     const origins = await resolveOriginsForFetch(options, ownOriginOnly);
-    // Binding / explicit origins: own-origin mechanics only when this URL
-    // matches a rule. Never widen to arbitrary private hosts.
-    ownOriginFetch = ownOriginOnly || isOwnDeploymentFileUrl(imageUrl, origins);
+    // Binding / explicit origins: own-origin mechanics only when this URL is a
+    // storage object of this deployment (never app routes on a shared domain,
+    // never arbitrary private hosts). `ownOriginOnly` callers keep the wider
+    // app-file + storage allowlist because they only ever receive own links.
+    const matchesOwn = (url: string) =>
+      ownOriginOnly
+        ? isOwnDeploymentFileUrl(url, origins)
+        : isOwnDeploymentStorageObjectUrl(url, origins);
+    ownOriginFetch = ownOriginOnly || matchesOwn(imageUrl);
     let currentUrl = ownOriginFetch ? resolveOwnDeploymentFetchUrl(imageUrl, origins) : imageUrl;
 
     let res: Response | undefined;
     for (let hop = 0; hop <= OWN_ORIGIN_MAX_REDIRECTS; hop += 1) {
-      if (ownOriginFetch && !isOwnDeploymentFileUrl(currentUrl, origins)) {
+      if (ownOriginFetch && !matchesOwn(currentUrl)) {
         throw new AttachmentFetchError(sanitizedUrlHost(currentUrl));
       }
 

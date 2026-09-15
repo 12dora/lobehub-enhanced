@@ -847,4 +847,18 @@ describe('FileService', () => {
       });
     });
   });
+
+  describe('getShareFileUrl', () => {
+    it('builds an absolute /f/ URL carrying the share capability', () => {
+      expect(service.getShareFileUrl('file-1', 'shr_abc')).toBe(
+        'https://lobehub.com/f/file-1?share=shr_abc',
+      );
+    });
+
+    it('URL-encodes legacy and unusual share ids', () => {
+      expect(service.getShareFileUrl('file-1', 'a b&c')).toBe(
+        'https://lobehub.com/f/file-1?share=a%20b%26c',
+      );
+    });
+  });
 });

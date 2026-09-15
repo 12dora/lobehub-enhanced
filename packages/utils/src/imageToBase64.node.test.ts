@@ -204,6 +204,54 @@ describe('imageUrlToBase64 (server)', () => {
       );
     });
 
+    it('does not grant the private-address allowance to app routes when the public domain equals APP_URL', async () => {
+      setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
+
+      for (const url of [
+        'https://chat.jiefakj.com/api/auth/get-session',
+        'https://chat.jiefakj.com/trpc/lambda/admin.stats.totals',
+        'https://chat.jiefakj.com/oidc/token',
+        'https://chat.jiefakj.com/f/file_1',
+      ]) {
+        vi.mocked(ssrfSafeFetch).mockClear();
+        await imageUrlToBase64(url).catch(() => undefined);
+        const call = vi.mocked(ssrfSafeFetch).mock.calls[0];
+        expect(call?.[0]).toBe(url);
+        expect(call?.[2]?.allowPrivateIPAddress).toBeUndefined();
+      }
+    });
+
+    it('still allows the bucket path on the shared domain', async () => {
+      setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
+
+      await imageUrlToBase64('https://chat.jiefakj.com/lobe/generations/x.png?X-Amz-Signature=s');
+
+      expect(ssrfSafeFetch).toHaveBeenCalledWith(
+        'https://chat.jiefakj.com/lobe/generations/x.png?X-Amz-Signature=s',
+        { redirect: 'manual' },
+        expect.objectContaining({ allowPrivateIPAddress: true }),
+      );
+    });
+
+    it('allows a dedicated public domain that is not an app origin', async () => {
+      const cdnOrigins = buildOwnDeploymentOrigins({
+        appUrl: 'https://app.example.com',
+        bucket: 'lobe',
+        endpoint: 'http://localhost:9000',
+        forcePathStyle: true,
+        publicDomain: 'https://cdn.example.com',
+      });
+      setOwnDeploymentOriginsBinding({ get: () => cdnOrigins });
+
+      await imageUrlToBase64('https://cdn.example.com/files/cat.png');
+
+      expect(ssrfSafeFetch).toHaveBeenCalledWith(
+        'https://cdn.example.com/files/cat.png',
+        { redirect: 'manual' },
+        expect.objectContaining({ allowPrivateIPAddress: true }),
+      );
+    });
+
     it('does not change fetch options for a foreign URL when the binding is set', async () => {
       setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
 

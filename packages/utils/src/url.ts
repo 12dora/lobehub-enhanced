@@ -383,6 +383,47 @@ const pathMatches = (pathname: string, policy: OwnOriginPathPolicy): boolean => 
 };
 
 /**
+ * Stricter variant for callers that did NOT opt into `ownOriginOnly`: only
+ * storage-object rules qualify (`s3-path-style`, `s3-virtual-host`), plus
+ * `s3-public` when that public domain is not also an application origin.
+ * When `S3_PUBLIC_DOMAIN` equals `APP_URL`, `/api/*`, `/trpc/*` … must never
+ * receive the private-address allowance.
+ */
+export function isOwnDeploymentStorageObjectUrl(
+  url: string,
+  origins?: OwnDeploymentOrigins,
+): boolean {
+  if (!origins?.rules.length) return false;
+
+  try {
+    const parsed = new URL(url);
+    const origin = parsed.origin.toLowerCase();
+    const pathname = parsed.pathname;
+    const appOrigins = new Set(
+      origins.rules.filter((rule) => rule.path.type === 'app-file').map((rule) => rule.origin),
+    );
+
+    return origins.rules.some((rule) => {
+      if (rule.origin !== origin) return false;
+      switch (rule.path.type) {
+        case 's3-path-style':
+        case 's3-virtual-host': {
+          return pathMatches(pathname, rule.path);
+        }
+        case 's3-public': {
+          return !appOrigins.has(rule.origin) && pathMatches(pathname, rule.path);
+        }
+        default: {
+          return false;
+        }
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * URLs that belong to this deployment's file storage. Compared by exact origin
  * (scheme + host + port) against caller-supplied rules. Fail closed when no
  * rules are provided — do not consult process.env.
