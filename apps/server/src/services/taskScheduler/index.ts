@@ -1,5 +1,6 @@
 export {
   createTaskSchedulerModule,
+  hasPendingLocalTimer,
   LocalTaskScheduler,
   QStashTaskScheduler,
   setTaskSchedulerExecutionCallback,

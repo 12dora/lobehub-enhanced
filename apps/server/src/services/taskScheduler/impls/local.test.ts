@@ -96,6 +96,24 @@ describe('LocalTaskScheduler', () => {
       expect(callback).toHaveBeenCalledOnce();
     });
 
+    it('should report pending timers by task id and replace a prior timer for the same task', async () => {
+      const callback = vi.fn().mockResolvedValue(undefined);
+      scheduler.setExecutionCallback(callback);
+
+      await scheduler.scheduleNextTopic({ delay: 5, taskId: 'task-dup', userId: 'user-1' });
+      expect(scheduler.hasPendingForTask('task-dup')).toBe(true);
+      expect(scheduler.hasPendingForTask('other')).toBe(false);
+
+      await scheduler.scheduleNextTopic({ delay: 2, taskId: 'task-dup', userId: 'user-1' });
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(callback).toHaveBeenCalledOnce();
+      expect(scheduler.hasPendingForTask('task-dup')).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(callback).toHaveBeenCalledOnce();
+    });
+
     it('should support multiple concurrent schedules', async () => {
       const callback = vi.fn().mockResolvedValue(undefined);
       scheduler.setExecutionCallback(callback);

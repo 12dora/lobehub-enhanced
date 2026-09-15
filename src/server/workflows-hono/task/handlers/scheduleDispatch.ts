@@ -17,13 +17,52 @@ export interface ScheduleDispatchPayload {
   dryRun?: boolean;
 }
 
-interface DueTask {
+/** Minimal task fields the cron matcher needs. */
+export interface ScheduledTaskForDispatch {
+  createdByUserId: string;
+  id: string;
+  identifier: string;
+  lastHeartbeatAt: Date | string | null;
+  schedulePattern: string | null;
+  scheduleTimezone: string | null;
+}
+
+export interface DueScheduledTask {
   pattern: string;
   taskId: string;
   taskIdentifier: string;
   timezone: string | null;
   userId: string;
 }
+
+/**
+ * Filter schedule-mode tasks that are due at `now` (timezone + last-run dedup).
+ * Pure: no I/O. Shared by the QStash dispatch handler and the local in-process worker.
+ */
+export const selectDueScheduledTasks = (
+  tasks: ScheduledTaskForDispatch[],
+  now: Date = new Date(),
+): DueScheduledTask[] => {
+  const due: DueScheduledTask[] = [];
+  for (const task of tasks) {
+    if (!task.schedulePattern) continue;
+    const matches = isExecutionTime({
+      cronPattern: task.schedulePattern,
+      currentTime: now,
+      lastExecutedAt: task.lastHeartbeatAt ?? null,
+      timezone: task.scheduleTimezone,
+    });
+    if (!matches) continue;
+    due.push({
+      pattern: task.schedulePattern,
+      taskId: task.id,
+      taskIdentifier: task.identifier,
+      timezone: task.scheduleTimezone,
+      userId: task.createdByUserId,
+    });
+  }
+  return due;
+};
 
 /**
  * Cron-style central dispatcher. Registered as a QStash Schedule (e.g.
@@ -45,24 +84,7 @@ export async function scheduleDispatch(c: Context) {
     const tasks = await TaskModel.getScheduledTasks(db);
 
     const now = new Date();
-    const due: DueTask[] = [];
-    for (const task of tasks) {
-      if (!task.schedulePattern) continue;
-      const matches = isExecutionTime({
-        cronPattern: task.schedulePattern,
-        currentTime: now,
-        lastExecutedAt: task.lastHeartbeatAt ?? null,
-        timezone: task.scheduleTimezone,
-      });
-      if (!matches) continue;
-      due.push({
-        pattern: task.schedulePattern,
-        taskId: task.id,
-        taskIdentifier: task.identifier,
-        timezone: task.scheduleTimezone,
-        userId: task.createdByUserId,
-      });
-    }
+    const due = selectDueScheduledTasks(tasks, now);
 
     log(
       'scan: total=%d due=%d skipped=%d dryRun=%s',
@@ -98,7 +120,7 @@ export async function scheduleDispatch(c: Context) {
   }
 }
 
-const fanout = async (due: DueTask[]): Promise<number> => {
+const fanout = async (due: DueScheduledTask[]): Promise<number> => {
   // In queue mode, hand off via QStash so each task gets its own retry budget
   // and runs in an isolated handler invocation. Locally, just run inline so
   // dev / electron can exercise the path without QStash.

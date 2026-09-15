@@ -209,6 +209,15 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
+    // Core: no moduleId. In-process cron/heartbeat/watchdog when QStash is
+    // not configured. Internal predicate skips Vercel / queue-runtime.
+    name: 'taskSchedulingWorker',
+    start: async () => {
+      const { ensureTaskSchedulingWorkerStarted } = await import('../services/taskScheduling');
+      ensureTaskSchedulingWorkerStarted();
+    },
+  },
+  {
     // Core: no moduleId. Only meaningful when the key provider is Vault —
     // otherwise the 2s poller is a pure idle-CPU leak.
     name: 'secretRewrap',
