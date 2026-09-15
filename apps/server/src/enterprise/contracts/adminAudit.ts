@@ -44,6 +44,9 @@ export {
 } from './adminAudit/common';
 export {
   adminAuditConversationListItemSchema,
+  type AdminAuditConversationMessageAttachment,
+  adminAuditConversationMessageAttachmentSchema,
+  type AdminAuditConversationMessageListItem,
   adminAuditConversationMessageListItemSchema,
   adminAuditConversationsGetInputSchema,
   adminAuditConversationsGetOutputSchema,

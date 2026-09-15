@@ -8,7 +8,7 @@ import { applyAuditConversationRedaction } from '@/database/models/platform';
 import type {
   AdminAuditConversationMessageAttachment,
   AdminAuditConversationsMessagesInputParsed,
-} from '../../contracts/adminAudit/conversations';
+} from '../../contracts/adminAudit';
 import { appendAuditAccessLog } from './accessLog';
 import type { AdminAuditServiceHost } from './adminAuditServiceHost';
 import type { ConversationContentAccess } from './contentPolicy';
