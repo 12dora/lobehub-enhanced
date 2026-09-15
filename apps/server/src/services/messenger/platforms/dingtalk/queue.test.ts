@@ -21,6 +21,7 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
 const { getAgentRuntimeRedisClient } = await import('@/server/modules/AgentRuntime/redis');
 const {
   acquireDingTalkDrainLock,
+  isDingTalkBusyOwnedByThisProcess,
   popDingTalkQueuedMessage,
   pushDingTalkQueuedMessage,
   dropStaleDingTalkQueues,
@@ -78,8 +79,27 @@ describe('DingTalk inbound queue', () => {
     );
     mockRedis.llen.mockResolvedValueOnce(0);
     const item = await popDingTalkQueuedMessage('dingtalk:cid');
-    expect(item?.text).toBe('first');
+    expect(item).toEqual({
+      item: { queuedAt: 1, senderStaffId: 'staff_1', text: 'first' },
+      status: 'item',
+    });
     expect(mockRedis.lpop).toHaveBeenCalledWith('messenger:dingtalk:queue:dingtalk:cid');
+  });
+
+  it('reports empty when LPOP returns nothing', async () => {
+    mockRedis.lpop.mockResolvedValueOnce(null);
+    await expect(popDingTalkQueuedMessage('dingtalk:cid')).resolves.toEqual({ status: 'empty' });
+  });
+
+  it('reports error when LPOP throws so drain can keep the lock', async () => {
+    mockRedis.lpop.mockRejectedValueOnce(new Error('redis blip'));
+    await expect(popDingTalkQueuedMessage('dingtalk:cid')).resolves.toEqual({ status: 'error' });
+  });
+
+  it('skips a malformed payload instead of treating it as empty', async () => {
+    mockRedis.lpop.mockResolvedValueOnce('not-json');
+    mockRedis.llen.mockResolvedValueOnce(0);
+    await expect(popDingTalkQueuedMessage('dingtalk:cid')).resolves.toEqual({ status: 'invalid' });
   });
 
   it('drops queue keys that have no TTL on restart', async () => {
@@ -115,11 +135,17 @@ describe('DingTalk per-thread busy flag', () => {
     await expect(isDingTalkThreadBusy('dingtalk:cid')).resolves.toBe(false);
   });
 
-  it('falls back to process-local busy when Redis SET throws', async () => {
+  it('returns unavailable when Redis SET throws', async () => {
     mockRedis.set.mockRejectedValueOnce(new Error('redis down'));
+    await expect(tryAcquireDingTalkThreadBusy('dingtalk:cid')).resolves.toBe('unavailable');
+    expect(isDingTalkBusyOwnedByThisProcess('dingtalk:cid')).toBe(false);
+  });
+
+  it('returns busy without SET when this process already owns the flag', async () => {
     await expect(tryAcquireDingTalkThreadBusy('dingtalk:cid')).resolves.toBe('acquired');
-    mockRedis.set.mockRejectedValueOnce(new Error('redis down'));
+    mockRedis.set.mockClear();
     await expect(tryAcquireDingTalkThreadBusy('dingtalk:cid')).resolves.toBe('busy');
+    expect(mockRedis.set).not.toHaveBeenCalled();
   });
 
   it('lets drain re-enter the lock this process already holds', async () => {
@@ -127,17 +153,19 @@ describe('DingTalk per-thread busy flag', () => {
     await expect(acquireDingTalkDrainLock('dingtalk:cid')).resolves.toBe('acquired');
   });
 
-  it('LPUSH-es a popped item back onto the overflow list', async () => {
-    mockRedis.lpush.mockResolvedValueOnce(1);
+  it('LPUSH-es a popped item back onto the overflow list with LTRIM', async () => {
+    mockRedis.eval.mockResolvedValueOnce(1);
     await unshiftDingTalkQueuedMessage('dingtalk:cid', {
       queuedAt: 1,
       senderStaffId: 'staff_1',
       text: 'again',
     });
-    expect(mockRedis.lpush).toHaveBeenCalledWith(
-      'messenger:dingtalk:queue:dingtalk:cid',
-      expect.stringContaining('again'),
-    );
+    expect(mockRedis.eval).toHaveBeenCalledOnce();
+    const script = String(mockRedis.eval.mock.calls[0][0]);
+    expect(script).toContain('LPUSH');
+    expect(script).toContain('LTRIM');
+    expect(script).toContain('EXPIRE');
+    expect(mockRedis.eval.mock.calls[0][4]).toBe('5');
   });
 });
 
@@ -154,7 +182,8 @@ describe('DingTalk in-memory queue fallback', () => {
       pushDingTalkQueuedMessage('dingtalk:mem', { senderStaffId: 's', text: 'follow' }),
     ).resolves.toBe('queued');
     await expect(popDingTalkQueuedMessage('dingtalk:mem')).resolves.toMatchObject({
-      text: 'follow',
+      item: { text: 'follow' },
+      status: 'item',
     });
     await releaseDingTalkThreadBusy('dingtalk:mem');
     await expect(tryAcquireDingTalkThreadBusy('dingtalk:mem')).resolves.toBe('acquired');

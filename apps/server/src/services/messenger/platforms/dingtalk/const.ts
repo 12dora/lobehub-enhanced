@@ -36,6 +36,7 @@ export const DINGTALK_QUESTION_GONE_REPLY = '该问题已失效，将作为新�
 export const DINGTALK_UNKNOWN_COMMAND_REPLY = '未知命令。发送 /帮助 查看可用命令。';
 export const DINGTALK_NO_TOPICS_REPLY = '暂无会话记录。';
 export const DINGTALK_RESUME_USAGE_REPLY = '用法：/继续 N';
+export const DINGTALK_AGENTS_USAGE_REPLY = '用法：/切换 N';
 export const DINGTALK_RESUME_RANGE_REPLY = '序号超出范围。发送 /会话 查看最近会话。';
 export const DINGTALK_RESUMED_REPLY = '已切换到该会话。';
 export const DINGTALK_NO_ACTIVE_AGENT_REPLY = '未选择助手。发送 /助手 选择一个。';

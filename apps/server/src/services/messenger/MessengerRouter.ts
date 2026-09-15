@@ -48,7 +48,9 @@ import {
 import {
   DINGTALK_AGENT_NOT_FOUND_REPLY,
   DINGTALK_AGENTS_PICKER_PROMPT,
+  DINGTALK_AGENTS_USAGE_REPLY,
   DINGTALK_ASKER_ONLY_REPLY,
+  DINGTALK_BUSY_TTL_SECONDS,
   DINGTALK_CHAT_DISABLED_REPLY,
   DINGTALK_HELP_TEXT,
   DINGTALK_IDLE_NEW_TOPIC_NOTICE,
@@ -89,7 +91,9 @@ import {
   acquireDingTalkDrainLock,
   drainDingTalkQueue,
   dropStaleDingTalkQueues,
+  isDingTalkBusyOwnedByThisProcess,
   isDingTalkThreadBusy,
+  peekDingTalkQueueLength,
   popDingTalkQueuedMessage,
   pushDingTalkQueuedMessage,
   releaseDingTalkThreadBusy,
@@ -110,8 +114,57 @@ import type {
 
 const log = debug('lobe-server:messenger:router');
 
+interface DingTalkLiveThread {
+  id: string;
+  state?: Promise<{ topicId?: string } | undefined>;
+  unsubscribe?: () => Promise<void>;
+}
+
+const DINGTALK_LIVE_THREAD_TTL_MS = DINGTALK_BUSY_TTL_SECONDS * 1000;
+
 /** Live Chat-SDK threads so drain replays on the same topic, not a fake one. */
-const dingtalkLiveThreads = new Map<string, any>();
+const dingtalkLiveThreads = new Map<string, DingTalkLiveThread>();
+const dingtalkLiveThreadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const dingtalkLiveThreadUnsubWrapped = new WeakSet<object>();
+
+const forgetDingTalkLiveThread = (threadId: string): void => {
+  dingtalkLiveThreads.delete(threadId);
+  const timer = dingtalkLiveThreadTimers.get(threadId);
+  if (timer) {
+    clearTimeout(timer);
+    dingtalkLiveThreadTimers.delete(threadId);
+  }
+};
+
+const rememberDingTalkLiveThread = (thread: DingTalkLiveThread): void => {
+  const threadId = String(thread.id);
+  dingtalkLiveThreads.set(threadId, thread);
+  const existing = dingtalkLiveThreadTimers.get(threadId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    dingtalkLiveThreads.delete(threadId);
+    dingtalkLiveThreadTimers.delete(threadId);
+  }, DINGTALK_LIVE_THREAD_TTL_MS);
+  timer.unref?.();
+  dingtalkLiveThreadTimers.set(threadId, timer);
+
+  if (!dingtalkLiveThreadUnsubWrapped.has(thread) && typeof thread.unsubscribe === 'function') {
+    const original = thread.unsubscribe.bind(thread);
+    thread.unsubscribe = async () => {
+      try {
+        await original();
+      } finally {
+        forgetDingTalkLiveThread(threadId);
+      }
+    };
+    dingtalkLiveThreadUnsubWrapped.add(thread);
+  }
+};
+
+const forgetDingTalkLiveThreadIfIdle = async (threadId: string): Promise<void> => {
+  if (await isDingTalkThreadBusy(threadId)) return;
+  forgetDingTalkLiveThread(threadId);
+};
 
 /**
  * Sentinel scope token for the Personal scope (whose real `workspaceId` is
@@ -451,65 +504,79 @@ export class MessengerRouter {
         const claim = await acquireDingTalkDrainLock(threadId);
         if (claim !== 'acquired') return;
 
-        const queued = await popDingTalkQueuedMessage(threadId);
-        if (!queued) {
-          await releaseDingTalkThreadBusy(threadId);
-          return;
-        }
+        while (true) {
+          const popped = await popDingTalkQueuedMessage(threadId);
+          if (popped.status === 'error') {
+            log('drain: pop failed, keeping busy for %s', threadId);
+            return;
+          }
+          if (popped.status === 'invalid') {
+            log('drain: skipping invalid queued payload for %s', threadId);
+            continue;
+          }
+          if (popped.status === 'empty') {
+            await releaseDingTalkThreadBusy(threadId);
+            return;
+          }
 
-        const drainLink = await MessengerAccountLinkModel.findByPlatformUser(
-          serverDB,
-          creds.platform,
-          queued.senderStaffId,
-          creds.tenantId,
-        );
-        const liveThread = dingtalkLiveThreads.get(threadId);
-        if (!drainLink?.activeAgentId || !liveThread) {
-          await unshiftDingTalkQueuedMessage(threadId, queued);
-          await releaseDingTalkThreadBusy(threadId);
-          return;
-        }
-
-        let topicId: string | undefined;
-        try {
-          topicId = (await liveThread.state)?.topicId;
-        } catch (error) {
-          log('drain: failed to read live thread state: %O', error);
-        }
-
-        const syntheticMessage = new Message({
-          attachments: [],
-          author: {
-            fullName: queued.authorUserName || queued.senderStaffId,
-            isBot: false,
-            isMe: false,
-            userId: queued.senderStaffId,
-            userName: queued.authorUserName || queued.senderStaffId,
-          },
-          formatted: parseMarkdown(queued.text),
-          id: `queued-${queued.queuedAt}`,
-          isMention: true,
-          metadata: {
-            dateSent: new Date(queued.queuedAt),
-            edited: false,
-          },
-          raw: queued.raw,
-          text: queued.text,
-          threadId,
-        });
-        try {
-          await this.dispatchToAgent(
-            liveThread,
-            syntheticMessage,
-            client,
-            drainLink,
-            drainLink.activeAgentId,
-            'dingtalk',
-            topicId ? 'handleSubscribedMessage' : 'handleMention',
+          const queued = popped.item;
+          const drainLink = await MessengerAccountLinkModel.findByPlatformUser(
+            serverDB,
+            creds.platform,
+            queued.senderStaffId,
+            creds.tenantId,
           );
-        } catch (error) {
-          await releaseDingTalkThreadBusy(threadId);
-          throw error;
+          const liveThread = dingtalkLiveThreads.get(threadId);
+          if (liveThread) rememberDingTalkLiveThread(liveThread);
+          if (!drainLink?.activeAgentId || !liveThread) {
+            await unshiftDingTalkQueuedMessage(threadId, queued);
+            await releaseDingTalkThreadBusy(threadId);
+            return;
+          }
+
+          let topicId: string | undefined;
+          try {
+            topicId = (await liveThread.state)?.topicId;
+          } catch (error) {
+            log('drain: failed to read live thread state: %O', error);
+          }
+
+          const syntheticMessage = new Message({
+            attachments: [],
+            author: {
+              fullName: queued.authorUserName || queued.senderStaffId,
+              isBot: false,
+              isMe: false,
+              userId: queued.senderStaffId,
+              userName: queued.authorUserName || queued.senderStaffId,
+            },
+            formatted: parseMarkdown(queued.text),
+            id: `queued-${queued.queuedAt}`,
+            isMention: true,
+            metadata: {
+              dateSent: new Date(queued.queuedAt),
+              edited: false,
+            },
+            raw: queued.raw,
+            text: queued.text,
+            threadId,
+          });
+          try {
+            await this.dispatchToAgent(
+              liveThread,
+              syntheticMessage,
+              client,
+              drainLink,
+              drainLink.activeAgentId,
+              'dingtalk',
+              topicId ? 'handleSubscribedMessage' : 'handleMention',
+            );
+          } catch (error) {
+            await unshiftDingTalkQueuedMessage(threadId, queued);
+            await releaseDingTalkThreadBusy(threadId);
+            throw error;
+          }
+          return;
         }
       });
       void dropStaleDingTalkQueues();
@@ -595,7 +662,7 @@ export class MessengerRouter {
 
       const chatId = platform === 'dingtalk' ? String(thread.id) : client.extractChatId(thread.id);
       if (platform === 'dingtalk') {
-        dingtalkLiveThreads.set(String(thread.id), thread);
+        rememberDingTalkLiveThread(thread);
       }
       // Channel `@mention` (Slack today) — `thread.isDM` is false. The
       // unlinked path swaps to an ephemeral so the link prompt is visible
@@ -1189,9 +1256,21 @@ export class MessengerRouter {
               return;
             }
           } else if (isBusy && !isActive) {
-            // Crash after SET NX, or an inbound that skipped handleMention:
-            // Redis still says busy but nothing is running.
+            // Drain window and queue-mode handoff look like a leaked flag
+            // (`isBusy && !isActive && !operationId`). Only DEL a true leftover:
+            // busy is set, this process does not own it, overflow is empty.
             if (ctx.platform === 'dingtalk') {
+              const owned = isDingTalkBusyOwnedByThisProcess(ctx.thread.id);
+              const queuedCount = await peekDingTalkQueueLength(ctx.thread.id);
+              if (owned || queuedCount > 0) {
+                AgentBridgeService.requestStop(ctx.thread.id);
+                log(
+                  'command /stop: deferred stop while this process holds busy thread=%s',
+                  ctx.thread.id,
+                );
+                await ctx.reply(DINGTALK_STOP_REQUESTED_REPLY);
+                return;
+              }
               await releaseDingTalkThreadBusy(ctx.thread.id);
             }
             await ctx.reply(
@@ -1444,7 +1523,11 @@ export class MessengerRouter {
     if (args && (ctx.platform === 'dingtalk' || !binder.sendAgentPicker)) {
       const index = Number.parseInt(args, 10);
       if (!Number.isInteger(index) || index < 1 || index > userAgents.length) {
-        await ctx.reply(`Usage: /agents <n>, where n is between 1 and ${userAgents.length}.`);
+        await ctx.reply(
+          ctx.platform === 'dingtalk'
+            ? DINGTALK_AGENTS_USAGE_REPLY
+            : `Usage: /agents <n>, where n is between 1 and ${userAgents.length}.`,
+        );
         return;
       }
       const target = userAgents[index - 1];
@@ -2491,7 +2574,10 @@ export class MessengerRouter {
     return 'blocked';
   }
 
-  private async requeueDingTalkAfterSkip(thread: any, message: Message): Promise<void> {
+  private async requeueDingTalkAfterSkip(
+    thread: DingTalkLiveThread,
+    message: Message,
+  ): Promise<void> {
     const senderId = message.author?.userId;
     if (senderId) {
       let topicId: string | undefined;
@@ -2587,9 +2673,11 @@ export class MessengerRouter {
               clearDingTalkReplySink(thread.id);
               if (info.reason === 'waiting_for_human') {
                 await releaseDingTalkThreadBusy(thread.id);
+                forgetDingTalkLiveThread(thread.id);
                 return;
               }
               await drainDingTalkQueue(thread.id);
+              await forgetDingTalkLiveThreadIfIdle(thread.id);
             }
           : undefined,
       onSkippedActive:
@@ -2604,6 +2692,7 @@ export class MessengerRouter {
               await forwardDingTalkWaitingQuestion(thread.id, event);
               clearDingTalkReplySink(thread.id);
               await releaseDingTalkThreadBusy(thread.id);
+              forgetDingTalkLiveThread(thread.id);
             }
           : undefined,
       replySink,

@@ -7,6 +7,7 @@ import {
   formatTopicListText,
   parseDingTalkCommand,
 } from './commands';
+import { DINGTALK_AGENTS_USAGE_REPLY } from './const';
 
 describe('parseDingTalkCommand', () => {
   it('maps Chinese aliases and English names', () => {
@@ -22,6 +23,10 @@ describe('parseDingTalkCommand', () => {
     expect(parseDingTalkCommand('/停止')).toEqual({ args: '', name: 'stop' });
     expect(parseDingTalkCommand('/帮助')).toEqual({ args: '', name: 'help' });
     expect(parseDingTalkCommand('/help')).toEqual({ args: '', name: 'help' });
+  });
+
+  it('exposes zh-CN usage copy for /切换 N', () => {
+    expect(DINGTALK_AGENTS_USAGE_REPLY).toBe('用法：/切换 N');
   });
 
   it('returns the raw name for unknown slash commands', () => {
