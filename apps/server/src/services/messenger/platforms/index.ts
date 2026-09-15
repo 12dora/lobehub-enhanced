@@ -1,8 +1,10 @@
+import { dingtalk } from './dingtalk';
 import { discord } from './discord';
 import { MessengerPlatformRegistry } from './registry';
 import { slack } from './slack';
 import { telegram } from './telegram';
 
+export { MessengerDingTalkBinder } from './dingtalk';
 export { MessengerDiscordBinder } from './discord';
 export { MessengerPlatformRegistry } from './registry';
 export { MessengerSlackBinder, slackWebhookGate } from './slack';
@@ -21,4 +23,5 @@ export type {
 export const messengerPlatformRegistry = new MessengerPlatformRegistry()
   .register(slack)
   .register(telegram)
-  .register(discord);
+  .register(discord)
+  .register(dingtalk);

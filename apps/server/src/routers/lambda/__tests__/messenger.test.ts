@@ -10,10 +10,16 @@ const {
   mockConsumeLinkToken,
   mockFindByPlatform,
   mockFindByPlatformUser,
+  mockGetEnabledMessengerPlatforms,
+  mockGetMessengerDingTalkConfig,
+  mockGetMessengerDiscordConfig,
+  mockGetMessengerSlackConfig,
+  mockGetMessengerTelegramConfig,
   mockGetServerDB,
   mockGetServerFeatureFlagsStateFromRuntimeConfig,
   mockHasAnyPermission,
   mockInitWithEnvKey,
+  mockListSerializedPlatforms,
   mockListUserWorkspaces,
   mockListMessengerBindableAgents,
   mockListByInstallerUserId,
@@ -27,10 +33,16 @@ const {
   mockConsumeLinkToken: vi.fn(),
   mockFindByPlatform: vi.fn(),
   mockFindByPlatformUser: vi.fn(),
+  mockGetEnabledMessengerPlatforms: vi.fn().mockResolvedValue([]),
+  mockGetMessengerDingTalkConfig: vi.fn().mockResolvedValue(null),
+  mockGetMessengerDiscordConfig: vi.fn().mockResolvedValue(null),
+  mockGetMessengerSlackConfig: vi.fn().mockResolvedValue(null),
+  mockGetMessengerTelegramConfig: vi.fn().mockResolvedValue(null),
   mockGetServerDB: vi.fn(),
   mockGetServerFeatureFlagsStateFromRuntimeConfig: vi.fn(),
   mockHasAnyPermission: vi.fn(),
   mockInitWithEnvKey: vi.fn(),
+  mockListSerializedPlatforms: vi.fn().mockReturnValue([]),
   mockListUserWorkspaces: vi.fn(),
   mockListMessengerBindableAgents: vi.fn(),
   mockListByInstallerUserId: vi.fn(),
@@ -40,6 +52,15 @@ const {
   mockPeekLinkToken: vi.fn(),
   mockSlackAuthTest: vi.fn(),
   mockUpsertForPlatform: vi.fn(),
+}));
+
+vi.mock('@/config/messenger', () => ({
+  getEnabledMessengerPlatforms: mockGetEnabledMessengerPlatforms,
+  getMessengerDingTalkConfig: mockGetMessengerDingTalkConfig,
+  getMessengerDiscordConfig: mockGetMessengerDiscordConfig,
+  getMessengerSlackConfig: mockGetMessengerSlackConfig,
+  getMessengerTelegramConfig: mockGetMessengerTelegramConfig,
+  isMessengerPlatformEnabled: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({
@@ -94,9 +115,10 @@ vi.mock('@/server/services/agent', () => ({
 
 vi.mock('@/server/services/messenger', () => ({
   consumeLinkToken: mockConsumeLinkToken,
+  MessengerDingTalkBinder: vi.fn(),
   MessengerDiscordBinder: vi.fn(),
   messengerPlatformRegistry: {
-    listSerializedPlatforms: vi.fn().mockReturnValue([]),
+    listSerializedPlatforms: mockListSerializedPlatforms,
   },
   MessengerSlackBinder: vi.fn(),
   MessengerTelegramBinder: vi.fn().mockImplementation(() => ({
@@ -495,5 +517,39 @@ describe('messengerRouter.listAgentsForBinding', () => {
 
     expect(result).toEqual([{ id: 'inbox-agent', isInbox: true, title: 'AIHub AI' }]);
     expect(mockListMessengerBindableAgents).toHaveBeenCalledOnce();
+  });
+});
+
+describe('messengerRouter.availablePlatforms', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetEnabledMessengerPlatforms.mockResolvedValue(['dingtalk']);
+    mockListSerializedPlatforms.mockReturnValue([
+      { connectionMode: 'websocket', id: 'dingtalk', name: '钉钉' },
+    ]);
+    mockGetMessengerDingTalkConfig.mockResolvedValue({
+      chatEnabled: true,
+      clientId: 'app_key',
+      pushEnabled: false,
+      robotCode: 'robot_1',
+    });
+  });
+
+  it('returns capabilities and a null botUsername for dingtalk', async () => {
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const result = await caller.availablePlatforms();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        appId: 'app_key',
+        botUsername: null,
+        capabilities: { chat: true, push: false },
+        connectionMode: 'websocket',
+        enabled: true,
+        id: 'dingtalk',
+        name: '钉钉',
+        platform: 'dingtalk',
+      }),
+    ]);
   });
 });

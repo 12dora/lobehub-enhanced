@@ -12,6 +12,11 @@ vi.mock('./telegram', () => ({
   TelegramInstallationStore: vi.fn().mockImplementation(() => ({ kind: 'telegram' })),
 }));
 
+vi.mock('./dingtalk', () => ({
+  DINGTALK_INSTALLATION_KEY: 'dingtalk:singleton',
+  DingTalkInstallationStore: vi.fn().mockImplementation(() => ({ kind: 'dingtalk' })),
+}));
+
 vi.mock('./discord', () => ({
   DISCORD_INSTALLATION_KEY: 'discord:singleton',
   DiscordInstallationStore: vi.fn().mockImplementation(() => ({ kind: 'discord' })),
@@ -31,6 +36,11 @@ describe('getInstallationStore', () => {
   it('returns the discord store for platform=discord', () => {
     const store = getInstallationStore('discord');
     expect(store).toEqual({ kind: 'discord' });
+  });
+
+  it('returns the dingtalk store for platform=dingtalk', () => {
+    const store = getInstallationStore('dingtalk');
+    expect(store).toEqual({ kind: 'dingtalk' });
   });
 
   it('memoizes the store across calls (one instance per process)', async () => {

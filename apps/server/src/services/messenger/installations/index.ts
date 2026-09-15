@@ -1,6 +1,7 @@
 import type { MessengerPlatform } from '@/config/messenger';
 
 import type { ConnectionMode } from '../../bot/platforms';
+import { DingTalkInstallationStore } from './dingtalk';
 import { DiscordInstallationStore } from './discord';
 import { SlackInstallationStore } from './slack';
 import { TelegramInstallationStore } from './telegram';
@@ -23,6 +24,9 @@ const create = (platform: MessengerPlatform): MessengerInstallationStore | null 
     }
     case 'discord': {
       return new DiscordInstallationStore();
+    }
+    case 'dingtalk': {
+      return new DingTalkInstallationStore();
     }
     default: {
       return null;
@@ -105,6 +109,7 @@ export const messengerConnectionIdForUser = (params: {
   return `messenger:${installationKey}:user-${userId}`;
 };
 
+export { DINGTALK_INSTALLATION_KEY, DingTalkInstallationStore } from './dingtalk';
 export { DISCORD_INSTALLATION_KEY, DiscordInstallationStore } from './discord';
 export { SlackInstallationStore } from './slack';
 export { TELEGRAM_INSTALLATION_KEY, TelegramInstallationStore } from './telegram';

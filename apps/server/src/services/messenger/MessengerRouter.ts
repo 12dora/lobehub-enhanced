@@ -9,8 +9,10 @@ import {
 import debug from 'debug';
 
 import type { MessengerPlatform } from '@/config/messenger';
+import { getMessengerDingTalkConfig } from '@/config/messenger';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
+import { TopicModel } from '@/database/models/topic';
 import { WorkspaceModel } from '@/database/models/workspace';
 import type { MessengerAccountLinkItem } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
@@ -32,6 +34,16 @@ import {
 import { getInstallationStore } from './installations';
 import type { InstallationCredentials } from './installations/types';
 import { messengerPlatformRegistry } from './platforms';
+import { tryAutoLinkDingTalk } from './platforms/dingtalk/autoLink';
+import {
+  DINGTALK_CHAT_DISABLED_REPLY,
+  DINGTALK_IDLE_NEW_TOPIC_NOTICE,
+  DINGTALK_TOPIC_TITLE_PREFIX,
+} from './platforms/dingtalk/const';
+import {
+  claimDingTalkChatDisabledNotice,
+  incrementDingTalkDailyCounter,
+} from './platforms/dingtalk/redis';
 import type {
   AgentPickerEntry,
   CallbackAcknowledgement,
@@ -460,12 +472,36 @@ export class MessengerRouter {
       // the platform's thread anchor (Slack: `slack:<channel>:<threadTs>`)
       // which the binder splits when posting in-thread.
       const isChannelMention = thread.isDM === false;
-      const link = await MessengerAccountLinkModel.findByPlatformUser(
+      let link = await MessengerAccountLinkModel.findByPlatformUser(
         serverDB,
         platform,
         senderId,
         tenantId,
       );
+
+      if (platform === 'dingtalk') {
+        await incrementDingTalkDailyCounter('messages');
+        if (!link) {
+          link = await tryAutoLinkDingTalk({
+            binder,
+            chatId,
+            senderNick: message.author.userName,
+            senderStaffId: senderId,
+            serverDB,
+          });
+          // Unknown staffId already received the login sentence. Never fall
+          // through to the verify-im link-token flow.
+          if (!link) return;
+        }
+
+        const dingConfig = await getMessengerDingTalkConfig();
+        if (!dingConfig?.chatEnabled) {
+          if (await claimDingTalkChatDisabledNotice(senderId)) {
+            await binder.sendDmText(chatId, DINGTALK_CHAT_DISABLED_REPLY);
+          }
+          return;
+        }
+      }
 
       try {
         const parsed = parseCommand(message.text);
@@ -1587,6 +1623,9 @@ export class MessengerRouter {
     //                               topicId and continues in the same topic.
     //                               Falls back to `handleMention` internally
     //                               if no topicId is cached (defensive).
+    const dingTalkBridgeOpts =
+      platform === 'dingtalk' ? await this.resolveDingTalkBridgeOpts() : {};
+
     const bridgeOpts = {
       agentId,
       botContext: {
@@ -1611,9 +1650,53 @@ export class MessengerRouter {
           : `${platform}:singleton`,
       },
       client,
+      ...dingTalkBridgeOpts,
     };
 
     await bridge[bridgeMethod](thread, message, bridgeOpts);
+
+    if (platform === 'dingtalk') {
+      await this.stampDingTalkTopicMetadata(serverDB, link, thread);
+    }
+  }
+
+  private async resolveDingTalkBridgeOpts(): Promise<{
+    topicStaleReplyPrefix: string;
+    topicStaleThresholdMs: number;
+    topicTitlePrefix: string;
+  }> {
+    const config = await getMessengerDingTalkConfig();
+    const hours = config?.idleNewTopicHours ?? 24;
+    const topicStaleThresholdMs =
+      config?.idleNewTopicEnabled === false ? Number.POSITIVE_INFINITY : hours * 60 * 60 * 1000;
+    return {
+      topicStaleReplyPrefix: DINGTALK_IDLE_NEW_TOPIC_NOTICE,
+      topicStaleThresholdMs,
+      topicTitlePrefix: DINGTALK_TOPIC_TITLE_PREFIX,
+    };
+  }
+
+  private async stampDingTalkTopicMetadata(
+    serverDB: LobeChatDatabase,
+    link: MessengerAccountLinkItem,
+    thread: { isDM?: boolean; state?: Promise<{ topicId?: string } | undefined> },
+  ): Promise<void> {
+    try {
+      const state = await thread.state;
+      const topicId = state?.topicId;
+      if (!topicId) return;
+      const topicModel = new TopicModel(serverDB, link.userId, link.workspaceId ?? undefined);
+      await topicModel.update(topicId, {
+        metadata: {
+          messenger: {
+            conversationType: thread.isDM === false ? 'group' : 'dm',
+            platform: 'dingtalk',
+          },
+        },
+      });
+    } catch (error) {
+      log('stampDingTalkTopicMetadata: failed: %O', error);
+    }
   }
 }
 

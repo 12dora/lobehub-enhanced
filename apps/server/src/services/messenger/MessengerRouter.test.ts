@@ -41,6 +41,7 @@ vi.mock('@/server/enterprise/services/branding/runtimeBranding', () => ({
 
 vi.mock('@/config/messenger', () => ({
   getEnabledMessengerPlatforms: vi.fn().mockReturnValue(['slack', 'telegram']),
+  getMessengerDingTalkConfig: vi.fn().mockResolvedValue(null),
   getMessengerSlackConfig: vi.fn().mockReturnValue({
     appId: 'A_APP',
     clientId: 'cid',
@@ -128,6 +129,11 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
 // user's workspaces. Default to membership of `workspace-1` so the existing
 // workspace-scoped dispatch tests pass; individual tests can override.
 const mockListUserWorkspaces = vi.fn();
+vi.mock('@/database/models/topic', () => ({
+  TopicModel: class {
+    update = vi.fn();
+  },
+}));
 vi.mock('@/database/models/workspace', () => ({
   WorkspaceModel: class {
     listUserWorkspaces = (...args: any[]) => mockListUserWorkspaces(...args);
@@ -181,6 +187,31 @@ vi.mock('./platforms/telegram/binder', () => ({
     registerWebhook: vi.fn(),
     sendDmText: vi.fn(),
   })),
+}));
+
+vi.mock('./platforms/dingtalk/binder', () => ({
+  MessengerDingTalkBinder: vi.fn().mockImplementation(() => ({
+    createClient: () => ({
+      createAdapter: () => ({}),
+      extractChatId: (id: string) => id,
+    }),
+    handleUnlinkedMessage: vi.fn(),
+    notifyLinkSuccess: vi.fn(),
+    sendDmText: vi.fn(),
+  })),
+}));
+
+vi.mock('./platforms/dingtalk/autoLink', () => ({
+  tryAutoLinkDingTalk: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('./platforms/dingtalk/redis', () => ({
+  claimDingTalkChatDisabledNotice: vi.fn().mockResolvedValue(false),
+  incrementDingTalkDailyCounter: vi.fn(),
+}));
+
+vi.mock('./platforms/dingtalk/push', () => ({
+  registerDingTalkMessengerPushProvider: vi.fn(),
 }));
 
 const buildSlackRequest = (body: string, headers: Record<string, string> = {}): Request =>

@@ -3,13 +3,14 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { withScopedPermission } from '@/business/server/trpc-middlewares/rbacPermission';
+import type { MessengerPlatform } from '@/config/messenger';
 import {
   getEnabledMessengerPlatforms,
+  getMessengerDingTalkConfig,
   getMessengerDiscordConfig,
   getMessengerSlackConfig,
   getMessengerTelegramConfig,
   isMessengerPlatformEnabled,
-  type MessengerPlatform,
 } from '@/config/messenger';
 import {
   MessengerAccountLinkConflictError,
@@ -30,6 +31,7 @@ import { AgentService } from '@/server/services/agent';
 import { SlackApi } from '@/server/services/bot/platforms/slack/api';
 import {
   consumeLinkToken,
+  MessengerDingTalkBinder,
   MessengerDiscordBinder,
   messengerPlatformRegistry,
   MessengerSlackBinder,
@@ -42,6 +44,7 @@ const platformEnum = z.enum([
   'telegram',
   'slack',
   'discord',
+  'dingtalk',
 ]) satisfies z.ZodType<MessengerPlatform>;
 
 const REVOKED_SLACK_AUTH_ERRORS = new Set([
@@ -208,10 +211,11 @@ export const messengerRouter = router({
       .listSerializedPlatforms()
       .filter((def) => enabledSet.has(def.id));
 
-    const [discordConfig, slackConfig, telegramConfig] = await Promise.all([
+    const [discordConfig, slackConfig, telegramConfig, dingtalkConfig] = await Promise.all([
       enabledSet.has('discord') ? getMessengerDiscordConfig() : Promise.resolve(null),
       enabledSet.has('slack') ? getMessengerSlackConfig() : Promise.resolve(null),
       enabledSet.has('telegram') ? getMessengerTelegramConfig() : Promise.resolve(null),
+      enabledSet.has('dingtalk') ? getMessengerDingTalkConfig() : Promise.resolve(null),
     ]);
 
     return definitions.map((def) => ({
@@ -221,11 +225,25 @@ export const messengerRouter = router({
           ? slackConfig?.appId
           : def.id === 'discord'
             ? discordConfig?.applicationId
-            : undefined,
+            : def.id === 'dingtalk'
+              ? dingtalkConfig?.clientId
+              : undefined,
       // Telegram-only: deep-link target (`https://t.me/<botUsername>`) — no
       // direct equivalent on Slack/Discord, both of which use App/Application
-      // IDs to deep-link to the bot.
-      botUsername: def.id === 'telegram' ? telegramConfig?.botUsername : undefined,
+      // IDs to deep-link to the bot. DingTalk has no public bot username.
+      botUsername:
+        def.id === 'telegram'
+          ? telegramConfig?.botUsername
+          : def.id === 'dingtalk'
+            ? null
+            : undefined,
+      capabilities:
+        def.id === 'dingtalk'
+          ? {
+              chat: dingtalkConfig?.chatEnabled ?? false,
+              push: dingtalkConfig?.pushEnabled ?? false,
+            }
+          : { chat: true, push: false },
       enabled: true,
       // Legacy field — older callers index by `.platform` rather than `.id`.
       // Keep until those callers migrate; safe alias of the registry id.
@@ -650,6 +668,10 @@ const notifyLinkSuccess = async (
       }
       case 'discord': {
         await new MessengerDiscordBinder().notifyLinkSuccess(params);
+        break;
+      }
+      case 'dingtalk': {
+        await new MessengerDingTalkBinder().notifyLinkSuccess(params);
         break;
       }
     }

@@ -153,11 +153,31 @@ interface BridgeHandlerOpts {
   client?: PlatformClient;
   displayToolCalls?: boolean;
   /**
+   * Prepended to the first assistant reply. Messenger DingTalk sets this
+   * after an idle-triggered new topic (`已开始新会话`).
+   */
+  firstReplyPrefix?: string;
+  /**
    * Locale for system-generated reply text (errors, stopped notice, etc.).
    * Picked per platform — see `getBotReplyLocale`. When omitted we fall back
    * to inferring from `botContext.platform`, then to English.
    */
   replyLocale?: BotReplyLocale;
+  /**
+   * When a topic is rotated because it went idle, this is forwarded to the
+   * subsequent `handleMention` as `firstReplyPrefix`.
+   */
+  topicStaleReplyPrefix?: string;
+  /**
+   * Override the default 4h idle-topic threshold. `Infinity` disables
+   * idle auto-new-topic. Unset keeps 4 hours. Messenger DingTalk passes the
+   * connector `idleNewTopicHours` policy here.
+   */
+  topicStaleThresholdMs?: number;
+  /**
+   * Prepended when auto-titling a new topic (DingTalk: `钉钉 · `).
+   */
+  topicTitlePrefix?: string;
 }
 
 /** Snapshot of the emoji currently applied to a given user message. */
@@ -505,7 +525,9 @@ export class AgentBridgeService {
           charLimit,
           client,
           displayToolCalls,
+          firstReplyPrefix: opts.firstReplyPrefix,
           replyLocale,
+          topicTitlePrefix: opts.topicTitlePrefix,
           trigger: RequestTrigger.Bot,
         });
         queueHandoffSucceeded = queueMode;
@@ -574,8 +596,9 @@ export class AgentBridgeService {
       return;
     }
 
-    // Check if the topic is stale (no activity for 4+ hours).
-    // If so, clear the cached topicId and start a fresh conversation.
+    // Check if the topic is stale. Default is 4 hours; messenger platforms
+    // can override via `topicStaleThresholdMs` (DingTalk uses the connector
+    // idle policy). `Infinity` disables idle rotation.
     // Wrapped in try/catch so transient DB errors fall through to the
     // existing topicId rather than rejecting before the guarded section.
     try {
@@ -583,14 +606,18 @@ export class AgentBridgeService {
       const existingTopic = await topicModel.findById(topicId);
       if (existingTopic) {
         const elapsed = Date.now() - new Date(existingTopic.updatedAt).getTime();
-        if (elapsed > TOPIC_STALE_THRESHOLD) {
+        const threshold = opts.topicStaleThresholdMs ?? TOPIC_STALE_THRESHOLD;
+        if (elapsed > threshold) {
           log(
             'handleSubscribedMessage: topic=%s is stale (%.1fh since last activity), creating new topic',
             topicId,
             elapsed / (60 * 60 * 1000),
           );
           await thread.setState({ ...threadState, topicId: undefined });
-          return this.handleMention(thread, message, opts);
+          return this.handleMention(thread, message, {
+            ...opts,
+            firstReplyPrefix: opts.topicStaleReplyPrefix,
+          });
         }
       }
     } catch (error) {
@@ -636,8 +663,10 @@ export class AgentBridgeService {
           charLimit,
           client: opts.client,
           displayToolCalls,
+          firstReplyPrefix: opts.firstReplyPrefix,
           replyLocale,
           topicId,
+          topicTitlePrefix: opts.topicTitlePrefix,
           trigger: RequestTrigger.Bot,
         });
         queueHandoffSucceeded = queueMode;
@@ -693,8 +722,10 @@ export class AgentBridgeService {
       charLimit?: number;
       client?: PlatformClient;
       displayToolCalls?: boolean;
+      firstReplyPrefix?: string;
       replyLocale: BotReplyLocale;
       topicId?: string;
+      topicTitlePrefix?: string;
       trigger?: string;
     },
   ): Promise<{ reply: string; topicId: string }> {
@@ -703,13 +734,13 @@ export class AgentBridgeService {
       ? platformRegistry.getPlatform(opts.botContext.platform)
       : undefined;
     const botPlatformContext:
-      | { platformName: string; supportsMarkdown: boolean; warnings?: string[] }
-      | undefined = platformDef
-      ? {
-          platformName: platformDef.name,
-          supportsMarkdown: platformDef.supportsMarkdown !== false,
-        }
-      : undefined;
+      { platformName: string; supportsMarkdown: boolean; warnings?: string[] } | undefined =
+      platformDef
+        ? {
+            platformName: platformDef.name,
+            supportsMarkdown: platformDef.supportsMarkdown !== false,
+          }
+        : undefined;
     // Whether we can edit a previously-posted message in place. When false
     // (QQ/WeChat today), the chat-adapter falls editMessage back to postMessage,
     // so each step/completion edit surfaces as a NEW message — leaving the
@@ -726,8 +757,10 @@ export class AgentBridgeService {
       charLimit,
       client,
       displayToolCalls,
+      firstReplyPrefix,
       replyLocale,
       topicId,
+      topicTitlePrefix,
       trigger,
     } = opts;
 
@@ -841,6 +874,7 @@ export class AgentBridgeService {
       // the synthetic applicationId shape — to decide which credential source
       // to read from.
       messengerInstallationKey: botContext?.messengerInstallationKey,
+      firstReplyPrefix,
       platformThreadId: botContext?.platformThreadId,
       progressMessageId: progressMessage?.id,
       // Pass thread name only if it's user-set.
@@ -850,6 +884,7 @@ export class AgentBridgeService {
         channelContext?.thread?.name && /^Thread \d/.test(channelContext.thread.name)
           ? undefined
           : channelContext?.thread?.name,
+      topicTitlePrefix,
       // Forward the lobe userId so messenger callbacks can rebuild the same
       // per-user gateway connectionId (`messenger:<platform>[:<tenant>]:user-<userId>`)
       // that we used to start typing here. Without it, `BotCallbackService`
@@ -899,11 +934,13 @@ export class AgentBridgeService {
       client,
       displayToolCalls,
       files,
+      firstReplyPrefix,
       gatewayConnectionId,
       progressMessage,
       prompt,
       replyLocale,
       topicId,
+      topicTitlePrefix,
       trigger,
       userMessage,
       webhookBody,
@@ -1073,11 +1110,13 @@ export class AgentBridgeService {
       client?: PlatformClient;
       displayToolCalls?: boolean;
       files?: any;
+      firstReplyPrefix?: string;
       gatewayConnectionId?: string;
       progressMessage?: SentMessage;
       prompt: string;
       replyLocale: BotReplyLocale;
       topicId?: string;
+      topicTitlePrefix?: string;
       trigger?: string;
       userMessage?: Message;
       webhookBody: Record<string, unknown>;
@@ -1093,10 +1132,12 @@ export class AgentBridgeService {
       client,
       displayToolCalls,
       files,
+      firstReplyPrefix,
       gatewayConnectionId,
       prompt,
       replyLocale,
       topicId,
+      topicTitlePrefix,
       trigger,
       userMessage,
       webhookBody,
@@ -1266,7 +1307,9 @@ export class AgentBridgeService {
                 }
 
                 try {
-                  const lastAssistantContent = event.lastAssistantContent;
+                  const lastAssistantContent = firstReplyPrefix
+                    ? `${firstReplyPrefix}\n\n${event.lastAssistantContent ?? ''}`.trim()
+                    : event.lastAssistantContent;
                   // Convert hook-event attachments (JSON-safe) to chat-sdk
                   // Attachment shape. Only the *last* chunk carries
                   // attachments so a multi-chunk reply doesn't repeat the
@@ -1349,11 +1392,14 @@ export class AgentBridgeService {
                             this.userId,
                             this.workspaceId,
                           );
-                          const title = await systemAgent.generateTopicTitle({
+                          const generated = await systemAgent.generateTopicTitle({
                             lastAssistantContent,
                             userPrompt: prompt,
                           });
-                          if (!title) return;
+                          if (!generated) return;
+                          const title = topicTitlePrefix
+                            ? `${topicTitlePrefix}${generated}`
+                            : generated;
 
                           await topicModel.update(resolvedTopicId, { title });
                         })
@@ -1613,8 +1659,7 @@ export class AgentBridgeService {
       const userModel = new UserModel(this.db, this.userId);
       const settings = await userModel.getUserSettings();
       this.timezone = (settings?.general as Record<string, unknown>)?.timezone as
-        | string
-        | undefined;
+        string | undefined;
     } catch {
       // Fall back to server time if settings can't be loaded
     }

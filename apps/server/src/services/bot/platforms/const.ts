@@ -22,6 +22,7 @@ export const displayToolCallsField: FieldSchema = {
  * Platforms not listed render no tooltip — only the generic description.
  */
 const USER_ID_TOOLTIP_BY_PLATFORM: Record<string, string> = {
+  dingtalk: 'channel.userIdHint.dingtalk',
   discord: 'channel.userIdHint.discord',
   // Feishu and Lark share `sharedSchema`, which always passes 'feishu' — the
   // tooltip copy mentions both products so it reads naturally for either.

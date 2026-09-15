@@ -80,8 +80,8 @@ describe('MessengerPlatformRegistry', () => {
 });
 
 describe('messengerPlatformRegistry singleton', () => {
-  it('registers slack, telegram, and discord on import', () => {
+  it('registers slack, telegram, discord, and dingtalk on import', () => {
     const ids = messengerPlatformRegistry.listPlatforms().map((d) => d.id);
-    expect(ids).toEqual(expect.arrayContaining(['slack', 'telegram', 'discord']));
+    expect(ids).toEqual(expect.arrayContaining(['slack', 'telegram', 'discord', 'dingtalk']));
   });
 });

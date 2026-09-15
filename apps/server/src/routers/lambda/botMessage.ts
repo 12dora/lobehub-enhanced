@@ -1,5 +1,6 @@
 import type { MessagePlatformType } from '@lobechat/builtin-tool-message';
 import type { MessageRuntimeService } from '@lobechat/builtin-tool-message/executionRuntime';
+import { DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
 import { LarkApiClient } from '@lobechat/chat-adapter-feishu';
 import { QQApiClient } from '@lobechat/chat-adapter-qq';
 import { WechatApiClient } from '@lobechat/chat-adapter-wechat';
@@ -22,6 +23,7 @@ import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { mergeWithDefaults, platformRegistry } from '@/server/services/bot/platforms';
+import { DingTalkMessageService } from '@/server/services/bot/platforms/dingtalk/service';
 import { DiscordApi } from '@/server/services/bot/platforms/discord/api';
 import { DiscordMessageService } from '@/server/services/bot/platforms/discord/service';
 import { FeishuMessageService } from '@/server/services/bot/platforms/feishu/service';
@@ -116,6 +118,12 @@ const createServiceForCredentials = (
         applicationId,
       );
     }
+    case 'dingtalk': {
+      return new DingTalkMessageService(
+        new DingTalkApiClient(applicationId, credentials.clientSecret),
+        String(credentials.robotCode || applicationId),
+      );
+    }
     default: {
       throw new TRPCError({
         code: 'BAD_REQUEST',
@@ -126,11 +134,10 @@ const createServiceForCredentials = (
 };
 
 const createServiceForBot = (provider: DecryptedBotProvider): MessageRuntimeService =>
-  createServiceForCredentials(
-    provider.platform,
-    provider.applicationId,
-    provider.credentials as Record<string, any>,
-  );
+  createServiceForCredentials(provider.platform, provider.applicationId, {
+    ...(provider.credentials as Record<string, any>),
+    robotCode: (provider.settings as Record<string, unknown> | undefined)?.robotCode,
+  });
 
 const resolveBot = async (
   model: AgentBotProviderModel,

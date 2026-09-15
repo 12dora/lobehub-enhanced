@@ -43,7 +43,7 @@ export const getMessengerConfig = () => {
 
 export const messengerEnv = getMessengerConfig();
 
-export type MessengerPlatform = 'telegram' | 'slack' | 'discord';
+export type MessengerPlatform = 'telegram' | 'slack' | 'discord' | 'dingtalk';
 
 export interface MessengerTelegramConfig {
   botToken: string;
@@ -70,6 +70,54 @@ export interface MessengerDiscordConfig {
   clientSecret?: string;
   publicKey: string;
 }
+
+/**
+ * DingTalk System Bot (Stream mode). `null` from the getter means the
+ * `system_bot_providers` row is missing, disabled, or incomplete.
+ *
+ * Settings parser is a minimal duplicate of
+ * `apps/server/src/enterprise/contracts/adminImConnectors.ts`
+ * (`dingTalkConnectorSettingsSchema`) — `packages/app-config` cannot import
+ * `apps/server`.
+ */
+export interface MessengerDingTalkConfig {
+  aiCardTemplateId: string | null;
+  chatEnabled: boolean;
+  clientId: string;
+  clientSecret: string;
+  idleNewTopicEnabled: boolean;
+  idleNewTopicHours: number;
+  pushEnabled: boolean;
+  robotCode: string;
+  selectCardTemplateId: string | null;
+}
+
+const IM_CONNECTOR_IDLE_HOURS_MIN = 1;
+const IM_CONNECTOR_IDLE_HOURS_MAX = 720;
+const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
+
+const dingTalkConnectorSettingsSchema = z
+  .object({
+    aiCardTemplateId: z.string().trim().max(200).nullable().optional(),
+    chatEnabled: z.boolean().optional(),
+    idleNewTopicEnabled: z.boolean().optional(),
+    idleNewTopicHours: z
+      .number()
+      .int()
+      .min(IM_CONNECTOR_IDLE_HOURS_MIN)
+      .max(IM_CONNECTOR_IDLE_HOURS_MAX)
+      .optional(),
+    pushEnabled: z.boolean().optional(),
+    robotCode: z.string().trim().min(1).max(200),
+    selectCardTemplateId: z.string().trim().max(200).nullable().optional(),
+  })
+  .passthrough();
+
+const emptyToNull = (value: string | null | undefined): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
 
 // ---------------------------------------------------------------------------
 // In-process cache.
@@ -160,6 +208,31 @@ export const getMessengerDiscordConfig = async (): Promise<MessengerDiscordConfi
   });
 };
 
+export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkConfig | null> => {
+  return fetchAndCache<MessengerDingTalkConfig>('dingtalk', (row) => {
+    const clientId = row.applicationId?.trim();
+    const c = row.credentials as { clientSecret?: unknown };
+    const clientSecret = typeof c.clientSecret === 'string' ? c.clientSecret.trim() : '';
+    if (!clientId || !clientSecret) return null;
+
+    const parsed = dingTalkConnectorSettingsSchema.safeParse(row.settings ?? {});
+    if (!parsed.success) return null;
+
+    const settings = parsed.data;
+    return {
+      aiCardTemplateId: emptyToNull(settings.aiCardTemplateId ?? null),
+      chatEnabled: settings.chatEnabled ?? true,
+      clientId,
+      clientSecret,
+      idleNewTopicEnabled: settings.idleNewTopicEnabled ?? true,
+      idleNewTopicHours: settings.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,
+      pushEnabled: settings.pushEnabled ?? true,
+      robotCode: settings.robotCode,
+      selectCardTemplateId: emptyToNull(settings.selectCardTemplateId ?? null),
+    };
+  });
+};
+
 export const isMessengerPlatformEnabled = async (platform: MessengerPlatform): Promise<boolean> => {
   switch (platform) {
     case 'telegram': {
@@ -171,6 +244,9 @@ export const isMessengerPlatformEnabled = async (platform: MessengerPlatform): P
     case 'discord': {
       return !!(await getMessengerDiscordConfig());
     }
+    case 'dingtalk': {
+      return !!(await getMessengerDingTalkConfig());
+    }
     default: {
       return false;
     }
@@ -178,7 +254,7 @@ export const isMessengerPlatformEnabled = async (platform: MessengerPlatform): P
 };
 
 export const getEnabledMessengerPlatforms = async (): Promise<MessengerPlatform[]> => {
-  const platforms = ['telegram', 'slack', 'discord'] as const;
+  const platforms = ['telegram', 'slack', 'discord', 'dingtalk'] as const;
   const checks = await Promise.all(
     platforms.map(async (p) => ((await isMessengerPlatformEnabled(p)) ? p : null)),
   );

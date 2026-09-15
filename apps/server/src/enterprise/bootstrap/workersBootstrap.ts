@@ -37,6 +37,22 @@ const startGatewayService = async (): Promise<void> => {
   });
 };
 
+const startDingTalkStreamWorker = async (): Promise<void> => {
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (
+    !process.env.DATABASE_URL ||
+    process.env.VERCEL_ENV ||
+    (isDev && process.env.ENABLE_BOT_IN_DEV !== '1')
+  ) {
+    return;
+  }
+  const { startDingTalkStreamWorker: start } =
+    await import('../services/imConnectors/dingtalkStreamWorker');
+  start().catch((error) => {
+    console.error('[Instrumentation] Failed to auto-start DingTalk stream worker:', error);
+  });
+};
+
 /**
  * Module-owned names MUST equal `PLATFORM_MODULES[*].workers` entries.
  * Specs without `moduleId` are core and always start (subject to their own
@@ -251,6 +267,13 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     name: 'gatewayService',
     start: startGatewayService,
   },
+  {
+    // Core-adjacent: same runtime guards as gatewayService (DATABASE_URL,
+    // not Vercel, production or ENABLE_BOT_IN_DEV). No moduleId so we don't
+    // have to extend PLATFORM_MODULES.bots.workers in this unit.
+    name: 'dingtalkStreamWorker',
+    start: startDingTalkStreamWorker,
+  },
 ];
 
 let started = false;
@@ -261,14 +284,26 @@ export const resetEnterpriseWorkersBootstrapForTest = (): void => {
 };
 
 /**
- * Drain browser-session contexts, jars, and the idle sweeper. Does not
- * `process.exit` — Next/Node finish the shutdown themselves.
+ * Drain browser-session contexts, jars, the idle sweeper, and the in-process
+ * task-scheduling interval. Does not `process.exit` — Next/Node finish the
+ * shutdown themselves.
  */
 export const stopEnterpriseWorkers = async (): Promise<void> => {
   const { disposeAllBrowserSessions, stopBrowserSessionIdleSweep } =
     await import('../services/browserSession/contextRegistry');
   stopBrowserSessionIdleSweep();
   await disposeAllBrowserSessions();
+  const { stopDingTalkStreamWorker } =
+    await import('../services/imConnectors/dingtalkStreamWorker');
+  await stopDingTalkStreamWorker();
+  try {
+    const { stopTaskSchedulingWorker } = await import('../services/taskScheduling/runtime');
+    stopTaskSchedulingWorker();
+  } catch (error) {
+    console.error('[modules] failed to stop taskSchedulingWorker', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
 };
 
 /**

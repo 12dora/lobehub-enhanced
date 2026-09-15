@@ -65,6 +65,8 @@ export interface BotCallbackBody {
   errorMessage?: string;
   errorType?: string;
   executionTimeMs?: number;
+  /** Prepended to the first assistant reply (DingTalk idle new-topic notice). */
+  firstReplyPrefix?: string;
   /** Hook ID from HookDispatcher (e.g. 'bot-step-progress', 'bot-completion') */
   hookId?: string;
   /** Hook type from HookDispatcher (e.g. 'afterStep', 'onComplete') */
@@ -94,6 +96,7 @@ export interface BotCallbackBody {
   toolsCalling?: any;
   toolsResult?: any;
   topicId?: string;
+  topicTitlePrefix?: string;
   totalCost?: number;
   totalInputTokens?: number;
   totalOutputTokens?: number;
@@ -388,13 +391,16 @@ export class BotCallbackService {
   ): Promise<void> {
     const {
       reason,
-      lastAssistantContent,
+      lastAssistantContent: rawAssistantContent,
       errorAttribution,
       errorMessage,
       errorType,
       operationId,
       attachments,
     } = body;
+    const lastAssistantContent = body.firstReplyPrefix
+      ? `${body.firstReplyPrefix}\n\n${rawAssistantContent ?? ''}`.trim()
+      : rawAssistantContent;
 
     if (reason === 'error') {
       log(
@@ -659,7 +665,14 @@ export class BotCallbackService {
         });
         if (!title) return;
 
-        await topicModel.update(topicId, { title });
+        const platform = body.platformThreadId?.split(':')[0];
+        const prefixed = body.topicTitlePrefix
+          ? `${body.topicTitlePrefix}${title}`
+          : platform === 'dingtalk'
+            ? `钉钉 · ${title}`
+            : title;
+
+        await topicModel.update(topicId, { title: prefixed });
 
         if (messenger.updateThreadName) {
           messenger.updateThreadName(title).catch((error) => {

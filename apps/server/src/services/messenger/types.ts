@@ -33,6 +33,15 @@ export interface AgentPickerEntry {
  */
 export type MessengerPickerAction = 'switch' | 'scope';
 
+declare module '@lobechat/types' {
+  interface ChatTopicMetadata {
+    messenger?: {
+      conversationType: 'dm' | 'group';
+      platform: string;
+    };
+  }
+}
+
 /** Raw inbound platform update used for actions chat-sdk doesn't surface. */
 export interface InboundCallbackAction {
   /** Platform-specific raw id needed to acknowledge the action. */
