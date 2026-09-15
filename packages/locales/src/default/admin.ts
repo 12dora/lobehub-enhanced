@@ -2290,7 +2290,8 @@ export default {
   'system.values.status.unknown': 'Unknown',
   'system.values.status.unreported': 'Unreported',
   'systemGeneral.title': 'General settings',
-  'systemGeneral.description': 'Infrastructure and network proxy settings for this deployment.',
+  'systemGeneral.description':
+    'Infrastructure, IM connectors, and network proxy settings for this deployment.',
   'systemGeneral.tabs.infrastructure': 'Infrastructure',
   'systemGeneral.tabs.imConnectors': 'IM connectors',
   'systemGeneral.tabs.networkProxy': 'Network proxy',

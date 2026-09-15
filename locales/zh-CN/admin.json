@@ -3114,7 +3114,7 @@
   "systemGeneral.conflict.description": "另一位管理员已保存此配置，请重新加载后再修改。",
   "systemGeneral.conflict.reload": "重新加载",
   "systemGeneral.conflict.title": "配置已被他人修改",
-  "systemGeneral.description": "本部署的基础设施与网络代理设置。",
+  "systemGeneral.description": "本部署的基础设施、IM 连接器与网络代理设置。",
   "systemGeneral.documentRender.actions.cancel": "取消",
   "systemGeneral.documentRender.actions.cancelDone": "任务已取消",
   "systemGeneral.documentRender.actions.cancelFailed": "无法取消该任务",

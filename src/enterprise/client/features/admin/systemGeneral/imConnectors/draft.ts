@@ -67,12 +67,18 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
   selectCardTemplateId: view.selectCardTemplateId ?? '',
 });
 
-/** Content identity of a draft — what 未保存 is decided from. */
+/**
+ * Content identity of a draft — what 未保存 is decided from.
+ *
+ * The stored secret's fingerprint is part of it: it is the only identity the server gives a
+ * credential, so a clean card has to adopt a rotated one when the list is re-read.
+ */
 export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string =>
   JSON.stringify([
     draft.aiCardTemplateId.trim(),
     draft.chatEnabled,
     draft.clientId.trim(),
+    draft.clientSecret.fingerprint,
     draft.clientSecret.stored,
     draft.clientSecret.value,
     draft.enabled,
@@ -85,11 +91,20 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
 
 /**
  * State of a draft right after a successful save: the plaintext is dropped from memory and the
- * secret now reads as stored, so the next save sends `keep` instead of re-sending what was typed.
+ * secret's identity is taken from the row the server just wrote, so the next save sends `keep` and
+ * the fingerprint note names the credential that is actually stored — a rotation shows its new
+ * fingerprint immediately rather than waiting on (and being ignored by) the list revalidation.
  */
-export const settleDingTalkDraft = (draft: DingTalkConnectorDraft): DingTalkConnectorDraft => ({
+export const settleDingTalkDraft = (
+  draft: DingTalkConnectorDraft,
+  saved: AdminImConnectorView,
+): DingTalkConnectorDraft => ({
   ...draft,
-  clientSecret: { ...draft.clientSecret, stored: true, value: '' },
+  clientSecret: {
+    fingerprint: saved.clientSecretFingerprint,
+    stored: saved.hasClientSecret,
+    value: '',
+  },
 });
 
 /**

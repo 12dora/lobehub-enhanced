@@ -285,6 +285,13 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
                     {t('systemGeneral.test.latency', { ms: testResult.latencyMs })}
                   </Text>
                 )}
+                {/* The mapped code says what to do about it; the provider's own words say which
+                    of the several things behind that code actually happened. */}
+                {testResult.errorMessage ? (
+                  <Text className={styles.code} type="secondary">
+                    {testResult.errorMessage}
+                  </Text>
+                ) : null}
               </Flexbox>
             ) : null}
 

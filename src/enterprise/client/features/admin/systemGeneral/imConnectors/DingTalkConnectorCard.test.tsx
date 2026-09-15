@@ -240,6 +240,74 @@ describe('DingTalkConnectorCard', () => {
     });
   });
 
+  it('shows the fingerprint the save returned, not the one it replaced', async () => {
+    const rotated = view({ clientSecretFingerprint: 'sha256:deadbeef' });
+    const stub = service({ upsert: vi.fn().mockResolvedValue(rotated) });
+    const { rerender } = render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+    fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.clientSecret'), {
+      target: { value: 'next-secret' },
+    });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    // The note is the only way to tell WHICH credential is stored, so it has to follow the write
+    // rather than wait for a list read that carries no change the card would notice.
+    await waitFor(() =>
+      expect(
+        screen.getByText('systemGeneral.imConnectors.secret.stored:sha256:deadbeef'),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText('systemGeneral.imConnectors.secret.stored:a1b2c3')).toBeNull();
+
+    // …and the list revalidation that follows leaves it alone.
+    rerender(<DingTalkConnectorCard canOperate service={stub} view={rotated} />);
+    expect(
+      screen.getByText('systemGeneral.imConnectors.secret.stored:sha256:deadbeef'),
+    ).toBeTruthy();
+  });
+
+  it('adopts a credential rotated from another session while the card is clean', () => {
+    const { rerender } = render(<DingTalkConnectorCard canOperate view={view()} />);
+
+    rerender(
+      <DingTalkConnectorCard canOperate view={view({ clientSecretFingerprint: 'sha256:other' })} />,
+    );
+
+    expect(screen.getByText('systemGeneral.imConnectors.secret.stored:sha256:other')).toBeTruthy();
+  });
+
+  it('writes the row once however often 保存 is pressed', async () => {
+    const stub = service();
+    render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+    fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the save toast when only the follow-up refresh fails', async () => {
+    const stub = service();
+    render(
+      <DingTalkConnectorCard
+        canOperate
+        service={stub}
+        view={view()}
+        onSaved={() => Promise.reject(new Error('refresh failed'))}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() =>
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('systemGeneral.imConnectors.saved'),
+    );
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
   it('refuses to write a draft the contract would reject', async () => {
     const stub = service();
     render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
@@ -314,7 +382,7 @@ describe('DingTalkConnectorCard', () => {
     ).toBeTruthy();
   });
 
-  it('maps a failed probe onto the error copy for its code', async () => {
+  it('maps a failed probe onto the error copy for its code, and keeps the provider’s words', async () => {
     const stub = service({
       test: vi.fn().mockResolvedValue({
         errorCode: 'auth_failed',
@@ -331,6 +399,7 @@ describe('DingTalkConnectorCard', () => {
     await waitFor(() =>
       expect(screen.getByText('systemGeneral.imConnectors.test.errors.auth_failed')).toBeTruthy(),
     );
+    expect(screen.getByText('invalid appSecret')).toBeTruthy();
   });
 
   it('falls back to the unknown failure copy for a code it does not know', async () => {

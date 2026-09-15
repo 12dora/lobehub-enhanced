@@ -150,14 +150,20 @@ describe('DingTalk connector draft', () => {
     expect(input.clientSecret).toBe('typed-secret');
   });
 
-  it('drops the plaintext and marks the secret stored after a save', () => {
-    const seed = toDingTalkDraft(view({ hasClientSecret: false, clientSecretFingerprint: null }));
-    const settled = settleDingTalkDraft({
-      ...seed,
-      clientSecret: { ...seed.clientSecret, value: 'typed-secret' },
-    });
+  it('drops the plaintext and takes the saved row’s secret identity', () => {
+    const seed = toDingTalkDraft(view({ clientSecretFingerprint: null, hasClientSecret: false }));
+    const settled = settleDingTalkDraft(
+      { ...seed, clientSecret: { ...seed.clientSecret, value: 'typed-secret' } },
+      view({ clientSecretFingerprint: 'sha256:deadbeef', hasClientSecret: true }),
+    );
 
-    expect(settled.clientSecret).toEqual({ fingerprint: null, stored: true, value: '' });
+    // The fingerprint is the only identity the server gives a credential: after a rotation it has
+    // to name the secret that is now stored, not the one that was replaced.
+    expect(settled.clientSecret).toEqual({
+      fingerprint: 'sha256:deadbeef',
+      stored: true,
+      value: '',
+    });
   });
 
   it('fingerprints the typed secret so an unsaved credential counts as dirty', () => {
@@ -166,5 +172,12 @@ describe('DingTalk connector draft', () => {
 
     expect(fingerprintDingTalkDraft(typed)).not.toBe(fingerprintDingTalkDraft(seed));
     expect(fingerprintDingTalkDraft({ ...seed })).toBe(fingerprintDingTalkDraft(seed));
+  });
+
+  it('fingerprints the stored credential so a rotation elsewhere is adopted', () => {
+    const seed = toDingTalkDraft(view());
+    const rotated = toDingTalkDraft(view({ clientSecretFingerprint: 'sha256:deadbeef' }));
+
+    expect(fingerprintDingTalkDraft(rotated)).not.toBe(fingerprintDingTalkDraft(seed));
   });
 });

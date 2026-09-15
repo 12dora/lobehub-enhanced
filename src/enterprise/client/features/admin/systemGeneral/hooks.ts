@@ -27,6 +27,9 @@ import {
 /** Queue depth and sidecar health move on their own; 15s is the same cadence 网络代理 polls at. */
 const DOCUMENT_RENDER_STATUS_REFRESH_MS = 15_000;
 
+/** The stream worker republishes its heartbeat every 30s (TTL 120s); 20s reads it without racing. */
+const IM_CONNECTOR_STATUS_REFRESH_MS = 20_000;
+
 export const useAdminBrowserProfile = (enabled: boolean, service: AdminBrowserProfileService) =>
   useClientDataSWR(buildAdminBrowserProfileKey(enabled), () => service.getBrowserProfile(), {
     keepPreviousData: true,
@@ -91,10 +94,16 @@ export const useAdminDocumentRenderStatus = (
 /**
  * IM 连接器 list. One entry per supported platform, configured or not, so the tab can render the
  * cards without a second "does a row exist" request.
+ *
+ * Polled, unlike the infrastructure settings it sits next to: the connection state is a Redis
+ * heartbeat the stream worker refreshes every 30s, and watching it come up after 启用 is the whole
+ * point of the status pill. `refreshWhenHidden` stays off so a backgrounded admin tab goes quiet.
  */
 export const useAdminImConnectors = (enabled: boolean, service: AdminImConnectorsReadService) =>
   useClientDataSWR(buildAdminImConnectorsKey(enabled), () => service.list(), {
     keepPreviousData: true,
+    refreshInterval: IM_CONNECTOR_STATUS_REFRESH_MS,
+    refreshWhenHidden: false,
     revalidateOnFocus: false,
   });
 

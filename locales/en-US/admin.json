@@ -3114,7 +3114,7 @@
   "systemGeneral.conflict.description": "Another administrator saved this configuration. Reload, then apply your change again.",
   "systemGeneral.conflict.reload": "Reload",
   "systemGeneral.conflict.title": "Configuration changed elsewhere",
-  "systemGeneral.description": "Infrastructure and network proxy settings for this deployment.",
+  "systemGeneral.description": "Infrastructure, IM connectors, and network proxy settings for this deployment.",
   "systemGeneral.documentRender.actions.cancel": "Cancel",
   "systemGeneral.documentRender.actions.cancelDone": "The job was cancelled",
   "systemGeneral.documentRender.actions.cancelFailed": "Could not cancel this job",

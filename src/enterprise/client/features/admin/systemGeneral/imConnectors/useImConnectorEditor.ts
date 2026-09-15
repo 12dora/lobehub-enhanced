@@ -79,6 +79,8 @@ export const useImConnectorEditor = ({
   const [baselineFp, setBaselineFp] = useState(seedFp);
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
+  // State lags a click; the ref is what keeps a double-click from writing the row twice.
+  const savingRef = useRef(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AdminImConnectorTestOutput | undefined>();
 
@@ -130,31 +132,42 @@ export const useImConnectorEditor = ({
   }, []);
 
   const save = useCallback(async () => {
-    if (!canOperate || saving) return;
+    if (!canOperate || savingRef.current) return;
     setShowErrors(true);
     if (Object.keys(validationErrors).length > 0) {
       toast.error(t('systemGeneral.edit.invalidDraft'));
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
-    await runAdminMutation({
-      authMethod,
-      mapErrorKey: () => 'systemGeneral.edit.saveFailed',
-      run: async () => {
-        const saved = await service.upsert(toDingTalkUpsertInput(draft));
-        // The plaintext leaves memory the moment the server has it; the refreshed list then owns
-        // the fingerprint, the stats and the live status.
-        const settled = settleDingTalkDraft(draft);
-        setDraft(settled);
-        setBaselineFp(fingerprintDingTalkDraft(settled));
-        setShowErrors(false);
-        toast.success(t('systemGeneral.imConnectors.saved'));
-        await onSaved?.(saved);
-      },
-    });
-    setSaving(false);
-  }, [authMethod, canOperate, draft, onSaved, saving, service, t, validationErrors]);
+    try {
+      await runAdminMutation({
+        authMethod,
+        mapErrorKey: () => 'systemGeneral.edit.saveFailed',
+        run: async () => {
+          const saved = await service.upsert(toDingTalkUpsertInput(draft));
+          // The plaintext leaves memory the moment the server has it, and the secret's identity
+          // comes from the row that was just written rather than from the next list read.
+          const settled = settleDingTalkDraft(draft, saved);
+          setDraft(settled);
+          setBaselineFp(fingerprintDingTalkDraft(settled));
+          setShowErrors(false);
+          // The write has committed. A refresh that fails afterwards is a stale reading, not a
+          // failed save, so it must not reach the mutation's error toast.
+          try {
+            await onSaved?.(saved);
+          } catch {
+            /* keep the saved state; the next revalidation will catch the card up */
+          }
+          toast.success(t('systemGeneral.imConnectors.saved'));
+        },
+      });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [authMethod, canOperate, draft, onSaved, service, t, validationErrors]);
 
   /**
    * The probe runs against the draft, not the saved row: credentials are verified before they are
