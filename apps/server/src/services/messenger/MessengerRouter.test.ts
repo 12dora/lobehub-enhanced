@@ -1,7 +1,18 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getMessengerDingTalkConfig } from '@/config/messenger';
+import { AgentBridgeService } from '@/server/services/bot/AgentBridgeService';
+
 import { MessengerRouter } from './MessengerRouter';
+import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
+import { sendDingTalkChoiceList } from './platforms/dingtalk/cards';
+import {
+  clearDingTalkPendingQuestion,
+  loadDingTalkPendingQuestion,
+  resolveQuestionAnswer,
+} from './platforms/dingtalk/questions';
+import { pushDingTalkQueuedMessage } from './platforms/dingtalk/queue';
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn().mockResolvedValue({}),
@@ -79,6 +90,7 @@ const mockChatBot = {
   onSubscribedMessage: vi.fn(),
   openDM: mockOpenDM,
   webhooks: {
+    dingtalk: mockWebhookHandler,
     slack: mockWebhookHandler,
     telegram: mockWebhookHandler,
   },
@@ -106,7 +118,7 @@ vi.mock('@/server/services/bot/AgentBridgeService', () => ({
   AgentBridgeService: class {
     static clearActiveThread = vi.fn();
     static getActiveOperationId = vi.fn();
-    static isThreadActive = vi.fn();
+    static isThreadActive = vi.fn().mockReturnValue(false);
     static requestStop = vi.fn();
     constructor(...args: unknown[]) {
       mockAgentBridgeConstructor(...args);
@@ -118,9 +130,11 @@ vi.mock('@/server/services/bot/AgentBridgeService', () => ({
 
 const mockFindLink = vi.fn();
 const mockSetActiveScope = vi.fn();
+const mockSetActiveAgentById = vi.fn();
 vi.mock('@/database/models/messengerAccountLink', () => ({
   MessengerAccountLinkModel: {
     findByPlatformUser: (...args: any[]) => mockFindLink(...args),
+    setActiveAgentById: (...args: any[]) => mockSetActiveAgentById(...args),
     setActiveScope: (...args: any[]) => mockSetActiveScope(...args),
   },
 }));
@@ -129,9 +143,20 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
 // user's workspaces. Default to membership of `workspace-1` so the existing
 // workspace-scoped dispatch tests pass; individual tests can override.
 const mockListUserWorkspaces = vi.fn();
+const mockOperationFindById = vi.fn().mockResolvedValue(null);
+vi.mock('@/database/models/agentOperation', () => ({
+  AgentOperationModel: class {
+    findById = (...args: unknown[]) => mockOperationFindById(...args);
+  },
+}));
+const mockTopicFindById = vi.fn();
+const mockTopicQuery = vi.fn().mockResolvedValue({ items: [], total: 0 });
+const mockTopicUpdate = vi.fn();
 vi.mock('@/database/models/topic', () => ({
   TopicModel: class {
-    update = vi.fn();
+    findById = (...args: unknown[]) => mockTopicFindById(...args);
+    query = (...args: unknown[]) => mockTopicQuery(...args);
+    update = (...args: unknown[]) => mockTopicUpdate(...args);
   },
 }));
 vi.mock('@/database/models/workspace', () => ({
@@ -189,16 +214,21 @@ vi.mock('./platforms/telegram/binder', () => ({
   })),
 }));
 
+const mockDingTalkBinder = {
+  acknowledgeCallback: vi.fn(),
+  createClient: () => ({
+    createAdapter: () => ({}),
+    extractChatId: (id: string) => id,
+    extractFiles: vi.fn().mockResolvedValue([]),
+  }),
+  extractCallbackAction: vi.fn().mockResolvedValue(null),
+  handleUnlinkedMessage: vi.fn(),
+  notifyLinkSuccess: vi.fn(),
+  sendAgentPicker: vi.fn(),
+  sendDmText: vi.fn(),
+};
 vi.mock('./platforms/dingtalk/binder', () => ({
-  MessengerDingTalkBinder: vi.fn().mockImplementation(() => ({
-    createClient: () => ({
-      createAdapter: () => ({}),
-      extractChatId: (id: string) => id,
-    }),
-    handleUnlinkedMessage: vi.fn(),
-    notifyLinkSuccess: vi.fn(),
-    sendDmText: vi.fn(),
-  })),
+  MessengerDingTalkBinder: vi.fn().mockImplementation(() => mockDingTalkBinder),
 }));
 
 vi.mock('./platforms/dingtalk/autoLink', () => ({
@@ -212,6 +242,46 @@ vi.mock('./platforms/dingtalk/redis', () => ({
 
 vi.mock('./platforms/dingtalk/push', () => ({
   registerDingTalkMessengerPushProvider: vi.fn(),
+}));
+
+vi.mock('./platforms/dingtalk/queue', () => ({
+  drainDingTalkQueue: vi.fn(),
+  dropStaleDingTalkQueues: vi.fn().mockResolvedValue(0),
+  popDingTalkQueuedMessage: vi.fn(),
+  pushDingTalkQueuedMessage: vi.fn().mockResolvedValue('queued'),
+  setDingTalkQueueDrainHandler: vi.fn(),
+}));
+
+vi.mock('./platforms/dingtalk/questions', () => ({
+  clearDingTalkPendingQuestion: vi.fn(),
+  extractDingTalkQuestion: vi.fn(),
+  forwardDingTalkWaitingQuestion: vi.fn(),
+  loadDingTalkPendingQuestion: vi.fn().mockResolvedValue(null),
+  resolveQuestionAnswer: vi.fn((text: string) => text),
+  storeDingTalkPendingQuestion: vi.fn(),
+}));
+
+vi.mock('./platforms/dingtalk/cards', () => ({
+  createDingTalkReplySink: vi.fn().mockResolvedValue(undefined),
+  parseDingTalkAskerCommand: (text: string) => {
+    const match = text.trim().match(/^messenger:asker:([^:]+):([\s\S]+)$/);
+    if (match) {
+      const rest = match[2];
+      return {
+        askerStaffId: match[1],
+        command: rest.startsWith('messenger:') ? rest : `messenger:${rest}`,
+      };
+    }
+    return { command: text.trim() };
+  },
+  sendDingTalkChoiceList: vi.fn(),
+  sendDingTalkMarkdown: vi.fn(),
+  wrapDingTalkAskerCommand: (command: string) => command,
+}));
+
+vi.mock('./platforms/dingtalk/attachments', () => ({
+  isUnsupportedDingTalkMedia: vi.fn().mockReturnValue(false),
+  mapOutboundAttachments: vi.fn((items: unknown) => items ?? []),
 }));
 
 const buildSlackRequest = (body: string, headers: Record<string, string> = {}): Request =>
@@ -239,6 +309,7 @@ const slackCreds = (tenantId: string) => ({
 beforeEach(() => {
   mockVerifySignature.mockReturnValue(true);
   mockChatBot.webhooks = {
+    dingtalk: mockWebhookHandler,
     slack: mockWebhookHandler,
     telegram: mockWebhookHandler,
   };
@@ -265,6 +336,21 @@ beforeEach(() => {
   mockSlackBinder.replyPrivately.mockReset();
   mockSlackBinder.sendAgentPicker.mockReset();
   mockSlackBinder.sendDmText.mockReset();
+  mockDingTalkBinder.handleUnlinkedMessage.mockReset();
+  mockDingTalkBinder.sendAgentPicker.mockReset();
+  mockDingTalkBinder.sendDmText.mockReset();
+  mockDingTalkBinder.acknowledgeCallback.mockReset();
+  mockDingTalkBinder.extractCallbackAction.mockReset();
+  mockDingTalkBinder.extractCallbackAction.mockResolvedValue(null);
+  mockSetActiveAgentById.mockReset();
+  mockTopicQuery.mockReset();
+  mockTopicQuery.mockResolvedValue({ items: [], total: 0 });
+  mockTopicFindById.mockReset();
+  mockTopicUpdate.mockReset();
+  mockOperationFindById.mockReset();
+  mockOperationFindById.mockResolvedValue(null);
+  vi.mocked(AgentBridgeService.isThreadActive).mockReturnValue(false);
+  vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(null);
   mockRegisterBotCommands.mockReset();
   mockRegisterBotCommands.mockResolvedValue(undefined);
   mockResolveServerRuntimeBranding.mockReset();
@@ -1260,6 +1346,322 @@ describe('MessengerRouter /switch', () => {
             { id: 'workspace-1', isActive: true, title: 'Workspace 1' },
           ],
         }),
+      }),
+    );
+  });
+});
+
+const DINGTALK_CONFIG = {
+  aiCardTemplateId: null,
+  chatEnabled: true,
+  clientId: 'app',
+  clientSecret: 'secret',
+  idleNewTopicEnabled: true,
+  idleNewTopicHours: 24,
+  pushEnabled: true,
+  robotCode: 'robot',
+  selectCardTemplateId: null,
+};
+
+const loadDingTalkBot = async (): Promise<void> => {
+  vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(DINGTALK_CONFIG as any);
+  mockResolveByPayload.mockResolvedValue({
+    applicationId: 'app',
+    installationKey: 'dingtalk:singleton',
+    metadata: {},
+    platform: 'dingtalk' as const,
+    tenantId: '',
+  });
+  const router = new MessengerRouter();
+  await router.getWebhookHandler('dingtalk')(
+    new Request('https://app.example.com/api/agent/messenger/webhooks/dingtalk', {
+      body: '{}',
+      method: 'POST',
+    }),
+  );
+};
+
+const fakeDingTalkLink = () => ({
+  activeAgentId: 'agt_main',
+  id: 'link_dt',
+  platformUserId: 'staff_1',
+  tenantId: '',
+  userId: 'user_dt',
+});
+
+const fakeDingTalkDm = (): any => ({
+  id: 'dingtalk:cid',
+  isDM: true,
+  post: vi.fn(),
+  setState: vi.fn(),
+  state: Promise.resolve({}),
+  subscribe: vi.fn(),
+});
+
+const fakeDingTalkGroup = (): any => ({
+  id: 'dingtalk:cid:staff_1',
+  isDM: false,
+  post: vi.fn(),
+  setState: vi.fn(),
+  state: Promise.resolve({}),
+  subscribe: vi.fn(),
+});
+
+describe('MessengerRouter DingTalk conversation UX', () => {
+  beforeEach(() => {
+    vi.spyOn(MessengerRouter.prototype as any, 'fetchUserAgents').mockResolvedValue([
+      { id: 'agt_main', title: 'Inbox' },
+    ]);
+    vi.mocked(pushDingTalkQueuedMessage).mockResolvedValue('queued');
+    vi.mocked(loadDingTalkPendingQuestion).mockResolvedValue(null);
+    vi.mocked(isUnsupportedDingTalkMedia).mockReturnValue(false);
+    vi.mocked(resolveQuestionAnswer).mockImplementation((text: string) => text);
+  });
+
+  it('maps Chinese aliases to commands: /会话 renders recent topics', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    mockTopicQuery.mockResolvedValue({
+      items: [
+        { id: 'topic_1', title: '周报', updatedAt: new Date('2026-09-15T11:50:00Z') },
+        { id: 'topic_2', title: '日报', updatedAt: new Date('2026-09-15T10:00:00Z') },
+      ],
+      total: 2,
+    });
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '/会话',
+      }),
+    );
+
+    expect(mockTopicQuery).toHaveBeenCalledWith({ agentId: 'agt_main', current: 0, pageSize: 5 });
+    expect(sendDingTalkChoiceList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        askerStaffId: 'staff_1',
+        text: expect.stringContaining('周报'),
+        threadId: 'dingtalk:cid',
+        title: '最近会话',
+      }),
+    );
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('sets topicId when /继续 N is sent', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    mockTopicQuery.mockResolvedValue({
+      items: [
+        { id: 'topic_1', title: '周报', updatedAt: new Date() },
+        { id: 'topic_2', title: '日报', updatedAt: new Date() },
+      ],
+      total: 2,
+    });
+    const thread = fakeDingTalkDm();
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      thread,
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '/继续 2',
+      }),
+    );
+
+    expect(thread.setState).toHaveBeenCalledWith({ topicId: 'topic_2' });
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith('dingtalk:cid', '已切换到该会话。');
+  });
+
+  it('rejects card commands from a different group staffId', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue({
+      ...fakeDingTalkLink(),
+      platformUserId: 'staff_2',
+    });
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkGroup(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_2', userName: 'bob' },
+        text: 'messenger:asker:staff_1:switch:agt_main',
+      }),
+    );
+
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid:staff_1',
+      '仅提问人可操作',
+    );
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('hints unknown slash commands toward /帮助', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '/未知',
+      }),
+    );
+
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      '未知命令。发送 /帮助 查看可用命令。',
+    );
+  });
+
+  it('queues inbound text while the thread is active', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.mocked(AgentBridgeService.isThreadActive).mockReturnValue(true);
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: 'queued hello',
+      }),
+    );
+
+    expect(pushDingTalkQueuedMessage).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      expect.objectContaining({ senderStaffId: 'staff_1', text: 'queued hello' }),
+    );
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith('dingtalk:cid', '已加入队列');
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('rejects the sixth queued message as full', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.mocked(AgentBridgeService.isThreadActive).mockReturnValue(true);
+    vi.mocked(pushDingTalkQueuedMessage).mockResolvedValue('full');
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: 'overflow',
+      }),
+    );
+
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      '队列已满，请稍后再试',
+    );
+  });
+
+  it('intercepts dtmd picker text messenger:switch before dispatchToAgent', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.spyOn(MessengerRouter.prototype as any, 'fetchUserAgents').mockResolvedValue([
+      { id: 'agt_main', title: 'Inbox' },
+      { id: 'agt_other', title: 'Other' },
+    ]);
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: 'messenger:switch:agt_other',
+      }),
+    );
+
+    expect(mockSetActiveAgentById).toHaveBeenCalledWith(expect.anything(), 'link_dt', 'agt_other');
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported audio/video before dispatch', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.mocked(isUnsupportedDingTalkMedia).mockReturnValue(true);
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        raw: { msgtype: 'audio' },
+        text: '',
+      }),
+    );
+
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      '暂不支持语音和视频消息',
+    );
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('resumes a parked waiting_for_human question from the next asker message', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.mocked(loadDingTalkPendingQuestion).mockResolvedValue({
+      operationId: 'op_1',
+      parentMessageId: 'msg_tool_1',
+      prompt: '确认？',
+      questionId: 'msg_tool_1',
+      toolCallId: 'call_1',
+    } as any);
+    vi.mocked(resolveQuestionAnswer).mockReturnValue('yes');
+    mockOperationFindById.mockResolvedValue({ id: 'op_1', status: 'waiting_for_human' });
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '1',
+      }),
+    );
+
+    expect(clearDingTalkPendingQuestion).toHaveBeenCalledWith('dingtalk:cid');
+    expect(mockHandleMention).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ text: 'yes' }),
+      expect.objectContaining({
+        resumeToolResult: {
+          content: 'yes',
+          parentMessageId: 'msg_tool_1',
+          toolCallId: 'call_1',
+        },
       }),
     );
   });

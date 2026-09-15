@@ -233,8 +233,7 @@ describe('AgentBridgeService', () => {
     const progressMessageIdFromHooks = (): unknown => {
       const call = mockExecAgent.mock.calls.at(-1);
       const hooks = call?.[0]?.hooks as
-        | Array<{ id?: string; webhook?: { body?: Record<string, unknown> } }>
-        | undefined;
+        Array<{ id?: string; webhook?: { body?: Record<string, unknown> } }> | undefined;
       return hooks?.find((h) => h.id === 'bot-completion')?.webhook?.body?.progressMessageId;
     };
 
@@ -446,6 +445,59 @@ describe('AgentBridgeService', () => {
 
       expect(clientExtractFiles).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ files: [] });
+    });
+  });
+
+  describe('replySink and resumeToolResult hooks', () => {
+    it('skips the progress placeholder when a replySink is provided', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: vi.fn(),
+        onError: vi.fn(),
+        onPartial: vi.fn(),
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: 'dingtalk:cid' } as any,
+        client,
+        replySink,
+      });
+
+      expect(replySink.onStart).toHaveBeenCalled();
+      expect(thread.post).not.toHaveBeenCalled();
+    });
+
+    it('forwards resumeToolResult to execAgent', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+      const resumeToolResult = {
+        content: 'yes',
+        parentMessageId: 'msg_tool_1',
+        toolCallId: 'call_1',
+      };
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        resumeToolResult,
+      });
+
+      expect(mockExecAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parentMessageId: 'msg_tool_1',
+          prompt: 'yes',
+          resume: true,
+          resumeToolResult,
+        }),
+      );
     });
   });
 });

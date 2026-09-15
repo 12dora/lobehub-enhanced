@@ -12,6 +12,12 @@ import {
   messengerConnectionIdForUser,
 } from '@/server/services/messenger/installations';
 import { messengerPlatformRegistry } from '@/server/services/messenger/platforms';
+import {
+  clearDingTalkReplySink,
+  getDingTalkReplySink,
+} from '@/server/services/messenger/platforms/dingtalk/cards';
+import { forwardDingTalkWaitingQuestion } from '@/server/services/messenger/platforms/dingtalk/questions';
+import { drainDingTalkQueue } from '@/server/services/messenger/platforms/dingtalk/queue';
 import { SystemAgentService } from '@/server/services/systemAgent';
 
 import { AgentBridgeService } from './AgentBridgeService';
@@ -65,6 +71,7 @@ export interface BotCallbackBody {
   errorMessage?: string;
   errorType?: string;
   executionTimeMs?: number;
+  finalState?: unknown;
   /** Prepended to the first assistant reply (DingTalk idle new-topic notice). */
   firstReplyPrefix?: string;
   /** Hook ID from HookDispatcher (e.g. 'bot-step-progress', 'bot-completion') */
@@ -145,6 +152,20 @@ export class BotCallbackService {
     const replyLocale = getBotReplyLocale(platform);
 
     if (type === 'step') {
+      if (platformThreadId.startsWith('dingtalk:')) {
+        const sink = getDingTalkReplySink(platformThreadId);
+        const partial =
+          (typeof body.lastLLMContent === 'string' && body.lastLLMContent) ||
+          (typeof body.content === 'string' && body.content) ||
+          '';
+        if (sink?.onPartial && partial) {
+          try {
+            await sink.onPartial(partial);
+          } catch (error) {
+            log('handleStep: dingtalk sink onPartial failed: %O', error);
+          }
+        }
+      }
       if (canEdit && progressMessageId && settings.displayToolCalls === true) {
         await this.handleStep(body, messenger, progressMessageId, client, replyLocale);
       }
@@ -176,6 +197,10 @@ export class BotCallbackService {
       // In queue mode, the bridge handler's finally block skips this cleanup
       // to keep the thread marked active while the agent runs on the job queue.
       AgentBridgeService.clearActiveThread(platformThreadId);
+      if (platform === 'dingtalk' && body.reason !== 'waiting_for_human') {
+        await drainDingTalkQueue(platformThreadId);
+        clearDingTalkReplySink(platformThreadId);
+      }
       this.summarizeTopicTitle(
         { ...body, workspaceId: body.workspaceId ?? workspaceId ?? undefined },
         messenger,
@@ -398,9 +423,55 @@ export class BotCallbackService {
       operationId,
       attachments,
     } = body;
+    const platformThreadId = body.platformThreadId;
     const lastAssistantContent = body.firstReplyPrefix
       ? `${body.firstReplyPrefix}\n\n${rawAssistantContent ?? ''}`.trim()
       : rawAssistantContent;
+
+    if (platformThreadId.startsWith('dingtalk:') && reason === 'waiting_for_human') {
+      const sink = getDingTalkReplySink(platformThreadId);
+      try {
+        await sink?.onComplete?.(lastAssistantContent ?? '');
+      } catch (error) {
+        log('handleCompletion: dingtalk sink finalize on waiting_for_human failed: %O', error);
+      }
+      await forwardDingTalkWaitingQuestion(platformThreadId, {
+        finalState: body.finalState,
+        lastAssistantContent,
+        operationId,
+      });
+      return;
+    }
+
+    const dingtalkSink = platformThreadId.startsWith('dingtalk:')
+      ? getDingTalkReplySink(platformThreadId)
+      : undefined;
+    if (
+      dingtalkSink &&
+      (reason === 'error' || reason === 'interrupted' || reason === 'done' || !reason)
+    ) {
+      if (reason === 'error') {
+        const errorBody = renderAgentError(
+          errorType,
+          errorMessage,
+          operationId,
+          replyLocale,
+          errorAttribution,
+        );
+        await dingtalkSink.onError?.(errorBody);
+        return;
+      }
+      if (reason === 'interrupted') {
+        await dingtalkSink.onError?.(renderStopped(errorMessage, replyLocale));
+        return;
+      }
+      const hasText = !!lastAssistantContent?.trim();
+      const hasAttachments = !!attachments?.length;
+      if (hasText || hasAttachments) {
+        await dingtalkSink.onComplete?.(lastAssistantContent ?? '', { attachments });
+      }
+      return;
+    }
 
     if (reason === 'error') {
       log(

@@ -2,6 +2,7 @@ import {
   buildActionCardParam,
   decodeDingTalkThreadId,
   DingTalkApiClient,
+  getDingTalkCard,
   getDingTalkSession,
   isSessionWebhookLive,
 } from '@lobechat/chat-adapter-dingtalk';
@@ -20,6 +21,7 @@ import type {
   MessengerPlatformBinder,
   UnlinkedMessageContext,
 } from '../../types';
+import { wrapDingTalkAskerCommand } from './cards';
 import { DINGTALK_UNKNOWN_USER_REPLY } from './const';
 
 const log = debug('lobe-server:messenger:dingtalk');
@@ -38,7 +40,7 @@ const resolveRobotTarget = (chatId: string) => {
     chatId.startsWith('dingtalk:') ? chatId : `dingtalk:${chatId}`,
   );
   const staffId = session?.senderStaffId || decoded.senderStaffId || chatId;
-  return { session, staffId };
+  return { decoded, session, staffId };
 };
 
 export class MessengerDingTalkBinder implements MessengerPlatformBinder {
@@ -91,13 +93,35 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     if (!config) return;
 
     const api = new DingTalkApiClient(config.clientId, config.clientSecret);
-    const { session, staffId } = resolveRobotTarget(chatId);
+    const { decoded, session, staffId } = resolveRobotTarget(chatId);
 
     try {
       if (isSessionWebhookLive(session) && session?.sessionWebhook) {
-        await api.sendBySessionWebhook(session.sessionWebhook, {
-          markdown: { text, title: markdownTitle(text) },
+        const isGroup = Boolean(decoded.senderStaffId);
+        const payload: Record<string, unknown> = {
+          markdown: {
+            text: isGroup && staffId ? `@${staffId} ${text}` : text,
+            title: markdownTitle(text),
+          },
           msgtype: 'markdown',
+        };
+        if (isGroup && staffId) payload.at = { atUserIds: [staffId] };
+        await api.sendBySessionWebhook(session.sessionWebhook, payload);
+        return;
+      }
+
+      const isGroup = Boolean(decoded.senderStaffId);
+      if (isGroup) {
+        const body = staffId ? `@${staffId} ${text}` : text;
+        await api.sendGroupMessage({
+          msgKey: 'sampleMarkdown',
+          msgParam: JSON.stringify({
+            at: staffId ? { atUserIds: [staffId] } : undefined,
+            text: body,
+            title: markdownTitle(text),
+          }),
+          openConversationId: decoded.conversationId,
+          robotCode: config.robotCode,
         });
         return;
       }
@@ -121,8 +145,15 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     if (!config) return;
 
     const action = params.action ?? 'switch';
+    const { decoded } = resolveRobotTarget(chatId);
+    const isGroup = Boolean(decoded.senderStaffId);
+    const askerStaffId = decoded.senderStaffId || '';
     const buttons = params.entries.map((entry) => ({
-      command: `${CALLBACK_PREFIX}${action}:${entry.id}`,
+      command: wrapDingTalkAskerCommand(
+        `${CALLBACK_PREFIX}${action}:${entry.id}`,
+        askerStaffId,
+        isGroup,
+      ),
       label: entry.isActive ? `✓ ${entry.title}` : entry.title,
     }));
     const card = buildActionCardParam({
@@ -142,6 +173,32 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     } catch (error) {
       log('sendAgentPicker: failed for chat=%s: %O', chatId, error);
     }
+  }
+
+  async extractCallbackAction(req: Request): Promise<InboundCallbackAction | null> {
+    let body: unknown;
+    try {
+      body = JSON.parse(await req.text());
+    } catch {
+      return null;
+    }
+    if (!body || typeof body !== 'object') return null;
+    const payload = body as Record<string, unknown>;
+    const outTrackId = typeof payload.outTrackId === 'string' ? payload.outTrackId : undefined;
+    const userId = typeof payload.userId === 'string' ? payload.userId : undefined;
+    const msgtype = typeof payload.msgtype === 'string' ? payload.msgtype : undefined;
+    if (!outTrackId || !userId || msgtype) return null;
+    const card = getDingTalkCard(outTrackId);
+    if (!card) return null;
+    if (card.askerStaffId && userId !== card.askerStaffId) {
+      return {
+        callbackId: outTrackId,
+        chatId: card.threadId,
+        data: 'messenger:not_asker',
+        fromUserId: userId,
+      };
+    }
+    return null;
   }
 
   async acknowledgeCallback(

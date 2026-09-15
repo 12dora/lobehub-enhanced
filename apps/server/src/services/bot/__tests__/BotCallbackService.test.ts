@@ -144,6 +144,19 @@ vi.mock('@/server/services/messenger/platforms', () => ({
   },
 }));
 
+vi.mock('@/server/services/messenger/platforms/dingtalk/cards', () => ({
+  clearDingTalkReplySink: vi.fn(),
+  getDingTalkReplySink: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/queue', () => ({
+  drainDingTalkQueue: vi.fn(),
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/questions', () => ({
+  forwardDingTalkWaitingQuestion: vi.fn(),
+}));
+
 vi.mock('../platforms', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -1268,5 +1281,31 @@ describe('BotCallbackService', () => {
         expect.not.stringContaining('Rate limit exceeded'),
       );
     });
+  });
+
+  it('forwards waiting_for_human completions to the DingTalk question handler', async () => {
+    const { forwardDingTalkWaitingQuestion } =
+      await import('@/server/services/messenger/platforms/dingtalk/questions');
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '是否继续？',
+        operationId: 'op_dt',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'waiting_for_human',
+        type: 'completion',
+      }),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith('是否继续？');
+    expect(forwardDingTalkWaitingQuestion).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      expect.objectContaining({ lastAssistantContent: '是否继续？', operationId: 'op_dt' }),
+    );
+    expect(mockEditMessage).not.toHaveBeenCalled();
   });
 });

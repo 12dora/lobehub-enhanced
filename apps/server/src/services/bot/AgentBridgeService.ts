@@ -146,6 +146,39 @@ interface ThreadState {
   topicId?: string;
 }
 
+export interface AgentReplySinkAttachment {
+  data?: string;
+  fetchUrl?: string;
+  mimeType?: string;
+  name?: string;
+  type: 'audio' | 'file' | 'image' | 'video';
+}
+
+/**
+ * Optional per-platform outbound channel. When set, the bridge streams
+ * progress/final text through the sink instead of `thread.post` / `edit`.
+ * Unset on Slack/Telegram/Discord/Feishu — those keep the post/edit path.
+ */
+export interface AgentReplySink {
+  onComplete?: (
+    content: string,
+    extras?: { attachments?: AgentReplySinkAttachment[] },
+  ) => Promise<void>;
+  onError?: (errorText: string) => Promise<void>;
+  onPartial?: (content: string) => Promise<void>;
+  onStart?: () => Promise<void>;
+}
+
+export interface AgentWaitingForHumanEvent {
+  finalState?: unknown;
+  lastAssistantContent?: string;
+  operationId?: string;
+}
+
+export interface AgentRunSettledInfo {
+  reason?: string;
+}
+
 interface BridgeHandlerOpts {
   agentId: string;
   botContext?: ChatTopicBotContext;
@@ -158,11 +191,36 @@ interface BridgeHandlerOpts {
    */
   firstReplyPrefix?: string;
   /**
+   * Called after the thread is released. Messenger DingTalk drains its
+   * inbound queue here. Not invoked when the run parks on waiting_for_human.
+   */
+  onRunSettled?: (info: AgentRunSettledInfo) => Promise<void>;
+  /**
+   * Called when the operation parks in `waiting_for_human` (agent question).
+   * Messenger DingTalk forwards the question to the chat. Other platforms
+   * leave this unset and keep existing completion behaviour.
+   */
+  onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
+  /**
    * Locale for system-generated reply text (errors, stopped notice, etc.).
    * Picked per platform — see `getBotReplyLocale`. When omitted we fall back
    * to inferring from `botContext.platform`, then to English.
    */
   replyLocale?: BotReplyLocale;
+  /**
+   * When set, progress and the final reply go through this sink instead of
+   * `thread.post` / `progressMessage.edit`. DingTalk AI-card streaming.
+   */
+  replySink?: AgentReplySink;
+  /**
+   * Resume a parked `askUserQuestion` / `toolResult` intervention. Same
+   * payload the web client sends as `aiAgent.execAgent({ resumeToolResult })`.
+   */
+  resumeToolResult?: {
+    content: string;
+    parentMessageId: string;
+    toolCallId: string;
+  };
   /**
    * When a topic is rotated because it went idle, this is forwarded to the
    * subsequent `handleMention` as `firstReplyPrefix`.
@@ -396,6 +454,7 @@ export class AgentBridgeService {
     operationId?: string;
     progressMessage?: SentMessage;
     replyLocale?: BotReplyLocale;
+    replySink?: AgentReplySink;
     stopped?: boolean;
     thread: Thread<ThreadState>;
     userMessage: Message;
@@ -406,6 +465,7 @@ export class AgentBridgeService {
       operationId,
       progressMessage,
       replyLocale,
+      replySink,
       stopped,
       thread,
       userMessage,
@@ -429,7 +489,13 @@ export class AgentBridgeService {
         : renderError(operationId, replyLocale),
     };
 
-    if (progressMessage) {
+    if (replySink?.onError) {
+      try {
+        await replySink.onError(errorContent.markdown);
+      } catch (sinkError) {
+        log('finishStartupFailure: replySink.onError failed: %O', sinkError);
+      }
+    } else if (progressMessage) {
       try {
         await progressMessage.edit(errorContent);
       } catch (editError) {
@@ -466,8 +532,9 @@ export class AgentBridgeService {
     message: Message,
     opts: BridgeHandlerOpts,
   ): Promise<void> {
-    const { agentId, botContext, charLimit, displayToolCalls } = opts;
+    const { agentId, botContext, charLimit, displayToolCalls, replySink } = opts;
     const replyLocale = this.resolveReplyLocale(opts);
+    let settledReason: string | undefined;
 
     log(
       'handleMention: agentId=%s, user=%s, text=%s, attachments=%d',
@@ -518,7 +585,7 @@ export class AgentBridgeService {
       try {
         // executeWithCallback handles progress message (post + edit at each step)
         // The final reply is edited into the progress message by onComplete
-        const { topicId } = await this.executeWithCallback(thread, message, {
+        const { topicId, reason } = await this.executeWithCallback(thread, message, {
           agentId,
           botContext,
           channelContext,
@@ -526,10 +593,14 @@ export class AgentBridgeService {
           client,
           displayToolCalls,
           firstReplyPrefix: opts.firstReplyPrefix,
+          onWaitingForHuman: opts.onWaitingForHuman,
           replyLocale,
+          replySink,
+          resumeToolResult: opts.resumeToolResult,
           topicTitlePrefix: opts.topicTitlePrefix,
           trigger: RequestTrigger.Bot,
         });
+        settledReason = reason;
         queueHandoffSucceeded = queueMode;
 
         // Persist topic mapping and channel context in thread state for follow-up messages
@@ -542,7 +613,12 @@ export class AgentBridgeService {
         const operationId = AgentBridgeService.activeOperations.get(thread.id);
         log('handleMention error: operationId=%s, %O', operationId, error);
         try {
-          await thread.post({ markdown: renderError(operationId, replyLocale) });
+          const errorBody = renderError(operationId, replyLocale);
+          if (replySink?.onError) {
+            await replySink.onError(errorBody);
+          } else {
+            await thread.post({ markdown: errorBody });
+          }
         } catch (postError) {
           log('handleMention: failed to post error message: %O', postError);
         }
@@ -553,6 +629,9 @@ export class AgentBridgeService {
       // If setup fails before that point, clean up locally to avoid leaked reactions.
       if (!queueMode || !queueHandoffSucceeded) {
         await this.clearReaction(thread, client);
+        if (settledReason !== 'waiting_for_human') {
+          await opts.onRunSettled?.({ reason: settledReason });
+        }
       }
     }
   }
@@ -565,10 +644,11 @@ export class AgentBridgeService {
     message: Message,
     opts: BridgeHandlerOpts,
   ): Promise<void> {
-    const { agentId, botContext, charLimit, displayToolCalls } = opts;
+    const { agentId, botContext, charLimit, displayToolCalls, replySink } = opts;
     const replyLocale = this.resolveReplyLocale(opts);
     const threadState = await thread.state;
     const topicId = threadState?.topicId;
+    let settledReason: string | undefined;
 
     log(
       'handleSubscribedMessage: agentId=%s, thread=%s, topicId=%s, attachments=%d',
@@ -656,7 +736,7 @@ export class AgentBridgeService {
 
       try {
         // executeWithCallback handles progress message (post + edit at each step)
-        await this.executeWithCallback(thread, message, {
+        const executed = await this.executeWithCallback(thread, message, {
           agentId,
           botContext,
           channelContext,
@@ -664,11 +744,15 @@ export class AgentBridgeService {
           client: opts.client,
           displayToolCalls,
           firstReplyPrefix: opts.firstReplyPrefix,
+          onWaitingForHuman: opts.onWaitingForHuman,
           replyLocale,
+          replySink,
+          resumeToolResult: opts.resumeToolResult,
           topicId,
           topicTitlePrefix: opts.topicTitlePrefix,
           trigger: RequestTrigger.Bot,
         });
+        settledReason = executed.reason;
         queueHandoffSucceeded = queueMode;
       } catch (error) {
         // If the cached topicId references a deleted topic (FK violation),
@@ -690,9 +774,12 @@ export class AgentBridgeService {
         const operationId = AgentBridgeService.activeOperations.get(thread.id);
         log('handleSubscribedMessage error: operationId=%s, %O', operationId, error);
         try {
-          await thread.post({
-            markdown: renderErrorWithDetails(errMsg, replyLocale, operationId),
-          });
+          const errorBody = renderErrorWithDetails(errMsg, replyLocale, operationId);
+          if (replySink?.onError) {
+            await replySink.onError(errorBody);
+          } else {
+            await thread.post({ markdown: errorBody });
+          }
         } catch (postError) {
           log('handleSubscribedMessage: failed to post error message: %O', postError);
         }
@@ -702,6 +789,9 @@ export class AgentBridgeService {
       // In queue mode, the callback owns cleanup only after webhook handoff succeeds.
       if (!queueMode || !queueHandoffSucceeded) {
         await this.clearReaction(thread, opts.client);
+        if (settledReason !== 'waiting_for_human') {
+          await opts.onRunSettled?.({ reason: settledReason });
+        }
       }
     }
   }
@@ -723,12 +813,19 @@ export class AgentBridgeService {
       client?: PlatformClient;
       displayToolCalls?: boolean;
       firstReplyPrefix?: string;
+      onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       replyLocale: BotReplyLocale;
+      replySink?: AgentReplySink;
+      resumeToolResult?: {
+        content: string;
+        parentMessageId: string;
+        toolCallId: string;
+      };
       topicId?: string;
       topicTitlePrefix?: string;
       trigger?: string;
     },
-  ): Promise<{ reply: string; topicId: string }> {
+  ): Promise<{ reason?: string; reply: string; topicId: string }> {
     // Resolve bot platform context from platform registry
     const platformDef = opts.botContext?.platform
       ? platformRegistry.getPlatform(opts.botContext.platform)
@@ -758,7 +855,10 @@ export class AgentBridgeService {
       client,
       displayToolCalls,
       firstReplyPrefix,
+      onWaitingForHuman,
       replyLocale,
+      replySink,
+      resumeToolResult,
       topicId,
       topicTitlePrefix,
       trigger,
@@ -786,7 +886,10 @@ export class AgentBridgeService {
 
     let progressMessage: SentMessage | undefined;
     let gatewayConnectionId: string | undefined;
-    if (useGatewayTyping) {
+    if (replySink) {
+      await safeSideEffect(() => thread.startTyping(), 'startTyping (replySink)');
+      await safeSideEffect(() => replySink.onStart?.() ?? Promise.resolve(), 'replySink.onStart');
+    } else if (useGatewayTyping) {
       log('executeWithWebhooks: using gateway typing, skipping ack message');
 
       // Platform typing (best-effort, must not block AI generation)
@@ -914,9 +1017,12 @@ export class AgentBridgeService {
         channelContext,
         client,
         files,
+        onWaitingForHuman,
         progressMessage,
         prompt,
         replyLocale,
+        replySink,
+        resumeToolResult,
         topicId,
         trigger,
         webhookBody,
@@ -936,9 +1042,12 @@ export class AgentBridgeService {
       files,
       firstReplyPrefix,
       gatewayConnectionId,
+      onWaitingForHuman,
       progressMessage,
       prompt,
       replyLocale,
+      replySink,
+      resumeToolResult,
       topicId,
       topicTitlePrefix,
       trigger,
@@ -962,14 +1071,21 @@ export class AgentBridgeService {
       channelContext?: DiscordChannelContext;
       client?: PlatformClient;
       files?: any;
+      onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       progressMessage?: SentMessage;
       prompt: string;
       replyLocale: BotReplyLocale;
+      replySink?: AgentReplySink;
+      resumeToolResult?: {
+        content: string;
+        parentMessageId: string;
+        toolCallId: string;
+      };
       topicId?: string;
       trigger?: string;
       webhookBody: Record<string, unknown>;
     },
-  ): Promise<{ reply: string; topicId: string }> {
+  ): Promise<{ reason?: string; reply: string; topicId: string }> {
     const {
       agentId,
       botContext,
@@ -981,6 +1097,8 @@ export class AgentBridgeService {
       progressMessage,
       prompt,
       replyLocale,
+      replySink,
+      resumeToolResult,
       topicId,
       trigger,
       webhookBody,
@@ -1029,7 +1147,10 @@ export class AgentBridgeService {
               },
             },
           ],
-          prompt,
+          parentMessageId: resumeToolResult?.parentMessageId,
+          prompt: resumeToolResult?.content ?? prompt,
+          resume: Boolean(resumeToolResult),
+          resumeToolResult,
           signal,
           title: '',
           trigger,
@@ -1049,6 +1170,7 @@ export class AgentBridgeService {
         error,
         progressMessage,
         replyLocale,
+        replySink,
         stopped: isAbortError(error),
         thread,
         userMessage,
@@ -1063,6 +1185,7 @@ export class AgentBridgeService {
         operationId: result.operationId,
         progressMessage,
         replyLocale,
+        replySink,
         thread,
         userMessage,
       });
@@ -1112,16 +1235,23 @@ export class AgentBridgeService {
       files?: any;
       firstReplyPrefix?: string;
       gatewayConnectionId?: string;
+      onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       progressMessage?: SentMessage;
       prompt: string;
       replyLocale: BotReplyLocale;
+      replySink?: AgentReplySink;
+      resumeToolResult?: {
+        content: string;
+        parentMessageId: string;
+        toolCallId: string;
+      };
       topicId?: string;
       topicTitlePrefix?: string;
       trigger?: string;
       userMessage?: Message;
       webhookBody: Record<string, unknown>;
     },
-  ): Promise<{ reply: string; topicId: string }> {
+  ): Promise<{ reason?: string; reply: string; topicId: string }> {
     const {
       agentId,
       botContext,
@@ -1134,8 +1264,11 @@ export class AgentBridgeService {
       files,
       firstReplyPrefix,
       gatewayConnectionId,
+      onWaitingForHuman,
       prompt,
       replyLocale,
+      replySink,
+      resumeToolResult,
       topicId,
       topicTitlePrefix,
       trigger,
@@ -1160,10 +1293,15 @@ export class AgentBridgeService {
       }
     };
 
-    return new Promise<{ reply: string; topicId: string }>((resolve, reject) => {
+    return new Promise<{ reason?: string; reply: string; topicId: string }>((resolve, reject) => {
       const timeout = setTimeout(() => {
         stopGatewayTyping();
-        reject(new Error(`Agent execution timed out`));
+        const timeoutError = new Error(`Agent execution timed out`);
+        if (replySink?.onError) {
+          void replySink.onError(timeoutError.message).finally(() => reject(timeoutError));
+          return;
+        }
+        reject(timeoutError);
       }, EXECUTION_TIMEOUT);
 
       let resolvedTopicId = topicId ?? '';
@@ -1191,6 +1329,18 @@ export class AgentBridgeService {
                 if (event.shouldContinue && userMessage) {
                   const desiredEmoji = getStepReactionEmoji(event.stepType, event.toolsCalling);
                   await this.setReaction(thread, userMessage, client, desiredEmoji, botContext);
+                }
+
+                const partial =
+                  (typeof event.lastLLMContent === 'string' && event.lastLLMContent) ||
+                  (typeof event.content === 'string' && event.content) ||
+                  '';
+                if (replySink?.onPartial && partial) {
+                  try {
+                    await replySink.onPartial(partial);
+                  } catch (error) {
+                    log('executeWithCallback[local]: replySink.onPartial failed: %O', error);
+                  }
                 }
 
                 if (!event.shouldContinue || !progressMessage || displayToolCalls !== true) return;
@@ -1256,6 +1406,25 @@ export class AgentBridgeService {
                 const reason = event.reason;
                 log('onComplete: reason=%s', reason);
 
+                if (reason === 'waiting_for_human') {
+                  try {
+                    await replySink?.onComplete?.(event.lastAssistantContent ?? '');
+                    await onWaitingForHuman?.({
+                      finalState: event.finalState,
+                      lastAssistantContent: event.lastAssistantContent,
+                      operationId: event.operationId,
+                    });
+                  } catch (error) {
+                    log('onComplete: waiting_for_human handler failed: %O', error);
+                  }
+                  resolve({
+                    reason,
+                    reply: event.lastAssistantContent ?? '',
+                    topicId: resolvedTopicId,
+                  });
+                  return;
+                }
+
                 if (reason === 'error') {
                   const errorMsg = event.errorMessage || 'Agent execution failed';
                   log(
@@ -1276,7 +1445,9 @@ export class AgentBridgeService {
                     // platform's markdown parse_mode (e.g. Telegram `Markdown`,
                     // Slack `mrkdwn`) and converts the body. Plain strings are
                     // sent without parse_mode and would render literal `**`.
-                    if (progressMessage) {
+                    if (replySink?.onError) {
+                      await replySink.onError(errorBody);
+                    } else if (progressMessage) {
                       await progressMessage.edit({ markdown: errorBody });
                     } else {
                       await thread.post({ markdown: errorBody });
@@ -1288,21 +1459,22 @@ export class AgentBridgeService {
                   // posted to the user. Rejecting would bubble up to the outer
                   // try/catch in handleMention and cause a duplicate generic
                   // "Agent Execution Failed" message on top of the friendly one.
-                  resolve({ reply: '', topicId: resolvedTopicId });
+                  resolve({ reason, reply: '', topicId: resolvedTopicId });
                   return;
                 }
 
                 if (reason === 'interrupted') {
-                  if (progressMessage) {
-                    try {
-                      await progressMessage.edit({
-                        markdown: renderStopped(undefined, replyLocale),
-                      });
-                    } catch {
-                      // ignore edit failure
+                  const stoppedText = renderStopped(undefined, replyLocale);
+                  try {
+                    if (replySink?.onError) {
+                      await replySink.onError(stoppedText);
+                    } else if (progressMessage) {
+                      await progressMessage.edit({ markdown: stoppedText });
                     }
+                  } catch {
+                    // ignore edit failure
                   }
-                  resolve({ reply: '', topicId: resolvedTopicId });
+                  resolve({ reason, reply: '', topicId: resolvedTopicId });
                   return;
                 }
 
@@ -1319,6 +1491,59 @@ export class AgentBridgeService {
                   );
                   const hasText = !!lastAssistantContent;
                   const hasAttachments = !!lastChunkAttachments?.length;
+
+                  if (replySink?.onComplete && (hasText || hasAttachments)) {
+                    try {
+                      await replySink.onComplete(lastAssistantContent ?? '', {
+                        attachments: event.attachments as AgentReplySinkAttachment[] | undefined,
+                      });
+                    } catch (error) {
+                      log('executeWithCallback[local]: replySink.onComplete failed: %O', error);
+                    }
+                    log(
+                      'executeWithCallback[local]: sink response (%d chars, %d attachments)',
+                      lastAssistantContent?.length ?? 0,
+                      lastChunkAttachments?.length ?? 0,
+                    );
+                    resolve({
+                      reason,
+                      reply: lastAssistantContent ?? '',
+                      topicId: resolvedTopicId,
+                    });
+
+                    if (resolvedTopicId && prompt && lastAssistantContent) {
+                      const topicModel = new TopicModel(this.db, this.userId, this.workspaceId);
+                      topicModel
+                        .findById(resolvedTopicId)
+                        .then(async (topic) => {
+                          if (topic?.title) return;
+
+                          const systemAgent = new SystemAgentService(
+                            this.db,
+                            this.userId,
+                            this.workspaceId,
+                          );
+                          const generated = await systemAgent.generateTopicTitle({
+                            lastAssistantContent,
+                            userPrompt: prompt,
+                          });
+                          if (!generated) return;
+                          const title = topicTitlePrefix
+                            ? `${topicTitlePrefix}${generated}`
+                            : generated;
+
+                          await topicModel.update(resolvedTopicId, { title });
+                        })
+                        .catch((error) => {
+                          log(
+                            'executeWithCallback[local]: topic title summarization failed: %O',
+                            error,
+                          );
+                        });
+                    }
+
+                    return;
+                  }
 
                   if (hasText || hasAttachments) {
                     let chunks: string[];
@@ -1374,7 +1599,11 @@ export class AgentBridgeService {
                       chunks.length,
                       lastChunkAttachments?.length ?? 0,
                     );
-                    resolve({ reply: lastAssistantContent ?? '', topicId: resolvedTopicId });
+                    resolve({
+                      reason,
+                      reply: lastAssistantContent ?? '',
+                      topicId: resolvedTopicId,
+                    });
 
                     // Fire-and-forget: summarize topic title in DB. Only when
                     // we have text to summarize on — image-only replies skip
@@ -1428,7 +1657,10 @@ export class AgentBridgeService {
               },
             },
           ],
-          prompt,
+          parentMessageId: resumeToolResult?.parentMessageId,
+          prompt: resumeToolResult?.content ?? prompt,
+          resume: Boolean(resumeToolResult),
+          resumeToolResult,
           signal,
           title: '',
           trigger,
@@ -1448,7 +1680,13 @@ export class AgentBridgeService {
               result.error,
             );
 
-            if (progressMessage) {
+            if (replySink?.onError) {
+              try {
+                await replySink.onError(renderError(result.operationId, replyLocale));
+              } catch (error) {
+                log('executeWithCallback[local]: replySink startup error failed: %O', error);
+              }
+            } else if (progressMessage) {
               try {
                 await progressMessage.edit({
                   markdown: renderError(result.operationId, replyLocale),
@@ -1458,7 +1696,7 @@ export class AgentBridgeService {
               }
             }
 
-            resolve({ reply: '', topicId: result.topicId });
+            resolve({ reason: 'error', reply: '', topicId: result.topicId });
             return;
           }
 

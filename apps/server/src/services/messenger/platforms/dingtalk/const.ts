@@ -21,6 +21,37 @@ export const DINGTALK_IDLE_NEW_TOPIC_NOTICE = '已开始新会话';
 export const DINGTALK_CARD_CALLBACK_EVENT = 'card.callback';
 export const DINGTALK_ROBOT_MESSAGE_EVENT = 'im.bot.message';
 
+export const DINGTALK_ASKER_ONLY_REPLY = '仅提问人可操作';
+export const DINGTALK_QUEUE_JOINED_REPLY = '已加入队列';
+export const DINGTALK_QUEUE_FULL_REPLY = '队列已满，请稍后再试';
+export const DINGTALK_THINKING_REPLY = '正在思考…';
+export const DINGTALK_UNSUPPORTED_MEDIA_REPLY = '暂不支持语音和视频消息';
+export const DINGTALK_QUESTION_GONE_REPLY = '该问题已失效，将作为新消息处理。';
+export const DINGTALK_UNKNOWN_COMMAND_REPLY = '未知命令。发送 /帮助 查看可用命令。';
+export const DINGTALK_NO_TOPICS_REPLY = '暂无会话记录。';
+export const DINGTALK_RESUME_USAGE_REPLY = '用法：/继续 N';
+export const DINGTALK_RESUME_RANGE_REPLY = '序号超出范围。发送 /会话 查看最近会话。';
+export const DINGTALK_RESUMED_REPLY = '已切换到该会话。';
+export const DINGTALK_NO_ACTIVE_AGENT_REPLY = '未选择助手。发送 /助手 选择一个。';
+
+export const DINGTALK_HELP_TEXT = [
+  '命令：',
+  '• /助手 — 查看或切换助手',
+  '• /会话 — 最近 5 个会话',
+  '• /继续 N — 继续第 N 个会话',
+  '• /新会话 — 开始新会话',
+  '• /当前 — 查看当前状态',
+  '• /停止 — 停止当前执行',
+  '• /帮助 — 查看帮助',
+].join('\n');
+
+export const DINGTALK_QUEUE_KEY_PREFIX = 'messenger:dingtalk:queue:';
+export const DINGTALK_QUEUE_TTL_SECONDS = 60 * 60;
+export const DINGTALK_QUEUE_MAX_LENGTH = 5;
+export const DINGTALK_PENDING_QUESTION_KEY_PREFIX = 'messenger:dingtalk:pending-question:';
+export const DINGTALK_PENDING_QUESTION_TTL_SECONDS = 24 * 60 * 60;
+export const DINGTALK_LIST_PAGE_SIZE = 5;
+
 export const DINGTALK_STREAM_STATUS_TTL_SECONDS = 120;
 export const DINGTALK_COUNTER_TTL_SECONDS = 8 * 24 * 60 * 60;
 

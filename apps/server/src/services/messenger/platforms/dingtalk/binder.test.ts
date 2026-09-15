@@ -13,21 +13,41 @@ vi.mock('@/envs/app', () => ({
   appEnv: { APP_URL: 'https://app.example.com' },
 }));
 
+const sendGroupMessage = vi.fn();
+const mockGetDingTalkCard = vi.fn();
+
 vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   buildActionCardParam: vi.fn().mockImplementation((options: any) => ({
     msgKey: 'sampleActionCard2',
     msgParam: JSON.stringify({ title: options.title, text: options.text }),
   })),
+  chunkMarkdown: (text: string) => [text],
   decodeDingTalkThreadId: (threadId: string) => {
     const rest = threadId.startsWith('dingtalk:') ? threadId.slice('dingtalk:'.length) : threadId;
+    const sep = rest.lastIndexOf(':');
+    if (sep > 0) {
+      return {
+        conversationId: rest.slice(0, sep),
+        senderStaffId: rest.slice(sep + 1),
+      };
+    }
     return { conversationId: rest };
   },
+  DingTalkAiCardStream: vi.fn(),
   DingTalkApiClient: vi.fn().mockImplementation(() => ({
     sendBySessionWebhook,
+    sendGroupMessage,
     sendOtoMessage,
   })),
+  DingTalkCardUnavailableError: class extends Error {},
+  getDingTalkCard: (...args: unknown[]) => mockGetDingTalkCard(...args),
   getDingTalkSession: vi.fn().mockReturnValue(undefined),
   isSessionWebhookLive: vi.fn().mockReturnValue(false),
+  rememberDingTalkCard: vi.fn(),
+}));
+
+vi.mock('@/server/services/bot/platforms/dingtalk/sendAttachments', () => ({
+  sendDingTalkAttachments: vi.fn(),
 }));
 
 vi.mock('@/server/services/bot/platforms/dingtalk/client', () => ({
@@ -53,6 +73,8 @@ beforeEach(() => {
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(VALID_CONFIG as any);
   sendOtoMessage.mockResolvedValue({});
   sendBySessionWebhook.mockResolvedValue(undefined);
+  sendGroupMessage.mockResolvedValue({});
+  mockGetDingTalkCard.mockReturnValue(undefined);
   createClient.mockReturnValue({ id: 'client' });
 });
 
@@ -92,5 +114,45 @@ describe('MessengerDingTalkBinder.createClient', () => {
       }),
       { appUrl: 'https://app.example.com' },
     );
+  });
+});
+
+describe('MessengerDingTalkBinder group replies', () => {
+  it('@-mentions the asker in group markdown', async () => {
+    const binder = new MessengerDingTalkBinder();
+    await binder.sendDmText('dingtalk:cid:staff_9', '已加入队列');
+
+    expect(sendGroupMessage).toHaveBeenCalledWith({
+      msgKey: 'sampleMarkdown',
+      msgParam: JSON.stringify({
+        at: { atUserIds: ['staff_9'] },
+        text: '@staff_9 已加入队列',
+        title: '已加入队列',
+      }),
+      openConversationId: 'cid',
+      robotCode: 'robot_1',
+    });
+  });
+});
+
+describe('MessengerDingTalkBinder.extractCallbackAction', () => {
+  it('returns messenger:not_asker when a different staffId taps the card', async () => {
+    mockGetDingTalkCard.mockReturnValue({
+      askerStaffId: 'staff_1',
+      threadId: 'dingtalk:cid:staff_1',
+    });
+    const binder = new MessengerDingTalkBinder();
+    const action = await binder.extractCallbackAction(
+      new Request('https://example.com', {
+        body: JSON.stringify({ outTrackId: 'card_1', userId: 'staff_2' }),
+        method: 'POST',
+      }),
+    );
+    expect(action).toEqual({
+      callbackId: 'card_1',
+      chatId: 'dingtalk:cid:staff_1',
+      data: 'messenger:not_asker',
+      fromUserId: 'staff_2',
+    });
   });
 });
