@@ -13,6 +13,10 @@ import { TaskTopicModel } from '@/database/models/taskTopic';
 import type { LobeChatDatabase } from '@/database/type';
 import { AiAgentService } from '@/server/services/aiAgent';
 import { TaskLifecycleService } from '@/server/services/taskLifecycle';
+import {
+  notifyAfterTopicComplete,
+  TaskNotificationService,
+} from '@/server/services/taskNotification';
 
 import { buildTaskPrompt } from './buildTaskPrompt';
 
@@ -153,6 +157,8 @@ export class TaskRunnerService {
       const taskIdentifier = task.identifier;
       const taskLifecycle = this.taskLifecycle;
       const userId = this.userId;
+      const db = this.db;
+      const workspaceId = this.workspaceId;
 
       const checkpoint = this.taskModel.getCheckpointConfig(task);
       const reviewConfig = this.taskModel.getReviewConfig(task);
@@ -205,6 +211,17 @@ export class TaskRunnerService {
                 taskId,
                 taskIdentifier,
                 topicId: event.topicId,
+              });
+              await notifyAfterTopicComplete({
+                db,
+                errorMessage: event.errorMessage,
+                lastAssistantContent: event.lastAssistantContent,
+                reason: event.reason || 'done',
+                taskId,
+                taskIdentifier,
+                topicId: event.topicId,
+                userId,
+                workspaceId,
               });
             },
             id: 'task-on-complete',
@@ -268,6 +285,17 @@ export class TaskRunnerService {
             } else {
               await this.taskModel.updateStatus(failedTask.id, 'paused', { error: errorText });
             }
+            await new TaskNotificationService().notify({
+              agentId: failedTask.assigneeAgentId ?? undefined,
+              content: errorText,
+              db: this.db,
+              taskId: failedTask.id,
+              taskIdentifier: failedTask.identifier,
+              taskName: failedTask.name,
+              topicId: failedTask.currentTopicId ?? undefined,
+              type: 'task_run_failed',
+              userId: this.userId,
+            });
           }
         } catch {
           // Rollback itself failed, ignore

@@ -360,4 +360,79 @@ describe('NotificationModel (integration)', () => {
       expect(persisted.providerMessageId).toBe('resend-123');
     });
   });
+
+  describe('findByDedupeKey', () => {
+    it('returns the row for the current user', async () => {
+      const model = new NotificationModel(serverDB, userId);
+      const created = await model.create(baseNotification({ dedupeKey: 'task:1:done:t1' }));
+
+      const found = await model.findByDedupeKey('task:1:done:t1');
+      expect(found?.id).toBe(created!.id);
+    });
+
+    it("does not return another user's row with the same key", async () => {
+      const model = new NotificationModel(serverDB, userId);
+      const otherModel = new NotificationModel(serverDB, otherUserId);
+      await otherModel.create(baseNotification({ dedupeKey: 'shared-key' }));
+
+      expect(await model.findByDedupeKey('shared-key')).toBeNull();
+    });
+  });
+
+  describe('createWithDeliveries', () => {
+    it('inserts the notification and delivery rows together', async () => {
+      const model = new NotificationModel(serverDB, userId);
+
+      const { notification, deliveries } = await model.createWithDeliveries(
+        baseNotification({ dedupeKey: 'with-deliveries' }),
+        [{ channel: 'inbox', status: 'sent', sentAt: new Date() }],
+      );
+
+      expect(notification).not.toBeNull();
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0].channel).toBe('inbox');
+      expect(deliveries[0].notificationId).toBe(notification!.id);
+    });
+
+    it('returns null on dedupe conflict and writes no extra deliveries', async () => {
+      const model = new NotificationModel(serverDB, userId);
+      await model.createWithDeliveries(baseNotification({ dedupeKey: 'dup-del' }), [
+        { channel: 'inbox', status: 'sent' },
+      ]);
+
+      const second = await model.createWithDeliveries(
+        baseNotification({ dedupeKey: 'dup-del', title: 'Second' }),
+        [{ channel: 'dingtalk', status: 'sent' }],
+      );
+
+      expect(second.notification).toBeNull();
+      expect(second.deliveries).toEqual([]);
+
+      const rows = await serverDB
+        .select()
+        .from(notificationDeliveries)
+        .where(eq(notificationDeliveries.channel, 'dingtalk'));
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('updateDeliveryStatus', () => {
+    it('patches status and failedReason', async () => {
+      const model = new NotificationModel(serverDB, userId);
+      const notification = await model.create(baseNotification({ title: 'A' }));
+      const delivery = await model.createDelivery({
+        channel: 'dingtalk',
+        notificationId: notification!.id,
+        status: 'pending',
+      });
+
+      const updated = await model.updateDeliveryStatus(delivery.id, {
+        failedReason: 'timeout',
+        status: 'failed',
+      });
+
+      expect(updated?.status).toBe('failed');
+      expect(updated?.failedReason).toBe('timeout');
+    });
+  });
 });

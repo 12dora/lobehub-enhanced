@@ -13,9 +13,16 @@ export const notifications = pgTable(
       .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
 
-    /** High-level grouping for preference toggles, e.g. `budget`, `subscription` */
+    /**
+     * High-level grouping for preference toggles, e.g. `budget`, `subscription`, `task`.
+     * Task events use category `task` (`TASK_NOTIFICATION_CATEGORY`).
+     */
     category: text('category').notNull(),
-    /** Specific scenario type, e.g. `budget_exhausted`, `subscription_expiring` */
+    /**
+     * Specific scenario type, e.g. `budget_exhausted`, `subscription_expiring`,
+     * or task types `task_run_completed` | `task_run_failed` | `task_waiting_for_user` | `task_completed`.
+     * No jsonb metadata column — extra context lives in `title` / `content` / `actionUrl` / `dedupeKey`.
+     */
     type: text('type').notNull(),
 
     /** Notification title, used for email subject and inbox display */
@@ -63,12 +70,17 @@ export const notificationDeliveries = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey().notNull(),
 
+    /**
+     * Parent notification. NOT NULL — DingTalk-only deliveries still need a parent row.
+     * When inbox is disabled for that type, TaskNotificationService inserts the parent with
+     * `isArchived=true` so it does not surface in the bell, then attaches the dingtalk delivery.
+     */
     notificationId: uuid('notification_id')
       .references(() => notifications.id, { onDelete: 'cascade' })
       .notNull(),
 
-    /** Delivery channel: `inbox` | `email` | `push` */
-    channel: text('channel').$type<'email' | 'inbox' | 'push'>().notNull(),
+    /** Delivery channel: `inbox` | `email` | `push` | `dingtalk` */
+    channel: text('channel').$type<'dingtalk' | 'email' | 'inbox' | 'push'>().notNull(),
     /** Lifecycle status: `pending` | `sent` | `delivered` | `failed` */
     status: text('status').$type<'delivered' | 'failed' | 'pending' | 'sent'>().notNull(),
 

@@ -6,6 +6,7 @@ import type { Context } from 'hono';
 import { tasks } from '@/database/schemas';
 import { getServerDB } from '@/database/server';
 import { TaskLifecycleService } from '@/server/services/taskLifecycle';
+import { notifyAfterTopicComplete } from '@/server/services/taskNotification';
 
 const log = debug('lobe-server:workflows:task:on-topic-complete');
 
@@ -71,6 +72,18 @@ export async function onTopicComplete(c: Context) {
       taskId,
       taskIdentifier,
       topicId,
+    });
+
+    await notifyAfterTopicComplete({
+      db,
+      errorMessage,
+      lastAssistantContent,
+      reason: reason || 'done',
+      taskId,
+      taskIdentifier,
+      topicId,
+      userId,
+      workspaceId: wsId,
     });
 
     return c.json({ success: true });
