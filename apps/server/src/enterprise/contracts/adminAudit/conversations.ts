@@ -97,9 +97,25 @@ export const adminAuditConversationsMessagesInputSchema = z
     limit: input.limit ?? ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
   }));
 
+export const adminAuditConversationMessageAttachmentSchema = z
+  .object({
+    fileId: z.string().min(1),
+    fileType: z.string(),
+    name: z.string(),
+    size: z.number(),
+    /** Relative file-proxy path; never a storage key or presigned URL. */
+    url: z.string().startsWith('/f/'),
+  })
+  .strict();
+
 export const adminAuditConversationMessageListItemSchema = z
   .object({
     agentId: z.string().nullable(),
+    /**
+     * Present only when policy allows bodies and the caller requested `includeBody`.
+     * Omitted entirely otherwise — never an empty array on the metadata-only path.
+     */
+    attachments: z.array(adminAuditConversationMessageAttachmentSchema).optional(),
     content: z.string().nullable().optional(),
     contentAccessMode: platformAuditContentAccessModeSchema.optional(),
     createdAt: z.date(),
@@ -133,4 +149,10 @@ export type AdminAuditConversationsListInputParsed = z.output<
 >;
 export type AdminAuditConversationsMessagesInputParsed = z.output<
   typeof adminAuditConversationsMessagesInputSchema
+>;
+export type AdminAuditConversationMessageAttachment = z.output<
+  typeof adminAuditConversationMessageAttachmentSchema
+>;
+export type AdminAuditConversationMessageListItem = z.output<
+  typeof adminAuditConversationMessageListItemSchema
 >;

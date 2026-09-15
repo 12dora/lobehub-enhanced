@@ -7,10 +7,11 @@
  * - Does not apply credential masking — service layer owns content policy + masking.
  */
 
-import { and, desc, eq, gte, ilike, inArray, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lt, or, type SQL, sql } from 'drizzle-orm';
 
 import { escapeLike } from '../../repositories/platformSearch';
-import { messages } from '../../schemas/message';
+import { files } from '../../schemas/file';
+import { messages, messagesFiles } from '../../schemas/message';
 import { sessions } from '../../schemas/session';
 import { topics } from '../../schemas/topic';
 import { users } from '../../schemas/user';
@@ -94,6 +95,14 @@ export interface PlatformAuditConversationMessageItem {
   topicId: string | null;
   updatedAt: Date;
   userId: string;
+}
+
+/** File metadata for a message. No object bytes or storage keys. */
+export interface PlatformAuditMessageAttachment {
+  fileId: string;
+  fileType: string;
+  name: string;
+  size: number;
 }
 
 /** List projection omits large body fields for performance. */
@@ -319,6 +328,44 @@ export class PlatformAuditConversationModel {
     }));
     const last = items.at(-1);
     return { items, nextCursor: hasMore && last ? encodeCursor(last) : null };
+  };
+
+  /**
+   * Attachments for the given message ids (`messages_files` ⋈ `files`).
+   * Separate from `listMessageDetails` so metadata-only lists never join files.
+   * Does not project `files.url` (storage key).
+   */
+  listMessageAttachments = async (
+    messageIds: string[],
+  ): Promise<Map<string, PlatformAuditMessageAttachment[]>> => {
+    const grouped = new Map<string, PlatformAuditMessageAttachment[]>();
+    if (messageIds.length === 0) return grouped;
+
+    const rows = await this.db
+      .select({
+        fileId: files.id,
+        fileType: files.fileType,
+        messageId: messagesFiles.messageId,
+        name: files.name,
+        size: files.size,
+      })
+      .from(messagesFiles)
+      .innerJoin(files, eq(messagesFiles.fileId, files.id))
+      .where(inArray(messagesFiles.messageId, messageIds))
+      .orderBy(asc(messagesFiles.messageId), asc(files.id));
+
+    for (const row of rows) {
+      const list = grouped.get(row.messageId) ?? [];
+      list.push({
+        fileId: row.fileId,
+        fileType: row.fileType,
+        name: row.name,
+        size: row.size,
+      });
+      grouped.set(row.messageId, list);
+    }
+
+    return grouped;
   };
 
   /**

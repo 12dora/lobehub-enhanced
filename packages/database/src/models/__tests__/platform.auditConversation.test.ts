@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { messages, topics, users } from '../../schemas';
+import { files, messages, messagesFiles, topics, users } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { pinyinFieldsFromFullName } from '../../utils/pinyin';
 import {
@@ -22,6 +22,8 @@ const userB = 'audit-conv-user-b';
 beforeEach(async () => {
   await serverDB.delete(messages);
   await serverDB.delete(topics);
+  await serverDB.delete(files).where(eq(files.userId, userA));
+  await serverDB.delete(files).where(eq(files.userId, userB));
   await serverDB.delete(users).where(eq(users.id, userA));
   await serverDB.delete(users).where(eq(users.id, userB));
   await serverDB.insert(users).values([{ id: userA }, { id: userB }]);
@@ -30,6 +32,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await serverDB.delete(messages);
   await serverDB.delete(topics);
+  await serverDB.delete(files).where(eq(files.userId, userA));
+  await serverDB.delete(files).where(eq(files.userId, userB));
   await serverDB.delete(users).where(eq(users.id, userA));
   await serverDB.delete(users).where(eq(users.id, userB));
 });
@@ -168,6 +172,61 @@ describe('PlatformAuditConversationModel', () => {
 
     const byInitials = await model.searchUsers({ limit: 20, q: 'sjj' });
     expect(byInitials.items.map((row) => row.id)).toContain(userA);
+  });
+
+  it('groups message attachments by message id without storage keys', async () => {
+    await serverDB.insert(topics).values({ id: 'topic-att', title: 'Files', userId: userA });
+    await serverDB.insert(messages).values([
+      { content: 'with files', id: 'msg-att-a', role: 'user', topicId: 'topic-att', userId: userA },
+      { content: 'no files', id: 'msg-att-b', role: 'user', topicId: 'topic-att', userId: userA },
+      {
+        content: 'unlisted message',
+        id: 'msg-att-other',
+        role: 'user',
+        topicId: 'topic-att',
+        userId: userA,
+      },
+    ]);
+    await serverDB.insert(files).values([
+      {
+        fileType: 'image/png',
+        id: 'file-att-1',
+        name: 'diagram.png',
+        size: 2048,
+        url: 's3://bucket/secret-object-key-1',
+        userId: userA,
+      },
+      {
+        fileType: 'application/pdf',
+        id: 'file-att-2',
+        name: 'notes.pdf',
+        size: 4096,
+        url: 's3://bucket/secret-object-key-2',
+        userId: userA,
+      },
+    ]);
+    await serverDB.insert(messagesFiles).values([
+      { fileId: 'file-att-1', messageId: 'msg-att-a', userId: userA },
+      { fileId: 'file-att-2', messageId: 'msg-att-a', userId: userA },
+      { fileId: 'file-att-1', messageId: 'msg-att-other', userId: userA },
+    ]);
+
+    const empty = await model.listMessageAttachments([]);
+    expect(empty.size).toBe(0);
+
+    const grouped = await model.listMessageAttachments(['msg-att-a', 'msg-att-b']);
+    expect(grouped.has('msg-att-b')).toBe(false);
+    expect(grouped.has('msg-att-other')).toBe(false);
+
+    const forA = grouped.get('msg-att-a');
+    expect(forA).toEqual([
+      { fileId: 'file-att-1', fileType: 'image/png', name: 'diagram.png', size: 2048 },
+      { fileId: 'file-att-2', fileType: 'application/pdf', name: 'notes.pdf', size: 4096 },
+    ]);
+    expect(JSON.stringify(forA)).not.toMatch(/s3:\/\/|secret-object-key/);
+
+    const details = await model.listMessageDetails({ topicId: 'topic-att', userId: userA });
+    expect(details.items.every((item) => !('attachments' in item))).toBe(true);
   });
 });
 

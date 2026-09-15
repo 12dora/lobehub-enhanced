@@ -5,7 +5,10 @@
 
 import { applyAuditConversationRedaction } from '@/database/models/platform';
 
-import type { AdminAuditConversationsMessagesInputParsed } from '../../contracts/adminAudit';
+import type {
+  AdminAuditConversationMessageAttachment,
+  AdminAuditConversationsMessagesInputParsed,
+} from '../../contracts/adminAudit/conversations';
 import { appendAuditAccessLog } from './accessLog';
 import type { AdminAuditServiceHost } from './adminAuditServiceHost';
 import type { ConversationContentAccess } from './contentPolicy';
@@ -22,6 +25,19 @@ type MessageListContext = {
   window: { from: Date; to: Date };
 };
 
+const toAuditAttachmentDto = (file: {
+  fileId: string;
+  fileType: string;
+  name: string;
+  size: number;
+}): AdminAuditConversationMessageAttachment => ({
+  fileId: file.fileId,
+  fileType: file.fileType,
+  name: file.name,
+  size: file.size,
+  url: `/f/${file.fileId}`,
+});
+
 export const listConversationMessageBodies = async (ctx: MessageListContext) => {
   const page = await ctx.host.conversationModel.listMessageDetails({
     cursor: ctx.input.cursor,
@@ -31,6 +47,10 @@ export const listConversationMessageBodies = async (ctx: MessageListContext) => 
     topicId: ctx.input.topicId,
     userId: ctx.input.userId,
   });
+
+  const attachmentsByMessageId = await ctx.host.conversationModel.listMessageAttachments(
+    page.items.map((row) => row.id),
+  );
 
   // Message bodies are sensitive evidence — never return them unaudited.
   await appendAuditAccessLog(ctx.host.db, {
@@ -48,6 +68,7 @@ export const listConversationMessageBodies = async (ctx: MessageListContext) => 
     redactionProfile: ctx.redactionProfile,
     items: page.items.map((row) => ({
       agentId: row.agentId,
+      attachments: (attachmentsByMessageId.get(row.id) ?? []).map(toAuditAttachmentDto),
       content:
         row.content == null
           ? null

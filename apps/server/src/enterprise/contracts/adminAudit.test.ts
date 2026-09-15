@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
   ADMIN_AUDIT_LIST_MAX_LIMIT,
+  adminAuditConversationMessageListItemSchema,
   adminAuditConversationsGetOutputSchema,
   adminAuditConversationsListInputSchema,
   adminAuditConversationsListOutputSchema,
@@ -130,6 +131,81 @@ describe('adminAudit contracts', () => {
         redactionProfile: 'off',
       }).redactionProfile,
     ).toBe('off');
+  });
+
+  it('message attachments are optional relative /f urls and reject storage keys', () => {
+    const now = new Date();
+    const item = {
+      agentId: null,
+      createdAt: now,
+      id: 'm1',
+      model: null,
+      parentId: null,
+      provider: null,
+      role: 'user',
+      sessionId: null,
+      topicId: 't1',
+      updatedAt: now,
+      userId: 'u1',
+    };
+
+    expect(adminAuditConversationMessageListItemSchema.parse(item)).not.toHaveProperty(
+      'attachments',
+    );
+
+    expect(
+      adminAuditConversationMessageListItemSchema.parse({
+        ...item,
+        attachments: [
+          {
+            fileId: 'file-1',
+            fileType: 'image/png',
+            name: 'diagram.png',
+            size: 12,
+            url: '/f/file-1',
+          },
+        ],
+      }).attachments,
+    ).toEqual([
+      {
+        fileId: 'file-1',
+        fileType: 'image/png',
+        name: 'diagram.png',
+        size: 12,
+        url: '/f/file-1',
+      },
+    ]);
+
+    expect(
+      adminAuditConversationMessageListItemSchema.safeParse({
+        ...item,
+        attachments: [
+          {
+            fileId: 'file-1',
+            fileType: 'image/png',
+            name: 'diagram.png',
+            size: 12,
+            storageKey: 's3://bucket/key',
+            url: '/f/file-1',
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      adminAuditConversationMessageListItemSchema.safeParse({
+        ...item,
+        attachments: [
+          {
+            fileId: 'file-1',
+            fileType: 'image/png',
+            name: 'diagram.png',
+            size: 12,
+            url: 'https://s3.example/presigned',
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it('export create requires userId for conversation kinds and rejects cross-kind filters', () => {

@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '@/database/core/getTestDB';
-import { messages, topics, users } from '@/database/schemas';
+import { files, messages, messagesFiles, topics, users } from '@/database/schemas';
 import {
   platformAuditLegalHolds,
   platformAuditLogs,
@@ -35,6 +35,7 @@ beforeEach(async () => {
   await serverDB.delete(platformAuditPolicies);
   await serverDB.delete(messages);
   await serverDB.delete(topics);
+  await serverDB.delete(files).where(inArray(files.userId, [actor, userA, userB]));
   await serverDB.delete(users).where(eq(users.id, actor));
   await serverDB.delete(users).where(eq(users.id, userA));
   await serverDB.delete(users).where(eq(users.id, userB));
@@ -53,6 +54,7 @@ afterEach(async () => {
   await serverDB.delete(platformAuditPolicies);
   await serverDB.delete(messages);
   await serverDB.delete(topics);
+  await serverDB.delete(files).where(inArray(files.userId, [actor, userA, userB]));
 });
 
 describe('AdminAuditService', () => {
@@ -391,6 +393,7 @@ describe('AdminAuditService', () => {
       throw new Error('expected metadata-only message item');
     }
     expect(item).not.toHaveProperty('content');
+    expect(item).not.toHaveProperty('attachments');
     expect(item.hasContent).toBe(true);
   });
 
@@ -583,6 +586,92 @@ describe('AdminAuditService', () => {
       id: actor,
       username: null,
     });
+  });
+
+  it('attaches relative /f urls only when content_allowed and includeBody', async () => {
+    const storedName = 'sk-abcdefghijklmnopqrstuvwxyz012345-invoice.pdf';
+    await serverDB.insert(topics).values({ id: 't-att', title: 'Files', userId: userA });
+    await serverDB.insert(messages).values({
+      content: 'see attached sk-abcdefghijklmnopqrstuvwxyz012345',
+      id: 'm-att',
+      role: 'user',
+      topicId: 't-att',
+      userId: userA,
+    });
+    await serverDB.insert(files).values({
+      fileType: 'application/pdf',
+      id: 'file-att',
+      name: storedName,
+      size: 88,
+      url: 's3://bucket/secret-object-key',
+      userId: userA,
+    });
+    await serverDB.insert(messagesFiles).values({
+      fileId: 'file-att',
+      messageId: 'm-att',
+      userId: userA,
+    });
+
+    const setMode = async (contentAccessMode: 'disabled' | 'metadata_only' | 'content_allowed') => {
+      const current = await service.getPolicy({ actorUserId: actor });
+      if (current.contentAccessMode === contentAccessMode) return;
+      await service.updatePolicy({
+        actorUserId: actor,
+        input: {
+          contentAccessMode,
+          expectedRevision: current.revision,
+          reason: `set ${contentAccessMode} for attachments`,
+        },
+      });
+    };
+
+    await setMode('disabled');
+    await expect(
+      service.listConversationMessages({
+        actorUserId: actor,
+        input: { includeBody: true, limit: 5, topicId: 't-att', userId: userA },
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    await setMode('metadata_only');
+    const metadata = await service.listConversationMessages({
+      actorUserId: actor,
+      input: { includeBody: true, limit: 5, topicId: 't-att', userId: userA },
+    });
+    expect(metadata.contentAccessMode).toBe('metadata_only');
+    expect(metadata.items[0]).not.toHaveProperty('attachments');
+
+    await setMode('content_allowed');
+    const withoutBody = await service.listConversationMessages({
+      actorUserId: actor,
+      input: { includeBody: false, limit: 5, topicId: 't-att', userId: userA },
+    });
+    expect(withoutBody.items[0]).not.toHaveProperty('attachments');
+
+    const withBody = await service.listConversationMessages({
+      actorUserId: actor,
+      input: { includeBody: true, limit: 5, topicId: 't-att', userId: userA },
+    });
+    const item = withBody.items[0];
+    expect(item).toBeDefined();
+    if (!item || !('attachments' in item)) {
+      throw new Error('expected attachments on body-bearing message item');
+    }
+    expect(item.attachments).toEqual([
+      {
+        fileId: 'file-att',
+        fileType: 'application/pdf',
+        name: storedName,
+        size: 88,
+        url: '/f/file-att',
+      },
+    ]);
+    expect(JSON.stringify(item.attachments)).not.toMatch(/s3:\/\/|secret-object-key/);
+    if (!('content' in item) || typeof item.content !== 'string') {
+      throw new Error('expected redacted body');
+    }
+    expect(item.content).not.toContain('sk-abcdefghijklmnopqrstuvwxyz012345');
+    expect(item.attachments[0]!.name).toBe(storedName);
   });
 });
 
