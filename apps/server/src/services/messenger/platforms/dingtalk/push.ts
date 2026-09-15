@@ -6,17 +6,28 @@ import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLin
 import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
+import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 import type { MessengerPushMessage, MessengerPushProvider, MessengerPushResult } from '../../push';
 import { registerMessengerPushProvider } from '../../push';
 import { resolveDingTalkBrandingDisplayName } from './branding';
-import { formatDingTalkViewInBrandingLabel, resolveDingTalkIdentityEmailDomain } from './const';
+import {
+  DINGTALK_CORP_ID_KEY,
+  formatDingTalkViewInBrandingLabel,
+  resolveDingTalkIdentityEmailDomain,
+} from './const';
 import { incrementDingTalkDailyCounter } from './redis';
 
 const log = debug('lobe-server:messenger:dingtalk:push');
 
 const DINGTALK_SSO_PATH = '/dingtalk/sso';
 const DINGTALK_SSO_REDIRECT_PREFIX = `${DINGTALK_SSO_PATH}?redirect=`;
+
+const emptyToNull = (value: string | null | undefined): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
 
 const appUrlBase = (): string => (appEnv.APP_URL || '').replace(/\/$/, '');
 
@@ -72,6 +83,55 @@ const wrapDingTalkSsoRedirect = (actionUrl: string): string | null => {
   return base ? `${base}${wrapped}` : wrapped;
 };
 
+/**
+ * Open an https URL inside the DingTalk micro-app container.
+ * `agentId` is the numeric AgentId (not prefixed with `0_`).
+ */
+export const buildDingTalkOpenAppUrl = (params: {
+  agentId: string;
+  corpId: string;
+  url: string;
+}): string => {
+  const agentId = params.agentId.trim();
+  const corpId = params.corpId.trim();
+  const query = [
+    `corpid=${encodeURIComponent(corpId)}`,
+    'container_type=work_platform',
+    `app_id=${encodeURIComponent(`0_${agentId}`)}`,
+    'redirect_type=jump',
+    `redirect_url=${encodeURIComponent(params.url)}`,
+  ].join('&');
+  return `dingtalk://dingtalkclient/action/openapp?${query}`;
+};
+
+const readRedisCorpId = async (): Promise<string | null> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return null;
+  try {
+    const value = await redis.get(DINGTALK_CORP_ID_KEY);
+    return emptyToNull(typeof value === 'string' ? value : null);
+  } catch (error) {
+    log('readRedisCorpId failed: %O', error);
+    return null;
+  }
+};
+
+const wrapDingTalkPushButtonUrl = async (
+  actionUrl: string,
+  config: { agentId: string | null; corpId: string | null },
+): Promise<string | null> => {
+  const httpsSso = wrapDingTalkSsoRedirect(actionUrl);
+  if (!httpsSso) return null;
+
+  const agentId = emptyToNull(config.agentId);
+  if (!agentId || !/^https?:\/\//i.test(httpsSso)) return httpsSso;
+
+  const corpId = emptyToNull(config.corpId) ?? (await readRedisCorpId());
+  if (!corpId) return httpsSso;
+
+  return buildDingTalkOpenAppUrl({ agentId, corpId, url: httpsSso });
+};
+
 const emailStaffId = (email: string | null | undefined): string | null => {
   if (!email) return null;
   const at = email.lastIndexOf('@');
@@ -110,7 +170,12 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
     const { actionUrl, markdown, title } = params.message;
 
     try {
-      const wrappedUrl = actionUrl ? wrapDingTalkSsoRedirect(actionUrl) : null;
+      const wrappedUrl = actionUrl
+        ? await wrapDingTalkPushButtonUrl(actionUrl, {
+            agentId: config.agentId ?? null,
+            corpId: config.corpId ?? null,
+          })
+        : null;
       if (wrappedUrl) {
         const displayName = await resolveDingTalkBrandingDisplayName();
         const card = buildSampleActionCardParam({

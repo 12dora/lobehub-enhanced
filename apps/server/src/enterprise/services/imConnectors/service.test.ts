@@ -318,4 +318,32 @@ describe('ImConnectorsAdminService', () => {
       }),
     );
   });
+
+  it('passes agentId through upsert settings and the view', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, agentId: '4617854000' },
+    } as never);
+
+    const view = await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, agentId: '4617854000' },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ agentId: '4617854000', robotCode: 'ding-robot' }),
+      }),
+    );
+    expect(view.agentId).toBe('4617854000');
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterDiff: expect.objectContaining({ agentId: '4617854000' }),
+      }),
+    );
+  });
 });

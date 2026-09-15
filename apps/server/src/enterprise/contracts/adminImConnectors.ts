@@ -21,6 +21,11 @@ export const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
 /** Plaintext `system_bot_providers.settings` shape for platform `dingtalk`. */
 export const dingTalkConnectorSettingsSchema = z
   .object({
+    /**
+     * Optional DingTalk micro-app AgentId for `dingtalk://…/openapp` deep links
+     * (`app_id=0_<agentId>`). Empty = push/card buttons use the plain https SSO URL.
+     */
+    agentId: z.string().trim().max(64).nullable().optional().default(null),
     /** Optional DingTalk AI card template id (卡片平台 → AI 卡片). Empty = markdown fallback. */
     aiCardTemplateId: z.string().trim().max(200).nullable().default(null),
     /** Inbound chat (Clawbot) capability. */
@@ -67,6 +72,7 @@ export const imConnectorStatusSchema = z
     lastError: z.string().nullable(),
     lastErrorAt: z.string().nullable(),
     lastEventAt: z.string().nullable(),
+    lastFrameAt: z.string().nullable().optional(),
     state: imConnectorStreamStateSchema,
   })
   .strict();
@@ -88,6 +94,8 @@ export type ImConnectorStats = z.infer<typeof imConnectorStatsSchema>;
 
 export const adminImConnectorViewSchema = z
   .object({
+    /** Optional micro-app AgentId used by DingTalk `openapp` deep links. Null when unset. */
+    agentId: z.string().nullable().optional(),
     aiCardTemplateId: z.string().nullable(),
     chatEnabled: z.boolean(),
     /** Client ID (AppKey). Null when never configured. */
@@ -134,6 +142,7 @@ export const adminImConnectorSecretInputSchema = z.discriminatedUnion('action', 
 
 export const adminImConnectorUpsertInputSchema = z
   .object({
+    agentId: z.string().trim().max(64).nullable().optional(),
     aiCardTemplateId: z.string().trim().max(200).nullable(),
     chatEnabled: z.boolean(),
     clientId: z.string().trim().min(1).max(200),

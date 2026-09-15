@@ -32,6 +32,7 @@ export const IM_CONNECTOR_CONNECTION_MODE = 'websocket';
 export const IM_CONNECTOR_AUDIT_TARGET_TYPE = 'im_connector' as const;
 
 const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
+  agentId: null,
   aiCardTemplateId: null,
   chatEnabled: true,
   corpId: null,
@@ -63,6 +64,7 @@ const parseDingTalkSettings = (
   if (parsed.success) return parsed.data;
   return {
     ...DEFAULT_SETTINGS,
+    agentId: emptyToNull(typeof raw?.agentId === 'string' ? raw.agentId : null),
     aiCardTemplateId: emptyToNull(
       typeof raw?.aiCardTemplateId === 'string' ? raw.aiCardTemplateId : null,
     ),
@@ -88,6 +90,7 @@ const parseDingTalkSettings = (
 
 const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnectorSettings =>
   dingTalkConnectorSettingsSchema.parse({
+    agentId: emptyToNull(input.agentId ?? null),
     aiCardTemplateId: emptyToNull(input.aiCardTemplateId),
     chatEnabled: input.chatEnabled,
     corpId: emptyToNull(input.corpId ?? null),
@@ -109,6 +112,7 @@ const unconfiguredView = async (
     readImConnectorStatus({ platform, redis: redisClient(), rowDisabled: false }),
   ]);
   return {
+    agentId: DEFAULT_SETTINGS.agentId,
     aiCardTemplateId: DEFAULT_SETTINGS.aiCardTemplateId,
     chatEnabled: DEFAULT_SETTINGS.chatEnabled,
     clientId: null,
@@ -145,6 +149,7 @@ const toView = async (
   ]);
 
   return {
+    agentId: emptyToNull(settings.agentId),
     aiCardTemplateId: emptyToNull(settings.aiCardTemplateId),
     chatEnabled: settings.chatEnabled,
     clientId: row.applicationId ?? null,
@@ -237,6 +242,7 @@ export class ImConnectorsAdminService {
         action: AUDIT_ACTION.SYSTEM_IM_CONNECTOR_UPDATE,
         actorUserId: params.actorUserId,
         afterDiff: {
+          agentId: settings.agentId,
           aiCardTemplateId: settings.aiCardTemplateId,
           chatEnabled: settings.chatEnabled,
           clientId: input.clientId,

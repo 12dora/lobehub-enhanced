@@ -60,7 +60,13 @@ export type DingTalkSsoConfigResult = { corpId: string | null; enabled: true } |
 
 export type DingTalkSsoExchangeResult =
   | { cookie: DingTalkSsoSessionCookie; ok: true; redirect: string }
-  | { httpStatus?: 403 | 502; ok: false; reason: DingTalkSsoFailReason };
+  | {
+      /** DingTalk `errcode` (or `http_<status>` / `network`) when `reason` is `exchange_failed`. */
+      detail?: string;
+      httpStatus?: 403 | 502;
+      ok: false;
+      reason: DingTalkSsoFailReason;
+    };
 
 /**
  * Synthetic better-auth path for DingTalk 免登 session minting.
@@ -212,13 +218,49 @@ const jsonRecord = (value: unknown): Record<string, unknown> | null => {
   return value as Record<string, unknown>;
 };
 
+const isDingTalkErrcodeFailure = (errcode: unknown): boolean =>
+  errcode !== 0 && errcode !== undefined && errcode !== null && errcode !== '0';
+
+const responseStatus = (response: Response): number | undefined =>
+  typeof response.status === 'number' ? response.status : undefined;
+
+/**
+ * Always `console.warn` (not `debug`) so exchange failures are visible without DEBUG=.
+ * Never pass the JSAPI code, app secret, access token, or request URL.
+ */
+const warnDingTalkSso = (
+  stage: string,
+  params: { errcode?: unknown; errmsg?: unknown; status?: number },
+): void => {
+  const errcode =
+    params.errcode === undefined || params.errcode === null ? 'n/a' : String(params.errcode);
+  const errmsg =
+    typeof params.errmsg === 'string' && params.errmsg.trim().length > 0
+      ? params.errmsg.trim()
+      : 'n/a';
+  const status = params.status === undefined ? 'n/a' : String(params.status);
+  console.warn(`[dingtalk-sso] ${stage} status=${status} errcode=${errcode} errmsg=${errmsg}`);
+};
+
+const dingTalkOapiDetail = (record: Record<string, unknown> | null, status?: number): string => {
+  const errcode = record?.errcode;
+  if (errcode !== undefined && errcode !== null && String(errcode).length > 0) {
+    return String(errcode);
+  }
+  return typeof status === 'number' ? `http_${status}` : 'network';
+};
+
+type DingTalkOapiFailure = { detail: string; ok: false };
+type DingTalkOapiToken = { ok: true; token: string };
+type DingTalkOapiUserId = { ok: true; userid: string };
+
 const fetchLegacyAppToken = async (
   clientId: string,
   clientSecret: string,
   now = Date.now(),
-): Promise<string | null> => {
+): Promise<DingTalkOapiToken | DingTalkOapiFailure> => {
   const cached = legacyTokenCache.get(clientId);
-  if (cached && cached.expiresAt > now) return cached.token;
+  if (cached && cached.expiresAt > now) return { ok: true, token: cached.token };
 
   const url = new URL(DINGTALK_LEGACY_TOKEN_URL);
   url.searchParams.set('appkey', clientId);
@@ -230,38 +272,45 @@ const fetchLegacyAppToken = async (
     response = await fetch(url.toString(), { cache: 'no-store', method: 'GET', redirect: 'error' });
   } catch (error) {
     log('fetchLegacyAppToken network error: %O', error);
-    return null;
+    warnDingTalkSso('gettoken', { errmsg: 'network' });
+    return { detail: 'network', ok: false };
   }
 
+  const status = responseStatus(response);
   let body: unknown;
   try {
     body = await response.json();
   } catch (error) {
     log('fetchLegacyAppToken invalid json: %O', error);
-    return null;
+    warnDingTalkSso('gettoken', { errmsg: 'invalid_json', status });
+    return { detail: dingTalkOapiDetail(null, status), ok: false };
   }
 
   const record = jsonRecord(body);
   const errcode = record?.errcode;
+  const errmsg = record?.errmsg;
   const token = record?.access_token;
-  if (errcode !== 0 && errcode !== undefined && errcode !== null && errcode !== '0') {
-    log('fetchLegacyAppToken errcode=%s', String(errcode));
-    return null;
+  if (isDingTalkErrcodeFailure(errcode)) {
+    warnDingTalkSso('gettoken', { errcode, errmsg, status });
+    return { detail: String(errcode), ok: false };
   }
-  if (typeof token !== 'string' || token.trim().length === 0) return null;
+  if (typeof token !== 'string' || token.trim().length === 0) {
+    warnDingTalkSso('gettoken', { errcode, errmsg, status });
+    return { detail: dingTalkOapiDetail(record, status), ok: false };
+  }
 
   const next: LegacyTokenCache = {
     expiresAt: now + DINGTALK_LEGACY_TOKEN_CACHE_MS,
     token: token.trim(),
   };
   legacyTokenCache.set(clientId, next);
-  return next.token;
+  return { ok: true, token: next.token };
 };
 
 const exchangeAuthCodeForUserId = async (
   accessToken: string,
   code: string,
-): Promise<string | null> => {
+): Promise<DingTalkOapiUserId | DingTalkOapiFailure> => {
   const url = new URL(DINGTALK_GETUSERINFO_URL);
   url.searchParams.set('access_token', accessToken);
 
@@ -276,27 +325,36 @@ const exchangeAuthCodeForUserId = async (
     });
   } catch (error) {
     log('exchangeAuthCodeForUserId network error: %O', error);
-    return null;
+    warnDingTalkSso('requestAuthCode', { errmsg: 'network' });
+    return { detail: 'network', ok: false };
   }
 
+  const status = responseStatus(response);
   let body: unknown;
   try {
     body = await response.json();
   } catch (error) {
     log('exchangeAuthCodeForUserId invalid json: %O', error);
-    return null;
+    warnDingTalkSso('requestAuthCode', { errmsg: 'invalid_json', status });
+    return { detail: dingTalkOapiDetail(null, status), ok: false };
   }
 
   const record = jsonRecord(body);
   const errcode = record?.errcode;
-  if (errcode !== 0 && errcode !== undefined && errcode !== null && errcode !== '0') {
-    log('exchangeAuthCodeForUserId errcode=%s', String(errcode));
-    return null;
+  const errmsg = record?.errmsg;
+  if (isDingTalkErrcodeFailure(errcode)) {
+    // 40078 = invalid/expired tmp auth code (often issued outside the micro-app container);
+    // 40014 = invalid access_token. Log errmsg so ops can see DingTalk's reason.
+    warnDingTalkSso('requestAuthCode', { errcode, errmsg, status });
+    return { detail: String(errcode), ok: false };
   }
   const result = jsonRecord(record?.result);
   const userid = result?.userid;
-  if (typeof userid !== 'string' || userid.trim().length === 0) return null;
-  return userid.trim();
+  if (typeof userid !== 'string' || userid.trim().length === 0) {
+    warnDingTalkSso('requestAuthCode', { errcode, errmsg, status });
+    return { detail: dingTalkOapiDetail(record, status), ok: false };
+  }
+  return { ok: true, userid: userid.trim() };
 };
 
 const findUserByStaffId = async (db: LobeChatDatabase, staffId: string) => {
@@ -414,13 +472,13 @@ export const exchangeDingTalkSso = async (input: {
   if (!code || code.length > 512) return { ok: false, reason: 'invalid_code' };
 
   const accessToken = await fetchLegacyAppToken(config.clientId, config.clientSecret);
-  if (!accessToken) return { ok: false, reason: 'exchange_failed' };
+  if (!accessToken.ok) return { detail: accessToken.detail, ok: false, reason: 'exchange_failed' };
 
-  const staffId = await exchangeAuthCodeForUserId(accessToken, code);
-  if (!staffId) return { ok: false, reason: 'exchange_failed' };
+  const staffId = await exchangeAuthCodeForUserId(accessToken.token, code);
+  if (!staffId.ok) return { detail: staffId.detail, ok: false, reason: 'exchange_failed' };
 
   const db = await getServerDB();
-  const user = await findUserByStaffId(db, staffId);
+  const user = await findUserByStaffId(db, staffId.userid);
   if (!user?.id) {
     log('sso user_not_found staffId=%s domain=%s', staffId, resolveDingTalkIdentityEmailDomain());
     return { ok: false, reason: 'user_not_found' };

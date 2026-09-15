@@ -81,6 +81,8 @@ export interface MessengerDiscordConfig {
  * `apps/server`.
  */
 export interface MessengerDingTalkConfig {
+  /** Optional micro-app AgentId for `dingtalk://…/openapp` deep links; empty/missing → null. */
+  agentId: string | null;
   aiCardTemplateId: string | null;
   chatEnabled: boolean;
   clientId: string;
@@ -100,6 +102,7 @@ const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
 
 const dingTalkConnectorSettingsSchema = z
   .object({
+    agentId: z.string().trim().max(64).nullable().optional(),
     aiCardTemplateId: z.string().trim().max(200).nullable().optional(),
     chatEnabled: z.boolean().optional(),
     corpId: z.string().trim().max(200).nullable().optional(),
@@ -223,6 +226,7 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
 
     const settings = parsed.data;
     return {
+      agentId: emptyToNull(settings.agentId ?? null),
       aiCardTemplateId: emptyToNull(settings.aiCardTemplateId ?? null),
       chatEnabled: settings.chatEnabled ?? true,
       clientId,

@@ -85,10 +85,11 @@ const VALID_CONFIG = {
   selectCardTemplateId: null,
 };
 
-const jsonResponse = (body: unknown, ok = true) =>
+const jsonResponse = (body: unknown, ok = true, status = 200) =>
   ({
     json: async () => body,
     ok,
+    status,
   }) as Response;
 
 beforeEach(() => {
@@ -317,6 +318,60 @@ describe('exchangeDingTalkSso', () => {
       .mocked(fetch)
       .mock.calls.filter((call) => String(call[0]).startsWith(DINGTALK_LEGACY_TOKEN_URL));
     expect(after).toHaveLength(2);
+  });
+
+  it.each([
+    { errcode: 40078, errmsg: '不合法的临时授权码' },
+    { errcode: 40014, errmsg: '不合法的access_token' },
+  ])(
+    'returns exchange_failed with detail and warns errcode/errmsg/status for requestAuthCode $errcode',
+    async ({ errcode, errmsg }) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const secretCode = 'secret-jsapi-auth-code';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL) => {
+          const url = String(input);
+          if (url.startsWith(DINGTALK_LEGACY_TOKEN_URL)) {
+            return jsonResponse({ access_token: 'legacy-token', errcode: 0 });
+          }
+          return jsonResponse({ errcode, errmsg });
+        }),
+      );
+
+      await expect(
+        exchangeDingTalkSso({ code: secretCode, ip: '1.1.1.1', redirect: '/home' }),
+      ).resolves.toEqual({ detail: String(errcode), ok: false, reason: 'exchange_failed' });
+
+      const logged = warn.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+      expect(logged).toContain('[dingtalk-sso] requestAuthCode');
+      expect(logged).toContain('status=200');
+      expect(logged).toContain(`errcode=${errcode}`);
+      expect(logged).toContain(errmsg);
+      expect(logged).not.toContain(secretCode);
+      expect(logged).not.toContain('app_secret');
+      expect(logged).not.toContain('legacy-token');
+      warn.mockRestore();
+    },
+  );
+
+  it('returns exchange_failed with detail and warns when gettoken returns 40014', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ errcode: 40014, errmsg: '不合法的access_token' })),
+    );
+
+    await expect(
+      exchangeDingTalkSso({ code: 'auth-code', ip: '1.1.1.1', redirect: '/home' }),
+    ).resolves.toEqual({ detail: '40014', ok: false, reason: 'exchange_failed' });
+
+    const logged = warn.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+    expect(logged).toContain('[dingtalk-sso] gettoken');
+    expect(logged).toContain('errcode=40014');
+    expect(logged).toContain('不合法的access_token');
+    expect(logged).not.toContain('app_secret');
+    warn.mockRestore();
   });
 });
 

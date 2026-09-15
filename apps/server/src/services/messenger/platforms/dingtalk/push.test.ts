@@ -6,6 +6,7 @@ const mockFindByPlatform = vi.fn();
 const mockFindById = vi.fn();
 const mockIncr = vi.fn();
 const mockExpire = vi.fn();
+const mockRedisGet = vi.fn();
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
@@ -35,7 +36,11 @@ vi.mock('@/database/models/user', () => ({
 }));
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
-  getAgentRuntimeRedisClient: vi.fn(() => ({ expire: mockExpire, incr: mockIncr })),
+  getAgentRuntimeRedisClient: vi.fn(() => ({
+    expire: mockExpire,
+    get: mockRedisGet,
+    incr: mockIncr,
+  })),
 }));
 
 vi.mock('./branding', () => ({
@@ -45,8 +50,11 @@ vi.mock('./branding', () => ({
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const { resetMessengerPushProvidersForTest } = await import('../../push');
-const { dingtalkMessengerPushProvider, registerDingTalkMessengerPushProvider } =
-  await import('./push');
+const {
+  buildDingTalkOpenAppUrl,
+  dingtalkMessengerPushProvider,
+  registerDingTalkMessengerPushProvider,
+} = await import('./push');
 
 const VALID_CONFIG = {
   chatEnabled: true,
@@ -67,6 +75,7 @@ beforeEach(() => {
   sendOtoMessage.mockResolvedValue({});
   mockIncr.mockResolvedValue(1);
   mockExpire.mockResolvedValue(1);
+  mockRedisGet.mockResolvedValue(null);
   mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
 });
 
@@ -263,5 +272,126 @@ describe('DingTalkMessengerPushProvider', () => {
       userId: 'user_1',
     });
     expect(sendOtoMessage.mock.calls[0][0].userIds).toEqual(['staff_9']);
+  });
+});
+
+describe('buildDingTalkOpenAppUrl', () => {
+  it('builds a work_platform openapp URL with urlencoded redirect_url', () => {
+    const httpsSso = 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1';
+    expect(
+      buildDingTalkOpenAppUrl({
+        agentId: '4617854000',
+        corpId: 'ding42',
+        url: httpsSso,
+      }),
+    ).toBe(
+      `dingtalk://dingtalkclient/action/openapp?corpid=ding42&container_type=work_platform&app_id=0_4617854000&redirect_type=jump&redirect_url=${encodeURIComponent(httpsSso)}`,
+    );
+  });
+});
+
+describe('DingTalkMessengerPushProvider openapp deep link', () => {
+  const HTTPS_SSO = 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1';
+
+  it('uses the openapp deep link when agentId and settings.corpId are known', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      agentId: '4617854000',
+      corpId: 'ding42',
+    } as any);
+
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(param.singleURL).toBe(
+      buildDingTalkOpenAppUrl({
+        agentId: '4617854000',
+        corpId: 'ding42',
+        url: HTTPS_SSO,
+      }),
+    );
+    expect(param.singleURL.startsWith('dingtalk://dingtalkclient/action/openapp?')).toBe(true);
+    expect(param.singleURL).toContain(`redirect_url=${encodeURIComponent(HTTPS_SSO)}`);
+    expect(mockRedisGet).not.toHaveBeenCalled();
+  });
+
+  it('uses Redis corpId when settings omit corpId but agentId is set', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      agentId: '4617854000',
+      corpId: null,
+    } as any);
+    mockRedisGet.mockResolvedValueOnce('ding-from-redis');
+
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(param.singleURL).toBe(
+      buildDingTalkOpenAppUrl({
+        agentId: '4617854000',
+        corpId: 'ding-from-redis',
+        url: HTTPS_SSO,
+      }),
+    );
+    expect(mockRedisGet).toHaveBeenCalledWith('messenger:dingtalk:corp-id');
+  });
+
+  it('falls back to the plain https SSO url when agentId is missing', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      agentId: null,
+      corpId: 'ding42',
+    } as any);
+
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(param.singleURL).toBe(HTTPS_SSO);
+  });
+
+  it('falls back to the plain https SSO url when corpId is unknown', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      agentId: '4617854000',
+      corpId: null,
+    } as any);
+    mockRedisGet.mockResolvedValueOnce(null);
+
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(param.singleURL).toBe(HTTPS_SSO);
   });
 });

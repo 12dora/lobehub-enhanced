@@ -48,7 +48,9 @@ export async function POST(req: NextRequest) {
 
   if (!result.ok) {
     return NextResponse.json(
-      { ok: false, reason: result.reason },
+      result.detail
+        ? { detail: result.detail, ok: false, reason: result.reason }
+        : { ok: false, reason: result.reason },
       { headers, status: result.httpStatus ?? statusForReason(result.reason) },
     );
   }

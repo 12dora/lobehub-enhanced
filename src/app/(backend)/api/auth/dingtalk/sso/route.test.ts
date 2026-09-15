@@ -91,6 +91,23 @@ describe('POST /api/auth/dingtalk/sso', () => {
     await expect(response.json()).resolves.toEqual({ ok: false, reason: 'exchange_failed' });
   });
 
+  it('forwards exchange_failed detail (DingTalk errcode) in the JSON body', async () => {
+    exchangeDingTalkSso.mockResolvedValueOnce({
+      detail: '40078',
+      ok: false,
+      reason: 'exchange_failed',
+    });
+
+    const response = await post({ code: 'auth-code', redirect: '/home' });
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      detail: '40078',
+      ok: false,
+      reason: 'exchange_failed',
+    });
+  });
+
   it('maps a forbidden session-mint APIError to 403 exchange_failed', async () => {
     exchangeDingTalkSso.mockResolvedValueOnce({
       httpStatus: 403,

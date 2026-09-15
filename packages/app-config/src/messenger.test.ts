@@ -73,6 +73,7 @@ describe('getMessengerDingTalkConfig', () => {
   it('returns the decoded config when the row is complete', async () => {
     findEnabledByPlatform.mockResolvedValueOnce(COMPLETE_ROW);
     await expect(getMessengerDingTalkConfig()).resolves.toEqual({
+      agentId: null,
       aiCardTemplateId: null,
       chatEnabled: true,
       clientId: 'app_key',
@@ -94,6 +95,18 @@ describe('getMessengerDingTalkConfig', () => {
     await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
       clientId: 'app_key',
       corpId: 'ding42',
+      robotCode: 'robot_1',
+    });
+  });
+
+  it('parses optional agentId from settings', async () => {
+    findEnabledByPlatform.mockResolvedValueOnce({
+      ...COMPLETE_ROW,
+      settings: { ...COMPLETE_ROW.settings, agentId: '4617854000' },
+    });
+    await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+      agentId: '4617854000',
+      clientId: 'app_key',
       robotCode: 'robot_1',
     });
   });
