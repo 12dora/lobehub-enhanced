@@ -115,6 +115,7 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
   configured: true,
+  corpId: null,
   enabled: true,
   hasClientSecret: true,
   idleNewTopicEnabled: true,
@@ -419,6 +420,38 @@ describe('DingTalkConnectorCard', () => {
     await waitFor(() =>
       expect(screen.getByText('systemGeneral.imConnectors.test.errors.unknown')).toBeTruthy(),
     );
+  });
+
+  it('sends the CorpId an admin typed, so 免登 works before the first message arrives', async () => {
+    const stub = service();
+    render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+    fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.corpId'), {
+      target: { value: '  ding-corp-42  ' },
+    });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert.mock.calls[0]![0]).toMatchObject({ corpId: 'ding-corp-42' });
+  });
+
+  it('sends a null CorpId when the field is left blank, so the worker keeps auto-capturing it', async () => {
+    const stub = service();
+    render(
+      <DingTalkConnectorCard canOperate service={stub} view={view({ corpId: 'ding-corp' })} />,
+    );
+
+    expect(
+      (screen.getByLabelText('systemGeneral.imConnectors.fields.corpId') as HTMLInputElement).value,
+    ).toBe('ding-corp');
+
+    fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.corpId'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert.mock.calls[0]![0].corpId).toBeNull();
   });
 
   it('restores the server values when the edit is abandoned', () => {

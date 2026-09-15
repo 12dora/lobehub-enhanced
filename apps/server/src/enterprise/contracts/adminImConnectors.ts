@@ -25,6 +25,11 @@ export const dingTalkConnectorSettingsSchema = z
     aiCardTemplateId: z.string().trim().max(200).nullable().default(null),
     /** Inbound chat (Clawbot) capability. */
     chatEnabled: z.boolean().default(true),
+    /**
+     * Optional DingTalk CorpId for in-client 免登 (`dd.runtime.permission.requestAuthCode`).
+     * Empty = the stream worker captures it from inbound robot messages into Redis.
+     */
+    corpId: z.string().trim().max(200).nullable().optional().default(null),
     /** Auto-start a new topic when the last message is older than `idleNewTopicHours`. */
     idleNewTopicEnabled: z.boolean().default(true),
     idleNewTopicHours: z
@@ -91,6 +96,8 @@ export const adminImConnectorViewSchema = z
     clientSecretFingerprint: z.string().nullable(),
     /** True once a row exists (even if disabled). */
     configured: z.boolean(),
+    /** Optional CorpId used by the DingTalk 免登 SSO bridge. Null when unset. */
+    corpId: z.string().nullable().optional(),
     enabled: z.boolean(),
     hasClientSecret: z.boolean(),
     idleNewTopicEnabled: z.boolean(),
@@ -131,6 +138,7 @@ export const adminImConnectorUpsertInputSchema = z
     chatEnabled: z.boolean(),
     clientId: z.string().trim().min(1).max(200),
     clientSecret: adminImConnectorSecretInputSchema,
+    corpId: z.string().trim().max(200).nullable().optional(),
     enabled: z.boolean(),
     idleNewTopicEnabled: z.boolean(),
     idleNewTopicHours: z

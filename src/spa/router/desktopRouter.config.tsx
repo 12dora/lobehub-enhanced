@@ -1013,6 +1013,13 @@ export const desktopRoutes: RouteObject[] = [
     path: '/verify-im',
   },
 
+  // DingTalk 免登 bridge (public, outside main layout — no chrome, transits to the target)
+  {
+    element: dynamicElement(() => import('@/routes/dingtalk/sso'), 'Desktop > DingTalkSso'),
+    errorElement: <ErrorBoundary />,
+    path: '/dingtalk/sso',
+  },
+
   // Verify report workspace — standalone master-detail (outside main layout)
   {
     children: [

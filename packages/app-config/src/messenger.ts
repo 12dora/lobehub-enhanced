@@ -85,6 +85,8 @@ export interface MessengerDingTalkConfig {
   chatEnabled: boolean;
   clientId: string;
   clientSecret: string;
+  /** Optional CorpId for DingTalk 免登; empty/missing → null (SSO falls back to Redis). */
+  corpId: string | null;
   idleNewTopicEnabled: boolean;
   idleNewTopicHours: number;
   pushEnabled: boolean;
@@ -100,6 +102,7 @@ const dingTalkConnectorSettingsSchema = z
   .object({
     aiCardTemplateId: z.string().trim().max(200).nullable().optional(),
     chatEnabled: z.boolean().optional(),
+    corpId: z.string().trim().max(200).nullable().optional(),
     idleNewTopicEnabled: z.boolean().optional(),
     idleNewTopicHours: z
       .number()
@@ -224,6 +227,7 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
       chatEnabled: settings.chatEnabled ?? true,
       clientId,
       clientSecret,
+      corpId: emptyToNull(settings.corpId ?? null),
       idleNewTopicEnabled: settings.idleNewTopicEnabled ?? true,
       idleNewTopicHours: settings.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,
       pushEnabled: settings.pushEnabled ?? true,

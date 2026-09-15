@@ -128,6 +128,7 @@ import TaskDetailRoute from '@/routes/(main)/task/[taskId]';
 import AllTasksPage from '@/routes/(main)/tasks';
 import VerifyWorkspace from '@/routes/(main)/verify';
 import VerifyEmptyDetail from '@/routes/(main)/verify/empty';
+import DingTalkSsoPage from '@/routes/dingtalk/sso';
 import SharePagePage from '@/routes/share/page/[id]';
 import ShareTopicPage from '@/routes/share/t/[id]';
 import ShareTopicLayout from '@/routes/share/t/[id]/_layout';
@@ -786,6 +787,13 @@ export const desktopRoutes: RouteObject[] = [
     element: <VerifyImPage />,
     errorElement: <ErrorBoundary />,
     path: '/verify-im',
+  },
+
+  // DingTalk 免登 bridge (public, outside main layout — no chrome, transits to the target)
+  {
+    element: <DingTalkSsoPage />,
+    errorElement: <ErrorBoundary />,
+    path: '/dingtalk/sso',
   },
 
   // Verify report workspace — standalone master-detail (outside main layout)

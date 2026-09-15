@@ -18,7 +18,8 @@ describe('proxy SPA matcher', () => {
     },
   );
 
-  it.each(['/verify', '/verify/run-1', '/verify-im'])(
+  // Without a middleware pass there is no SPA rewrite, so the bridge would 404.
+  it.each(['/verify', '/verify/run-1', '/verify-im', '/dingtalk/sso'])(
     'runs the proxy for %s so session gating can apply',
     (url) => {
       expect(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url })).toBe(true);

@@ -243,6 +243,11 @@ export function defineConfig() {
     // and the random_id token is the actual capability check; no need for
     // session-protected access at the middleware layer.
     '/verify-im',
+    // DingTalk 免登 SSO bridge — the SPA page exchanges a JSAPI authCode before
+    // a session exists. Session-gating it would bounce the visitor to /signin
+    // and the in-DingTalk login could never complete. The API under
+    // `/api/auth/dingtalk/sso` is already public via `/api/auth(.*)` above.
+    '/dingtalk/sso',
   ]);
 
   const betterAuthMiddleware = async (req: NextRequest) => {

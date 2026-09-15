@@ -2330,6 +2330,7 @@ export default {
   'systemGeneral.imConnectors.fields.enabled': 'Enabled',
   'systemGeneral.imConnectors.fields.clientId': 'Client ID',
   'systemGeneral.imConnectors.fields.clientSecret': 'Client Secret',
+  'systemGeneral.imConnectors.fields.corpId': 'CorpId',
   'systemGeneral.imConnectors.fields.robotCode': 'RobotCode',
   'systemGeneral.imConnectors.fields.aiCardTemplateId': 'AI card template ID',
   'systemGeneral.imConnectors.fields.selectCardTemplateId': 'Select card template ID',
@@ -2341,6 +2342,8 @@ export default {
     'Create an enterprise internal app in the DingTalk developer console, add a robot, and set message receiving to Stream mode.',
   'systemGeneral.imConnectors.hints.robotCode':
     'From the robot page of the app; it is usually the same as the Client ID.',
+  'systemGeneral.imConnectors.hints.corpId':
+    'DingTalk developer console home page → Enterprise information → CorpId. Leave it empty to pick it up from the first message.',
   'systemGeneral.imConnectors.hints.cardTemplates':
     'Falls back to Markdown messages when left empty.',
   'systemGeneral.imConnectors.hints.chatEnabled': 'Answer direct messages and group mentions.',

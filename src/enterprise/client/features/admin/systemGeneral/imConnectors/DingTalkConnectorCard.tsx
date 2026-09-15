@@ -157,6 +157,21 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
                   />
                 )}
               </InfraField>
+              <InfraField
+                error={errors.corpId}
+                hint={t('systemGeneral.imConnectors.hints.corpId')}
+                label={t('systemGeneral.imConnectors.fields.corpId')}
+              >
+                {(field) => (
+                  <Input
+                    {...field.control}
+                    autoComplete="off"
+                    disabled={locked}
+                    value={draft.corpId}
+                    onChange={(event) => editor.patch({ corpId: event.target.value })}
+                  />
+                )}
+              </InfraField>
             </div>
           </div>
 

@@ -77,11 +77,24 @@ describe('getMessengerDingTalkConfig', () => {
       chatEnabled: true,
       clientId: 'app_key',
       clientSecret: 'app_secret',
+      corpId: null,
       idleNewTopicEnabled: true,
       idleNewTopicHours: 24,
       pushEnabled: true,
       robotCode: 'robot_1',
       selectCardTemplateId: null,
+    });
+  });
+
+  it('parses optional corpId from settings', async () => {
+    findEnabledByPlatform.mockResolvedValueOnce({
+      ...COMPLETE_ROW,
+      settings: { ...COMPLETE_ROW.settings, corpId: 'ding42' },
+    });
+    await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+      clientId: 'app_key',
+      corpId: 'ding42',
+      robotCode: 'robot_1',
     });
   });
 

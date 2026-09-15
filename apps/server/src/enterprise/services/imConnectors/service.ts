@@ -34,6 +34,7 @@ export const IM_CONNECTOR_AUDIT_TARGET_TYPE = 'im_connector' as const;
 const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   aiCardTemplateId: null,
   chatEnabled: true,
+  corpId: null,
   idleNewTopicEnabled: true,
   idleNewTopicHours: IM_CONNECTOR_IDLE_HOURS_DEFAULT,
   pushEnabled: true,
@@ -67,6 +68,7 @@ const parseDingTalkSettings = (
     ),
     chatEnabled:
       typeof raw?.chatEnabled === 'boolean' ? raw.chatEnabled : DEFAULT_SETTINGS.chatEnabled,
+    corpId: emptyToNull(typeof raw?.corpId === 'string' ? raw.corpId : null),
     idleNewTopicEnabled:
       typeof raw?.idleNewTopicEnabled === 'boolean'
         ? raw.idleNewTopicEnabled
@@ -88,6 +90,7 @@ const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnect
   dingTalkConnectorSettingsSchema.parse({
     aiCardTemplateId: emptyToNull(input.aiCardTemplateId),
     chatEnabled: input.chatEnabled,
+    corpId: emptyToNull(input.corpId ?? null),
     idleNewTopicEnabled: input.idleNewTopicEnabled,
     idleNewTopicHours: input.idleNewTopicHours,
     pushEnabled: input.pushEnabled,
@@ -111,6 +114,7 @@ const unconfiguredView = async (
     clientId: null,
     clientSecretFingerprint: null,
     configured: false,
+    corpId: DEFAULT_SETTINGS.corpId,
     enabled: false,
     hasClientSecret: false,
     idleNewTopicEnabled: DEFAULT_SETTINGS.idleNewTopicEnabled,
@@ -146,6 +150,7 @@ const toView = async (
     clientId: row.applicationId ?? null,
     clientSecretFingerprint: secret ? fingerprintClientSecret(secret) : null,
     configured: true,
+    corpId: emptyToNull(settings.corpId),
     enabled: row.enabled,
     hasClientSecret: Boolean(secret),
     idleNewTopicEnabled: settings.idleNewTopicEnabled,
@@ -235,6 +240,7 @@ export class ImConnectorsAdminService {
           aiCardTemplateId: settings.aiCardTemplateId,
           chatEnabled: settings.chatEnabled,
           clientId: input.clientId,
+          corpId: settings.corpId,
           rotation: replacing ? 'replaced' : 'kept',
           enabled: input.enabled,
           idleNewTopicEnabled: settings.idleNewTopicEnabled,

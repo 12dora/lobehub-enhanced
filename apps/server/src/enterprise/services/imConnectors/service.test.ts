@@ -145,7 +145,7 @@ describe('ImConnectorsAdminService', () => {
         applicationId: 'ding-app-key',
         connectionMode: 'websocket',
         enabled: true,
-        settings: expect.objectContaining({ robotCode: 'ding-robot' }),
+        settings: expect.objectContaining({ corpId: null, robotCode: 'ding-robot' }),
       }),
     );
     expect(vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2]).not.toHaveProperty(
@@ -289,5 +289,33 @@ describe('ImConnectorsAdminService', () => {
       clientId: 'ding-app-key',
       clientSecret: SECRET,
     });
+  });
+
+  it('passes corpId through upsert settings and the view', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, corpId: 'ding42' },
+    } as never);
+
+    const view = await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, corpId: 'ding42' },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ corpId: 'ding42', robotCode: 'ding-robot' }),
+      }),
+    );
+    expect(view.corpId).toBe('ding42');
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterDiff: expect.objectContaining({ corpId: 'ding42' }),
+      }),
+    );
   });
 });

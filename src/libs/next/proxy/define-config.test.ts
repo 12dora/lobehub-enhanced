@@ -170,4 +170,17 @@ describe('defineConfig public routes', () => {
     expect(response?.headers.get('location')).toBeNull();
     expect(response?.headers.get('x-middleware-rewrite')).toBeTruthy();
   });
+
+  // The DingTalk 免登 bridge IS the sign-in: gating it would redirect it to /signin and the
+  // 免登 exchange could never run.
+  it('lets an unauthenticated /dingtalk/sso visitor through', async () => {
+    getSessionMock.mockResolvedValue(null);
+
+    const response = await middleware(
+      new NextRequest('http://localhost:3010/dingtalk/sso?redirect=%2Ftasks'),
+    );
+
+    expect(response?.headers.get('location')).toBeNull();
+    expect(response?.headers.get('x-middleware-rewrite')).toBeTruthy();
+  });
 });

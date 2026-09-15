@@ -50,6 +50,8 @@ export const config = {
     '/signin(.*)',
     '/verify-email(.*)',
     '/verify-im(.*)',
+    // DingTalk 免登 bridge — the middleware pass is what rewrites it onto the SPA shell.
+    '/dingtalk/sso',
     // `/verify` is session-gated (not a public route). Keep it in the matcher
     // so anonymous visitors get the edge redirect to /signin.
     '/verify',

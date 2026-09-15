@@ -29,6 +29,8 @@ export interface DingTalkConnectorDraft {
   chatEnabled: boolean;
   clientId: string;
   clientSecret: ImConnectorSecretDraft;
+  /** Optional: when empty the stream worker captures the CorpId from the first inbound message. */
+  corpId: string;
   enabled: boolean;
   idleNewTopicEnabled: boolean;
   /** `null` while the field is empty, so "unset" stays distinguishable from a typed 0. */
@@ -42,6 +44,7 @@ export type DingTalkConnectorFieldErrors = Partial<
   Record<
     | 'clientId'
     | 'clientSecret'
+    | 'corpId'
     | 'robotCode'
     | 'idleNewTopicHours'
     | 'aiCardTemplateId'
@@ -59,6 +62,7 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
     stored: view.hasClientSecret,
     value: '',
   },
+  corpId: view.corpId ?? '',
   enabled: view.enabled,
   idleNewTopicEnabled: view.idleNewTopicEnabled,
   idleNewTopicHours: view.idleNewTopicHours,
@@ -81,6 +85,7 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.clientSecret.fingerprint,
     draft.clientSecret.stored,
     draft.clientSecret.value,
+    draft.corpId.trim(),
     draft.enabled,
     draft.idleNewTopicEnabled,
     draft.idleNewTopicHours,
@@ -129,6 +134,8 @@ export const validateDingTalkDraft = (
   if (secret.length === 0 && !draft.clientSecret.stored) errors.clientSecret = 'required';
   else if (secret.length > SECRET_MAX) errors.clientSecret = 'tooLong';
 
+  if (draft.corpId.trim().length > TEXT_MAX) errors.corpId = 'tooLong';
+
   if (draft.aiCardTemplateId.trim().length > TEXT_MAX) errors.aiCardTemplateId = 'tooLong';
   if (draft.selectCardTemplateId.trim().length > TEXT_MAX) errors.selectCardTemplateId = 'tooLong';
 
@@ -161,6 +168,7 @@ export const toDingTalkUpsertInput = (
     draft.clientSecret.value.trim().length > 0
       ? { action: 'replace', value: draft.clientSecret.value.trim() }
       : { action: 'keep' },
+  corpId: optionalText(draft.corpId),
   enabled: draft.enabled,
   idleNewTopicEnabled: draft.idleNewTopicEnabled,
   idleNewTopicHours: draft.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,
