@@ -119,15 +119,15 @@ const mockChatBot = {
 };
 vi.mock('chat', () => {
   class MockMessage {
-    attachments;
-    author;
-    formatted;
-    id;
-    isMention;
-    metadata;
-    raw;
-    text;
-    threadId;
+    attachments: unknown;
+    author: unknown;
+    formatted: unknown;
+    id: unknown;
+    isMention: unknown;
+    metadata: unknown;
+    raw: unknown;
+    text: unknown;
+    threadId: unknown;
     constructor(data: Record<string, unknown>) {
       Object.assign(this, data);
     }
