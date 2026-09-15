@@ -62,7 +62,7 @@ export default {
     'AppSecret of the DingTalk app. It will be encrypted and stored securely.',
   'channel.dingtalk.description': 'Connect this agent to DingTalk for private and group chats.',
   'channel.dingtalk.robotCode': 'Robot Code',
-  'channel.dingtalk.robotCodeHint': 'RobotCode of the enterprise robot (Stream mode).',
+  'channel.dingtalk.robotCodeHint': 'Robot code of the enterprise robot (Stream mode).',
   'channel.dingtalk.selectCardTemplateId': 'Select Card Template ID',
   'channel.dingtalk.selectCardTemplateIdHint':
     'Optional. Template ID for interactive select cards (agent/topic pickers).',

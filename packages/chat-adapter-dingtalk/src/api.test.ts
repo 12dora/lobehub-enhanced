@@ -75,16 +75,49 @@ describe('DingTalkApiClient', () => {
 
     it('sendBySessionWebhook posts JSON with no token header', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ errcode: 0 }));
-      await client.sendBySessionWebhook('https://hook.example/session', {
-        markdown: { text: 'hi', title: 't' },
-        msgtype: 'markdown',
-      });
+      await client.sendBySessionWebhook(
+        'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+        {
+          markdown: { text: 'hi', title: 't' },
+          msgtype: 'markdown',
+        },
+      );
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('https://hook.example/session');
+      expect(url).toBe('https://oapi.dingtalk.com/robot/sendBySession?session=abc');
       expect(
         (init.headers as Record<string, string>)['x-acs-dingtalk-access-token'],
       ).toBeUndefined();
+    });
+
+    it('rejects a sessionWebhook whose host is not *.dingtalk.com', async () => {
+      await expect(
+        client.sendBySessionWebhook('http://169.254.169.254/latest/meta-data', {
+          msgtype: 'markdown',
+        }),
+      ).rejects.toMatchObject({
+        code: 'invalid_webhook',
+        name: 'DingTalkApiError',
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('does not put the webhook query string in the API error message', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ errmsg: 'boom', errcode: 400 }, 400));
+      const webhook = 'https://oapi.dingtalk.com/robot/sendBySession?session=secret-token';
+      await expect(
+        client.sendBySessionWebhook(webhook, { msgtype: 'markdown' }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('sessionWebhook'),
+      });
+      try {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ errmsg: 'boom', errcode: 400 }, 400));
+        await client.sendBySessionWebhook(webhook, { msgtype: 'markdown' });
+      } catch (error) {
+        expect((error as Error).message).not.toContain('session=');
+        expect((error as Error).message).not.toContain('secret-token');
+        expect((error as Error).message).not.toContain(webhook);
+      }
     });
 
     it('sendOtoMessage and sendGroupMessage hit robot APIs with the ACS token', async () => {

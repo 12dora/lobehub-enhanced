@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 import type { DingTalkApiClient } from './api';
+import { rememberDingTalkCard } from './threadId';
 import type { DingTalkActionCardButton, DingTalkActionCardParam } from './types';
-import { DingTalkCardUnavailableError } from './types';
+import {
+  CONVERSATION_TYPE_DM,
+  CONVERSATION_TYPE_GROUP,
+  DingTalkCardUnavailableError,
+} from './types';
 
 const DTMD_SEND_MESSAGE = 'dtmd://dingtalkclient/sendMessage?content=';
 
@@ -53,6 +58,8 @@ export function buildActionCardParam(options: {
 
 export interface DingTalkAiCardStreamOptions {
   cardTemplateId: string;
+  /** DM conversation id. Required to remember the card → thread mapping. */
+  conversationId?: string;
   openConversationId?: string;
   outTrackId?: string;
   robotCode: string;
@@ -86,6 +93,16 @@ export class DingTalkAiCardStream {
         staffId: this.options.staffId,
       });
       this.created = true;
+      const conversationId = this.options.conversationId || this.options.openConversationId || '';
+      if (this.options.staffId || conversationId) {
+        rememberDingTalkCard(this.outTrackId, {
+          askerStaffId: this.options.staffId ?? '',
+          conversationId,
+          conversationType: this.options.openConversationId
+            ? CONVERSATION_TYPE_GROUP
+            : CONVERSATION_TYPE_DM,
+        });
+      }
     } catch (error) {
       throw this.wrap(error);
     }

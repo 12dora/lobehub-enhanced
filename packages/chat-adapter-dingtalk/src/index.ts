@@ -7,14 +7,25 @@ export {
   encodeDingTalkThreadId,
   extractMediaMetadata,
 } from './adapter';
-export { DingTalkApiClient } from './api';
+export { assertDingTalkSessionWebhook, DingTalkApiClient } from './api';
 export { buildActionCardParam, DingTalkAiCardStream, dtmdSendMessageUrl } from './cards';
+export {
+  buildDingTalkForwardHeaders,
+  DINGTALK_FORWARD_HEADER,
+  DINGTALK_FORWARD_TS_HEADER,
+  DINGTALK_FORWARD_WINDOW_SECONDS,
+  verifyDingTalkForwardHeaders,
+} from './forwardAuth';
 export type { DingTalkStreamFrame, DingTalkStreamOptions } from './stream';
 export { DingTalkStreamConnection } from './stream';
+export type { DingTalkCardMemory, RememberDingTalkCardInput } from './threadId';
 export {
+  clearDingTalkCards,
   clearDingTalkSessions,
+  getDingTalkCard,
   getDingTalkSession,
   isSessionWebhookLive,
+  rememberDingTalkCard,
   rememberDingTalkSession,
   sessionFromRobotMessage,
   threadIdFromRobotMessage,

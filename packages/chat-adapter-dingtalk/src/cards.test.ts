@@ -48,4 +48,27 @@ describe('DingTalkAiCardStream', () => {
     });
     await expect(stream.create()).rejects.toBeInstanceOf(DingTalkCardUnavailableError);
   });
+
+  it('remembers outTrackId → asker/thread on create', async () => {
+    const { clearDingTalkCards, getDingTalkCard } = await import('./threadId');
+    clearDingTalkCards();
+    const api = {
+      createAndDeliverCard: async () => ({}),
+    } as unknown as DingTalkApiClient;
+
+    const stream = new DingTalkAiCardStream(api, {
+      cardTemplateId: 'tpl',
+      conversationId: 'cid_dm_1',
+      outTrackId: 'out_fixed',
+      robotCode: 'r',
+      staffId: 'staff_1',
+    });
+    await stream.create();
+    expect(getDingTalkCard('out_fixed')).toEqual({
+      askerStaffId: 'staff_1',
+      conversationId: 'cid_dm_1',
+      conversationType: '1',
+      threadId: 'dingtalk:cid_dm_1',
+    });
+  });
 });

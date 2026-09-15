@@ -5,7 +5,7 @@ import { schema } from './schema';
 
 export const dingtalk: PlatformDefinition = {
   id: 'dingtalk',
-  name: '钉钉',
+  name: 'DingTalk',
   connectionMode: DEFAULT_DINGTALK_CONNECTION_MODE,
   description: 'Connect a DingTalk bot',
   documentation: {

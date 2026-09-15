@@ -9,9 +9,13 @@ import {
   encodeDingTalkThreadId,
   extractMediaMetadata,
 } from './adapter';
-import { clearDingTalkSessions } from './threadId';
+import { buildDingTalkForwardHeaders } from './forwardAuth';
+import { clearDingTalkCards, clearDingTalkSessions, rememberDingTalkCard } from './threadId';
 import type { DingTalkRobotMessage } from './types';
 import { MARKDOWN_MAX_BYTES } from './types';
+
+const CLIENT_ID = 'app_key';
+const CLIENT_SECRET = 'app_secret';
 
 function makePayload(overrides: Partial<DingTalkRobotMessage> = {}): DingTalkRobotMessage {
   return {
@@ -30,10 +34,14 @@ function makePayload(overrides: Partial<DingTalkRobotMessage> = {}): DingTalkRob
   };
 }
 
-function makeRequest(body: unknown): Request {
+function makeRequest(body: unknown, extraHeaders?: Record<string, string>): Request {
   return new Request('http://localhost/webhook', {
-    body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json' },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+    headers: {
+      'Content-Type': 'application/json',
+      ...buildDingTalkForwardHeaders({ appId: CLIENT_ID, clientSecret: CLIENT_SECRET }),
+      ...extraHeaders,
+    },
     method: 'POST',
   });
 }
@@ -99,9 +107,10 @@ describe('DingTalkAdapter inbound', () => {
         ),
     );
     clearDingTalkSessions();
+    clearDingTalkCards();
     adapter = createDingTalkAdapter({
-      clientId: 'app_key',
-      clientSecret: 'app_secret',
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
       robotCode: 'robot_abc',
     });
     processMessage.mockReset();
@@ -111,6 +120,7 @@ describe('DingTalkAdapter inbound', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     clearDingTalkSessions();
+    clearDingTalkCards();
   });
 
   const init = async () => adapter.initialize(mockChat as any);
@@ -198,5 +208,108 @@ describe('DingTalkAdapter inbound', () => {
     expect(body.at.atUserIds).toEqual(['staff_alice']);
     expect(body.markdown.text).toContain('@Alice');
     expect(body.markdown.text).toContain('here is the answer');
+  });
+
+  it('returns 401 when forward-auth headers are missing', async () => {
+    await init();
+    const res = await adapter.handleWebhook(
+      new Request('http://localhost/webhook', {
+        body: JSON.stringify(makePayload()),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for malformed JSON', async () => {
+    await init();
+    const res = await adapter.handleWebhook(makeRequest('{'));
+    expect(res.status).toBe(400);
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it('turns a card callback into a synthetic command on the remembered thread', async () => {
+    await init();
+    rememberDingTalkCard('out_1', {
+      askerStaffId: 'staff_alice',
+      conversationId: 'cid_dm_1',
+      conversationType: '1',
+    });
+    const res = await adapter.handleWebhook(
+      makeRequest({
+        content: { cardPrivateData: { actionIds: ['switch:agent_1'] } },
+        outTrackId: 'out_1',
+        userId: 'staff_alice',
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    const [, threadId, factory] = processMessage.mock.calls[0];
+    expect(threadId).toBe('dingtalk:cid_dm_1');
+    const message = await factory();
+    expect(message.text).toBe('switch:agent_1');
+  });
+
+  it('ignores card taps from a user who is not the asker', async () => {
+    await init();
+    rememberDingTalkCard('out_1', {
+      askerStaffId: 'staff_alice',
+      conversationId: 'cid_dm_1',
+      conversationType: '1',
+    });
+    const res = await adapter.handleWebhook(
+      makeRequest({
+        content: { cardPrivateData: { params: { command: 'resume:topic_1' } } },
+        outTrackId: 'out_1',
+        userId: 'staff_bob',
+      }),
+    );
+    expect(await res.json()).toEqual({ ignored: 'not_asker', ok: true });
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to oto/group robot APIs when the session webhook is expired', async () => {
+    await init();
+    const fetchMock = fetch as unknown as Mock;
+
+    await adapter.handleWebhook(
+      makeRequest(
+        makePayload({
+          sessionWebhookExpiredTime: Date.now() - 1000,
+        }),
+      ),
+    );
+    processMessage.mockReset();
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await adapter.sendMarkdown('dingtalk:cid_dm_1', 'dm after expiry');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1.0/robot/oToMessages/batchSend');
+    const otoBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(JSON.parse(otoBody.msgParam)).toEqual({
+      text: 'dm after expiry',
+      title: 'dm after expiry',
+    });
+
+    await adapter.handleWebhook(
+      makeRequest(
+        makePayload({
+          conversationId: 'cid_group_1',
+          conversationType: '2',
+          isInAtList: true,
+          sessionWebhookExpiredTime: Date.now() - 1000,
+        }),
+      ),
+    );
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await adapter.sendMarkdown('dingtalk:cid_group_1:staff_alice', 'group after expiry');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1.0/robot/groupMessages/send');
+    const groupBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(JSON.parse(groupBody.msgParam).at.atUserIds).toEqual(['staff_alice']);
   });
 });

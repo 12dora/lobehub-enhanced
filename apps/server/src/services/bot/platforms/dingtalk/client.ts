@@ -70,7 +70,13 @@ function createMessenger(config: BotProviderConfig, platformThreadId: string): P
       return;
     }
 
-    const msgParam = JSON.stringify({ text, title });
+    const msgParamObj: Record<string, unknown> = { text, title };
+    if (!isDm && (decoded.senderStaffId || session?.senderStaffId)) {
+      msgParamObj.at = {
+        atUserIds: [decoded.senderStaffId || session?.senderStaffId],
+      };
+    }
+    const msgParam = JSON.stringify(msgParamObj);
     if (isDm) {
       const userId = session?.senderStaffId;
       if (!userId) throw new Error('DingTalk DM send requires senderStaffId');
@@ -123,7 +129,7 @@ async function dingtalkExtractFiles(
   const raw = (message as any).raw as Parameters<typeof downloadMediaFromRawMessage>[1] | undefined;
   if (!raw) return undefined;
 
-  const attachments = await downloadMediaFromRawMessage(api, raw);
+  const attachments = await downloadMediaFromRawMessage(api, raw, { warn: log });
   if (attachments.length === 0) return undefined;
 
   return attachments.map((att: any) => ({
@@ -214,10 +220,34 @@ class DingTalkWSClientImpl implements PlatformClient {
       this.gateway = new DingTalkWSConnection({
         clientId: this.config.applicationId,
         clientSecret: this.config.credentials.clientSecret,
+        onStateChange: (state, error) => {
+          if (this.stopped) return;
+          const status =
+            state === 'connected'
+              ? BOT_RUNTIME_STATUSES.connected
+              : state === 'error'
+                ? BOT_RUNTIME_STATUSES.failed
+                : state === 'connecting'
+                  ? BOT_RUNTIME_STATUSES.starting
+                  : BOT_RUNTIME_STATUSES.disconnected;
+          void updateBotRuntimeStatus(
+            {
+              applicationId: this.applicationId,
+              errorMessage: error ? getRuntimeStatusErrorMessage(error) : undefined,
+              platform: this.id,
+              status,
+            },
+            { redisClient: this.context.redisClient as any, ttlMs: runtimeStatusTtlMs },
+          );
+        },
         webhookUrl,
       });
 
       await this.gateway.start();
+
+      if (this.gateway.state !== 'connected') {
+        throw new Error(`DingTalk stream failed to connect (state=${this.gateway.state})`);
+      }
 
       if (!options) {
         this.refreshTimer = setTimeout(() => {

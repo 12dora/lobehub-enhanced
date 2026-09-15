@@ -85,6 +85,34 @@ const throwApiError = async (method: string, path: string, response: Response): 
   });
 };
 
+/**
+ * Honour `sessionWebhook` only for https URLs whose host is `oapi.dingtalk.com`
+ * or `*.dingtalk.com`. Rejects anything else (SSRF). The URL itself is never
+ * included in the thrown message (it carries a `session=` token).
+ */
+export function assertDingTalkSessionWebhook(webhook: string): void {
+  let url: URL;
+  try {
+    url = new URL(webhook);
+  } catch {
+    throw new DingTalkApiError('DingTalk sessionWebhook rejected: invalid URL', {
+      code: 'invalid_webhook',
+    });
+  }
+  if (url.protocol !== 'https:') {
+    throw new DingTalkApiError('DingTalk sessionWebhook rejected: https required', {
+      code: 'invalid_webhook',
+    });
+  }
+  const host = url.hostname.toLowerCase();
+  const allowed = host === 'oapi.dingtalk.com' || host.endsWith('.dingtalk.com');
+  if (!allowed) {
+    throw new DingTalkApiError('DingTalk sessionWebhook rejected: host not allowed', {
+      code: 'invalid_webhook',
+    });
+  }
+}
+
 export interface DingTalkSendOtoParams {
   msgKey: string;
   msgParam: string;
@@ -192,13 +220,14 @@ export class DingTalkApiClient {
   }
 
   async sendBySessionWebhook(webhook: string, payload: Record<string, unknown>): Promise<void> {
+    assertDingTalkSessionWebhook(webhook);
     const response = await fetch(webhook, {
       body: JSON.stringify(payload),
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
       method: 'POST',
     });
     if (!response.ok) {
-      await throwApiError('POST', webhook, response);
+      await throwApiError('POST', 'sessionWebhook', response);
     }
 
     const raw = await response.text();

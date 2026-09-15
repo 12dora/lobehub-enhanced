@@ -27,16 +27,79 @@ describe('sendDingTalkAttachments', () => {
     vi.restoreAllMocks();
   });
 
-  it('uploads and sends an image to a DM user', async () => {
+  it('sends session-webhook images as { msgtype: image, image: { media_id } }', async () => {
+    const delivered = await sendDingTalkAttachments(
+      api,
+      {
+        robotCode: 'r',
+        sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      },
+      [{ data: Buffer.from('img').toString('base64'), name: 'pic.jpg', type: 'image' }],
+    );
+    expect(delivered).toBe(1);
+    expect(sendBySessionWebhook).toHaveBeenCalledWith(
+      'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      { image: { media_id: 'media_1' }, msgtype: 'image' },
+    );
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('sends session-webhook files as { msgtype: file, file: { media_id, fileName, fileType } }', async () => {
+    const delivered = await sendDingTalkAttachments(
+      api,
+      {
+        robotCode: 'r',
+        sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      },
+      [{ data: Buffer.from('pdf').toString('base64'), name: 'report.pdf', type: 'file' }],
+    );
+    expect(delivered).toBe(1);
+    expect(sendBySessionWebhook).toHaveBeenCalledWith(
+      'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      {
+        file: { fileName: 'report.pdf', fileType: 'pdf', media_id: 'media_1' },
+        msgtype: 'file',
+      },
+    );
+  });
+
+  it('uses sampleImageMsg only with a real https photoURL on the robot API', async () => {
+    const delivered = await sendDingTalkAttachments(api, { robotCode: 'r', userIds: ['staff_1'] }, [
+      {
+        data: Buffer.from('img').toString('base64'),
+        fetchUrl: 'https://cdn.example.com/pic.jpg',
+        name: 'pic.jpg',
+        type: 'image',
+      },
+    ]);
+    expect(delivered).toBe(1);
+    expect(sendOtoMessage).toHaveBeenCalledWith({
+      msgKey: 'sampleImageMsg',
+      msgParam: JSON.stringify({ photoURL: 'https://cdn.example.com/pic.jpg' }),
+      robotCode: 'r',
+      userIds: ['staff_1'],
+    });
+  });
+
+  it('does not send sampleImageMsg when the only handle is media_id', async () => {
     const delivered = await sendDingTalkAttachments(api, { robotCode: 'r', userIds: ['staff_1'] }, [
       { data: Buffer.from('img').toString('base64'), name: 'pic.jpg', type: 'image' },
     ]);
+    expect(delivered).toBe(0);
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(sendBySessionWebhook).not.toHaveBeenCalled();
+  });
+
+  it('sends files via sampleFile { mediaId, fileName, fileType } on the robot API', async () => {
+    const delivered = await sendDingTalkAttachments(api, { robotCode: 'r', userIds: ['staff_1'] }, [
+      { data: Buffer.from('pdf').toString('base64'), name: 'report.pdf', type: 'file' },
+    ]);
     expect(delivered).toBe(1);
-    expect(uploadMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: 'pic.jpg', type: 'image' }),
-    );
-    expect(sendOtoMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ msgKey: 'sampleImageMsg', robotCode: 'r', userIds: ['staff_1'] }),
-    );
+    expect(sendOtoMessage).toHaveBeenCalledWith({
+      msgKey: 'sampleFile',
+      msgParam: JSON.stringify({ fileName: 'report.pdf', fileType: 'pdf', mediaId: 'media_1' }),
+      robotCode: 'r',
+      userIds: ['staff_1'],
+    });
   });
 });

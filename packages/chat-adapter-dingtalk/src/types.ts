@@ -2,7 +2,7 @@
  * DingTalk chat-sdk adapter configuration.
  */
 export interface DingTalkAdapterConfig {
-  /** Optional AI-card template id — when unset, callers fall back to markdown */
+  /** Optional AI-card template id — stored for callers (G2b / messenger). */
   aiCardTemplateId?: string;
   /** AppKey / Client ID */
   clientId: string;
@@ -10,7 +10,7 @@ export interface DingTalkAdapterConfig {
   clientSecret: string;
   /** Robot code from the DingTalk open platform */
   robotCode: string;
-  /** Optional interactive-select card template id */
+  /** Optional interactive-select card template id — stored for callers. */
   selectCardTemplateId?: string;
   /** Bot display name override */
   userName?: string;

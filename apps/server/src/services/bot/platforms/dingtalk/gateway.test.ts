@@ -2,17 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let capturedOptions: any;
 
-vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
-  DingTalkStreamConnection: vi.fn().mockImplementation((options: any) => {
-    capturedOptions = options;
-    return {
-      connect: vi.fn().mockResolvedValue(undefined),
-      disconnect: vi.fn(),
-    };
-  }),
-}));
+vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    DingTalkStreamConnection: vi.fn().mockImplementation((options: any) => {
+      capturedOptions = options;
+      return {
+        connect: vi.fn().mockResolvedValue(undefined),
+        disconnect: vi.fn(),
+        get state() {
+          return 'connected';
+        },
+      };
+    }),
+  };
+});
 
 const { DingTalkWSConnection } = await import('./gateway');
+const { DINGTALK_FORWARD_HEADER, verifyDingTalkForwardHeaders } =
+  await import('@lobechat/chat-adapter-dingtalk');
 
 describe('DingTalkWSConnection', () => {
   beforeEach(() => {
@@ -25,7 +34,7 @@ describe('DingTalkWSConnection', () => {
     vi.clearAllMocks();
   });
 
-  it('forwards robot messages as synthetic webhooks', async () => {
+  it('forwards robot messages as synthetic webhooks with forward-auth headers', async () => {
     const conn = new DingTalkWSConnection({
       clientId: 'app_key',
       clientSecret: 'secret',
@@ -51,10 +60,18 @@ describe('DingTalkWSConnection', () => {
       'http://localhost:3000/api/agent/webhooks/dingtalk/app_key',
       expect.objectContaining({
         body: JSON.stringify(payload),
-        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
         method: 'POST',
       }),
     );
+    const headers = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).headers as Record<
+      string,
+      string
+    >;
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers[DINGTALK_FORWARD_HEADER]).toBeTruthy();
+    expect(
+      verifyDingTalkForwardHeaders(headers, { appId: 'app_key', clientSecret: 'secret' }),
+    ).toBe(true);
   });
 
   it('forwards card callbacks to the same webhook', async () => {

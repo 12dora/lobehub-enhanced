@@ -5,6 +5,8 @@ const mockDownloadMediaFromRawMessage = vi.hoisted(() => vi.fn());
 const mockGetAccessToken = vi.hoisted(() => vi.fn().mockResolvedValue('tok'));
 const mockGatewayStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockGatewayClose = vi.hoisted(() => vi.fn());
+const mockGatewayState = vi.hoisted(() => ({ value: 'connected' as string }));
+const mockGatewayCtorOptions = vi.hoisted(() => ({ last: undefined as any }));
 
 vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   createDingTalkAdapter: mockCreateDingTalkAdapter,
@@ -37,13 +39,29 @@ vi.mock('@/server/services/gateway/runtimeStatus', () => ({
 }));
 
 vi.mock('./gateway', () => ({
-  DingTalkWSConnection: vi.fn().mockImplementation(() => ({
-    close: mockGatewayClose,
-    start: mockGatewayStart,
-  })),
+  DingTalkWSConnection: vi.fn().mockImplementation((options: any) => {
+    mockGatewayCtorOptions.last = options;
+    return {
+      close: mockGatewayClose,
+      start: mockGatewayStart,
+      get state() {
+        return mockGatewayState.value;
+      },
+    };
+  }),
+}));
+
+vi.mock('chat', () => ({
+  Chat: class {
+    async initialize() {}
+    async shutdown() {}
+  },
+  ConsoleLogger: class {},
 }));
 
 const { DingTalkClientFactory } = await import('./client');
+const { DingTalkWSConnection } = await import('./gateway');
+const { updateBotRuntimeStatus } = await import('@/server/services/gateway/runtimeStatus');
 
 describe('DingTalkClientFactory', () => {
   const createClient = () =>
@@ -59,6 +77,19 @@ describe('DingTalkClientFactory', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGatewayState.value = 'connected';
+    mockGatewayStart.mockResolvedValue(undefined);
+    mockCreateDingTalkAdapter.mockReturnValue({ name: 'dingtalk' });
+    vi.mocked(DingTalkWSConnection).mockImplementation((options: any) => {
+      mockGatewayCtorOptions.last = options;
+      return {
+        close: mockGatewayClose,
+        start: mockGatewayStart,
+        get state() {
+          return mockGatewayState.value;
+        },
+      };
+    });
   });
 
   afterEach(() => {
@@ -67,11 +98,7 @@ describe('DingTalkClientFactory', () => {
 
   it('validateCredentials calls the token endpoint via DingTalkApiClient', async () => {
     const factory = new DingTalkClientFactory();
-    const result = await factory.validateCredentials(
-      { clientSecret: 'sec' },
-      {},
-      'app_key',
-    );
+    const result = await factory.validateCredentials({ clientSecret: 'sec' }, {}, 'app_key');
     expect(mockGetAccessToken).toHaveBeenCalled();
     expect(result.valid).toBe(true);
   });
@@ -89,7 +116,11 @@ describe('DingTalkClientFactory', () => {
       robotCode: 'robot_1',
     };
     const result = await client.extractFiles!({ id: 'm1', raw } as any);
-    expect(mockDownloadMediaFromRawMessage).toHaveBeenCalledWith(expect.anything(), raw);
+    expect(mockDownloadMediaFromRawMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      raw,
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
     expect(result).toEqual([
       { buffer, mimeType: 'image/jpeg', name: 'image.jpg', size: undefined },
     ]);
@@ -107,5 +138,25 @@ describe('DingTalkClientFactory', () => {
         robotCode: 'robot_1',
       }),
     );
+  });
+
+  it('start() records failed and throws when the first stream connect fails', async () => {
+    mockGatewayStart.mockRejectedValueOnce(new Error('DingTalk gateway open failed: 401'));
+    const client = createClient();
+    await expect(client.start({ durationMs: 1000 })).rejects.toThrow(/401/);
+    const statuses = vi.mocked(updateBotRuntimeStatus).mock.calls.map((call) => call[0].status);
+    expect(statuses).toContain('starting');
+    expect(statuses).toContain('failed');
+    expect(statuses).not.toContain('connected');
+  });
+
+  it('start() wires onStateChange and does not mark connected unless the stream is connected', async () => {
+    mockGatewayState.value = 'error';
+    mockGatewayStart.mockResolvedValueOnce(undefined);
+    const client = createClient();
+    await expect(client.start({ durationMs: 1000 })).rejects.toThrow(/failed to connect/);
+    const statuses = vi.mocked(updateBotRuntimeStatus).mock.calls.map((call) => call[0].status);
+    expect(statuses).not.toContain('connected');
+    expect(mockGatewayCtorOptions.last.onStateChange).toBeTypeOf('function');
   });
 });

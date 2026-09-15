@@ -5,6 +5,7 @@ import {
   displayToolCallsField,
   makeDmPolicyField,
   makeGroupPolicyFields,
+  makeUserIdField,
   watchKeywordsField,
 } from '../const';
 import type { FieldSchema } from '../types';
@@ -35,13 +36,7 @@ export const schema: FieldSchema[] = [
     key: 'settings',
     label: 'channel.settings',
     properties: [
-      {
-        key: 'userId',
-        description: 'channel.userIdHint',
-        label: 'channel.userId',
-        tooltip: 'channel.userIdHint.dingtalk',
-        type: 'string',
-      },
+      makeUserIdField('dingtalk'),
       {
         key: 'robotCode',
         description: 'channel.dingtalk.robotCodeHint',

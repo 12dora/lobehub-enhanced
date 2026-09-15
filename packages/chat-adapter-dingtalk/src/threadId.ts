@@ -3,7 +3,57 @@ import { CONVERSATION_TYPE_DM, CONVERSATION_TYPE_GROUP } from './types';
 
 const THREAD_PREFIX = 'dingtalk';
 
-const sessions = new Map<string, DingTalkSessionContext>();
+/** Process-local session cache. Survives for the worker lifetime; empty after restart. */
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const SESSION_MAX_ENTRIES = 4096;
+const CARD_TTL_MS = 8 * 60 * 60 * 1000;
+const CARD_MAX_ENTRIES = 4096;
+
+interface Stored<T> {
+  expiresAt: number;
+  value: T;
+}
+
+const sessions = new Map<string, Stored<DingTalkSessionContext>>();
+const cards = new Map<string, Stored<DingTalkCardMemory>>();
+
+const pruneMap = <T>(map: Map<string, Stored<T>>, maxEntries: number, now: number): void => {
+  for (const [key, entry] of map) {
+    if (entry.expiresAt <= now) map.delete(key);
+  }
+  while (map.size > maxEntries) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+};
+
+const put = <T>(
+  map: Map<string, Stored<T>>,
+  key: string,
+  value: T,
+  expiresAt: number,
+  maxEntries: number,
+): void => {
+  const now = Date.now();
+  pruneMap(map, maxEntries, now);
+  map.delete(key);
+  map.set(key, { expiresAt, value });
+  if (map.size > maxEntries) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+};
+
+const getFresh = <T>(map: Map<string, Stored<T>>, key: string): T | undefined => {
+  const entry = map.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    map.delete(key);
+    return undefined;
+  }
+  return entry.value;
+};
 
 /**
  * Encode a DingTalk thread id.
@@ -22,9 +72,13 @@ export function encodeDingTalkThreadId(data: DingTalkThreadId): string {
 }
 
 /**
- * Decode a DingTalk thread id. Conversation ids that themselves contain
- * colons stay intact: the last segment is only treated as `senderStaffId`
- * when a third (or later) segment is present.
+ * Decode a DingTalk thread id.
+ *
+ * The last colon-separated segment is treated as `senderStaffId` whenever a
+ * colon is present. Group round-trips with colons in `conversationId` work
+ * because the asker is always the final segment. A **DM** conversation id
+ * that itself contains a colon would be decoded as a group — DingTalk `cid…`
+ * ids usually have no colon, so this matches the live codec.
  */
 export function decodeDingTalkThreadId(threadId: string): DingTalkThreadId {
   if (!threadId) return { conversationId: '' };
@@ -57,23 +111,24 @@ export function threadIdFromRobotMessage(payload: DingTalkRobotMessage): string 
 }
 
 export function rememberDingTalkSession(session: DingTalkSessionContext): void {
-  sessions.set(session.conversationId, session);
+  const expiresAt = Math.max(Date.now() + SESSION_TTL_MS, session.sessionWebhookExpiredTime ?? 0);
+  put(sessions, session.conversationId, session, expiresAt, SESSION_MAX_ENTRIES);
   const threadId = encodeDingTalkThreadId({
     conversationId: session.conversationId,
     senderStaffId:
       session.conversationType === CONVERSATION_TYPE_GROUP ? session.senderStaffId : undefined,
   });
-  sessions.set(threadId, session);
+  put(sessions, threadId, session, expiresAt, SESSION_MAX_ENTRIES);
 }
 
 export function getDingTalkSession(
   conversationIdOrThreadId: string,
 ): DingTalkSessionContext | undefined {
-  const direct = sessions.get(conversationIdOrThreadId);
+  const direct = getFresh(sessions, conversationIdOrThreadId);
   if (direct) return direct;
 
   const { conversationId } = decodeDingTalkThreadId(conversationIdOrThreadId);
-  return sessions.get(conversationId);
+  return getFresh(sessions, conversationId);
 }
 
 export function sessionFromRobotMessage(payload: DingTalkRobotMessage): DingTalkSessionContext {
@@ -96,4 +151,54 @@ export function isSessionWebhookLive(session?: DingTalkSessionContext): boolean 
 
 export function clearDingTalkSessions(): void {
   sessions.clear();
+}
+
+export interface DingTalkCardMemory {
+  askerStaffId: string;
+  conversationId: string;
+  conversationType: string;
+  threadId: string;
+}
+
+export interface RememberDingTalkCardInput {
+  askerStaffId: string;
+  conversationId: string;
+  conversationType?: string;
+  threadId?: string;
+}
+
+/**
+ * Remember `outTrackId → { threadId, askerStaffId }` at card creation so
+ * `/v1.0/card/instances/callback` taps can be turned into synthetic commands
+ * on the original thread.
+ */
+export function rememberDingTalkCard(outTrackId: string, memory: RememberDingTalkCardInput): void {
+  if (!outTrackId) return;
+  const conversationType = memory.conversationType || CONVERSATION_TYPE_DM;
+  const threadId =
+    memory.threadId ??
+    encodeDingTalkThreadId({
+      conversationId: memory.conversationId,
+      senderStaffId: conversationType === CONVERSATION_TYPE_GROUP ? memory.askerStaffId : undefined,
+    });
+  put(
+    cards,
+    outTrackId,
+    {
+      askerStaffId: memory.askerStaffId,
+      conversationId: memory.conversationId,
+      conversationType,
+      threadId,
+    },
+    Date.now() + CARD_TTL_MS,
+    CARD_MAX_ENTRIES,
+  );
+}
+
+export function getDingTalkCard(outTrackId: string): DingTalkCardMemory | undefined {
+  return getFresh(cards, outTrackId);
+}
+
+export function clearDingTalkCards(): void {
+  cards.clear();
 }

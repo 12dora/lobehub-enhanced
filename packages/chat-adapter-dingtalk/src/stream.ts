@@ -29,6 +29,7 @@ export interface DingTalkStreamOptions {
   clientSecret: string;
   /** @internal test hook */
   fetchImpl?: typeof fetch;
+  logger?: { warn?: (...args: unknown[]) => void };
   onCardCallback?: (payload: DingTalkCardCallback, ack: DingTalkAck) => void | Promise<void>;
   onRobotMessage?: (payload: DingTalkRobotMessage, ack: DingTalkAck) => void | Promise<void>;
   onStateChange?: (state: DingTalkStreamState, error?: Error) => void;
@@ -80,6 +81,8 @@ export class DingTalkStreamConnection {
   private reconnectAttempts = 0;
   private userDisconnect = false;
   private connecting = false;
+  /** True after the first successful socket open — background reconnect is allowed only then. */
+  private hasOpened = false;
   private currentState: DingTalkStreamState = 'disconnected';
 
   constructor(options: DingTalkStreamOptions) {
@@ -101,17 +104,19 @@ export class DingTalkStreamConnection {
     try {
       this.cleanupSocket();
       const dwUrl = await this.openGateway();
-      if (this.userDisconnect) return;
+      if (this.userDisconnect) {
+        this.setState('disconnected');
+        throw new Error('DingTalk stream disconnected before socket open');
+      }
       await this.openSocket(dwUrl);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       this.setState('error', err);
       this.connecting = false;
-      if (!this.userDisconnect) {
-        this.reconnectAttempts += 1;
+      if (!this.userDisconnect && this.hasOpened) {
         this.scheduleReconnect();
       }
-      return;
+      throw err;
     } finally {
       this.connecting = false;
     }
@@ -124,6 +129,7 @@ export class DingTalkStreamConnection {
       this.reconnectTimer = undefined;
     }
     this.reconnectAttempts = 0;
+    this.hasOpened = false;
     this.cleanupSocket();
     this.setState('disconnected');
   }
@@ -177,14 +183,14 @@ export class DingTalkStreamConnection {
     if (!data.endpoint || !data.ticket) {
       throw new Error('DingTalk gateway open failed: missing endpoint or ticket');
     }
-    return `${data.endpoint}?ticket=${data.ticket}`;
+    return `${data.endpoint}?ticket=${encodeURIComponent(data.ticket)}`;
   }
 
   private openSocket(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const clientOptions: WebSocket.ClientOptions = { rejectUnauthorized: true };
       if (process.env.NODE_USE_ENV_PROXY === '1') {
-        clientOptions.agent = new https.Agent({ proxyEnv: process.env } as https.AgentOptions);
+        clientOptions.agent = new https.Agent({ proxyEnv: process.env });
       }
 
       try {
@@ -198,6 +204,7 @@ export class DingTalkStreamConnection {
 
       this.socket.on('open', () => {
         this.reconnectAttempts = 0;
+        this.hasOpened = true;
         this.setState('connected');
         settled = true;
         resolve();
@@ -207,16 +214,25 @@ export class DingTalkStreamConnection {
         const text = typeof data === 'string' ? data : data.toString();
         try {
           this.handleFrame(text);
-        } catch {
-          // malformed frame — ignore
+        } catch (error) {
+          if (this.options.logger?.warn) {
+            this.options.logger.warn('DingTalk stream malformed frame', error);
+          } else {
+            console.warn('DingTalk stream malformed frame', error);
+          }
         }
       });
 
       this.socket.on('close', () => {
+        if (!settled) {
+          settled = true;
+          reject(new Error('DingTalk stream socket closed before open'));
+          return;
+        }
         if (this.currentState !== 'disconnected') {
           this.setState('disconnected');
         }
-        if (settled && !this.userDisconnect) {
+        if (this.hasOpened && !this.userDisconnect) {
           this.scheduleReconnect();
         }
       });
@@ -299,11 +315,13 @@ export class DingTalkStreamConnection {
     const base = this.options.reconnectBaseIntervalMs ?? RECONNECT_BASE_MS;
     const max = this.options.reconnectMaxIntervalMs ?? RECONNECT_MAX_MS;
     const delay = Math.min(base * 2 ** this.reconnectAttempts, max);
+    this.reconnectAttempts += 1;
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      this.reconnectAttempts += 1;
-      void this.connect();
+      void this.connect().catch(() => {
+        // First-open failures throw; after hasOpened, connect() already scheduled the next try.
+      });
     }, delay);
   }
 

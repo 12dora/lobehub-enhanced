@@ -17,9 +17,11 @@ import type {
 import { BaseFormatConverter, Message, parseMarkdown, stringifyMarkdown } from 'chat';
 
 import { DingTalkApiClient } from './api';
+import { verifyDingTalkForwardHeaders } from './forwardAuth';
 import {
   decodeDingTalkThreadId,
   encodeDingTalkThreadId,
+  getDingTalkCard,
   getDingTalkSession,
   isSessionWebhookLive,
   rememberDingTalkSession,
@@ -28,6 +30,7 @@ import {
 } from './threadId';
 import type {
   DingTalkAdapterConfig,
+  DingTalkCardCallback,
   DingTalkMediaContent,
   DingTalkRobotMessage,
   DingTalkSessionContext,
@@ -294,13 +297,52 @@ const isBotMention = (payload: DingTalkRobotMessage): boolean => {
 };
 
 const isCardCallback = (body: Record<string, unknown>): boolean =>
-  typeof body.outTrackId === 'string' || body.userId !== undefined;
+  (typeof body.outTrackId === 'string' || body.userId !== undefined) && !body.msgtype;
+
+const parseCardPrivateData = (
+  content: DingTalkCardCallback['content'],
+): Record<string, unknown> | undefined => {
+  let parsed: unknown = content;
+  if (typeof content === 'string') {
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return undefined;
+  const record = parsed as Record<string, unknown>;
+  const privateData = record.cardPrivateData;
+  if (privateData && typeof privateData === 'object') {
+    return privateData as Record<string, unknown>;
+  }
+  return record;
+};
+
+const extractCardCommand = (body: Record<string, unknown>): string | undefined => {
+  const privateData = parseCardPrivateData(body.content as DingTalkCardCallback['content']);
+  if (!privateData) return undefined;
+  const actionIds = privateData.actionIds;
+  if (Array.isArray(actionIds) && typeof actionIds[0] === 'string' && actionIds[0]) {
+    return actionIds[0];
+  }
+  const params = privateData.params;
+  if (params && typeof params === 'object') {
+    const command = (params as { command?: unknown }).command;
+    if (typeof command === 'string' && command) return command;
+  }
+  return undefined;
+};
 
 export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotMessage> {
   readonly name = 'dingtalk';
   readonly persistThreadHistory = true;
+  readonly aiCardTemplateId?: string;
+  readonly selectCardTemplateId?: string;
 
   private readonly api: DingTalkApiClient;
+  private readonly clientId: string;
+  private readonly clientSecret: string;
   private readonly robotCode: string;
   private readonly formatConverter = new DingTalkFormatConverter();
   private _userName: string;
@@ -309,7 +351,11 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
 
   constructor(config: DingTalkAdapterConfig) {
     this.api = new DingTalkApiClient(config.clientId, config.clientSecret);
+    this.clientId = config.clientId;
+    this.clientSecret = config.clientSecret;
     this.robotCode = config.robotCode;
+    this.aiCardTemplateId = config.aiCardTemplateId;
+    this.selectCardTemplateId = config.selectCardTemplateId;
     this._userName = config.userName || 'dingtalk-bot';
   }
 
@@ -330,6 +376,15 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
   }
 
   async handleWebhook(request: Request, options?: WebhookOptions): Promise<Response> {
+    if (
+      !verifyDingTalkForwardHeaders(request.headers, {
+        appId: this.clientId,
+        clientSecret: this.clientSecret,
+      })
+    ) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
     const bodyText = await request.text();
     let body: Record<string, unknown>;
     try {
@@ -338,8 +393,8 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    if (isCardCallback(body) && !body.msgtype) {
-      return Response.json({ ok: true });
+    if (isCardCallback(body)) {
+      return this.handleCardCallback(body, options);
     }
 
     const payload = body as unknown as DingTalkRobotMessage;
@@ -529,7 +584,11 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
 
     const robotCode = session?.robotCode || this.robotCode;
     const decoded = this.decodeThreadId(threadId);
-    const msgParam = JSON.stringify({ text, title });
+    const msgParamObj: Record<string, unknown> = { text, title };
+    if (atUserIds.length > 0) {
+      msgParamObj.at = { atUserIds };
+    }
+    const msgParam = JSON.stringify(msgParamObj);
 
     if (this.isDM(threadId)) {
       const userId = session?.senderStaffId;
@@ -551,6 +610,39 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
       openConversationId: decoded.conversationId,
       robotCode,
     });
+  }
+
+  private handleCardCallback(body: Record<string, unknown>, options?: WebhookOptions): Response {
+    const outTrackId = typeof body.outTrackId === 'string' ? body.outTrackId : '';
+    const card = outTrackId ? getDingTalkCard(outTrackId) : undefined;
+    if (!card) {
+      return Response.json({ ok: true });
+    }
+
+    const userId = typeof body.userId === 'string' ? body.userId : undefined;
+    if (userId !== card.askerStaffId) {
+      return Response.json({ ignored: 'not_asker', ok: true });
+    }
+
+    const command = extractCardCommand(body);
+    if (!command) {
+      return Response.json({ ok: true });
+    }
+
+    const payload: DingTalkRobotMessage = {
+      conversationId: card.conversationId,
+      conversationType: card.conversationType,
+      msgId: `card:${outTrackId}:${Date.now()}`,
+      msgtype: 'text',
+      robotCode: this.robotCode,
+      senderStaffId: card.askerStaffId,
+      text: { content: command },
+    };
+
+    const threadId = card.threadId;
+    const messageFactory = () => this.parseRawEvent(payload, threadId, command);
+    this.chat.processMessage(this, threadId, messageFactory, options);
+    return Response.json({ ok: true });
   }
 
   private parseRawEvent(

@@ -23,6 +23,16 @@ const fileTypeFromName = (name: string): string => {
   return ext && ext.length <= 8 ? ext : 'bin';
 };
 
+const isHttpsPhotoUrl = (url: string | undefined): url is string => {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const loadAttachmentBuffer = async (
   attachment: BotMessageAttachment,
 ): Promise<Buffer | undefined> => {
@@ -54,28 +64,12 @@ export interface DingTalkSendTarget {
   userIds?: string[];
 }
 
-const sendViaRobot = async (
+const sendRobotMessage = async (
   api: DingTalkApiClient,
   target: DingTalkSendTarget,
   msgKey: string,
   msgParam: string,
 ): Promise<void> => {
-  if (target.sessionWebhook) {
-    const parsed = JSON.parse(msgParam) as Record<string, unknown>;
-    if (msgKey === 'sampleImageMsg') {
-      await api.sendBySessionWebhook(target.sessionWebhook, {
-        image: { photoURL: parsed.photoURL, mediaId: parsed.mediaId },
-        msgtype: 'image',
-      });
-      return;
-    }
-    await api.sendBySessionWebhook(target.sessionWebhook, {
-      file: parsed,
-      msgtype: 'file',
-    });
-    return;
-  }
-
   if (target.userIds?.length) {
     await api.sendOtoMessage({
       msgKey,
@@ -85,7 +79,6 @@ const sendViaRobot = async (
     });
     return;
   }
-
   if (target.openConversationId) {
     await api.sendGroupMessage({
       msgKey,
@@ -94,6 +87,52 @@ const sendViaRobot = async (
       robotCode: target.robotCode,
     });
   }
+};
+
+const sendImage = async (
+  api: DingTalkApiClient,
+  target: DingTalkSendTarget,
+  mediaId: string,
+  photoURL: string | undefined,
+): Promise<boolean> => {
+  if (target.sessionWebhook) {
+    await api.sendBySessionWebhook(target.sessionWebhook, {
+      image: { media_id: mediaId },
+      msgtype: 'image',
+    });
+    return true;
+  }
+  if (isHttpsPhotoUrl(photoURL)) {
+    await sendRobotMessage(api, target, 'sampleImageMsg', JSON.stringify({ photoURL }));
+    return true;
+  }
+  log(
+    'sendDingTalkAttachments: skipping image — robot API sampleImageMsg needs an https photoURL (have media_id only)',
+  );
+  return false;
+};
+
+const sendFile = async (
+  api: DingTalkApiClient,
+  target: DingTalkSendTarget,
+  mediaId: string,
+  fileName: string,
+  fileType: string,
+): Promise<boolean> => {
+  if (target.sessionWebhook) {
+    await api.sendBySessionWebhook(target.sessionWebhook, {
+      file: { fileName, fileType, media_id: mediaId },
+      msgtype: 'file',
+    });
+    return true;
+  }
+  await sendRobotMessage(
+    api,
+    target,
+    'sampleFile',
+    JSON.stringify({ fileName, fileType, mediaId }),
+  );
+  return true;
 };
 
 export const sendDingTalkAttachments = async (
@@ -113,26 +152,11 @@ export const sendDingTalkAttachments = async (
       const mediaType = att.type === 'image' ? 'image' : 'file';
       const mediaId = await api.uploadMedia({ buffer, filename, type: mediaType });
 
-      if (att.type === 'image') {
-        await sendViaRobot(
-          api,
-          target,
-          'sampleImageMsg',
-          JSON.stringify({ mediaId, photoURL: att.fetchUrl ?? mediaId }),
-        );
-      } else {
-        await sendViaRobot(
-          api,
-          target,
-          'sampleFile',
-          JSON.stringify({
-            fileName: filename,
-            fileType: fileTypeFromName(filename),
-            mediaId,
-          }),
-        );
-      }
-      delivered += 1;
+      const sent =
+        att.type === 'image'
+          ? await sendImage(api, target, mediaId, att.fetchUrl)
+          : await sendFile(api, target, mediaId, filename, fileTypeFromName(filename));
+      if (sent) delivered += 1;
     } catch (error) {
       log(
         'sendDingTalkAttachments: failed to send %s "%s": %O',

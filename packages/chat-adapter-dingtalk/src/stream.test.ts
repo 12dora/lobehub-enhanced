@@ -105,6 +105,59 @@ describe('DingTalkStreamConnection', () => {
     expect(sockets[0].url).toContain('ticket=tix');
   });
 
+  it('encodes the gateway ticket in the websocket URL', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ endpoint: 'ws://stream.dingtalk.test/connect', ticket: 'ti x/+=?' }),
+        { status: 200 },
+      ),
+    );
+    const sockets: MockSocket[] = [];
+    const conn = create({ WebSocketImpl: createWsCtor(sockets) });
+    await conn.connect();
+    expect(sockets[0].url).toBe(
+      `ws://stream.dingtalk.test/connect?ticket=${encodeURIComponent('ti x/+=?')}`,
+    );
+  });
+
+  it('rejects the first connect on gateway 401 and does not mark connected', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(new Response('unauthorized', { status: 401 }));
+    const conn = create();
+    await expect(conn.connect()).rejects.toThrow(/401/);
+    expect(conn.state).toBe('error');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects openSocket when the socket closes before open', async () => {
+    class ClosingSocket extends EventEmitter {
+      static CLOSED = 3;
+      static CLOSING = 2;
+      static CONNECTING = 0;
+      static OPEN = 1;
+      readyState = ClosingSocket.CONNECTING;
+      sent: string[] = [];
+      url: string;
+      constructor(url: string) {
+        super();
+        this.url = url;
+        queueMicrotask(() => {
+          this.readyState = ClosingSocket.CLOSED;
+          this.emit('close');
+        });
+      }
+      send() {}
+      terminate() {
+        this.emit('close');
+      }
+    }
+    const ctor = vi.fn((url: string) => new ClosingSocket(url));
+    Object.assign(ctor, { CLOSED: 3, CLOSING: 2, CONNECTING: 0, OPEN: 1 });
+    const conn = create({ WebSocketImpl: ctor as unknown as typeof WebSocket });
+    await expect(conn.connect()).rejects.toThrow(/closed before open/);
+    expect(conn.state).toBe('error');
+  });
+
   it('echoes SYSTEM ping data', async () => {
     const sockets: MockSocket[] = [];
     const conn = create({ WebSocketImpl: createWsCtor(sockets) });
@@ -183,10 +236,30 @@ describe('DingTalkStreamConnection', () => {
     expect(conn.state).toBe('disconnected');
     expect(vi.getTimerCount()).toBeGreaterThan(0);
 
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('unauthorized', { status: 401 }));
+
     await vi.advanceTimersByTimeAsync(999);
     expect(connectSpy).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(connectSpy).toHaveBeenCalled();
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connectSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs malformed frames instead of swallowing them', async () => {
+    const warn = vi.fn();
+    const sockets: MockSocket[] = [];
+    const conn = create({
+      WebSocketImpl: createWsCtor(sockets),
+      logger: { warn },
+    });
+    await conn.connect();
+    sockets[0].emit('message', 'not-json{');
+    expect(warn).toHaveBeenCalledWith('DingTalk stream malformed frame', expect.anything());
   });
 });
