@@ -6,10 +6,6 @@ const finalize = vi.fn();
 const sendOtoMessage = vi.fn();
 const sendGroupMessage = vi.fn();
 const sendBySessionWebhook = vi.fn();
-const mockBuildActionCardParam = vi.fn().mockReturnValue({
-  msgKey: 'sampleActionCard4',
-  msgParam: '{}',
-});
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
@@ -21,34 +17,16 @@ vi.mock('./branding', () => ({
     mockResolveDingTalkBrandingDisplayName(...args),
 }));
 
-vi.mock('@lobechat/chat-adapter-dingtalk', () => {
-  class DingTalkCardUnavailableError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = 'DingTalkCardUnavailableError';
-    }
-  }
+vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
   return {
-    buildActionCardParam: (...args: unknown[]) => mockBuildActionCardParam(...args),
-    chunkMarkdown: (text: string) => [text],
-    decodeDingTalkThreadId: (threadId: string) => {
-      const rest = threadId.startsWith('dingtalk:') ? threadId.slice('dingtalk:'.length) : threadId;
-      const sep = rest.lastIndexOf(':');
-      if (sep > 0) {
-        return {
-          conversationId: rest.slice(0, sep),
-          senderStaffId: rest.slice(sep + 1),
-        };
-      }
-      return { conversationId: rest };
-    },
+    ...actual,
     DingTalkAiCardStream: vi.fn().mockImplementation(() => ({ create, finalize, replace })),
     DingTalkApiClient: vi.fn().mockImplementation(() => ({
       sendBySessionWebhook,
       sendGroupMessage,
       sendOtoMessage,
     })),
-    DingTalkCardUnavailableError,
     getDingTalkSession: vi.fn(),
     isSessionWebhookLive: vi.fn().mockReturnValue(false),
     rememberDingTalkCard: vi.fn(),
@@ -60,13 +38,15 @@ vi.mock('@/server/services/bot/platforms/dingtalk/sendAttachments', () => ({
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
-const { DingTalkCardUnavailableError } = await import('@lobechat/chat-adapter-dingtalk');
+const { DingTalkCardUnavailableError, dtmdSendMessageUrl, getDingTalkSession } =
+  await import('@lobechat/chat-adapter-dingtalk');
 const { sendDingTalkAttachments } =
   await import('@/server/services/bot/platforms/dingtalk/sendAttachments');
 const {
   createDingTalkReplySink,
   paginateEntries,
   parseDingTalkAskerCommand,
+  sendDingTalkChoiceList,
   sendDingTalkHelpReply,
   sendDingTalkUnknownCommandReply,
   sendDingTalkWelcomeCard,
@@ -101,7 +81,8 @@ beforeEach(() => {
   finalize.mockResolvedValue(undefined);
   sendOtoMessage.mockResolvedValue({});
   sendGroupMessage.mockResolvedValue({});
-  mockBuildActionCardParam.mockReturnValue({ msgKey: 'sampleActionCard4', msgParam: '{}' });
+  vi.mocked(getDingTalkSession).mockReset();
+  vi.mocked(getDingTalkSession).mockReturnValue(undefined);
   mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
 });
 
@@ -164,31 +145,49 @@ describe('paginateEntries', () => {
 });
 
 describe('DingTalk onboarding cards', () => {
+  const parseParam = (call: { msgParam: string }) =>
+    JSON.parse(call.msgParam) as Record<string, unknown>;
+
+  const expectShortcutCard4 = (param: Record<string, unknown>, text: string, title: string) => {
+    expect(param.title).toBe(title);
+    expect(param.text).toBe(text);
+    expect(param.actionTitle1).toBe(DINGTALK_COMMAND_SHORTCUT_BUTTONS[0].label);
+    expect(param.actionTitle2).toBe(DINGTALK_COMMAND_SHORTCUT_BUTTONS[1].label);
+    expect(param.actionTitle3).toBe(DINGTALK_COMMAND_SHORTCUT_BUTTONS[2].label);
+    expect(param.actionTitle4).toBe(DINGTALK_COMMAND_SHORTCUT_BUTTONS[3].label);
+    expect(param).not.toHaveProperty('actionTitle5');
+    expect(param).not.toHaveProperty('singleTitle');
+    expect(param.actionURL1).toBe(dtmdSendMessageUrl(DINGTALK_COMMAND_SHORTCUT_BUTTONS[0].command));
+    expect(param.actionURL2).toBe(dtmdSendMessageUrl(DINGTALK_COMMAND_SHORTCUT_BUTTONS[1].command));
+    expect(param.actionURL3).toBe(dtmdSendMessageUrl(DINGTALK_COMMAND_SHORTCUT_BUTTONS[2].command));
+    expect(param.actionURL4).toBe(dtmdSendMessageUrl(DINGTALK_COMMAND_SHORTCUT_BUTTONS[3].command));
+  };
+
   it('sends a welcome ActionCard with branding title and shortcut buttons', async () => {
+    vi.mocked(getDingTalkSession).mockReturnValue({
+      conversationId: 'cid',
+      conversationType: '1',
+      senderStaffId: 'staff_dm',
+    } as any);
     await sendDingTalkWelcomeCard('dingtalk:cid');
-    expect(mockBuildActionCardParam).toHaveBeenCalledWith({
-      buttons: DINGTALK_COMMAND_SHORTCUT_BUTTONS,
-      text: DINGTALK_WELCOME_TEXT,
-      title: '已连接 AI平台',
-    });
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
     expect(sendOtoMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         msgKey: 'sampleActionCard4',
         robotCode: 'robot',
-        userIds: ['cid'],
+        userIds: ['staff_dm'],
       }),
+    );
+    expectShortcutCard4(
+      parseParam(sendOtoMessage.mock.calls[0][0]),
+      DINGTALK_WELCOME_TEXT,
+      '已连接 AI平台',
     );
     expect(sendGroupMessage).not.toHaveBeenCalled();
   });
 
   it('sends the welcome card via the group API and @-mentions the asker', async () => {
     await sendDingTalkWelcomeCard('dingtalk:cid:staff_9');
-    expect(mockBuildActionCardParam).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: `@staff_9 ${DINGTALK_WELCOME_TEXT}`,
-        title: '已连接 AI平台',
-      }),
-    );
     expect(sendGroupMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         msgKey: 'sampleActionCard4',
@@ -196,7 +195,28 @@ describe('DingTalk onboarding cards', () => {
         robotCode: 'robot',
       }),
     );
+    const param = parseParam(sendGroupMessage.mock.calls[0][0]);
+    expectShortcutCard4(param, `@staff_9 ${DINGTALK_WELCOME_TEXT}`, '已连接 AI平台');
+    expect(param.at).toEqual({ atUserIds: ['staff_9'] });
     expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('sends sampleActionCard for a single-button picker', async () => {
+    await sendDingTalkChoiceList({
+      askerStaffId: 'staff_1',
+      entries: [{ command: '/切换 1', label: 'Inbox' }],
+      text: '点选要切换的助手',
+      threadId: 'dingtalk:cid',
+      title: '助手',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ msgKey: 'sampleActionCard' }),
+    );
+    const param = parseParam(sendOtoMessage.mock.calls[0][0]);
+    expect(param.singleTitle).toBe('Inbox');
+    expect(param.singleURL).toBe(dtmdSendMessageUrl('/切换 1'));
+    expect(param).not.toHaveProperty('actionTitle1');
+    expect(param).not.toHaveProperty('actionTitle2');
   });
 
   it('sends tidy help markdown then the same shortcut card', async () => {
@@ -208,13 +228,18 @@ describe('DingTalk onboarding cards', () => {
         msgParam: JSON.stringify({ text: DINGTALK_HELP_TEXT, title: '常用指令' }),
       }),
     );
-    expect(mockBuildActionCardParam).toHaveBeenCalledWith({
-      buttons: DINGTALK_COMMAND_SHORTCUT_BUTTONS,
-      text: DINGTALK_COMMAND_CARD_TEXT,
-      title: DINGTALK_COMMAND_CARD_TITLE,
-    });
+    expect(sendOtoMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ msgKey: 'sampleActionCard4' }),
+    );
+    expectShortcutCard4(
+      parseParam(sendOtoMessage.mock.calls[1][0]),
+      DINGTALK_COMMAND_CARD_TEXT,
+      DINGTALK_COMMAND_CARD_TITLE,
+    );
     expect(DINGTALK_HELP_TEXT).toContain('## 常用指令');
     expect(DINGTALK_HELP_TEXT).toContain('/助手 — 列出并切换助手');
+    expect(DINGTALK_HELP_TEXT).toContain('/会话 — 查看最近 5 个会话');
     expect(DINGTALK_HELP_TEXT).toContain('群聊中需 @机器人');
     expect(DINGTALK_HELP_TEXT).not.toMatch(/[!！]/);
   });
@@ -234,15 +259,16 @@ describe('DingTalk onboarding cards', () => {
       text: `@staff_9 ${DINGTALK_UNKNOWN_COMMAND_REPLY}`,
       title: DINGTALK_UNKNOWN_COMMAND_REPLY,
     });
-    expect(mockBuildActionCardParam).toHaveBeenCalledWith(
-      expect.objectContaining({
-        buttons: DINGTALK_COMMAND_SHORTCUT_BUTTONS,
-        text: `@staff_9 ${DINGTALK_COMMAND_CARD_TEXT}`,
-      }),
-    );
     expect(sendGroupMessage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ msgKey: 'sampleActionCard4', openConversationId: 'cid' }),
     );
+    const cardParam = parseParam(sendGroupMessage.mock.calls[1][0]);
+    expectShortcutCard4(
+      cardParam,
+      `@staff_9 ${DINGTALK_COMMAND_CARD_TEXT}`,
+      DINGTALK_COMMAND_CARD_TITLE,
+    );
+    expect(cardParam.at).toEqual({ atUserIds: ['staff_9'] });
   });
 });

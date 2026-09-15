@@ -9,6 +9,7 @@ import {
   isSessionWebhookLive,
   rememberDingTalkCard,
 } from '@lobechat/chat-adapter-dingtalk';
+import { isRecord } from '@lobechat/utils/object';
 import debug from 'debug';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
@@ -51,6 +52,16 @@ const markdownTitle = (text: string): string => {
   const line = text.split('\n').find((item) => item.trim());
   if (!line) return DINGTALK_MARKDOWN_TITLE_FALLBACK;
   return line.replace(/^#+\s*/, '').slice(0, 32) || DINGTALK_MARKDOWN_TITLE_FALLBACK;
+};
+
+const attachGroupAtUserIds = (msgParam: string, staffId: string): string => {
+  try {
+    const parsed: unknown = JSON.parse(msgParam);
+    if (!isRecord(parsed)) return msgParam;
+    return JSON.stringify({ ...parsed, at: { atUserIds: [staffId] } });
+  } catch {
+    return msgParam;
+  }
 };
 
 export const wrapDingTalkAskerCommand = (
@@ -150,11 +161,13 @@ const sendActionCard = async (params: {
     text,
     title: params.title,
   });
+  const msgParam =
+    isGroup && staffId ? attachGroupAtUserIds(card.msgParam, staffId) : card.msgParam;
   try {
     if (isGroup) {
       await api.sendGroupMessage({
         msgKey: card.msgKey,
-        msgParam: card.msgParam,
+        msgParam,
         openConversationId: decoded.conversationId,
         robotCode: config.robotCode,
       });
@@ -162,7 +175,7 @@ const sendActionCard = async (params: {
     }
     await api.sendOtoMessage({
       msgKey: card.msgKey,
-      msgParam: card.msgParam,
+      msgParam,
       robotCode: config.robotCode,
       userIds: [staffId || decoded.conversationId],
     });
@@ -175,7 +188,7 @@ const sendActionCard = async (params: {
   }
 };
 
-export const sendDingTalkCommandCard = async (params: {
+const sendDingTalkCommandCard = async (params: {
   text: string;
   threadId: string;
   title: string;

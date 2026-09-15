@@ -1910,6 +1910,27 @@ describe('MessengerRouter DingTalk G2a glue', () => {
     expect(mockHandleMention).not.toHaveBeenCalled();
   });
 
+  it('skips the welcome card when first auto-link happens while chat is disabled', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValueOnce(undefined);
+    vi.mocked(tryAutoLinkDingTalk).mockResolvedValueOnce(fakeDingTalkLink() as any);
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...DINGTALK_CONFIG,
+      chatEnabled: false,
+    } as any);
+    vi.mocked(claimDingTalkChatDisabledNotice).mockResolvedValueOnce(true);
+
+    await runInbound();
+
+    expect(tryAutoLinkDingTalk).toHaveBeenCalled();
+    expect(sendDingTalkWelcomeCard).not.toHaveBeenCalled();
+    expect(mockHandleMention).not.toHaveBeenCalled();
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      DINGTALK_CHAT_DISABLED_REPLY,
+    );
+  });
+
   it('increments the daily inbound message counter', async () => {
     await loadDingTalkBot();
     mockFindLink.mockResolvedValue(fakeDingTalkLink());

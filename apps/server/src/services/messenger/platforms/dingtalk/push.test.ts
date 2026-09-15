@@ -178,6 +178,71 @@ describe('DingTalkMessengerPushProvider', () => {
     expect(param.singleTitle).toBe('在AI 平台中查看');
   });
 
+  it('does not double-wrap an already-SSO relative redirect', async () => {
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/dingtalk/sso?redirect=%2Ftask%2F1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(sendOtoMessage.mock.calls[0][0].msgKey).toBe('sampleActionCard');
+    expect(param.singleURL).toBe('https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1');
+    expect(param.singleURL).not.toContain('redirect=%2Fdingtalk%2Fsso');
+  });
+
+  it('does not double-wrap an already-SSO same-origin absolute URL', async () => {
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(param.singleURL).toBe('https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1');
+  });
+
+  it('omits the button for a protocol-relative actionUrl', async () => {
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '//evil.example/phish',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+    expect(result).toEqual({ status: 'sent' });
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ msgKey: 'sampleMarkdown' }),
+    );
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, unknown>;
+    expect(JSON.stringify(param)).not.toContain('evil.example');
+  });
+
+  it('omits the button for a cross-origin already-SSO actionUrl', async () => {
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: 'https://evil.example/dingtalk/sso?redirect=https://evil.example',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ msgKey: 'sampleMarkdown' }),
+    );
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, unknown>;
+    expect(JSON.stringify(param)).not.toContain('evil.example');
+  });
+
   it('sends sampleMarkdown when there is no actionUrl', async () => {
     await dingtalkMessengerPushProvider.pushToUser({
       db: {} as any,

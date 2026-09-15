@@ -64,7 +64,7 @@ export const formatDingTalkViewInBrandingLabel = (displayName: string): string =
 
 export const formatDingTalkWelcomeTitle = (displayName: string): string => `已连接 ${displayName}`;
 
-export const DINGTALK_WELCOME_TEXT = ['已关联你的钉钉账号。', '可直接提问，或使用下方指令。'].join(
+export const DINGTALK_WELCOME_TEXT = ['已关联钉钉账号。', '可直接提问，或使用下方指令。'].join(
   '\n',
 );
 
@@ -82,7 +82,7 @@ export const DINGTALK_HELP_TEXT = [
   '## 常用指令',
   '',
   '会话',
-  '/会话 — 查看最近会话',
+  '/会话 — 查看最近 5 个会话',
   '/继续 N — 继续第 N 个会话',
   '/新会话 — 开始新会话',
   '',

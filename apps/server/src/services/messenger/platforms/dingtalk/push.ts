@@ -16,25 +16,59 @@ import { incrementDingTalkDailyCounter } from './redis';
 const log = debug('lobe-server:messenger:dingtalk:push');
 
 const DINGTALK_SSO_PATH = '/dingtalk/sso';
+const DINGTALK_SSO_REDIRECT_PREFIX = `${DINGTALK_SSO_PATH}?redirect=`;
 
-const toAppPath = (actionUrl: string): string => {
-  if (/^https?:\/\//i.test(actionUrl)) {
-    try {
-      const parsed = new URL(actionUrl);
-      return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
-    } catch {
-      return actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`;
-    }
+const appUrlBase = (): string => (appEnv.APP_URL || '').replace(/\/$/, '');
+
+const appUrlOrigin = (): string | null => {
+  const base = appUrlBase();
+  if (!base) return null;
+  try {
+    return new URL(base).origin;
+  } catch {
+    return null;
   }
-  return actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`;
 };
 
-/** Wrap an app path (or absolute APP_URL URL) as `${APP_URL}/dingtalk/sso?redirect=…`. */
-const wrapDingTalkSsoRedirect = (actionUrl: string): string => {
-  const base = (appEnv.APP_URL || '').replace(/\/$/, '');
+/**
+ * Same-origin app path only. Root-relative (`/…`, not `//…`) or an absolute URL
+ * whose origin matches `APP_URL`. Protocol-relative and cross-origin inputs
+ * return null so the caller can omit the button.
+ */
+const toAppPath = (actionUrl: string): string | null => {
+  const trimmed = actionUrl.trim();
+  if (!trimmed || trimmed.startsWith('//')) return null;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const origin = appUrlOrigin();
+      if (!origin || parsed.origin !== origin) return null;
+      return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+    } catch {
+      return null;
+    }
+  }
+
+  if (!trimmed.startsWith('/')) return null;
+  return trimmed;
+};
+
+const isOurDingTalkSsoRedirectPath = (path: string): boolean =>
+  path.startsWith(DINGTALK_SSO_REDIRECT_PREFIX);
+
+/**
+ * Wrap a same-origin app path as `${APP_URL}/dingtalk/sso?redirect=…`.
+ * Already-wrapped paths (`/dingtalk/sso?redirect=` or the same under APP_URL)
+ * are returned as-is. Unsafe / cross-origin inputs return null.
+ */
+const wrapDingTalkSsoRedirect = (actionUrl: string): string | null => {
   const path = toAppPath(actionUrl);
-  const isSso = path === DINGTALK_SSO_PATH || path.startsWith(`${DINGTALK_SSO_PATH}?`);
-  const wrapped = isSso ? path : `${DINGTALK_SSO_PATH}?redirect=${encodeURIComponent(path)}`;
+  if (!path) return null;
+  const wrapped = isOurDingTalkSsoRedirectPath(path)
+    ? path
+    : `${DINGTALK_SSO_PATH}?redirect=${encodeURIComponent(path)}`;
+  const base = appUrlBase();
   return base ? `${base}${wrapped}` : wrapped;
 };
 
@@ -76,11 +110,12 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
     const { actionUrl, markdown, title } = params.message;
 
     try {
-      if (actionUrl) {
+      const wrappedUrl = actionUrl ? wrapDingTalkSsoRedirect(actionUrl) : null;
+      if (wrappedUrl) {
         const displayName = await resolveDingTalkBrandingDisplayName();
         const card = buildSampleActionCardParam({
           singleTitle: formatDingTalkViewInBrandingLabel(displayName),
-          singleURL: wrapDingTalkSsoRedirect(actionUrl),
+          singleURL: wrappedUrl,
           text: markdown,
           title,
         });
