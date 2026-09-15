@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 
+import type { AdminImConnectorsReadService } from '@/enterprise/client/services/adminImConnectors';
 import type {
   AdminBrowserProfileService,
   AdminDocumentRenderSettingsService,
@@ -18,6 +19,7 @@ import {
   buildAdminBrowserProfileOptionsKey,
   buildAdminDocumentRenderSettingsKey,
   buildAdminDocumentRenderStatusKey,
+  buildAdminImConnectorsKey,
   buildAdminInfraSettingsKey,
   buildAdminSandboxSettingsKey,
 } from './swrKeys';
@@ -85,6 +87,16 @@ export const useAdminDocumentRenderStatus = (
       revalidateOnFocus: false,
     },
   );
+
+/**
+ * IM 连接器 list. One entry per supported platform, configured or not, so the tab can render the
+ * cards without a second "does a row exist" request.
+ */
+export const useAdminImConnectors = (enabled: boolean, service: AdminImConnectorsReadService) =>
+  useClientDataSWR(buildAdminImConnectorsKey(enabled), () => service.list(), {
+    keepPreviousData: true,
+    revalidateOnFocus: false,
+  });
 
 export interface InfraProbeState {
   busy: Partial<Record<AdminSystemInfraDependency, boolean>>;

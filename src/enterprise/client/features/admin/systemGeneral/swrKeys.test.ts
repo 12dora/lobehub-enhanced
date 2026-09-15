@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ADMIN_BROWSER_PROFILE_KEY,
+  ADMIN_IM_CONNECTORS_KEY,
   ADMIN_SYSTEM_INFRA_SETTINGS_KEY,
   ADMIN_SYSTEM_SANDBOX_SETTINGS_KEY,
   buildAdminBrowserProfileKey,
+  buildAdminImConnectorsKey,
   buildAdminInfraSettingsKey,
   buildAdminSandboxSettingsKey,
 } from './swrKeys';
@@ -20,5 +22,7 @@ describe('admin infra settings SWR keys', () => {
     expect(buildAdminBrowserProfileKey(false)).toBeNull();
     expect(buildAdminSandboxSettingsKey(true)).toEqual([ADMIN_SYSTEM_SANDBOX_SETTINGS_KEY]);
     expect(buildAdminSandboxSettingsKey(false)).toBeNull();
+    expect(buildAdminImConnectorsKey(true)).toEqual([ADMIN_IM_CONNECTORS_KEY]);
+    expect(buildAdminImConnectorsKey(false)).toBeNull();
   });
 });

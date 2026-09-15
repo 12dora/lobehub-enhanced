@@ -19,6 +19,7 @@ export const AUDIT_LOG_TARGET_TYPES = [
   'identity_provider',
   'identity_provider_test',
   'identity_provider_validation',
+  'im_connector',
   'infra_settings',
   'legal_hold',
   'managed_policy',

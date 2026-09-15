@@ -32,10 +32,10 @@ vi.mock('antd-style', () => ({
 
 vi.mock('@lobehub/ui', () => ({
   Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Tabs: ({
     activeKey,
     items,
@@ -134,6 +134,16 @@ vi.mock('./SystemGeneralPageView', () => ({
   },
 }));
 
+vi.mock('./imConnectors/ImConnectorsTab', () => ({
+  ImConnectorsTab: ({ canOperate, enabled }: { canOperate: boolean; enabled: boolean }) => (
+    <div
+      data-can-operate={String(canOperate)}
+      data-enabled={String(enabled)}
+      data-testid="tab-body-im-connectors"
+    />
+  ),
+}));
+
 vi.mock('../networkProxy/NetworkProxyTab', () => ({
   default: ({ canManage, enabled }: { canManage: boolean; enabled: boolean }) => (
     <div
@@ -166,11 +176,36 @@ beforeEach(() => {
 });
 
 describe('SystemGeneralPage', () => {
-  it('defaults to 基础设施 and offers both tabs', () => {
+  it('defaults to 基础设施 and offers every readable tab', () => {
     renderAt('/admin/system/general');
     expect(screen.getByTestId('tab-infrastructure')).toBeTruthy();
+    expect(screen.getByTestId('tab-im-connectors')).toBeTruthy();
     expect(screen.getByTestId('tab-network-proxy')).toBeTruthy();
     expect(screen.getByTestId('tab-body-infrastructure')).toBeTruthy();
+  });
+
+  it('honours ?tab=im-connectors on entry', () => {
+    renderAt('/admin/system/general?tab=im-connectors');
+    expect(screen.getByTestId('tab-body-im-connectors')).toBeTruthy();
+    expect(screen.queryByTestId('tab-body-infrastructure')).toBeNull();
+  });
+
+  it('passes SYSTEM_OPERATE down to the IM 连接器 tab as the write gate', () => {
+    mocks.admin.permissions = [
+      PLATFORM_PERMISSIONS.SYSTEM_READ,
+      PLATFORM_PERMISSIONS.SYSTEM_OPERATE,
+    ];
+    renderAt('/admin/system/general?tab=im-connectors');
+    const body = screen.getByTestId('tab-body-im-connectors');
+    expect(body.dataset.canOperate).toBe('true');
+    expect(body.dataset.enabled).toBe('true');
+  });
+
+  it('keeps the IM 连接器 tab away from an admin without SYSTEM_READ', () => {
+    mocks.admin.permissions = [PLATFORM_PERMISSIONS.NETWORK_PROXY_READ];
+    renderAt('/admin/system/general?tab=im-connectors');
+    expect(screen.queryByTestId('tab-im-connectors')).toBeNull();
+    expect(screen.getByTestId('tab-body-network-proxy')).toBeTruthy();
   });
 
   it('honours ?tab=network-proxy on entry', () => {
