@@ -19,8 +19,9 @@ export type FileAccessFile = {
 export type FileAccessDecision =
   { allowed: true; reason: 'owner' | 'workspace' | 'auditor' } | { allowed: false };
 
-// Topic link-shares are served by `message.getMessages({ topicShareId })` with
-// short-lived presigned object URLs, so they never need `/f/:id` access here.
+// Topic link-shares are served through `/f/:id?share=<shareId>` (see
+// `shareFileAccess.ts`), a capability checked per request; they never take the
+// session rules below.
 const isWorkspaceMemberVisible = (visibility?: string | null): boolean =>
   visibility == null || visibility === 'public';
 
