@@ -5,7 +5,8 @@ import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AuditMessageAttachment } from './auditMessageAttachments';
+import type { AdminAuditConversationMessageAttachment } from '@/enterprise/client/services/adminAudit';
+
 import { isImageFileType } from './auditMessageAttachments';
 import { MessageAttachments } from './MessageAttachments';
 
@@ -38,11 +39,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
-vi.mock('@/components/FileIcon', () => ({
-  default: ({ fileName }: { fileName: string }) => <span data-testid="file-icon">{fileName}</span>,
-}));
-
-const pdf: AuditMessageAttachment = {
+const pdf: AdminAuditConversationMessageAttachment = {
   fileId: 'file-pdf',
   fileType: 'application/pdf',
   name: 'report.pdf',
@@ -50,7 +47,7 @@ const pdf: AuditMessageAttachment = {
   url: '/f/file-pdf',
 };
 
-const photo: AuditMessageAttachment = {
+const photo: AdminAuditConversationMessageAttachment = {
   fileId: 'file-img',
   fileType: 'image/png',
   name: 'photo.png',
@@ -79,27 +76,27 @@ describe('MessageAttachments', () => {
     render(<MessageAttachments attachments={[pdf]} />);
 
     expect(screen.getByLabelText('audit.conversations.message.attachments')).toBeTruthy();
-    const link = screen.getByRole('link', { name: 'audit.conversations.message.openAttachment' });
+    const link = screen.getByRole('link', {
+      name: 'audit.conversations.message.openAttachment: report.pdf',
+    });
     expect(link.getAttribute('href')).toBe('/f/file-pdf');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
     expect(link.getAttribute('title')).toBe('report.pdf');
     expect(screen.getByText('2.0 KB')).toBeTruthy();
-    expect(screen.getByTestId('file-icon')).toBeTruthy();
     expect(screen.queryByRole('img')).toBeNull();
   });
 
-  it('renders a lazy thumbnail for image mime types that also opens the file', () => {
+  it('renders image files as the same click-to-open chip, without an auto-loaded thumbnail', () => {
     render(<MessageAttachments attachments={[photo]} />);
 
-    const img = screen.getByRole('img', { name: 'photo.png' });
-    expect(img.getAttribute('src')).toBe('/f/file-img');
-    expect(img.getAttribute('loading')).toBe('lazy');
-    expect(screen.queryByTestId('file-icon')).toBeNull();
-
-    const link = screen.getByRole('link');
+    expect(screen.queryByRole('img')).toBeNull();
+    const link = screen.getByRole('link', {
+      name: 'audit.conversations.message.openAttachment: photo.png',
+    });
     expect(link.getAttribute('href')).toBe('/f/file-img');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.querySelector('img')).toBeNull();
   });
 });

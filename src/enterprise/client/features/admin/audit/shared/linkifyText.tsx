@@ -10,20 +10,41 @@ const styles = createStaticStyles(({ css }) => ({
   `,
 }));
 
-/** Absolute http(s) URLs; trailing sentence punctuation is kept as plain text. */
-const ABSOLUTE_HTTP_URL = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+/** Absolute http(s) URLs. Flags are applied per call so `lastIndex` never leaks. */
+const ABSOLUTE_HTTP_URL = /\bhttps?:\/\/[^\s<>"'`]+/;
 
-const TRAILING_PUNCT = /[),.;:!?]+$/u;
+const TRAILING_SENTENCE_PUNCT = new Set(['.', ',', ';', ':', '!', '?']);
 
 export interface LinkifySegment {
   href?: string;
   value: string;
 }
 
+const countChar = (value: string, ch: string): number => value.split(ch).length - 1;
+
+/**
+ * Peel trailing sentence punctuation, then unbalanced `)` so
+ * `https://en.wikipedia.org/wiki/X_(y)` stays intact while `(https://example.com).` does not.
+ */
 const splitUrlAndTrailing = (raw: string): { href: string; trailing: string } => {
-  const trailing = raw.match(TRAILING_PUNCT)?.[0] ?? '';
-  if (!trailing) return { href: raw, trailing: '' };
-  return { href: raw.slice(0, -trailing.length), trailing };
+  let end = raw.length;
+  while (end > 0) {
+    const ch = raw[end - 1]!;
+    if (TRAILING_SENTENCE_PUNCT.has(ch)) {
+      end -= 1;
+      continue;
+    }
+    if (ch === ')') {
+      const slice = raw.slice(0, end);
+      if (countChar(slice, ')') > countChar(slice, '(')) {
+        end -= 1;
+        continue;
+      }
+    }
+    break;
+  }
+  if (end === raw.length) return { href: raw, trailing: '' };
+  return { href: raw.slice(0, end), trailing: raw.slice(end) };
 };
 
 /** Split plain text so absolute http(s) URLs can be rendered as links. */

@@ -33,6 +33,24 @@ describe('splitHttpUrls', () => {
       { value: '.' },
     ]);
   });
+
+  it('keeps balanced parentheses inside Wikipedia-style paths', () => {
+    expect(splitHttpUrls('see https://en.wikipedia.org/wiki/X_(y)')).toEqual([
+      { value: 'see ' },
+      {
+        href: 'https://en.wikipedia.org/wiki/X_(y)',
+        value: 'https://en.wikipedia.org/wiki/X_(y)',
+      },
+    ]);
+  });
+
+  it('strips an unbalanced trailing closing paren together with sentence punctuation', () => {
+    expect(splitHttpUrls('See (https://example.com/foo).')).toEqual([
+      { value: 'See (' },
+      { href: 'https://example.com/foo', value: 'https://example.com/foo' },
+      { value: ').' },
+    ]);
+  });
 });
 
 describe('linkifyText', () => {

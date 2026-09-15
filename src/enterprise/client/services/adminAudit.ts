@@ -2,6 +2,7 @@ import type { z } from 'zod';
 
 import { lambdaClient } from '@/libs/trpc/client';
 import type {
+  AdminAuditConversationMessageAttachment,
   adminAuditConversationsGetOutputSchema,
   adminAuditConversationsListOutputSchema,
   adminAuditConversationsMessagesOutputSchema,
@@ -47,6 +48,7 @@ export type AdminAuditConversationsMessagesOutput = z.infer<
   typeof adminAuditConversationsMessagesOutputSchema
 >;
 export type AdminAuditConversationMessage = AdminAuditConversationsMessagesOutput['items'][number];
+export type { AdminAuditConversationMessageAttachment };
 
 export type AdminAuditUserSummary = z.infer<typeof adminAuditUsersSummaryOutputSchema>;
 export type AdminAuditUsersTimelineOutput = z.infer<typeof adminAuditUsersTimelineOutputSchema>;

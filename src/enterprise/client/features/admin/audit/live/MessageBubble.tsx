@@ -8,14 +8,9 @@ import { useTranslation } from 'react-i18next';
 
 import type { AdminAuditConversationMessage } from '@/enterprise/client/services/adminAudit';
 
-import type { AuditMessageAttachment } from '../shared/auditMessageAttachments';
 import { formatAdminDateTime } from '../shared/format';
 import { linkifyText } from '../shared/linkifyText';
 import { MessageAttachments } from '../shared/MessageAttachments';
-
-type LiveMessage = AdminAuditConversationMessage & {
-  attachments?: AuditMessageAttachment[];
-};
 
 const styles = createStaticStyles(({ css }) => ({
   row: css`
@@ -95,7 +90,7 @@ const renderBody = (content: string) => {
 export interface MessageBubbleProps {
   /** When metadata_only / body not loaded */
   bodyHidden?: boolean;
-  message: LiveMessage;
+  message: AdminAuditConversationMessage;
 }
 
 const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
@@ -119,7 +114,7 @@ const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
       ? `${styles.bubble} ${styles.bubbleSystem}`
       : `${styles.bubble} ${styles.bubbleAssistant}`;
 
-  const attachments = bodyHidden ? [] : (message.attachments ?? []);
+  const attachments = bodyHidden ? [] : message.attachments;
 
   const body = bodyHidden ? (
     <Text type="secondary">{t('audit.live.message.bodyHidden')}</Text>

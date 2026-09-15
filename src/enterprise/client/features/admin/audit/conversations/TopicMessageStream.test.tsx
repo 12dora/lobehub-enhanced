@@ -52,10 +52,6 @@ vi.mock('../shared/format', () => ({
   formatAdminDateTime: () => '2026-01-02 00:00',
 }));
 
-vi.mock('@/components/FileIcon', () => ({
-  default: ({ fileName }: { fileName: string }) => <span data-testid="file-icon">{fileName}</span>,
-}));
-
 type FeedItem = TopicEvidence['messages']['items'][number];
 
 /** Tests only set the fields the component reads; the rest of the DTO is irrelevant here. */
@@ -122,10 +118,69 @@ describe('TopicMessageStream', () => {
 
     expect(screen.getByText('with file')).toBeTruthy();
     const fileLink = screen.getByRole('link', {
-      name: 'audit.conversations.message.openAttachment',
+      name: 'audit.conversations.message.openAttachment: notes.pdf',
     });
     expect(fileLink.getAttribute('href')).toBe('/f/f1');
     expect(fileLink.getAttribute('title')).toBe('notes.pdf');
+  });
+
+  it('does not render attachments when the body exists but is not loaded', () => {
+    render(
+      <TopicMessageStream
+        feed={feed([
+          {
+            attachments: [
+              {
+                fileId: 'f1',
+                fileType: 'application/pdf',
+                name: 'notes.pdf',
+                size: 2048,
+                url: '/f/f1',
+              },
+            ],
+            content: null,
+            createdAt: new Date('2026-01-02T00:00:00.000Z'),
+            hasContent: true,
+            id: 'm1',
+            role: 'user',
+          } as TopicEvidence['messages']['items'][number],
+        ])}
+      />,
+    );
+
+    expect(screen.getByText('audit.conversations.topic.bodyNotLoaded')).toBeTruthy();
+    expect(screen.queryByLabelText('audit.conversations.message.attachments')).toBeNull();
+    expect(screen.queryByText('notes.pdf')).toBeNull();
+  });
+
+  it('still renders attachments on file-only messages with no body text', () => {
+    render(
+      <TopicMessageStream
+        feed={feed([
+          {
+            attachments: [
+              {
+                fileId: 'f1',
+                fileType: 'application/pdf',
+                name: 'notes.pdf',
+                size: 2048,
+                url: '/f/f1',
+              },
+            ],
+            content: '',
+            createdAt: new Date('2026-01-02T00:00:00.000Z'),
+            hasContent: false,
+            id: 'm1',
+            role: 'user',
+          } as TopicEvidence['messages']['items'][number],
+        ])}
+      />,
+    );
+
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'audit.conversations.message.openAttachment: notes.pdf' }),
+    ).toBeTruthy();
   });
 
   it('does not render an attachment list when the field is omitted', () => {

@@ -6,18 +6,11 @@ import { useReducedMotion } from 'motion/react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { AdminAuditConversationMessage } from '@/enterprise/client/services/adminAudit';
-
-import type { AuditMessageAttachment } from '../shared/auditMessageAttachments';
 import { formatAdminDateTime } from '../shared/format';
 import { linkifyText } from '../shared/linkifyText';
 import { MessageAttachments } from '../shared/MessageAttachments';
 import { styles } from './topicPageStyles';
 import type { TopicEvidence } from './useTopicEvidence';
-
-type TopicMessage = AdminAuditConversationMessage & {
-  attachments?: AuditMessageAttachment[];
-};
 
 /** Keeps server-applied `[REDACTED …]` markers visually distinct from the auditor's own reading. */
 const renderBody = (content: string) => {
@@ -49,7 +42,7 @@ const TopicMessageStream = memo<TopicMessageStreamProps>(({ feed }) => {
           <SkeletonText animated={!reduceMotion} rows={5} />
         </div>
       ) : null}
-      {feed.items.map((msg: TopicMessage) => (
+      {feed.items.map((msg) => (
         <div className={styles.message} key={msg.id}>
           <Flexbox horizontal align="center" gap={8}>
             <Tag size="small">{msg.role}</Tag>
@@ -64,7 +57,9 @@ const TopicMessageStream = memo<TopicMessageStreamProps>(({ feed }) => {
           ) : (
             <Text type="secondary">—</Text>
           )}
-          <MessageAttachments attachments={msg.attachments ?? []} />
+          <MessageAttachments
+            attachments={msg.hasContent && msg.content == null ? [] : msg.attachments}
+          />
         </div>
       ))}
       {feed.hasError && !feed.hasData ? (

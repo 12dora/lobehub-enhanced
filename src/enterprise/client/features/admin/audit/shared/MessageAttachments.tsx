@@ -3,16 +3,14 @@
 import { Flexbox } from '@lobehub/ui';
 import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
+import { FileText, Image as ImageIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import FileIcon from '@/components/FileIcon';
+import type { AdminAuditConversationMessageAttachment } from '@/enterprise/client/services/adminAudit';
 import { formatSize } from '@/utils/format';
 
-import type { AuditMessageAttachment } from './auditMessageAttachments';
 import { isImageFileType } from './auditMessageAttachments';
-
-const THUMB_MAX_PX = 120;
 
 const styles = createStaticStyles(({ css }) => ({
   list: css`
@@ -21,8 +19,8 @@ const styles = createStaticStyles(({ css }) => ({
   chip: css`
     overflow: hidden;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    gap: 6px;
+    align-items: center;
 
     max-width: 240px;
     padding-block: 6px;
@@ -40,65 +38,44 @@ const styles = createStaticStyles(({ css }) => ({
       background: ${cssVar.colorFillTertiary};
     }
   `,
-  meta: css`
-    overflow: hidden;
-    display: flex;
-    gap: 6px;
-    align-items: center;
-
-    min-width: 0;
-  `,
   name: css`
     overflow: hidden;
     min-width: 0;
     text-overflow: ellipsis;
     white-space: nowrap;
   `,
-  thumb: css`
-    display: block;
-
-    max-width: ${THUMB_MAX_PX}px;
-    max-height: ${THUMB_MAX_PX}px;
-    border-radius: ${cssVar.borderRadiusSM};
-
-    object-fit: contain;
-  `,
 }));
 
 export interface MessageAttachmentsProps {
-  attachments?: AuditMessageAttachment[] | null;
+  attachments?: AdminAuditConversationMessageAttachment[] | null;
 }
 
 interface AttachmentChipProps {
-  file: AuditMessageAttachment;
+  file: AdminAuditConversationMessageAttachment;
   openLabel: string;
 }
 
 const AttachmentChip = memo<AttachmentChipProps>(({ file, openLabel }) => {
   const isImage = isImageFileType(file.fileType);
+  const Icon = isImage ? ImageIcon : FileText;
   const sizeLabel = formatSize(file.size);
 
   return (
     <a
-      aria-label={openLabel}
+      aria-label={`${openLabel}: ${file.name}`}
       className={styles.chip}
       href={file.url}
       rel="noopener noreferrer"
       target="_blank"
       title={file.name}
     >
-      {isImage ? (
-        <img alt={file.name} className={styles.thumb} loading="lazy" src={file.url} />
-      ) : null}
-      <span className={styles.meta}>
-        {isImage ? null : <FileIcon fileName={file.name} fileType={file.fileType} size={16} />}
-        <Text ellipsis className={styles.name}>
-          {file.name}
-        </Text>
-        <Text style={{ flex: 'none', fontSize: 12, margin: 0 }} type="secondary">
-          {sizeLabel}
-        </Text>
-      </span>
+      <Icon aria-hidden size={16} style={{ flexShrink: 0 }} />
+      <Text ellipsis as="span" className={styles.name}>
+        {file.name}
+      </Text>
+      <Text as="span" style={{ flex: 'none', fontSize: 12, margin: 0 }} type="secondary">
+        {sizeLabel}
+      </Text>
     </a>
   );
 });

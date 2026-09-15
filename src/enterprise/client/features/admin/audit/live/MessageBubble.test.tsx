@@ -5,7 +5,8 @@ import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AuditMessageAttachment } from '../shared/auditMessageAttachments';
+import type { AdminAuditConversationMessageAttachment } from '@/enterprise/client/services/adminAudit';
+
 import MessageBubble from './MessageBubble';
 
 vi.mock('react-i18next', () => ({
@@ -50,11 +51,7 @@ vi.mock('../shared/format', () => ({
   formatAdminDateTime: () => '2026-01-02 00:00',
 }));
 
-vi.mock('@/components/FileIcon', () => ({
-  default: ({ fileName }: { fileName: string }) => <span data-testid="file-icon">{fileName}</span>,
-}));
-
-const attachment: AuditMessageAttachment = {
+const attachment: AdminAuditConversationMessageAttachment = {
   fileId: 'f1',
   fileType: 'application/pdf',
   name: 'notes.pdf',
@@ -87,7 +84,7 @@ describe('MessageBubble', () => {
     render(<MessageBubble message={message({ attachments: [attachment] })} />);
 
     const fileLink = screen.getByRole('link', {
-      name: 'audit.conversations.message.openAttachment',
+      name: 'audit.conversations.message.openAttachment: notes.pdf',
     });
     expect(fileLink.getAttribute('href')).toBe('/f/f1');
     expect(fileLink.getAttribute('target')).toBe('_blank');
