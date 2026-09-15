@@ -23,6 +23,7 @@ import {
 import type { LobeChatDatabase } from '@/database/type';
 import { PlatformSecretService } from '@/server/enterprise/security/secret';
 
+import { getPlatformPublicSnapshotEpoch } from '../branding/publicSnapshotCache';
 import { IdentityProviderValidationError } from './discoveryValidator';
 import {
   finalizeIdentityProviderRevocation,
@@ -32,10 +33,15 @@ import {
   recordIdentityProviderRevocation,
 } from './lkg';
 import type { PublishedIdentityProviderPayload } from './publicationService';
+import { getIdentityProviderStartupArtifactHealth } from './startupArtifact';
 import {
   loadIdentityProviderStartupSnapshot,
   resetIdentityProviderStartupSnapshotForTest,
 } from './startupSnapshot';
+import {
+  IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS,
+  IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS,
+} from './startupSnapshotDiscoveryRetry';
 
 const db: LobeChatDatabase = await getTestDB();
 const masterKey = Buffer.alloc(32, 88).toString('base64');
@@ -180,6 +186,7 @@ const publishRevision = async (input: {
 };
 
 const cleanup = async () => {
+  vi.useRealTimers();
   resetIdentityProviderStartupSnapshotForTest();
   // Immutable revision rows need trigger bypass for fixture teardown.
   await db.transaction(async (tx) => {
@@ -195,6 +202,25 @@ const cleanup = async () => {
 
 beforeEach(cleanup);
 afterEach(cleanup);
+
+const waitForScheduledTimer = async () => {
+  const deadline = Date.now() + 10_000;
+  while (vi.getTimerCount() === 0) {
+    if (Date.now() > deadline) {
+      throw new Error('timed out waiting for identity provider retry timer');
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+};
+
+const advanceDiscoveryRetries = async () => {
+  for (const delayMs of IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS) {
+    await waitForScheduledTimer();
+    await vi.advanceTimersByTimeAsync(delayMs);
+  }
+};
 
 describe('identity provider startup snapshot', () => {
   it.runIf(process.env.TEST_SERVER_DB === '1' && Boolean(process.env.DATABASE_TEST_URL))(
@@ -443,17 +469,21 @@ describe('identity provider startup snapshot', () => {
     await seedPublished(env);
     await loadSnapshot({ cache: false, db, env });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const discover = vi.fn(async () => {
       throw new IdentityProviderValidationError('OIDC_NETWORK_BLOCKED');
     });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
 
     try {
-      const snapshot = await loadIdentityProviderStartupSnapshot({
+      const pending = loadIdentityProviderStartupSnapshot({
         cache: false,
         db,
         discovery: { discover },
         env,
       });
+      await advanceDiscoveryRetries();
+      const snapshot = await pending;
 
       expect(snapshot.source).toBe('break_glass');
       const databaseLog = errorSpy.mock.calls.find((call) =>
@@ -471,7 +501,9 @@ describe('identity provider startup snapshot', () => {
         errorClass: 'IdentityProviderValidationError',
       });
     } finally {
+      vi.useRealTimers();
       errorSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
@@ -804,5 +836,157 @@ describe('identity provider startup snapshot', () => {
       providerIds: ['google'],
       source: 'break_glass',
     });
+  });
+
+  it('retries a transient discovery failure then loads a healthy database snapshot', async () => {
+    const env = await baseEnv();
+    const { clientSecret } = await seedPublished(env);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const discover = vi
+      .fn()
+      .mockRejectedValueOnce(new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID'))
+      .mockImplementation(discovery.discover);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+    try {
+      const pending = loadIdentityProviderStartupSnapshot({
+        cache: false,
+        db,
+        discovery: { discover },
+        env,
+      });
+      await waitForScheduledTimer();
+      await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS[0]);
+      const snapshot = await pending;
+
+      expect(snapshot).toMatchObject({ health: 'healthy', source: 'database' });
+      expect(snapshot.databaseProviders[0]?.clientSecret).toBe(clientSecret);
+      expect(discover).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('falls back to LKG only after discovery retries are exhausted', async () => {
+    const env = await baseEnv();
+    const { provider, published } = await seedPublished(env);
+    await loadSnapshot({ cache: false, db, env });
+    await publishRevision({
+      issuer: 'https://unavailable.example.test',
+      providerId: provider.id,
+      revision: 3,
+      secretFingerprint: published.secretFingerprint,
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const discover = vi.fn(async (issuer: string) => {
+      if (issuer === 'https://unavailable.example.test') {
+        throw new IdentityProviderValidationError('OIDC_DISCOVERY_UNAVAILABLE');
+      }
+      return discovery.discover(issuer);
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+    try {
+      const pending = loadIdentityProviderStartupSnapshot({
+        cache: false,
+        db,
+        discovery: { discover },
+        env,
+      });
+      await advanceDiscoveryRetries();
+      const fallback = await pending;
+
+      expect(fallback).toMatchObject({ source: 'lkg' });
+      expect(discover).toHaveBeenCalledTimes(
+        1 + IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS.length + 1,
+      );
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('revalidates in the background after fail-closed discovery and invalidates the public snapshot', async () => {
+    const env = { ...(await baseEnv()), AUTH_SSO_PROVIDERS: 'google' };
+    await seedPublished(env);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    let failDiscovery = true;
+    const discover = vi.fn(async (issuer: string) => {
+      if (failDiscovery) throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
+      return discovery.discover(issuer);
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+    try {
+      const pending = loadIdentityProviderStartupSnapshot({
+        db,
+        discovery: { discover },
+        env,
+      });
+      await advanceDiscoveryRetries();
+      const snapshot = await pending;
+      expect(snapshot).toMatchObject({ source: 'break_glass' });
+      expect(getIdentityProviderStartupArtifactHealth()?.source).toBe('break_glass');
+
+      const epochBefore = getPlatformPublicSnapshotEpoch();
+      failDiscovery = false;
+      await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS);
+      vi.useRealTimers();
+      await vi.waitFor(() => {
+        expect(getIdentityProviderStartupArtifactHealth()).toMatchObject({
+          health: 'healthy',
+          source: 'database',
+        });
+      });
+      expect(getPlatformPublicSnapshotEpoch()).toBeGreaterThan(epochBefore);
+      const cached = await loadIdentityProviderStartupSnapshot({
+        db,
+        discovery: { discover },
+        env,
+      });
+      expect(cached).toMatchObject({ health: 'healthy', source: 'database' });
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
+  it('does not retry non-transient secret errors', async () => {
+    const env = await baseEnv();
+    const { provider } = await seedPublished(env);
+    const secretService = PlatformSecretService.tryFromEnv(env)!;
+    const wrongCiphertext = await secretService.encrypt('wrong-secret');
+    await db
+      .update(platformIdentityProviderSecrets)
+      .set({ ciphertext: wrongCiphertext })
+      .where(eq(platformIdentityProviderSecrets.providerId, provider.id));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+    try {
+      const snapshot = await loadSnapshot({ cache: false, db, env });
+      expect(snapshot).toMatchObject({
+        databaseProviders: [],
+        health: 'degraded',
+        source: 'break_glass',
+      });
+      expect(
+        errorSpy.mock.calls.filter((call) =>
+          String(call[0]).includes('critical database snapshot failure'),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+    }
   });
 });

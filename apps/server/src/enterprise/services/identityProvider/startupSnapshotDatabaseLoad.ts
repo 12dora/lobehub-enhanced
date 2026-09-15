@@ -15,6 +15,7 @@ import { resolveStaticIdentityProviderMetadata } from './kinds';
 import type { IdentityProviderLkgPayload } from './lkg';
 import { IDENTITY_PROVIDER_LKG_VERSION, writeIdentityProviderLkg } from './lkg';
 import type { IdentityProviderStartupSnapshot } from './startupArtifact';
+import { retryOnTransientDiscoveryError } from './startupSnapshotDiscoveryRetry';
 import type {
   DatabasePayload,
   DatabaseProviderRow,
@@ -173,7 +174,15 @@ const toLkgPayload = (payload: DatabasePayload): IdentityProviderLkgPayload => (
   version: IDENTITY_PROVIDER_LKG_VERSION,
 });
 
-export const tryLoadDatabaseStartupSnapshot = async (input: {
+type DatabaseStartupSnapshotResult =
+  | {
+      ok: true;
+      snapshot: IdentityProviderStartupSnapshot;
+      validatedTombstones: ValidatedTombstone[];
+    }
+  | { ok: false; error: unknown; validatedTombstones: ValidatedTombstone[] };
+
+const loadDatabaseStartupSnapshotOnce = async (input: {
   db?: LobeChatDatabase;
   discovery: Pick<IdentityProviderDiscoveryValidator, 'discover'>;
   env: Record<string, string | undefined>;
@@ -186,14 +195,7 @@ export const tryLoadDatabaseStartupSnapshot = async (input: {
   testHooks?: {
     afterCanonicalRecheck?: () => Promise<void>;
   };
-}): Promise<
-  | {
-      ok: true;
-      snapshot: IdentityProviderStartupSnapshot;
-      validatedTombstones: ValidatedTombstone[];
-    }
-  | { ok: false; error: unknown; validatedTombstones: ValidatedTombstone[] }
-> => {
+}): Promise<DatabaseStartupSnapshotResult> => {
   /** Tombstones validated before a later live-provider failure — applied to LKG fallback. */
   let validatedTombstones: ValidatedTombstone[] = [];
   try {
@@ -286,4 +288,24 @@ export const tryLoadDatabaseStartupSnapshot = async (input: {
     });
     return { error, ok: false, validatedTombstones };
   }
+};
+
+export const tryLoadDatabaseStartupSnapshot = async (input: {
+  db?: LobeChatDatabase;
+  discovery: Pick<IdentityProviderDiscoveryValidator, 'discover'>;
+  env: Record<string, string | undefined>;
+  environmentProviderIds: string[];
+  environmentProviderIdSet: Set<string>;
+  loadDatabase: () => Promise<LobeChatDatabase>;
+  loadedAt: Date;
+  loadPublishedIdentityProviderSelection: LoadPublishedIdentityProviderSelection;
+  retryTransientDiscovery?: boolean;
+  secrets: PlatformSecretService;
+  testHooks?: {
+    afterCanonicalRecheck?: () => Promise<void>;
+  };
+}): Promise<DatabaseStartupSnapshotResult> => {
+  const loadOnce = () => loadDatabaseStartupSnapshotOnce(input);
+  if (!input.retryTransientDiscovery) return loadOnce();
+  return retryOnTransientDiscoveryError(loadOnce);
 };

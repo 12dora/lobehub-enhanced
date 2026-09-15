@@ -17,12 +17,28 @@ export type IdentityProviderValidationErrorCode =
   | 'OIDC_ISSUER_INVALID'
   | 'OIDC_NETWORK_BLOCKED';
 
+/** Discovery/network failures that may recover after a container/network blip. */
+export const TRANSIENT_OIDC_DISCOVERY_ERROR_CODES = [
+  'OIDC_DISCOVERY_INVALID',
+  'OIDC_DISCOVERY_UNAVAILABLE',
+  'OIDC_NETWORK_BLOCKED',
+] as const satisfies readonly IdentityProviderValidationErrorCode[];
+
 export class IdentityProviderValidationError extends Error {
   constructor(public readonly code: IdentityProviderValidationErrorCode) {
     super(code);
     this.name = 'IdentityProviderValidationError';
   }
 }
+
+export const isTransientOidcDiscoveryError = (error: unknown): boolean =>
+  error instanceof IdentityProviderValidationError &&
+  (TRANSIENT_OIDC_DISCOVERY_ERROR_CODES as readonly string[]).includes(error.code);
+
+const DISCOVERY_ERROR_BODY_PREVIEW_CHARS = 200;
+
+const previewDiscoveryBody = (body: Buffer): string =>
+  body.toString('utf8').slice(0, DISCOVERY_ERROR_BODY_PREVIEW_CHARS);
 
 const isJsonContentType = (value: string | null): boolean => {
   const mediaType = value?.split(';', 1)[0]?.trim().toLowerCase();
@@ -141,15 +157,28 @@ export class IdentityProviderDiscoveryValidator {
       response.truncated ||
       !isJsonContentType(response.headers.get('content-type'))
     ) {
+      console.warn('[identityProviderDiscovery] invalid discovery response', {
+        bodyPreview: previewDiscoveryBody(response.body),
+        contentType: response.headers.get('content-type'),
+        status: response.status,
+      });
       throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
     }
 
-    let metadata: PlatformOidcDiscoveryMetadata;
+    let raw: unknown;
     try {
-      metadata = toMetadata(oidcDiscoveryMetadataSchema.parse(await response.json()));
+      raw = await response.json();
     } catch {
       throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
     }
+    const parsed = oidcDiscoveryMetadataSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.warn('[identityProviderDiscovery] discovery metadata schema invalid', {
+        issuePaths: parsed.error.issues.map((issue) => issue.path),
+      });
+      throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
+    }
+    const metadata = toMetadata(parsed.data);
 
     try {
       parseSafeHttpsUrl(metadata.issuer, 'OIDC_DISCOVERY_INVALID');

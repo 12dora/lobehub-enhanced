@@ -11,6 +11,7 @@ import {
   assertAuthorizationResponseIssuer,
   IdentityProviderDiscoveryValidator,
   IdentityProviderValidationError,
+  isTransientOidcDiscoveryError,
 } from './discoveryValidator';
 
 const publicAddress = '93.184.216.34';
@@ -216,18 +217,95 @@ describe('IdentityProviderDiscoveryValidator', () => {
   });
 
   it('fails closed for non-JSON, oversized, and malformed discovery responses', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const cases = [
       response(metadata(), { headers: { 'content-type': 'text/html' } }),
       response(metadata(), { truncated: true }),
       response({ issuer: 'https://login.example.com/application/o/work/' }),
     ];
-    for (const item of cases) {
-      await expect(
-        validatorFor({ transport: async () => item }).discover(
-          'https://login.example.com/application/o/work/',
-        ),
-      ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_INVALID' });
+    try {
+      for (const item of cases) {
+        await expect(
+          validatorFor({ transport: async () => item }).discover(
+            'https://login.example.com/application/o/work/',
+          ),
+        ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_INVALID' });
+      }
+    } finally {
+      warn.mockRestore();
     }
+  });
+
+  it('logs HTTP status, content-type, and a 200-char body preview for a non-JSON discovery response', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const html = `<html>${'x'.repeat(400)}</html>`;
+    try {
+      await expect(
+        validatorFor({
+          transport: async () => ({
+            body: Buffer.from(html),
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+            status: 502,
+            statusText: 'Bad Gateway',
+          }),
+        }).discover('https://login.example.com/application/o/work/'),
+      ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_INVALID' });
+
+      expect(warn).toHaveBeenCalledWith(
+        '[identityProviderDiscovery] invalid discovery response',
+        expect.objectContaining({
+          bodyPreview: html.slice(0, 200),
+          contentType: 'text/html; charset=utf-8',
+          status: 502,
+        }),
+      );
+      expect(
+        (warn.mock.calls[0]?.[1] as { bodyPreview: string }).bodyPreview.length,
+      ).toBeLessThanOrEqual(200);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('logs zod issue paths when discovery JSON does not match the metadata schema', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        validatorFor({
+          transport: async () =>
+            response({ issuer: 'https://login.example.com/application/o/work/' }),
+        }).discover('https://login.example.com/application/o/work/'),
+      ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_INVALID' });
+
+      expect(warn).toHaveBeenCalledWith(
+        '[identityProviderDiscovery] discovery metadata schema invalid',
+        expect.objectContaining({
+          issuePaths: expect.arrayContaining([['authorization_endpoint'], ['jwks_uri']]),
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('treats discovery/network codes as transient and issuer/schema codes as not', () => {
+    expect(
+      isTransientOidcDiscoveryError(new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID')),
+    ).toBe(true);
+    expect(
+      isTransientOidcDiscoveryError(
+        new IdentityProviderValidationError('OIDC_DISCOVERY_UNAVAILABLE'),
+      ),
+    ).toBe(true);
+    expect(
+      isTransientOidcDiscoveryError(new IdentityProviderValidationError('OIDC_NETWORK_BLOCKED')),
+    ).toBe(true);
+    expect(
+      isTransientOidcDiscoveryError(new IdentityProviderValidationError('OIDC_ISSUER_INVALID')),
+    ).toBe(false);
+    expect(
+      isTransientOidcDiscoveryError(new Error('PLATFORM_IDENTITY_PROVIDER_SECRET_UNAVAILABLE')),
+    ).toBe(false);
   });
 
   it('enforces the absolute discovery deadline', async () => {

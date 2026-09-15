@@ -7,7 +7,11 @@ import type { LobeChatDatabase, Transaction } from '@/database/type';
 import { parseEnterpriseFeatureFlags } from '../../featureFlags';
 import { SafeOutboundHttpClient } from '../../security/outboundHttp';
 import { PlatformSecretService } from '../../security/secret';
-import { IdentityProviderDiscoveryValidator } from './discoveryValidator';
+import { invalidatePlatformPublicSnapshot } from '../branding/publicSnapshotCache';
+import {
+  IdentityProviderDiscoveryValidator,
+  isTransientOidcDiscoveryError,
+} from './discoveryValidator';
 import type { IdentityProviderRevocationJournalEntry } from './lkg';
 import { readIdentityProviderRevocationJournal } from './lkg';
 import { resolveIdentityProviderOutboundMode } from './outboundMode';
@@ -20,6 +24,10 @@ import {
   resetIdentityProviderStartupArtifactForTest,
 } from './startupArtifact';
 import { tryLoadDatabaseStartupSnapshot } from './startupSnapshotDatabaseLoad';
+import {
+  scheduleIdentityProviderBackgroundRevalidation,
+  stopIdentityProviderBackgroundRevalidation,
+} from './startupSnapshotDiscoveryRetry';
 import { tryLoadLkgFallback } from './startupSnapshotLkgFallback';
 import {
   breakGlassSnapshot,
@@ -159,6 +167,41 @@ const loadDatabase = async (): Promise<LobeChatDatabase> => {
   return database.serverDB;
 };
 
+let startupPromise: Promise<IdentityProviderStartupSnapshot> | null = null;
+
+const scheduleFailedClosedRevalidation = (input: {
+  discovery: Pick<IdentityProviderDiscoveryValidator, 'discover'>;
+  env: Record<string, string | undefined>;
+  environmentProviderIds: string[];
+  environmentProviderIdSet: Set<string>;
+  options: LoadOptions;
+  secrets: PlatformSecretService;
+}): void => {
+  scheduleIdentityProviderBackgroundRevalidation({
+    load: async () => {
+      const result = await tryLoadDatabaseStartupSnapshot({
+        db: input.options.db,
+        discovery: input.discovery,
+        env: input.env,
+        environmentProviderIds: input.environmentProviderIds,
+        environmentProviderIdSet: input.environmentProviderIdSet,
+        loadDatabase,
+        loadedAt: new Date(),
+        loadPublishedIdentityProviderSelection,
+        secrets: input.secrets,
+        testHooks: input.options.testHooks,
+      });
+      return result.ok ? result.snapshot : null;
+    },
+    onRecovered: (snapshot) => {
+      commitIdentityProviderStartupSnapshot(snapshot);
+      startupPromise = Promise.resolve(snapshot);
+      invalidatePlatformPublicSnapshot();
+      console.info('[identityProviderStartup] discovery recovered; snapshot promoted to healthy');
+    },
+  });
+};
+
 const loadUncached = async (options: LoadOptions): Promise<IdentityProviderStartupSnapshot> => {
   const env = options.env ?? process.env;
   const environmentProviderIds = parseEnvironmentIdentityProviderIds(env);
@@ -226,10 +269,14 @@ const loadUncached = async (options: LoadOptions): Promise<IdentityProviderStart
       loadDatabase,
       loadedAt,
       loadPublishedIdentityProviderSelection,
+      retryTransientDiscovery: true,
       secrets,
       testHooks: options.testHooks,
     });
-    if (databaseResult.ok) return databaseResult.snapshot;
+    if (databaseResult.ok) {
+      stopIdentityProviderBackgroundRevalidation();
+      return databaseResult.snapshot;
+    }
     databaseError = databaseResult.error;
 
     const lkgResult = await tryLoadLkgFallback({
@@ -244,6 +291,23 @@ const loadUncached = async (options: LoadOptions): Promise<IdentityProviderStart
     });
     if (lkgResult.ok) return lkgResult.snapshot;
     if (lkgResult.error !== undefined) databaseError = lkgResult.error;
+
+    const failedClosed = breakGlassSnapshot({
+      environmentProviderIds,
+      error: databaseError,
+      loadedAt,
+    });
+    if (isTransientOidcDiscoveryError(databaseError)) {
+      scheduleFailedClosedRevalidation({
+        discovery,
+        env,
+        environmentProviderIds,
+        environmentProviderIdSet,
+        options,
+        secrets,
+      });
+    }
+    return failedClosed;
   }
 
   return breakGlassSnapshot({
@@ -252,8 +316,6 @@ const loadUncached = async (options: LoadOptions): Promise<IdentityProviderStart
     loadedAt,
   });
 };
-
-let startupPromise: Promise<IdentityProviderStartupSnapshot> | null = null;
 
 export const loadIdentityProviderStartupSnapshot = async (
   options: LoadOptions = {},
@@ -275,6 +337,7 @@ export const loadIdentityProviderStartupSnapshot = async (
 };
 
 export const resetIdentityProviderStartupSnapshotForTest = (): void => {
+  stopIdentityProviderBackgroundRevalidation();
   startupPromise = null;
   resetIdentityProviderStartupArtifactForTest();
 };
