@@ -51,6 +51,21 @@ export default {
     'Optional. HTTPS tunnel URL for forwarding webhook requests to local dev server.',
   'channel.discord.description':
     'Connect this agent to Discord server for channel chat and direct messages.',
+  'channel.dingtalk.aiCardTemplateId': 'AI Card Template ID',
+  'channel.dingtalk.aiCardTemplateIdHint':
+    'Optional. Template ID for streaming AI card replies. Leave empty to send markdown.',
+  'channel.dingtalk.clientId': 'Client ID',
+  'channel.dingtalk.clientIdHint':
+    'AppKey from the DingTalk Open Platform. Used as the application ID.',
+  'channel.dingtalk.clientSecret': 'Client Secret',
+  'channel.dingtalk.clientSecretHint':
+    'AppSecret of the DingTalk app. It will be encrypted and stored securely.',
+  'channel.dingtalk.description': 'Connect this agent to DingTalk for private and group chats.',
+  'channel.dingtalk.robotCode': 'Robot Code',
+  'channel.dingtalk.robotCodeHint': 'RobotCode of the enterprise robot (Stream mode).',
+  'channel.dingtalk.selectCardTemplateId': 'Select Card Template ID',
+  'channel.dingtalk.selectCardTemplateIdHint':
+    'Optional. Template ID for interactive select cards (agent/topic pickers).',
   'channel.documentation': 'Documentation',
   'channel.messengerPromo.action': 'Try Messenger',
   'channel.messengerPromo.desc': 'No bot setup. Chat with {{appName}} on Slack, Discord, Telegram.',
@@ -302,6 +317,8 @@ export default {
   'channel.userIdMissingDesc':
     "Without it, AI tools can't reach you with reminders, and pairing approvals will fail. Fill it in under Advanced Settings.",
   'channel.userIdMissingTitle': 'Add your platform User ID',
+  'channel.userIdHint.dingtalk':
+    'Open the DingTalk profile and copy the staff ID (userid) used by the enterprise directory.',
   'channel.userIdHint.discord':
     'Enable Developer Mode (Settings → Advanced), then right-click your avatar → Copy User ID.',
   'channel.userIdHint.feishu':

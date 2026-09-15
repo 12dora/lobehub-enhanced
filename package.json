@@ -269,6 +269,7 @@
     "@lobechat/business-const": "workspace:*",
     "@lobechat/business-model-bank": "workspace:*",
     "@lobechat/business-model-runtime": "workspace:*",
+    "@lobechat/chat-adapter-dingtalk": "workspace:*",
     "@lobechat/chat-adapter-feishu": "workspace:*",
     "@lobechat/chat-adapter-imessage": "workspace:*",
     "@lobechat/chat-adapter-line": "workspace:*",
