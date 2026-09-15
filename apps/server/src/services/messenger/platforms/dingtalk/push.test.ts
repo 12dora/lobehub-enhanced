@@ -6,6 +6,7 @@ const mockFindByPlatform = vi.fn();
 const mockFindById = vi.fn();
 const mockIncr = vi.fn();
 const mockExpire = vi.fn();
+const mockResolveDingTalkBrandingDisplayName = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
@@ -15,9 +16,13 @@ vi.mock('@/envs/app', () => ({
   appEnv: { APP_URL: 'https://app.example.com' },
 }));
 
-vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
-  DingTalkApiClient: vi.fn().mockImplementation(() => ({ sendOtoMessage })),
-}));
+vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    DingTalkApiClient: vi.fn().mockImplementation(() => ({ sendOtoMessage })),
+  };
+});
 
 vi.mock('@/database/models/messengerAccountLink', () => ({
   MessengerAccountLinkModel: vi.fn().mockImplementation(() => ({
@@ -31,6 +36,11 @@ vi.mock('@/database/models/user', () => ({
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: vi.fn(() => ({ expire: mockExpire, incr: mockIncr })),
+}));
+
+vi.mock('./branding', () => ({
+  resolveDingTalkBrandingDisplayName: (...args: unknown[]) =>
+    mockResolveDingTalkBrandingDisplayName(...args),
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
@@ -57,6 +67,7 @@ beforeEach(() => {
   sendOtoMessage.mockResolvedValue({});
   mockIncr.mockResolvedValue(1);
   mockExpire.mockResolvedValue(1);
+  mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
 });
 
 afterEach(() => {
@@ -99,7 +110,7 @@ describe('DingTalkMessengerPushProvider', () => {
     expect(result).toEqual({ reason: 'user_not_mapped', status: 'skipped' });
   });
 
-  it('sends sampleActionCard2 with an absolute actionUrl and increments the counter', async () => {
+  it('sends sampleActionCard with branding label, SSO URL, and exact msgParam', async () => {
     const result = await dingtalkMessengerPushProvider.pushToUser({
       db: {} as any,
       message: {
@@ -113,17 +124,58 @@ describe('DingTalkMessengerPushProvider', () => {
 
     expect(result).toEqual({ status: 'sent' });
     expect(sendOtoMessage).toHaveBeenCalledWith({
-      msgKey: 'sampleActionCard2',
+      msgKey: 'sampleActionCard',
       msgParam: JSON.stringify({
-        actionTitle1: '打开',
-        actionURL1: 'https://app.example.com/task/1',
-        text: 'body',
         title: '提醒',
+        text: 'body',
+        singleTitle: '在AI平台中查看',
+        singleURL: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
       }),
       robotCode: 'robot_1',
       userIds: ['staff_1'],
     });
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, unknown>;
+    expect(param).not.toHaveProperty('actionTitle2');
+    expect(param).not.toHaveProperty('actionURL2');
     expect(mockIncr).toHaveBeenCalled();
+  });
+
+  it('wraps an absolute same-origin actionUrl through the SSO bridge', async () => {
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: 'https://app.example.com/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msgKey: 'sampleActionCard',
+        msgParam: JSON.stringify({
+          title: '提醒',
+          text: 'body',
+          singleTitle: '在AI平台中查看',
+          singleURL: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+        }),
+      }),
+    );
+  });
+
+  it('uses the branding fallback label when the display name is empty', async () => {
+    mockResolveDingTalkBrandingDisplayName.mockResolvedValueOnce('AI 平台');
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
+    expect(param.singleTitle).toBe('在AI 平台中查看');
   });
 
   it('sends sampleMarkdown when there is no actionUrl', async () => {

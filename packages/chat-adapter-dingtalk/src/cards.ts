@@ -15,6 +15,28 @@ export const dtmdSendMessageUrl = (command: string): string =>
   `${DTMD_SEND_MESSAGE}${encodeURIComponent(command)}`;
 
 /**
+ * Single-button ActionCard (`sampleActionCard`). Never emits a second button.
+ * `msgParam` field order matches the DingTalk robot contract:
+ * `{ title, text, singleTitle, singleURL }`.
+ */
+export function buildSampleActionCardParam(options: {
+  singleTitle: string;
+  singleURL: string;
+  text: string;
+  title: string;
+}): DingTalkActionCardParam {
+  return {
+    msgKey: 'sampleActionCard',
+    msgParam: JSON.stringify({
+      title: options.title,
+      text: options.text,
+      singleTitle: options.singleTitle,
+      singleURL: options.singleURL,
+    }),
+  };
+}
+
+/**
  * Build `msgKey` + `msgParam` for a DingTalk ActionCard whose buttons inject
  * a command back into the chat via `dtmd://dingtalkclient/sendMessage`.
  *
@@ -29,15 +51,12 @@ export function buildActionCardParam(options: {
   const buttons = options.buttons.slice(0, 5);
   if (buttons.length <= 1) {
     const button = buttons[0];
-    return {
-      msgKey: 'sampleActionCard',
-      msgParam: JSON.stringify({
-        singleTitle: button?.label ?? '',
-        singleURL: button ? dtmdSendMessageUrl(button.command) : '',
-        text: options.text,
-        title: options.title,
-      }),
-    };
+    return buildSampleActionCardParam({
+      singleTitle: button?.label ?? '',
+      singleURL: button ? dtmdSendMessageUrl(button.command) : '',
+      text: options.text,
+      title: options.title,
+    });
   }
 
   const msgParam: Record<string, string> = {

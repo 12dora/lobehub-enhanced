@@ -1,8 +1,37 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DingTalkApiClient } from './api';
-import { buildActionCardParam, DingTalkAiCardStream, dtmdSendMessageUrl } from './cards';
+import {
+  buildActionCardParam,
+  buildSampleActionCardParam,
+  DingTalkAiCardStream,
+  dtmdSendMessageUrl,
+} from './cards';
 import { DingTalkCardUnavailableError } from './types';
+
+describe('buildSampleActionCardParam', () => {
+  it('emits sampleActionCard with title, text, singleTitle, singleURL and no second button', () => {
+    const result = buildSampleActionCardParam({
+      singleTitle: '在AI平台中查看',
+      singleURL: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+      text: 'body',
+      title: '提醒',
+    });
+    expect(result.msgKey).toBe('sampleActionCard');
+    expect(result.msgParam).toBe(
+      JSON.stringify({
+        title: '提醒',
+        text: 'body',
+        singleTitle: '在AI平台中查看',
+        singleURL: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+      }),
+    );
+    const param = JSON.parse(result.msgParam) as Record<string, unknown>;
+    expect(param).not.toHaveProperty('actionTitle2');
+    expect(param).not.toHaveProperty('actionURL2');
+    expect(param).not.toHaveProperty('actionTitle1');
+  });
+});
 
 describe('buildActionCardParam', () => {
   it('uses dtmd sendMessage URLs and sampleActionCard for a single button', () => {
@@ -13,8 +42,10 @@ describe('buildActionCardParam', () => {
     });
     expect(result.msgKey).toBe('sampleActionCard');
     const param = JSON.parse(result.msgParam);
+    expect(param.singleTitle).toBe('Agents');
     expect(param.singleURL).toBe(dtmdSendMessageUrl('/助手'));
     expect(param.singleURL).toContain('dtmd://dingtalkclient/sendMessage?content=');
+    expect(param).not.toHaveProperty('actionTitle2');
   });
 
   it('uses sampleActionCardN for 2–5 buttons', () => {

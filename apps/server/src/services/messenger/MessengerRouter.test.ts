@@ -8,7 +8,12 @@ import { AgentBridgeService } from '@/server/services/bot/AgentBridgeService';
 import { MessengerRouter } from './MessengerRouter';
 import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
 import { tryAutoLinkDingTalk } from './platforms/dingtalk/autoLink';
-import { sendDingTalkChoiceList } from './platforms/dingtalk/cards';
+import {
+  sendDingTalkChoiceList,
+  sendDingTalkHelpReply,
+  sendDingTalkUnknownCommandReply,
+  sendDingTalkWelcomeCard,
+} from './platforms/dingtalk/cards';
 import {
   DINGTALK_AGENTS_PICKER_PROMPT,
   DINGTALK_AGENTS_USAGE_REPLY,
@@ -356,7 +361,10 @@ vi.mock('./platforms/dingtalk/cards', () => ({
     return { command: text.trim() };
   },
   sendDingTalkChoiceList: vi.fn(),
+  sendDingTalkHelpReply: vi.fn(),
   sendDingTalkMarkdown: vi.fn(),
+  sendDingTalkUnknownCommandReply: vi.fn(),
+  sendDingTalkWelcomeCard: vi.fn(),
   wrapDingTalkAskerCommand: (command: string) => command,
 }));
 
@@ -423,6 +431,10 @@ beforeEach(() => {
   mockDingTalkBinder.acknowledgeCallback.mockReset();
   mockDingTalkBinder.extractCallbackAction.mockReset();
   mockDingTalkBinder.extractCallbackAction.mockResolvedValue(null);
+  vi.mocked(sendDingTalkChoiceList).mockReset();
+  vi.mocked(sendDingTalkHelpReply).mockReset();
+  vi.mocked(sendDingTalkUnknownCommandReply).mockReset();
+  vi.mocked(sendDingTalkWelcomeCard).mockReset();
   mockSetActiveAgentById.mockReset();
   vi.mocked(tryAutoLinkDingTalk).mockReset();
   vi.mocked(tryAutoLinkDingTalk).mockResolvedValue(null);
@@ -1612,10 +1624,56 @@ describe('MessengerRouter DingTalk conversation UX', () => {
       }),
     );
 
-    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
-      'dingtalk:cid',
-      '未知命令。发送 /帮助 查看可用命令。',
+    expect(sendDingTalkUnknownCommandReply).toHaveBeenCalledWith('dingtalk:cid');
+    expect(mockDingTalkBinder.sendDmText).not.toHaveBeenCalled();
+  });
+
+  it('sends /帮助 as tidy markdown plus the shortcut card', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkDm(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '/帮助',
+      }),
     );
+
+    expect(sendDingTalkHelpReply).toHaveBeenCalledWith('dingtalk:cid');
+    expect(mockDingTalkBinder.sendDmText).not.toHaveBeenCalled();
+  });
+
+  it('sends group /帮助 and unknown-command replies via the group thread id', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkGroup(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '/帮助',
+      }),
+    );
+    expect(sendDingTalkHelpReply).toHaveBeenCalledWith('dingtalk:cid:staff_1');
+
+    vi.mocked(sendDingTalkHelpReply).mockClear();
+    await handler(
+      fakeDingTalkGroup(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: '/未知',
+      }),
+    );
+    expect(sendDingTalkUnknownCommandReply).toHaveBeenCalledWith('dingtalk:cid:staff_1');
   });
 
   it('queues inbound text while the Redis busy flag is held', async () => {
@@ -1811,6 +1869,7 @@ describe('MessengerRouter DingTalk G2a glue', () => {
     expect(tryAutoLinkDingTalk).toHaveBeenCalledWith(
       expect.objectContaining({ senderStaffId: 'staff_1' }),
     );
+    expect(sendDingTalkWelcomeCard).toHaveBeenCalledWith('dingtalk:cid');
     expect(mockDingTalkBinder.handleUnlinkedMessage).not.toHaveBeenCalled();
     expect(mockHandleMention).toHaveBeenCalled();
   });
@@ -1823,6 +1882,7 @@ describe('MessengerRouter DingTalk G2a glue', () => {
     await runInbound();
 
     expect(mockDingTalkBinder.handleUnlinkedMessage).not.toHaveBeenCalled();
+    expect(sendDingTalkWelcomeCard).not.toHaveBeenCalled();
     expect(mockHandleMention).not.toHaveBeenCalled();
   });
 
@@ -1852,6 +1912,26 @@ describe('MessengerRouter DingTalk G2a glue', () => {
     await runInbound();
 
     expect(incrementDingTalkDailyCounter).toHaveBeenCalledWith('messages');
+    expect(sendDingTalkWelcomeCard).not.toHaveBeenCalled();
+  });
+
+  it('sends the welcome card on first group auto-link before the reply', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValueOnce(undefined);
+    vi.mocked(tryAutoLinkDingTalk).mockResolvedValueOnce(fakeDingTalkLink() as any);
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      fakeDingTalkGroup(),
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: 'hello from ding',
+      }),
+    );
+    expect(sendDingTalkWelcomeCard).toHaveBeenCalledWith('dingtalk:cid:staff_1');
+    expect(mockHandleMention).toHaveBeenCalled();
   });
 
   it('passes idle / title bridge opts and stamps topic metadata', async () => {

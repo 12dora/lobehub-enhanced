@@ -9,7 +9,11 @@ import {
 import { IM_CONNECTOR_STREAM_STATUS_KEY } from '@/server/enterprise/services/imConnectors/status';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
-import { DINGTALK_COUNTER_TTL_SECONDS, DINGTALK_STREAM_STATUS_TTL_SECONDS } from './const';
+import {
+  DINGTALK_CORP_ID_KEY,
+  DINGTALK_COUNTER_TTL_SECONDS,
+  DINGTALK_STREAM_STATUS_TTL_SECONDS,
+} from './const';
 
 const log = debug('lobe-server:messenger:dingtalk:redis');
 
@@ -96,5 +100,23 @@ export const writeDingTalkStreamStatus = async (
     );
   } catch (error) {
     log('writeDingTalkStreamStatus failed: %O', error);
+  }
+};
+
+/**
+ * Persist the corpId captured from inbound robot messages. No TTL — the SSO
+ * bridge reads this when the connector settings omit `corpId`.
+ */
+export const rememberDingTalkCorpId = async (corpId: string | undefined | null): Promise<void> => {
+  const value = corpId?.trim();
+  if (!value) return;
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return;
+  try {
+    const existing = await redis.get(DINGTALK_CORP_ID_KEY);
+    if (existing === value) return;
+    await redis.set(DINGTALK_CORP_ID_KEY, value);
+  } catch (error) {
+    log('rememberDingTalkCorpId failed: %O', error);
   }
 };

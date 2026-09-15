@@ -1,4 +1,4 @@
-import { DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
+import { buildSampleActionCardParam, DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
 import debug from 'debug';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
@@ -9,18 +9,33 @@ import { appEnv } from '@/envs/app';
 
 import type { MessengerPushMessage, MessengerPushProvider, MessengerPushResult } from '../../push';
 import { registerMessengerPushProvider } from '../../push';
-import { resolveDingTalkIdentityEmailDomain } from './const';
+import { resolveDingTalkBrandingDisplayName } from './branding';
+import { formatDingTalkViewInBrandingLabel, resolveDingTalkIdentityEmailDomain } from './const';
 import { incrementDingTalkDailyCounter } from './redis';
 
 const log = debug('lobe-server:messenger:dingtalk:push');
 
-const DEFAULT_ACTION_LABEL = '查看';
+const DINGTALK_SSO_PATH = '/dingtalk/sso';
 
-const toAbsoluteUrl = (actionUrl: string): string => {
-  if (/^https?:\/\//i.test(actionUrl)) return actionUrl;
+const toAppPath = (actionUrl: string): string => {
+  if (/^https?:\/\//i.test(actionUrl)) {
+    try {
+      const parsed = new URL(actionUrl);
+      return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+    } catch {
+      return actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`;
+    }
+  }
+  return actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`;
+};
+
+/** Wrap an app path (or absolute APP_URL URL) as `${APP_URL}/dingtalk/sso?redirect=…`. */
+const wrapDingTalkSsoRedirect = (actionUrl: string): string => {
   const base = (appEnv.APP_URL || '').replace(/\/$/, '');
-  if (!base) return actionUrl;
-  return `${base}${actionUrl.startsWith('/') ? '' : '/'}${actionUrl}`;
+  const path = toAppPath(actionUrl);
+  const isSso = path === DINGTALK_SSO_PATH || path.startsWith(`${DINGTALK_SSO_PATH}?`);
+  const wrapped = isSso ? path : `${DINGTALK_SSO_PATH}?redirect=${encodeURIComponent(path)}`;
+  return base ? `${base}${wrapped}` : wrapped;
 };
 
 const emailStaffId = (email: string | null | undefined): string | null => {
@@ -58,19 +73,20 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
     if (!staffId) return { reason: 'user_not_mapped', status: 'skipped' };
 
     const api = new DingTalkApiClient(config.clientId, config.clientSecret);
-    const { actionLabel, actionUrl, markdown, title } = params.message;
+    const { actionUrl, markdown, title } = params.message;
 
     try {
       if (actionUrl) {
-        const absolute = toAbsoluteUrl(actionUrl);
+        const displayName = await resolveDingTalkBrandingDisplayName();
+        const card = buildSampleActionCardParam({
+          singleTitle: formatDingTalkViewInBrandingLabel(displayName),
+          singleURL: wrapDingTalkSsoRedirect(actionUrl),
+          text: markdown,
+          title,
+        });
         await api.sendOtoMessage({
-          msgKey: 'sampleActionCard2',
-          msgParam: JSON.stringify({
-            actionTitle1: actionLabel || DEFAULT_ACTION_LABEL,
-            actionURL1: absolute,
-            text: markdown,
-            title,
-          }),
+          msgKey: card.msgKey,
+          msgParam: card.msgParam,
           robotCode: config.robotCode,
           userIds: [staffId],
         });

@@ -8,7 +8,12 @@ export {
   extractMediaMetadata,
 } from './adapter';
 export { assertDingTalkSessionWebhook, DingTalkApiClient } from './api';
-export { buildActionCardParam, DingTalkAiCardStream, dtmdSendMessageUrl } from './cards';
+export {
+  buildActionCardParam,
+  buildSampleActionCardParam,
+  DingTalkAiCardStream,
+  dtmdSendMessageUrl,
+} from './cards';
 export {
   buildDingTalkForwardHeaders,
   DINGTALK_FORWARD_HEADER,

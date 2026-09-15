@@ -38,7 +38,9 @@ vi.mock('@/server/services/messenger/platforms/dingtalk/push', () => ({
 }));
 
 const writeDingTalkStreamStatus = vi.fn().mockResolvedValue(undefined);
+const rememberDingTalkCorpId = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/server/services/messenger/platforms/dingtalk/redis', () => ({
+  rememberDingTalkCorpId: (...args: unknown[]) => rememberDingTalkCorpId(...args),
   writeDingTalkStreamStatus: (...args: unknown[]) => writeDingTalkStreamStatus(...args),
 }));
 
@@ -74,6 +76,7 @@ beforeEach(() => {
   mockConnect.mockResolvedValue(undefined);
   mockDisconnect.mockClear();
   writeDingTalkStreamStatus.mockClear();
+  rememberDingTalkCorpId.mockClear();
   mockWebhookHandler.mockReset();
   mockWebhookHandler.mockResolvedValue(new Response('ok', { status: 200 }));
   mockGetWebhookHandler.mockClear();
@@ -197,6 +200,52 @@ describe('DingTalkStreamWorker', () => {
         clientSecret: 'secret',
       }),
     ).toBe(true);
+  });
+
+  it('writes chatbotCorpId ?? senderCorpId to Redis on each inbound robot message', async () => {
+    const worker = new DingTalkStreamWorker();
+    await worker.tickForTest();
+
+    await capturedOptions.onRobotMessage(
+      {
+        chatbotCorpId: 'corp_from_bot',
+        conversationId: 'cid',
+        msgId: 'm1',
+        msgtype: 'text',
+        senderCorpId: 'corp_from_sender',
+      },
+      vi.fn(),
+    );
+    expect(rememberDingTalkCorpId).toHaveBeenCalledWith('corp_from_bot');
+
+    rememberDingTalkCorpId.mockClear();
+    await capturedOptions.onRobotMessage(
+      {
+        conversationId: 'cid',
+        msgId: 'm2',
+        msgtype: 'text',
+        senderCorpId: 'corp_from_sender',
+      },
+      vi.fn(),
+    );
+    expect(rememberDingTalkCorpId).toHaveBeenCalledWith('corp_from_sender');
+
+    rememberDingTalkCorpId.mockClear();
+    await capturedOptions.onRobotMessage(
+      { conversationId: 'cid', msgId: 'm3', msgtype: 'text' },
+      vi.fn(),
+    );
+    expect(rememberDingTalkCorpId).not.toHaveBeenCalled();
+  });
+
+  it('does not capture corpId from card callbacks', async () => {
+    const worker = new DingTalkStreamWorker();
+    await worker.tickForTest();
+    await capturedOptions.onCardCallback(
+      { corpId: 'corp_card', outTrackId: 'out_1', userId: 'staff_1' },
+      vi.fn(),
+    );
+    expect(rememberDingTalkCorpId).not.toHaveBeenCalled();
   });
 
   it('forwards card callbacks with the adapter marker header', async () => {

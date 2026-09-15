@@ -17,7 +17,10 @@ import {
   DINGTALK_ROBOT_MESSAGE_EVENT,
 } from '@/server/services/messenger/platforms/dingtalk/const';
 import { registerDingTalkMessengerPushProvider } from '@/server/services/messenger/platforms/dingtalk/push';
-import { writeDingTalkStreamStatus } from '@/server/services/messenger/platforms/dingtalk/redis';
+import {
+  rememberDingTalkCorpId,
+  writeDingTalkStreamStatus,
+} from '@/server/services/messenger/platforms/dingtalk/redis';
 
 registerDingTalkMessengerPushProvider();
 
@@ -168,6 +171,8 @@ export class DingTalkStreamWorker {
       onRobotMessage: async (payload, ack) => {
         ack({});
         this.lastEventAt = new Date().toISOString();
+        const corpId = payload.chatbotCorpId?.trim() || payload.senderCorpId?.trim();
+        if (corpId) await rememberDingTalkCorpId(corpId);
         await this.forward(DINGTALK_ROBOT_MESSAGE_EVENT, payload, webhookUrl, config);
       },
       onStateChange: (state, error) => {

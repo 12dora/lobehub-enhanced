@@ -38,6 +38,9 @@ import {
   createDingTalkReplySink,
   parseDingTalkAskerCommand,
   sendDingTalkChoiceList,
+  sendDingTalkHelpReply,
+  sendDingTalkUnknownCommandReply,
+  sendDingTalkWelcomeCard,
 } from './platforms/dingtalk/cards';
 import {
   formatStatusText,
@@ -52,7 +55,6 @@ import {
   DINGTALK_ASKER_ONLY_REPLY,
   DINGTALK_BUSY_TTL_SECONDS,
   DINGTALK_CHAT_DISABLED_REPLY,
-  DINGTALK_HELP_TEXT,
   DINGTALK_IDLE_NEW_TOPIC_NOTICE,
   DINGTALK_NO_ACTIVE_AGENT_REPLY,
   DINGTALK_NO_TOPICS_REPLY,
@@ -71,7 +73,6 @@ import {
   DINGTALK_STOP_REQUESTED_REPLY,
   DINGTALK_TOPIC_TITLE_PREFIX,
   DINGTALK_UNKNOWN_ACTION_REPLY,
-  DINGTALK_UNKNOWN_COMMAND_REPLY,
   DINGTALK_UNLINKED_COMMAND_REPLY,
   DINGTALK_UNSUPPORTED_MEDIA_REPLY,
   formatDingTalkAgentSwitched,
@@ -680,6 +681,7 @@ export class MessengerRouter {
 
       if (platform === 'dingtalk') {
         await incrementDingTalkDailyCounter('messages');
+        let justLinked = false;
         if (!link) {
           link =
             (await tryAutoLinkDingTalk({
@@ -692,6 +694,7 @@ export class MessengerRouter {
           // Unknown staffId already received the login sentence. Never fall
           // through to the verify-im link-token flow.
           if (!link) return;
+          justLinked = true;
         }
 
         const dingConfig = await getMessengerDingTalkConfig();
@@ -700,6 +703,14 @@ export class MessengerRouter {
             await binder.sendDmText(chatId, DINGTALK_CHAT_DISABLED_REPLY);
           }
           return;
+        }
+
+        if (justLinked) {
+          try {
+            await sendDingTalkWelcomeCard(chatId);
+          } catch (error) {
+            log('dingtalk welcome card failed: %O', error);
+          }
         }
       }
 
@@ -747,7 +758,7 @@ export class MessengerRouter {
             return;
           }
           if (platform === 'dingtalk' && isDingTalkSlashText(message.text)) {
-            await binder.sendDmText(chatId, DINGTALK_UNKNOWN_COMMAND_REPLY);
+            await sendDingTalkUnknownCommandReply(chatId);
             return;
           }
           // Unknown slash text — pass through to the agent so legitimate
@@ -1363,7 +1374,7 @@ export class MessengerRouter {
         description: 'Show usage',
         handler: async (ctx) => {
           if (ctx.platform === 'dingtalk') {
-            await ctx.reply(DINGTALK_HELP_TEXT);
+            await sendDingTalkHelpReply(ctx.chatId);
             return;
           }
           await ctx.reply(helpText(await this.resolvePlatformName()));

@@ -17,10 +17,18 @@ import { sendDingTalkAttachments } from '@/server/services/bot/platforms/dingtal
 
 import type { DingTalkOutboundAttachment } from './attachments';
 import { mapOutboundAttachments } from './attachments';
+import { resolveDingTalkBrandingDisplayName } from './branding';
 import {
+  DINGTALK_COMMAND_CARD_TEXT,
+  DINGTALK_COMMAND_CARD_TITLE,
+  DINGTALK_COMMAND_SHORTCUT_BUTTONS,
+  DINGTALK_HELP_TEXT,
   DINGTALK_LIST_PAGE_SIZE,
   DINGTALK_MARKDOWN_TITLE_FALLBACK,
   DINGTALK_THINKING_REPLY,
+  DINGTALK_UNKNOWN_COMMAND_REPLY,
+  DINGTALK_WELCOME_TEXT,
+  formatDingTalkWelcomeTitle,
 } from './const';
 
 const log = debug('lobe-server:messenger:dingtalk:cards');
@@ -133,9 +141,13 @@ const sendActionCard = async (params: {
   if (!config) return;
   const api = new DingTalkApiClient(config.clientId, config.clientSecret);
   const { staffId, decoded, isGroup } = resolveSendTarget(params.threadId);
+  const text =
+    isGroup && staffId && !params.text.includes(`@${staffId}`)
+      ? `@${staffId} ${params.text}`
+      : params.text;
   const card = buildActionCardParam({
     buttons: params.buttons.slice(0, 5),
-    text: params.text,
+    text,
     title: params.title,
   });
   try {
@@ -158,9 +170,49 @@ const sendActionCard = async (params: {
     log('sendActionCard failed: %O', error);
     await sendDingTalkMarkdown(
       params.threadId,
-      `${params.text}\n${params.buttons.map((b) => `• ${b.label}`).join('\n')}`,
+      `${text}\n${params.buttons.map((b) => `• ${b.label}`).join('\n')}`,
     );
   }
+};
+
+export const sendDingTalkCommandCard = async (params: {
+  text: string;
+  threadId: string;
+  title: string;
+}): Promise<void> => {
+  await sendActionCard({
+    buttons: DINGTALK_COMMAND_SHORTCUT_BUTTONS,
+    text: params.text,
+    threadId: params.threadId,
+    title: params.title,
+  });
+};
+
+export const sendDingTalkWelcomeCard = async (threadId: string): Promise<void> => {
+  const displayName = await resolveDingTalkBrandingDisplayName();
+  await sendDingTalkCommandCard({
+    text: DINGTALK_WELCOME_TEXT,
+    threadId,
+    title: formatDingTalkWelcomeTitle(displayName),
+  });
+};
+
+export const sendDingTalkHelpReply = async (threadId: string): Promise<void> => {
+  await sendDingTalkMarkdown(threadId, DINGTALK_HELP_TEXT);
+  await sendDingTalkCommandCard({
+    text: DINGTALK_COMMAND_CARD_TEXT,
+    threadId,
+    title: DINGTALK_COMMAND_CARD_TITLE,
+  });
+};
+
+export const sendDingTalkUnknownCommandReply = async (threadId: string): Promise<void> => {
+  await sendDingTalkMarkdown(threadId, DINGTALK_UNKNOWN_COMMAND_REPLY);
+  await sendDingTalkCommandCard({
+    text: DINGTALK_COMMAND_CARD_TEXT,
+    threadId,
+    title: DINGTALK_COMMAND_CARD_TITLE,
+  });
 };
 
 const sendSelectCard = async (params: {

@@ -7,7 +7,7 @@ import {
   formatTopicListText,
   parseDingTalkCommand,
 } from './commands';
-import { DINGTALK_AGENTS_USAGE_REPLY } from './const';
+import { DINGTALK_AGENTS_USAGE_REPLY, DINGTALK_HELP_TEXT } from './const';
 
 describe('parseDingTalkCommand', () => {
   it('maps Chinese aliases and English names', () => {
@@ -27,6 +27,17 @@ describe('parseDingTalkCommand', () => {
 
   it('exposes zh-CN usage copy for /切换 N', () => {
     expect(DINGTALK_AGENTS_USAGE_REPLY).toBe('用法：/切换 N');
+  });
+
+  it('keeps /帮助 copy grouped and without emoji or exclamation marks', () => {
+    expect(DINGTALK_HELP_TEXT).toContain('## 常用指令');
+    expect(DINGTALK_HELP_TEXT).toContain('会话');
+    expect(DINGTALK_HELP_TEXT).toContain('助手');
+    expect(DINGTALK_HELP_TEXT).toContain('其他');
+    expect(DINGTALK_HELP_TEXT).toContain('/助手 — 列出并切换助手');
+    expect(DINGTALK_HELP_TEXT.endsWith('群聊中需 @机器人')).toBe(true);
+    expect(DINGTALK_HELP_TEXT).not.toMatch(/[!！]/);
+    expect(DINGTALK_HELP_TEXT).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
   });
 
   it('returns the raw name for unknown slash commands', () => {

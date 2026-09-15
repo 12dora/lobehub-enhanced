@@ -33,7 +33,7 @@ export const DINGTALK_UNLINKED_COMMAND_REPLY = DINGTALK_UNKNOWN_USER_REPLY;
 export const DINGTALK_THINKING_REPLY = '正在思考…';
 export const DINGTALK_UNSUPPORTED_MEDIA_REPLY = '暂不支持语音和视频消息';
 export const DINGTALK_QUESTION_GONE_REPLY = '该问题已失效，将作为新消息处理。';
-export const DINGTALK_UNKNOWN_COMMAND_REPLY = '未知命令。发送 /帮助 查看可用命令。';
+export const DINGTALK_UNKNOWN_COMMAND_REPLY = '未知命令';
 export const DINGTALK_NO_TOPICS_REPLY = '暂无会话记录。';
 export const DINGTALK_RESUME_USAGE_REPLY = '用法：/继续 N';
 export const DINGTALK_AGENTS_USAGE_REPLY = '用法：/切换 N';
@@ -57,16 +57,48 @@ export const DINGTALK_SCOPE_NOT_FOUND_REPLY = '未找到该范围';
 export const DINGTALK_SCOPE_PICKER_PROMPT = '点选要切换的范围';
 export const DINGTALK_PERSONAL_SCOPE_LABEL = '个人';
 
+export const DINGTALK_BRANDING_FALLBACK = 'AI 平台';
+
+export const formatDingTalkViewInBrandingLabel = (displayName: string): string =>
+  `在${displayName}中查看`;
+
+export const formatDingTalkWelcomeTitle = (displayName: string): string => `已连接 ${displayName}`;
+
+export const DINGTALK_WELCOME_TEXT = ['已关联你的钉钉账号。', '可直接提问，或使用下方指令。'].join(
+  '\n',
+);
+
+export const DINGTALK_COMMAND_CARD_TITLE = '常用指令';
+export const DINGTALK_COMMAND_CARD_TEXT = '点选下方指令';
+
+export const DINGTALK_COMMAND_SHORTCUT_BUTTONS: { command: string; label: string }[] = [
+  { command: '/助手', label: '查看助手' },
+  { command: '/新会话', label: '新会话' },
+  { command: '/会话', label: '最近会话' },
+  { command: '/帮助', label: '帮助' },
+];
+
 export const DINGTALK_HELP_TEXT = [
-  '命令：',
-  '• /助手 — 查看或切换助手',
-  '• /会话 — 最近 5 个会话',
-  '• /继续 N — 继续第 N 个会话',
-  '• /新会话 — 开始新会话',
-  '• /当前 — 查看当前状态',
-  '• /停止 — 停止当前执行',
-  '• /帮助 — 查看帮助',
+  '## 常用指令',
+  '',
+  '会话',
+  '/会话 — 查看最近会话',
+  '/继续 N — 继续第 N 个会话',
+  '/新会话 — 开始新会话',
+  '',
+  '助手',
+  '/助手 — 列出并切换助手',
+  '/切换 N — 切换到第 N 个助手',
+  '/当前 — 查看当前状态',
+  '',
+  '其他',
+  '/停止 — 停止当前执行',
+  '/帮助 — 查看本说明',
+  '',
+  '群聊中需 @机器人',
 ].join('\n');
+
+export const DINGTALK_CORP_ID_KEY = 'messenger:dingtalk:corp-id';
 
 export const DINGTALK_QUEUE_KEY_PREFIX = 'messenger:dingtalk:queue:';
 export const DINGTALK_QUEUE_TTL_SECONDS = 60 * 60;
