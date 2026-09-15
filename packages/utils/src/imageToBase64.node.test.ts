@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AttachmentFetchError, imageUrlToBase64 } from './imageToBase64';
+import { setOwnDeploymentOriginsBinding } from './ownDeploymentOriginsBinding';
 import { buildOwnDeploymentOrigins } from './url';
 
 const ssrfSafeFetch = vi.fn();
@@ -27,6 +28,16 @@ describe('imageUrlToBase64 (server)', () => {
     internalAppUrl: 'http://127.0.0.1:3010',
   });
 
+  const publicDomainOrigins = buildOwnDeploymentOrigins({
+    appUrl: 'https://chat.jiefakj.com',
+    bucket: 'lobe',
+    endpoint: 'https://chat.jiefakj.com',
+    forcePathStyle: true,
+    publicDomain: 'https://chat.jiefakj.com',
+  });
+  const ownPresignedUrl =
+    'https://chat.jiefakj.com/lobe/files/cat.png?X-Amz-Signature=super-secret-signature';
+
   beforeEach(() => {
     ssrfSafeFetch.mockReset();
     ssrfSafeFetch.mockResolvedValue({
@@ -34,9 +45,11 @@ describe('imageUrlToBase64 (server)', () => {
       ok: true,
       status: 200,
     });
+    setOwnDeploymentOriginsBinding(undefined);
   });
 
   afterEach(() => {
+    setOwnDeploymentOriginsBinding(undefined);
     vi.restoreAllMocks();
   });
 
@@ -172,5 +185,76 @@ describe('imageUrlToBase64 (server)', () => {
       { redirect: 'manual' },
       expect.objectContaining({ redactErrors: true }),
     );
+  });
+
+  describe('own-deployment origins binding', () => {
+    it('fetches an own S3 presigned URL with allowPrivateIPAddress when the binding is set', async () => {
+      setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
+
+      await imageUrlToBase64(ownPresignedUrl);
+
+      expect(ssrfSafeFetch).toHaveBeenCalledWith(
+        ownPresignedUrl,
+        { redirect: 'manual' },
+        expect.objectContaining({
+          allowPrivateIPAddress: true,
+          maxRedirects: 0,
+          redactErrors: true,
+        }),
+      );
+    });
+
+    it('does not change fetch options for a foreign URL when the binding is set', async () => {
+      setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
+
+      await imageUrlToBase64('https://cdn.example.com/cat.png');
+
+      expect(ssrfSafeFetch).toHaveBeenCalledWith('https://cdn.example.com/cat.png', {}, undefined);
+    });
+
+    it('does not change fetch options for an own URL when the binding is missing', async () => {
+      await imageUrlToBase64(ownPresignedUrl);
+
+      expect(ssrfSafeFetch).toHaveBeenCalledWith(ownPresignedUrl, {}, undefined);
+    });
+
+    it('rejects an own URL that redirects to a foreign host', async () => {
+      setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
+      ssrfSafeFetch.mockResolvedValueOnce({
+        headers: {
+          get: (name: string) =>
+            name === 'location' ? 'https://evil.example.com/steal?token=1' : null,
+        },
+        ok: false,
+        status: 302,
+      });
+
+      await expect(imageUrlToBase64(ownPresignedUrl)).rejects.toThrow(AttachmentFetchError);
+      expect(ssrfSafeFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not widen allowPrivateIPAddress to an arbitrary private host', async () => {
+      setOwnDeploymentOriginsBinding({ get: () => publicDomainOrigins });
+
+      await imageUrlToBase64('http://127.0.0.1:3000/internal');
+
+      expect(ssrfSafeFetch).toHaveBeenCalledWith('http://127.0.0.1:3000/internal', {}, undefined);
+    });
+
+    it('uses explicit ownOrigins without reading the binding', async () => {
+      const get = vi.fn(() => publicDomainOrigins);
+      setOwnDeploymentOriginsBinding({ get });
+
+      await imageUrlToBase64('http://localhost:9000/bucket/cat.png', {
+        ownOrigins: pathStyleOrigins,
+      });
+
+      expect(get).not.toHaveBeenCalled();
+      expect(ssrfSafeFetch).toHaveBeenCalledWith(
+        'http://localhost:9000/bucket/cat.png',
+        { redirect: 'manual' },
+        expect.objectContaining({ allowPrivateIPAddress: true }),
+      );
+    });
   });
 });

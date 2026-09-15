@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  getOwnDeploymentOriginsBinding,
+  isOwnDeploymentFileUrl,
+  setOwnDeploymentOriginsBinding,
+} from '@lobechat/utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getInfraSnapshot = vi.fn();
 
@@ -27,6 +32,10 @@ describe('resolveOwnDeploymentOrigins', () => {
     getInfraSnapshot.mockReset();
   });
 
+  afterEach(() => {
+    setOwnDeploymentOriginsBinding(undefined);
+  });
+
   it('builds allowlist from the effective snapshot when it differs from env', async () => {
     getInfraSnapshot.mockResolvedValue({
       objectStorage: {
@@ -38,7 +47,6 @@ describe('resolveOwnDeploymentOrigins', () => {
       },
     });
 
-    const { isOwnDeploymentFileUrl } = await import('@lobechat/utils');
     const { resolveOwnDeploymentOrigins } = await import('./ownDeploymentOrigins');
     const origins = await resolveOwnDeploymentOrigins();
 
@@ -51,11 +59,24 @@ describe('resolveOwnDeploymentOrigins', () => {
   it('falls back to env storage when the snapshot is unconfigured', async () => {
     getInfraSnapshot.mockResolvedValue({ objectStorage: { kind: 'unconfigured' } });
 
-    const { isOwnDeploymentFileUrl } = await import('@lobechat/utils');
     const { resolveOwnDeploymentOrigins } = await import('./ownDeploymentOrigins');
     const origins = await resolveOwnDeploymentOrigins();
 
     expect(isOwnDeploymentFileUrl('http://localhost:9000/env-bucket/a.png', origins)).toBe(true);
     expect(isOwnDeploymentFileUrl('https://prod-files.s3.example.net/a.png', origins)).toBe(false);
+  });
+
+  it('registers resolveOwnDeploymentOrigins on the process-wide binding', async () => {
+    getInfraSnapshot.mockResolvedValue({ objectStorage: { kind: 'unconfigured' } });
+
+    const { registerOwnDeploymentOriginsBinding, resolveOwnDeploymentOrigins } =
+      await import('./ownDeploymentOrigins');
+
+    registerOwnDeploymentOriginsBinding();
+
+    const binding = getOwnDeploymentOriginsBinding();
+    expect(binding?.get).toBe(resolveOwnDeploymentOrigins);
+    const origins = await binding!.get();
+    expect(isOwnDeploymentFileUrl('http://localhost:9000/env-bucket/a.png', origins)).toBe(true);
   });
 });

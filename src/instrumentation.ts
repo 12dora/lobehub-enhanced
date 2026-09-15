@@ -15,6 +15,20 @@ export async function register() {
       });
     }
 
+    // Own-deployment storage origins for imageUrlToBase64 (SSRF allowlist).
+    // The network-proxy egress binding lives in
+    // `enterprise/services/networkProxy/egress/scope.ts` (`setEgressBinding`)
+    // and is gated on the networkProxy module — this seam must always install.
+    try {
+      const { registerOwnDeploymentOriginsBinding } =
+        await import('@/server/services/file/ownDeploymentOrigins');
+      registerOwnDeploymentOriginsBinding();
+    } catch (error) {
+      console.error('[Instrumentation] own-deployment origins binding failed (non-blocking)', {
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+
     // Seeds platform RBAC (new permission codes on existing DBs) and, when the
     // BOOTSTRAP_SUPER_ADMIN_* env vars are set, provisions the first super admin
     // so a Docker-only deployment never needs a repo checkout.

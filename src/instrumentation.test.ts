@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   gatewayEnsureRunning: vi.fn().mockResolvedValue(undefined),
   initBootModules: vi.fn().mockResolvedValue({}),
   isBootModuleEnabled: vi.fn().mockReturnValue(true),
+  registerOwnDeploymentOriginsBinding: vi.fn(),
   registerTelemetry: vi.fn(),
   startEnterpriseWorkers: vi.fn().mockResolvedValue(undefined),
   /** Set to simulate the startup-bootstrap module failing to evaluate at import time. */
@@ -52,6 +53,9 @@ vi.mock('@/server/services/gateway', () => ({
     ensureRunning = mocks.gatewayEnsureRunning;
   },
 }));
+vi.mock('@/server/services/file/ownDeploymentOrigins', () => ({
+  registerOwnDeploymentOriginsBinding: mocks.registerOwnDeploymentOriginsBinding,
+}));
 vi.mock('./instrumentation.node', () => {
   mocks.registerTelemetry();
   return {};
@@ -79,11 +83,15 @@ describe('instrumentation platform instance bootstrap', () => {
     await register();
 
     expect(mocks.initBootModules).toHaveBeenCalledTimes(1);
+    expect(mocks.registerOwnDeploymentOriginsBinding).toHaveBeenCalledTimes(1);
     expect(mocks.bootstrapPlatformAdminRuntime).toHaveBeenCalledTimes(1);
     expect(mocks.bootstrapIdentityProviderRuntime).toHaveBeenCalledTimes(1);
     expect(mocks.ensurePlatformInstanceHeartbeatStarted).toHaveBeenCalledTimes(1);
     expect(mocks.startEnterpriseWorkers).toHaveBeenCalledTimes(1);
     expect(mocks.initBootModules.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.registerOwnDeploymentOriginsBinding.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.registerOwnDeploymentOriginsBinding.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.bootstrapPlatformAdminRuntime.mock.invocationCallOrder[0]!,
     );
     expect(mocks.ensurePlatformInstanceHeartbeatStarted.mock.invocationCallOrder[0]).toBeLessThan(
@@ -161,6 +169,7 @@ describe('instrumentation platform instance bootstrap', () => {
     await register();
 
     expect(mocks.bootstrapPlatformAdminRuntime).not.toHaveBeenCalled();
+    expect(mocks.registerOwnDeploymentOriginsBinding).not.toHaveBeenCalled();
     expect(mocks.bootstrapIdentityProviderRuntime).not.toHaveBeenCalled();
     expect(mocks.ensurePlatformInstanceHeartbeatStarted).not.toHaveBeenCalled();
   });

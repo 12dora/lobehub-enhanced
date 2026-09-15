@@ -17,6 +17,7 @@ export * from './mimeType';
 export * from './multimodalContent';
 export * from './number';
 export * from './object';
+export * from './ownDeploymentOriginsBinding';
 export * from './platform';
 export * from './pricing';
 export * from './providerModelListPolicy';

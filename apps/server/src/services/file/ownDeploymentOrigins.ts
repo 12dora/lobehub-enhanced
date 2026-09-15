@@ -1,4 +1,5 @@
-import { buildOwnDeploymentOrigins, type OwnDeploymentOrigins } from '@lobechat/utils';
+import type { OwnDeploymentOrigins } from '@lobechat/utils';
+import { buildOwnDeploymentOrigins, setOwnDeploymentOriginsBinding } from '@lobechat/utils';
 
 import { appEnv } from '@/envs/app';
 import { fileEnv } from '@/envs/file';
@@ -36,4 +37,16 @@ export const resolveOwnDeploymentOrigins = async (): Promise<OwnDeploymentOrigin
     internalAppUrl,
     publicDomain: fileEnv.S3_PUBLIC_DOMAIN,
   });
+};
+
+/**
+ * Install `{ get: resolveOwnDeploymentOrigins }` on
+ * `Symbol.for('aihub.ownDeploymentOrigins')` so packages (e.g. imageUrlToBase64)
+ * can fetch this deployment's own storage without importing server code.
+ *
+ * `resolveOwnDeploymentOrigins` is not locally memoised; `getInfraSnapshot`
+ * already caches the effective storage snapshot.
+ */
+export const registerOwnDeploymentOriginsBinding = (): void => {
+  setOwnDeploymentOriginsBinding({ get: resolveOwnDeploymentOrigins });
 };

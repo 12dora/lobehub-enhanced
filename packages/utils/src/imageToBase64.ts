@@ -2,6 +2,7 @@ import { Buffer } from 'buffer.js';
 import debug from 'debug';
 
 import { resolveMimeTypeFromBytes } from './imageMimeType';
+import { resolveBoundOwnDeploymentOrigins } from './ownDeploymentOriginsBinding';
 import type { OwnDeploymentOrigins } from './url';
 import { isOwnDeploymentFileUrl, resolveOwnDeploymentFetchUrl, sanitizedUrlHost } from './url';
 
@@ -128,18 +129,38 @@ export const imageToBase64 = ({
 
 const isRedirect = (status: number): boolean => REDIRECT_STATUSES.has(status);
 
+const ownOriginFetchSsrfOptions = {
+  allowPrivateIPAddress: true,
+  maxRedirects: 0,
+  redactErrors: true,
+} as const;
+
+const resolveOriginsForFetch = async (
+  options: ImageUrlToBase64Options | undefined,
+  ownOriginOnly: boolean,
+): Promise<OwnDeploymentOrigins | undefined> => {
+  if (options?.ownOrigins !== undefined) {
+    return options.ownOrigins;
+  }
+  // Fail-closed ownOriginOnly callers must keep today's "no rules" behaviour
+  // when they omit `ownOrigins`. The process-wide binding is only for default
+  // callers (LLM vision, over-cap fallbacks) that did not opt into ownOriginOnly.
+  if (ownOriginOnly) return undefined;
+  return resolveBoundOwnDeploymentOrigins();
+};
+
 const fetchAttachment = async (
   imageUrl: string,
   options: ImageUrlToBase64Options | undefined,
   isServer: boolean,
+  ownOriginFetch: boolean,
 ): Promise<Response> => {
-  const ownOriginOnly = options?.ownOriginOnly === true;
   const maxBytes = options?.maxBytes;
   const ssrfOptions = {
-    ...(ownOriginOnly ? { allowPrivateIPAddress: true, maxRedirects: 0, redactErrors: true } : {}),
+    ...(ownOriginFetch ? ownOriginFetchSsrfOptions : {}),
     ...(maxBytes !== undefined ? { maxContentLength: maxBytes + 1 } : {}),
   };
-  const requestInit: RequestInit | undefined = ownOriginOnly ? { redirect: 'manual' } : undefined;
+  const requestInit: RequestInit | undefined = ownOriginFetch ? { redirect: 'manual' } : undefined;
   const hasSsrfOptions = Object.keys(ssrfOptions).length > 0;
 
   if (isServer) {
@@ -171,27 +192,31 @@ export const imageUrlToBase64 = async (
   const ownOriginOnly = options?.ownOriginOnly === true;
   const maxBytes = options?.maxBytes;
   const isServer = typeof window === 'undefined';
-  const origins = ownOriginOnly ? await Promise.resolve(options?.ownOrigins) : undefined;
+  let ownOriginFetch = ownOriginOnly;
 
   try {
-    let currentUrl = ownOriginOnly ? resolveOwnDeploymentFetchUrl(imageUrl, origins) : imageUrl;
+    const origins = await resolveOriginsForFetch(options, ownOriginOnly);
+    // Binding / explicit origins: own-origin mechanics only when this URL
+    // matches a rule. Never widen to arbitrary private hosts.
+    ownOriginFetch = ownOriginOnly || isOwnDeploymentFileUrl(imageUrl, origins);
+    let currentUrl = ownOriginFetch ? resolveOwnDeploymentFetchUrl(imageUrl, origins) : imageUrl;
 
     let res: Response | undefined;
     for (let hop = 0; hop <= OWN_ORIGIN_MAX_REDIRECTS; hop += 1) {
-      if (ownOriginOnly && !isOwnDeploymentFileUrl(currentUrl, origins)) {
+      if (ownOriginFetch && !isOwnDeploymentFileUrl(currentUrl, origins)) {
         throw new AttachmentFetchError(sanitizedUrlHost(currentUrl));
       }
 
-      res = await fetchAttachment(currentUrl, options, isServer);
+      res = await fetchAttachment(currentUrl, options, isServer, ownOriginFetch);
 
-      if (ownOriginOnly && isRedirect(res.status)) {
+      if (ownOriginFetch && isRedirect(res.status)) {
         currentUrl = resolveRedirectLocation(currentUrl, res);
         continue;
       }
       break;
     }
 
-    if (!res || (ownOriginOnly && isRedirect(res.status))) {
+    if (!res || (ownOriginFetch && isRedirect(res.status))) {
       throw new AttachmentFetchError(sanitizedUrlHost(currentUrl));
     }
 
@@ -224,7 +249,7 @@ export const imageUrlToBase64 = async (
       );
       throw error;
     }
-    if (ownOriginOnly) {
+    if (ownOriginFetch) {
       const host = sanitizedUrlHost(imageUrl);
       log('inline failed: host=%s error=%s status=-', host, 'AttachmentFetchError');
       throw new AttachmentFetchError(host);
