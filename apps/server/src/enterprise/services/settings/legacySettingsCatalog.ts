@@ -105,6 +105,8 @@ const notificationChannelSchema = z
 
 const notificationSchema = z
   .object({
+    /** DingTalk push via the platform IM connector (任务提醒渠道, 2026-09-15). */
+    dingtalk: notificationChannelSchema.optional(),
     email: notificationChannelSchema.optional(),
     inbox: notificationChannelSchema.optional(),
     push: notificationChannelSchema.optional(),

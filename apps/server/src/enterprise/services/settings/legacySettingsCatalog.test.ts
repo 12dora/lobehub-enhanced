@@ -296,6 +296,20 @@ describe('strict legacy settings catalog (B4-R2)', () => {
     }
   });
 
+  it('accepts the dingtalk notification channel with task item overrides', () => {
+    const result = validateLegacySettingsUpdate({
+      notification: {
+        dingtalk: { enabled: false, items: { task: { task_run_failed: false } } },
+        inbox: { items: { task: { task_completed: false } } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.notification?.dingtalk?.enabled).toBe(false);
+      expect(result.value.notification?.dingtalk?.items?.task?.task_run_failed).toBe(false);
+    }
+  });
+
   it('preserves sparse systemAgent without injecting reasoningEffort', () => {
     const result = validateLegacySettingsUpdate({
       systemAgent: { topic: { model: 'gpt-4o-mini', provider: 'openai' } },
