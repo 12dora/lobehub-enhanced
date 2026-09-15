@@ -568,6 +568,39 @@ describe('resolveAgentConfig', () => {
         expect(result.agentConfig.systemRole).not.toContain('Preferred reply language: en-US');
       });
 
+      it('passes the resolved inbox display name into the runtime systemRole', () => {
+        vi.spyOn(agentStore, 'getAgentStoreState').mockReturnValue({
+          agentMap: { 'inbox-1': { title: 'AI 助手' } },
+          builtinAgentIdMap: { inbox: 'inbox-1' },
+        } as any);
+        vi.spyOn(agentSelectors.agentSelectors, 'getAgentConfigById').mockReturnValue(
+          () =>
+            ({
+              ...mockAgentConfig,
+              systemRole: '',
+            }) as any,
+        );
+        const getAgentRuntimeConfigSpy = vi
+          .spyOn(builtinAgents, 'getAgentRuntimeConfig')
+          .mockImplementation((_slug, ctx) => ({
+            plugins: [LobeAgentIdentifier],
+            systemRole: builtinAgents.createInboxSystemRole(ctx.userLocale, {
+              assistantName: ctx.assistantName,
+            }),
+          }));
+
+        const result = resolveAgentConfig({ agentId: 'inbox-agent' });
+
+        expect(getAgentRuntimeConfigSpy).toHaveBeenCalledWith(
+          'inbox',
+          expect.objectContaining({ assistantName: 'AI 助手' }),
+        );
+        expect(result.agentConfig.systemRole).toContain(
+          'You are AI 助手, an AI Agent will help users.',
+        );
+        expect(result.agentConfig.systemRole).not.toContain('You are Lobe,');
+      });
+
       it('should keep a customised inbox role after a locale switch', () => {
         vi.spyOn(
           userSelectors.userGeneralSettingsSelectors,

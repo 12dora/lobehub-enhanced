@@ -38,7 +38,7 @@ const groupAgentBuilderId = (s: AgentStoreState) =>
 /**
  * Get inbox agent id from builtinAgentIdMap
  */
-const inboxAgentId = (s: AgentStoreState) => s.builtinAgentIdMap[INBOX_SESSION_ID];
+const inboxAgentId = (s: AgentStoreState) => s.builtinAgentIdMap?.[INBOX_SESSION_ID];
 
 /** Return the Inbox id only when its projection belongs to the current identity/workspace. */
 const inboxAgentIdForScope = (scope: string | undefined) => (s: AgentStoreState) =>

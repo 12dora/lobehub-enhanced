@@ -1,4 +1,5 @@
 import { GeneralChatAgent, GraphAgent } from '@lobechat/agent-runtime';
+import { createInboxSystemRole } from '@lobechat/builtin-agents';
 import { PageAgentIdentifier } from '@lobechat/builtin-tool-page-agent';
 import { SELF_FEEDBACK_INTENT_IDENTIFIER } from '@lobechat/builtin-tool-self-iteration';
 import { RequestTrigger } from '@lobechat/types';
@@ -366,10 +367,33 @@ describe('AiAgentService.execAgent - builtin agent runtime config', () => {
     // Verify createOperation was called with agentConfig containing the runtime systemRole
     expect(mockCreateOperation).toHaveBeenCalledTimes(1);
     const callArgs = mockCreateOperation.mock.calls[0][0];
-    expect(callArgs.agentConfig.systemRole).toContain('You are Lobe');
+    expect(callArgs.agentConfig.systemRole).toContain('You are Published assistant');
+    expect(callArgs.agentConfig.systemRole).not.toContain('You are Lobe,');
     // Model identity is injected by ModelInfoProvider now, not the `{{model}}`
     // template placeholder; `{{date}}` still proves the runtime template merged.
     expect(callArgs.agentConfig.systemRole).toContain('{{date}}');
+    expect(mockLoadResolvedInboxIdentity).toHaveBeenCalledWith(mockDb, userId);
+  });
+
+  it('should regenerate a persisted stock "You are Lobe" inbox role with the resolved name', async () => {
+    mockGetAgentConfig.mockResolvedValue({
+      chatConfig: {},
+      id: 'agent-inbox',
+      model: 'gpt-4',
+      plugins: [],
+      provider: 'openai',
+      slug: 'inbox',
+      systemRole: createInboxSystemRole(undefined, { assistantName: 'Lobe' }),
+    });
+
+    await service.execAgent({
+      agentId: 'agent-inbox',
+      prompt: 'Hello',
+    });
+
+    const callArgs = mockCreateOperation.mock.calls[0][0];
+    expect(callArgs.agentConfig.systemRole).toContain('You are Published assistant');
+    expect(callArgs.agentConfig.systemRole).not.toContain('You are Lobe,');
   });
 
   it('should pass user response language into web onboarding runtime systemRole', async () => {

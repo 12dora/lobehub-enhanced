@@ -1,4 +1,5 @@
 import { createInboxSystemRole } from '@lobechat/builtin-agents';
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
 import { type UIChatMessage } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -340,9 +341,9 @@ describe('contextEngineering', () => {
       });
 
       expect(output.find((message) => message.role === 'system')).toBeUndefined();
-      expect(output.some((message) => String(message.content).includes('You are Lobe'))).toBe(
-        false,
-      );
+      expect(
+        output.some((message) => String(message.content).includes('an AI Agent will help users')),
+      ).toBe(false);
     });
 
     it('preserves an edited inbox prompt on a webApp provider', async () => {
@@ -371,7 +372,9 @@ describe('contextEngineering', () => {
 
       const system = output[0];
       expect(system.role).toBe('system');
-      expect(system.content).toContain('You are Lobe');
+      expect(system.content).toContain(
+        `You are ${DEFAULT_INBOX_TITLE}, an AI Agent will help users.`,
+      );
       expect(system.content).toContain('Current date:');
       expect(system.content).toContain('Current model: Auto (ChatGPT Web) (gpt-4)');
       expect(system.content).toContain('Model knowledge cutoff: 2024-06');

@@ -5,7 +5,11 @@ import type {
   GeneralAgentConfig,
 } from '@lobechat/agent-runtime';
 import { GeneralChatAgent, GraphAgent } from '@lobechat/agent-runtime';
-import { BUILTIN_AGENT_SLUGS, getAgentRuntimeConfig } from '@lobechat/builtin-agents';
+import {
+  BUILTIN_AGENT_SLUGS,
+  getAgentRuntimeConfig,
+  isUnmodifiedInboxSystemRole,
+} from '@lobechat/builtin-agents';
 import { builtinSkills } from '@lobechat/builtin-skills';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox/manifest';
 import { LobeAgentIdentifier, LobeAgentManifest } from '@lobechat/builtin-tool-lobe-agent/manifest';
@@ -1384,15 +1388,32 @@ export class AiAgentService {
         agentSlug === BUILTIN_AGENT_SLUGS.webOnboarding
           ? Boolean(await new PlatformDefaultInboxService(this.db, this.userId).capture())
           : undefined;
+
+      let assistantName: string | undefined;
+      if (agentSlug === BUILTIN_AGENT_SLUGS.inbox) {
+        try {
+          assistantName = (await loadResolvedInboxIdentity(this.db, this.userId)).title;
+        } catch (error) {
+          log('execAgent: failed to load inbox identity for runtime systemRole: %O', error);
+        }
+      }
+
       const runtimeConfig = getAgentRuntimeConfig(agentSlug, {
+        assistantName,
         isManagedInbox,
         model: agentConfig.model,
         plugins: activePluginIds,
         userLocale,
       });
       if (runtimeConfig) {
-        // Runtime systemRole takes effect only if DB has no user-customized systemRole
-        if (!agentConfig.systemRole && runtimeConfig.systemRole) {
+        // Runtime systemRole fills an empty persist config. Inbox also regenerates
+        // an unmodified stock prompt (including the legacy "You are Lobe" body)
+        // so the resolved display name is what the model is told to be.
+        const keepStoredSystemRole =
+          Boolean(agentConfig.systemRole) &&
+          (agentSlug !== BUILTIN_AGENT_SLUGS.inbox ||
+            !isUnmodifiedInboxSystemRole(agentConfig.systemRole));
+        if (runtimeConfig.systemRole && !keepStoredSystemRole) {
           agentConfig.systemRole = runtimeConfig.systemRole;
           log('execAgent: merged builtin agent runtime systemRole for slug=%s', agentSlug);
         }

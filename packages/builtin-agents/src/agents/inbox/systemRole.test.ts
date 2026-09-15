@@ -1,3 +1,4 @@
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
 import { describe, expect, it } from 'vitest';
 
 import { BUILTIN_AGENT_SLUGS } from '../../types';
@@ -12,14 +13,23 @@ describe('inbox systemRole', () => {
   it('builds the stock prompt without a locale suffix', () => {
     const role = createSystemRole();
 
-    expect(role).toContain('You are Lobe, an AI Agent will help users.');
+    expect(role).toContain(`You are ${DEFAULT_INBOX_TITLE}, an AI Agent will help users.`);
     expect(role).toContain("Today's date: {{date}}");
     expect(role).not.toContain('Preferred reply language:');
+    expect(role).not.toContain('You are Lobe,');
+  });
+
+  it('interpolates the resolved assistant name into the stock prompt', () => {
+    const role = createSystemRole(undefined, { assistantName: 'AI 助手' });
+
+    expect(role).toContain('You are AI 助手, an AI Agent will help users.');
+    expect(role).not.toContain('You are Lobe,');
+    expect(role).not.toContain('{{assistantName}}');
   });
 
   it('appends the preferred-language line when a locale is provided', () => {
-    expect(createSystemRole('zh-CN')).toBe(
-      `${createSystemRole()}\n\nPreferred reply language: zh-CN. Use this language unless the user explicitly asks to switch.`,
+    expect(createSystemRole('zh-CN', { assistantName: 'AI 助手' })).toBe(
+      `${createSystemRole(undefined, { assistantName: 'AI 助手' })}\n\nPreferred reply language: zh-CN. Use this language unless the user explicitly asks to switch.`,
     );
   });
 
@@ -41,6 +51,21 @@ describe('inbox systemRole', () => {
 
       expect(isUnmodifiedInboxSystemRole(role, 'en-US')).toBe(true);
       expect(isUnmodifiedInboxSystemRole(role)).toBe(true);
+    });
+
+    it('matches a stock role whose name was the legacy "Lobe" persona', () => {
+      const legacy = createSystemRole('en-US', { assistantName: 'Lobe' });
+
+      expect(legacy).toContain('You are Lobe, an AI Agent will help users.');
+      expect(isUnmodifiedInboxSystemRole(legacy)).toBe(true);
+      expect(isUnmodifiedInboxSystemRole(legacy, 'zh-CN')).toBe(true);
+    });
+
+    it('matches a stock role generated with a published display name', () => {
+      const role = createSystemRole('zh-CN', { assistantName: 'AI 助手' });
+
+      expect(isUnmodifiedInboxSystemRole(role)).toBe(true);
+      expect(isUnmodifiedInboxSystemRole(role, 'en-US')).toBe(true);
     });
 
     it('rejects a user-edited inbox prompt', () => {

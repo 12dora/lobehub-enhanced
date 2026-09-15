@@ -17,8 +17,14 @@ import {
 import debug from 'debug';
 import { produce } from 'immer';
 
+import { getRuntimeBranding } from '@/enterprise/client/providers/RuntimeBrandingProvider';
+import { resolveDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { getAgentStoreState } from '@/store/agent';
-import { agentSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
+import {
+  agentSelectors,
+  builtinAgentSelectors,
+  chatConfigByIdSelectors,
+} from '@/store/agent/selectors';
 import { getChatGroupStoreState } from '@/store/agentGroup';
 import { agentGroupByIdSelectors, agentGroupSelectors } from '@/store/agentGroup/selectors';
 import { aiProviderSelectors, getAiInfraStoreState } from '@/store/aiInfra';
@@ -397,7 +403,15 @@ export const resolveAgentConfig = (ctx: AgentConfigResolverContext): ResolvedAge
   // Builtin agent - merge runtime config
   // Use basePlugins as fallback when ctx.plugins is not provided
   // This ensures builtin agents (e.g., INBOX) receive user-configured plugins for merging
+  const assistantName =
+    slug === BUILTIN_AGENT_SLUGS.inbox
+      ? resolveDefaultInboxDisplayName(
+          builtinAgentSelectors.inboxAgentTitle(getAgentStoreState()),
+          getRuntimeBranding(),
+        )
+      : undefined;
   const runtimeConfig = getAgentRuntimeConfig(slug, {
+    assistantName,
     documentContent,
     groupSupervisorContext,
     isDev,

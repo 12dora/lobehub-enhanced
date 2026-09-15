@@ -1,4 +1,5 @@
 import { createInboxSystemRole } from '@lobechat/builtin-agents';
+import { DEFAULT_INBOX_TITLE } from '@lobechat/const';
 import { MessagesEngine } from '@lobechat/context-engine';
 import { type UIChatMessage } from '@lobechat/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -708,9 +709,9 @@ describe('serverMessagesEngine', () => {
       });
 
       expect(result.find((message) => message.role === 'system')).toBeUndefined();
-      expect(result.some((message) => String(message.content).includes('You are Lobe'))).toBe(
-        false,
-      );
+      expect(
+        result.some((message) => String(message.content).includes('an AI Agent will help users')),
+      ).toBe(false);
     });
 
     it('preserves an edited inbox prompt on a webApp provider', async () => {
@@ -740,7 +741,9 @@ describe('serverMessagesEngine', () => {
       });
 
       expect(result[0].role).toBe('system');
-      expect(result[0].content).toContain('You are Lobe');
+      expect(result[0].content).toContain(
+        `You are ${DEFAULT_INBOX_TITLE}, an AI Agent will help users.`,
+      );
       expect(result[0].content).toContain(getCurrentDateContent());
       expect(result[0].content).toContain('Current model: GPT-4 (gpt-4)');
       expect(result[0].content).toContain('Model knowledge cutoff: 2024-06');

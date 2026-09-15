@@ -55,6 +55,13 @@ export interface BuiltinAgentRuntimeResult {
  * Runtime Context - context passed to runtime function
  */
 export interface RuntimeContext {
+  /**
+   * Resolved display name for the default inbox assistant. Callers must pass
+   * the catalog → branding → DEFAULT_INBOX_TITLE identity; the stock prompt
+   * interpolates this as the assistant's name.
+   */
+  assistantName?: string;
+
   /** Document content for PageAgent */
   documentContent?: string;
 
