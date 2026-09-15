@@ -22,18 +22,58 @@ export interface IsExecutionTimeInput {
 const DAILY_PATTERN_HOUR_REGEX = /^\d+$/;
 
 /**
+ * Match a cron field against a numeric value.
+ *
+ * Supports `*`, a single integer, comma lists, inclusive ranges `a-b`,
+ * steps `*\/n`, and range-steps `a-b/n`. `origin` is the first value `*`
+ * expands to (1 for day-of-month and month; those fields are 1-indexed).
+ */
+const matchesCronField = (field: string, value: number, origin: number): boolean => {
+  if (field === '*') return true;
+
+  return field.split(',').some((raw) => {
+    const expr = raw.trim();
+    if (!expr) return false;
+
+    const slash = expr.indexOf('/');
+    const rangeExpr = slash === -1 ? expr : expr.slice(0, slash);
+    const step = slash === -1 ? 1 : Number.parseInt(expr.slice(slash + 1), 10);
+    if (!Number.isFinite(step) || step <= 0) return false;
+
+    if (rangeExpr === '*') {
+      return value >= origin && (value - origin) % step === 0;
+    }
+
+    if (rangeExpr.includes('-')) {
+      const dash = rangeExpr.indexOf('-');
+      const start = Number.parseInt(rangeExpr.slice(0, dash), 10);
+      const end = Number.parseInt(rangeExpr.slice(dash + 1), 10);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+      if (value < start || value > end) return false;
+      return (value - start) % step === 0;
+    }
+
+    const exact = Number.parseInt(rangeExpr, 10);
+    if (!Number.isFinite(exact)) return false;
+    return value === exact;
+  });
+};
+
+/**
  * Decide whether a cron pattern is "due now" within a tolerance window.
  *
  * Designed for a central dispatcher polling on a fixed cadence (e.g. QStash
  * Schedule firing every 30 minutes). The matcher:
  *
  * - Converts the dispatcher's UTC `now` to the pattern's local timezone.
+ * - Requires the local calendar day to match day-of-month (field 3) and
+ *   month (field 4); otherwise it is not due.
  * - Dedups against `lastExecutedAt` so the same pattern doesn't fire twice
  *   within its own interval (e.g. a daily 09:00 job won't refire at 09:15
  *   on the same day in `Asia/Shanghai`).
  * - Catches up missed daily runs: if the dispatcher missed the scheduled hour
  *   (downtime / cold start) and the job hasn't run today yet, a later tick
- *   on the same day still fires it.
+ *   on the same matching calendar day still fires it.
  *
  * Supported patterns (matches what `packages/utils/src/cron.ts` produces):
  *
@@ -44,6 +84,7 @@ const DAILY_PATTERN_HOUR_REGEX = /^\d+$/;
  *   - `M H * * D[,D]`  — weekly on weekday list at H:M
  *   - `M *,M * * *`    — minute list (e.g. `0,15,30,45`)
  *   - `M H,H * * *`    — hour list
+ *   - `M H DOM MON *`  — specific calendar date(s) at H:M
  */
 export const isExecutionTime = (input: IsExecutionTimeInput): boolean => {
   const {
@@ -58,10 +99,19 @@ export const isExecutionTime = (input: IsExecutionTimeInput): boolean => {
   const localTime = dayjs(currentTime).tz(jobTimezone);
   const minute = localTime.minute();
   const hour = localTime.hour();
+  const dayOfMonth = localTime.date();
+  const month = localTime.month() + 1; // dayjs is 0-indexed; cron months are 1–12
+  const weekday = localTime.day();
 
   const parts = cronPattern.trim().split(/\s+/);
   if (parts.length !== 5) return false;
-  const [cronMinute, cronHour, , , cronWeekday] = parts;
+  const [cronMinute, cronHour, cronDay, cronMonth, cronWeekday] = parts;
+
+  // Calendar fields are exact (no minute-tolerance). Catch-up below only
+  // applies when today matches day-of-month and month in the job timezone.
+  if (!matchesCronField(cronDay, dayOfMonth, 1) || !matchesCronField(cronMonth, month, 1)) {
+    return false;
+  }
 
   // ── Dedup against last execution ────────────────────────────────
   if (lastExecutedAt) {
@@ -94,8 +144,6 @@ export const isExecutionTime = (input: IsExecutionTimeInput): boolean => {
       }
     }
   }
-
-  const weekday = localTime.day();
 
   // ── Daily catch-up: scheduled hour passed today and we haven't run yet ──
   const isDailyPattern =

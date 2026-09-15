@@ -188,4 +188,166 @@ describe('isExecutionTime', () => {
       ).toBe(true);
     });
   });
+
+  describe('day-of-month and month fields', () => {
+    it('does NOT fire 0 9 16 9 * at 19:26 on 15 Sep Shanghai (incident regression)', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 16 9 *',
+          currentTime: shanghaiLocal('2026-09-15T19:26:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+
+    it('fires 0 9 16 9 * at 09:03 on 16 Sep Shanghai', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 16 9 *',
+          currentTime: shanghaiLocal('2026-09-16T09:03:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+    });
+
+    it('catches up later on the matching day if it never ran', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 16 9 *',
+          currentTime: shanghaiLocal('2026-09-16T19:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+    });
+
+    it('does NOT catch up on the matching day after running at 09:00', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 16 9 *',
+          currentTime: shanghaiLocal('2026-09-16T19:00:00'),
+          lastExecutedAt: shanghaiLocal('2026-09-16T09:00:00'),
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+
+    it('fires 0 9 1 * * on the 1st, not the 2nd', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 1 * *',
+          currentTime: shanghaiLocal('2026-09-01T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 1 * *',
+          currentTime: shanghaiLocal('2026-09-02T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+
+    it('honours month lists: 0 9 1 1,7 *', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 1 1,7 *',
+          currentTime: shanghaiLocal('2026-01-01T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 1 1,7 *',
+          currentTime: shanghaiLocal('2026-07-01T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 1 1,7 *',
+          currentTime: shanghaiLocal('2026-06-01T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+
+    it('honours day-of-month ranges and steps', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 10-20 * *',
+          currentTime: shanghaiLocal('2026-09-15T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 10-20 * *',
+          currentTime: shanghaiLocal('2026-09-21T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+
+      // `*/2` expands from DOM origin 1 → 1,3,5,… so the 15th matches, 16th does not
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 */2 * *',
+          currentTime: shanghaiLocal('2026-09-15T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 */2 * *',
+          currentTime: shanghaiLocal('2026-09-16T09:00:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+
+    it('uses the job timezone calendar date at the UTC/Shanghai date boundary', () => {
+      // 2026-09-15 23:30 UTC === 2026-09-16 07:30 Asia/Shanghai
+      const boundary = utc('2026-09-15T23:30:00');
+
+      expect(
+        isExecutionTime({
+          cronPattern: '* * 16 9 *',
+          currentTime: boundary,
+          lastExecutedAt: null,
+          timezone: 'UTC',
+        }),
+      ).toBe(false);
+
+      expect(
+        isExecutionTime({
+          cronPattern: '* * 16 9 *',
+          currentTime: boundary,
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+
+      // Date matches in Shanghai, but 07:30 is still before 09:00
+      expect(
+        isExecutionTime({
+          cronPattern: '0 9 16 9 *',
+          currentTime: boundary,
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+  });
 });
