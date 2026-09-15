@@ -4,8 +4,7 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockGetMessengerDingTalkConfig = vi.fn();
-const mockFindByEmail = vi.fn();
-const mockFindFirst = vi.fn();
+const mockEnsureDingTalkUser = vi.fn();
 const mockCreateSession = vi.fn();
 const mockRedisGet = vi.fn();
 const mockRedisEval = vi.fn();
@@ -18,18 +17,12 @@ vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: (...args: unknown[]) => mockGetMessengerDingTalkConfig(...args),
 }));
 
-vi.mock('@/database/models/user', () => ({
-  UserModel: { findByEmail: (...args: unknown[]) => mockFindByEmail(...args) },
+vi.mock('@/server/services/messenger/platforms/dingtalk/provision', () => ({
+  ensureDingTalkUser: (...args: unknown[]) => mockEnsureDingTalkUser(...args),
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({
-  getServerDB: vi.fn(async () => ({
-    query: { users: { findFirst: (...args: unknown[]) => mockFindFirst(...args) } },
-  })),
-}));
-
-vi.mock('@/database/schemas', () => ({
-  users: { email: 'users.email' },
+  getServerDB: vi.fn(async () => ({})),
 }));
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
@@ -100,8 +93,7 @@ beforeEach(() => {
   resetDingTalkSsoStateForTest();
   vi.clearAllMocks();
   mockGetMessengerDingTalkConfig.mockResolvedValue(VALID_CONFIG);
-  mockFindByEmail.mockResolvedValue({ email: 'staff_1@dingtalk.jiefakj.com', id: 'user_1' });
-  mockFindFirst.mockResolvedValue(undefined);
+  mockEnsureDingTalkUser.mockResolvedValue({ email: 'staff_1@dingtalk.jiefakj.com', id: 'user_1' });
   mockCreateSession.mockResolvedValue({ id: 'sess_1', token: 'session-token-1', userId: 'user_1' });
   mockRedisGet.mockResolvedValue(null);
   mockRedisEval.mockRejectedValue(new Error('use memory limiter'));

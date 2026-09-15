@@ -1,19 +1,13 @@
 import debug from 'debug';
-import { sql } from 'drizzle-orm';
 
 import { AgentModel } from '@/database/models/agent';
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
-import { UserModel } from '@/database/models/user';
 import type { MessengerAccountLinkItem } from '@/database/schemas';
-import { users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 
 import type { MessengerPlatformBinder } from '../../types';
-import {
-  buildDingTalkIdentityEmail,
-  DINGTALK_UNKNOWN_USER_REPLY,
-  resolveDingTalkIdentityEmailDomain,
-} from './const';
+import { DINGTALK_UNKNOWN_USER_REPLY } from './const';
+import { ensureDingTalkUser } from './provision';
 
 const log = debug('lobe-server:messenger:dingtalk:auto-link');
 
@@ -23,17 +17,6 @@ const replyUnknownUser = async (params: TryAutoLinkDingTalkParams): Promise<void
   } catch (error) {
     console.error('tryAutoLinkDingTalk: failed to send unknown-user reply', error);
   }
-};
-
-const findUserByDingTalkEmail = async (db: LobeChatDatabase, staffId: string) => {
-  const email = buildDingTalkIdentityEmail(staffId);
-  const exact = await UserModel.findByEmail(db, email);
-  if (exact) return exact;
-
-  const normalized = email.toLowerCase();
-  return db.query.users.findFirst({
-    where: sql`lower(${users.email}) = ${normalized}`,
-  });
 };
 
 const resolveInboxAgentId = async (
@@ -54,9 +37,9 @@ export interface TryAutoLinkDingTalkParams {
 
 /**
  * Map `senderStaffId` → AIHub user via the identity-email convention and upsert
- * `messenger_account_links`. Returns the link on success. Unknown staffId
- * replies the fixed login sentence and returns null — DingTalk never uses
- * the verify-im link-token flow.
+ * `messenger_account_links`. Missing users are JIT-provisioned. Returns the
+ * link on success. Provisioning failure replies the fixed login sentence and
+ * returns null — DingTalk never uses the verify-im link-token flow.
  */
 export const tryAutoLinkDingTalk = async (
   params: TryAutoLinkDingTalkParams,
@@ -67,13 +50,12 @@ export const tryAutoLinkDingTalk = async (
     return null;
   }
 
-  const user = await findUserByDingTalkEmail(params.serverDB, staffId);
+  const user = await ensureDingTalkUser(params.serverDB, {
+    senderNick: params.senderNick,
+    staffId,
+  });
   if (!user) {
-    log(
-      'tryAutoLinkDingTalk: no user for staffId=%s domain=%s',
-      staffId,
-      resolveDingTalkIdentityEmailDomain(),
-    );
+    log('tryAutoLinkDingTalk: provision failed staffId=%s', staffId);
     await replyUnknownUser(params);
     return null;
   }

@@ -4,21 +4,14 @@ import { runWithEndpointContext } from '@better-auth/core/context';
 import { isAPIError } from 'better-auth/api';
 import { makeSignature } from 'better-auth/crypto';
 import debug from 'debug';
-import { sql } from 'drizzle-orm';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
 import { getServerDB } from '@/database/core/db-adaptor';
-import { UserModel } from '@/database/models/user';
-import { users } from '@/database/schemas';
-import type { LobeChatDatabase } from '@/database/type';
 import { isEffectivelyBanned } from '@/database/utils/userBan';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
-import {
-  buildDingTalkIdentityEmail,
-  DINGTALK_CORP_ID_KEY,
-  resolveDingTalkIdentityEmailDomain,
-} from './const';
+import { DINGTALK_CORP_ID_KEY, resolveDingTalkIdentityEmailDomain } from './const';
+import { ensureDingTalkUser } from './provision';
 
 const log = debug('lobe-server:messenger:dingtalk:sso');
 
@@ -357,17 +350,6 @@ const exchangeAuthCodeForUserId = async (
   return { ok: true, userid: userid.trim() };
 };
 
-const findUserByStaffId = async (db: LobeChatDatabase, staffId: string) => {
-  const email = buildDingTalkIdentityEmail(staffId);
-  const exact = await UserModel.findByEmail(db, email);
-  if (exact) return exact;
-
-  const normalized = email.toLowerCase();
-  return db.query.users.findFirst({
-    where: sql`lower(${users.email}) = ${normalized}`,
-  });
-};
-
 const sameSiteFrom = (value: unknown): 'lax' | 'none' | 'strict' => {
   if (value === 'strict' || value === 'Strict') return 'strict';
   if (value === 'none' || value === 'None') return 'none';
@@ -482,7 +464,7 @@ export const exchangeDingTalkSso = async (input: {
   }
 
   const db = await getServerDB();
-  const user = await findUserByStaffId(db, staffId.userid);
+  const user = await ensureDingTalkUser(db, { staffId: staffId.userid });
   if (!user?.id) {
     log(
       'sso user_not_found staffId=%s domain=%s',

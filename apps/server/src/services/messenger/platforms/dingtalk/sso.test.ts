@@ -3,8 +3,7 @@ import { makeSignature } from 'better-auth/crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockGetMessengerDingTalkConfig = vi.fn();
-const mockFindByEmail = vi.fn();
-const mockFindFirst = vi.fn();
+const mockEnsureDingTalkUser = vi.fn();
 const mockCreateSession = vi.fn();
 const mockRedisGet = vi.fn();
 const mockRedisEval = vi.fn();
@@ -17,18 +16,12 @@ vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: (...args: unknown[]) => mockGetMessengerDingTalkConfig(...args),
 }));
 
-vi.mock('@/database/models/user', () => ({
-  UserModel: { findByEmail: (...args: unknown[]) => mockFindByEmail(...args) },
+vi.mock('./provision', () => ({
+  ensureDingTalkUser: (...args: unknown[]) => mockEnsureDingTalkUser(...args),
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({
-  getServerDB: vi.fn(async () => ({
-    query: { users: { findFirst: (...args: unknown[]) => mockFindFirst(...args) } },
-  })),
-}));
-
-vi.mock('@/database/schemas', () => ({
-  users: { email: 'users.email' },
+  getServerDB: vi.fn(async () => ({})),
 }));
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
@@ -96,8 +89,7 @@ beforeEach(() => {
   resetDingTalkSsoStateForTest();
   vi.clearAllMocks();
   mockGetMessengerDingTalkConfig.mockResolvedValue(VALID_CONFIG);
-  mockFindByEmail.mockResolvedValue({ email: 'staff_1@dingtalk.jiefakj.com', id: 'user_1' });
-  mockFindFirst.mockResolvedValue(undefined);
+  mockEnsureDingTalkUser.mockResolvedValue({ email: 'staff_1@dingtalk.jiefakj.com', id: 'user_1' });
   mockCreateSession.mockResolvedValue({ id: 'sess_1', token: 'session-token-1', userId: 'user_1' });
   mockRedisGet.mockResolvedValue(null);
   mockRedisEval.mockRejectedValue(new Error('use memory limiter'));
@@ -197,13 +189,32 @@ describe('exchangeDingTalkSso', () => {
   });
 
   it('returns user_not_found without creating a session', async () => {
-    mockFindByEmail.mockResolvedValueOnce(undefined);
-    mockFindFirst.mockResolvedValueOnce(undefined);
+    mockEnsureDingTalkUser.mockResolvedValueOnce(null);
 
     await expect(
       exchangeDingTalkSso({ code: 'auth-code', ip: '1.1.1.1', redirect: '/home' }),
     ).resolves.toEqual({ ok: false, reason: 'user_not_found' });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('provisions a missing user then mints a session', async () => {
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
+      email: 'staff_1@dingtalk.jiefakj.com',
+      id: 'user_new',
+    });
+
+    const result = await exchangeDingTalkSso({
+      code: 'auth-code',
+      ip: '1.1.1.1',
+      redirect: '/home',
+    });
+    expect(result.ok).toBe(true);
+    expect(mockEnsureDingTalkUser).toHaveBeenCalledWith(expect.anything(), { staffId: 'staff_1' });
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      'user_new',
+      false,
+      expect.objectContaining({ ipAddress: '1.1.1.1' }),
+    );
   });
 
   it('rejects a non-path redirect', async () => {
@@ -235,7 +246,7 @@ describe('exchangeDingTalkSso', () => {
   });
 
   it('returns user_not_found for an effectively banned user without leaking ban', async () => {
-    mockFindByEmail.mockResolvedValueOnce({
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
       banExpires: null,
       banned: true,
       email: 'staff_1@dingtalk.jiefakj.com',
@@ -249,7 +260,7 @@ describe('exchangeDingTalkSso', () => {
   });
 
   it('mints a session when a temporary ban has expired', async () => {
-    mockFindByEmail.mockResolvedValueOnce({
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
       banExpires: new Date(Date.now() - 1000),
       banned: true,
       email: 'staff_1@dingtalk.jiefakj.com',
@@ -266,7 +277,7 @@ describe('exchangeDingTalkSso', () => {
   });
 
   it('mints a session for a 2FA-enabled user (DingTalk 免登 is IdP-delegated)', async () => {
-    mockFindByEmail.mockResolvedValueOnce({
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
       banExpires: null,
       banned: false,
       email: 'staff_1@dingtalk.jiefakj.com',

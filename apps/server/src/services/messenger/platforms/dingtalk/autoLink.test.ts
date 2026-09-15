@@ -1,14 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockFindByEmail = vi.fn();
-const mockFindFirst = vi.fn();
+const mockEnsureDingTalkUser = vi.fn();
 const mockGetBuiltinAgent = vi.fn();
 const mockUpsertForPlatform = vi.fn();
 const sendDmText = vi.fn();
 
-vi.mock('@/database/models/user', () => ({
-  UserModel: { findByEmail: (...args: unknown[]) => mockFindByEmail(...args) },
+vi.mock('./provision', () => ({
+  ensureDingTalkUser: (...args: unknown[]) => mockEnsureDingTalkUser(...args),
 }));
 
 vi.mock('@/database/models/agent', () => ({
@@ -23,19 +22,17 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
   })),
 }));
 
-vi.mock('@/database/schemas', () => ({
-  users: { email: 'users.email' },
-}));
-
 const { tryAutoLinkDingTalk } = await import('./autoLink');
 const { DINGTALK_UNKNOWN_USER_REPLY } = await import('./const');
 
-const serverDB = { query: { users: { findFirst: mockFindFirst } } } as any;
+const serverDB = {} as any;
 const binder = { sendDmText } as any;
 
 beforeEach(() => {
-  mockFindByEmail.mockResolvedValue(undefined);
-  mockFindFirst.mockResolvedValue(undefined);
+  mockEnsureDingTalkUser.mockResolvedValue({
+    email: 'staff_1@dingtalk.jiefakj.com',
+    id: 'user_1',
+  });
   mockGetBuiltinAgent.mockResolvedValue({ id: 'agt_inbox' });
   mockUpsertForPlatform.mockResolvedValue({
     activeAgentId: 'agt_inbox',
@@ -48,13 +45,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
-  delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
 });
 
 describe('tryAutoLinkDingTalk', () => {
-  it('upserts a link when the identity email matches', async () => {
-    mockFindByEmail.mockResolvedValueOnce({ id: 'user_1', email: 'staff_1@dingtalk.jiefakj.com' });
-
+  it('upserts a link when the user already exists (no provision create)', async () => {
     const link = await tryAutoLinkDingTalk({
       binder,
       chatId: 'cid_1',
@@ -64,6 +58,10 @@ describe('tryAutoLinkDingTalk', () => {
     });
 
     expect(link?.platformUserId).toBe('staff_1');
+    expect(mockEnsureDingTalkUser).toHaveBeenCalledWith(serverDB, {
+      senderNick: 'Alice',
+      staffId: 'staff_1',
+    });
     expect(mockUpsertForPlatform).toHaveBeenCalledWith(
       expect.objectContaining({
         activeAgentId: 'agt_inbox',
@@ -77,23 +75,28 @@ describe('tryAutoLinkDingTalk', () => {
     expect(sendDmText).not.toHaveBeenCalled();
   });
 
-  it('matches the identity email case-insensitively', async () => {
-    mockFindByEmail.mockResolvedValueOnce(undefined);
-    mockFindFirst.mockResolvedValueOnce({ id: 'user_1', email: 'STAFF_1@DingTalk.Jiefakj.COM' });
+  it('creates the messenger link after JIT provision succeeds', async () => {
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
+      email: 'unknown_staff@dingtalk.jiefakj.com',
+      id: 'user_new',
+    });
 
     const link = await tryAutoLinkDingTalk({
       binder,
       chatId: 'cid_1',
-      senderStaffId: 'staff_1',
+      senderNick: 'Alice',
+      senderStaffId: 'unknown_staff',
       serverDB,
     });
 
     expect(link?.userId ?? link).toBeTruthy();
-    expect(mockFindFirst).toHaveBeenCalled();
     expect(mockUpsertForPlatform).toHaveBeenCalled();
+    expect(sendDmText).not.toHaveBeenCalled();
   });
 
-  it('replies the fixed sentence when the staffId is unknown', async () => {
+  it('replies the fixed sentence when provisioning fails', async () => {
+    mockEnsureDingTalkUser.mockResolvedValueOnce(null);
+
     const link = await tryAutoLinkDingTalk({
       binder,
       chatId: 'cid_1',
@@ -116,11 +119,12 @@ describe('tryAutoLinkDingTalk', () => {
 
     expect(link).toBeNull();
     expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
-    expect(mockFindByEmail).not.toHaveBeenCalled();
+    expect(mockEnsureDingTalkUser).not.toHaveBeenCalled();
     expect(mockUpsertForPlatform).not.toHaveBeenCalled();
   });
 
   it('logs send failures of the unknown-user reply at error level', async () => {
+    mockEnsureDingTalkUser.mockResolvedValueOnce(null);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     sendDmText.mockRejectedValueOnce(new Error('webhook expired'));
 
