@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   appendAuditAccessLog: vi.fn(),
   getMember: vi.fn(),
   getOrCreate: vi.fn(),
+  isModuleEnabled: vi.fn(),
+  isPlatformAdminFeatureEnabled: vi.fn(),
   loadPlatformAuthContext: vi.fn(),
 }));
 
@@ -25,8 +27,16 @@ vi.mock('@/database/models/platform', () => ({
   },
 }));
 
+vi.mock('@/server/enterprise/featureFlags', () => ({
+  isPlatformAdminFeatureEnabled: mocks.isPlatformAdminFeatureEnabled,
+}));
+
 vi.mock('@/server/enterprise/guards/platformPermission', () => ({
   loadPlatformAuthContext: mocks.loadPlatformAuthContext,
+}));
+
+vi.mock('@/server/enterprise/services/moduleSettings', () => ({
+  isModuleEnabled: mocks.isModuleEnabled,
 }));
 
 vi.mock('@/server/enterprise/services/audit/accessLog', () => ({
@@ -61,6 +71,8 @@ describe('resolveFileAccess', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getMember.mockResolvedValue(undefined);
+    mocks.isPlatformAdminFeatureEnabled.mockReturnValue(true);
+    mocks.isModuleEnabled.mockResolvedValue(true);
     mocks.loadPlatformAuthContext.mockResolvedValue({ permissions: [] });
     mocks.getOrCreate.mockResolvedValue({ contentAccessMode: 'metadata_only' });
   });
@@ -224,7 +236,7 @@ describe('resolveFileAccess', () => {
 
   it('treats loadPlatformAuthContext failure as not-auditor', async () => {
     const { db } = createDb();
-    mocks.loadPlatformAuthContext.mockRejectedValue(new Error('admin disabled'));
+    mocks.loadPlatformAuthContext.mockRejectedValue(new Error('rbac lookup failed'));
 
     await expect(
       resolveFileAccess({
@@ -234,6 +246,48 @@ describe('resolveFileAccess', () => {
       }),
     ).resolves.toEqual({ allowed: false });
 
+    expect(mocks.getOrCreate).not.toHaveBeenCalled();
+  });
+
+  it('denies auditor access when the platform admin feature is disabled', async () => {
+    const { db } = createDb();
+    mocks.isPlatformAdminFeatureEnabled.mockReturnValue(false);
+    mocks.loadPlatformAuthContext.mockResolvedValue({
+      permissions: [PLATFORM_PERMISSIONS.AUDIT_CONVERSATION_READ],
+    });
+    mocks.getOrCreate.mockResolvedValue({ contentAccessMode: 'content_allowed' });
+
+    await expect(
+      resolveFileAccess({
+        db,
+        file: { ...file, workspaceId: null },
+        viewerUserId: 'auditor-id',
+      }),
+    ).resolves.toEqual({ allowed: false });
+
+    expect(mocks.isModuleEnabled).not.toHaveBeenCalled();
+    expect(mocks.loadPlatformAuthContext).not.toHaveBeenCalled();
+    expect(mocks.getOrCreate).not.toHaveBeenCalled();
+  });
+
+  it('denies auditor access when the audit module is disabled', async () => {
+    const { db } = createDb();
+    mocks.isModuleEnabled.mockResolvedValue(false);
+    mocks.loadPlatformAuthContext.mockResolvedValue({
+      permissions: [PLATFORM_PERMISSIONS.AUDIT_CONVERSATION_READ],
+    });
+    mocks.getOrCreate.mockResolvedValue({ contentAccessMode: 'content_allowed' });
+
+    await expect(
+      resolveFileAccess({
+        db,
+        file: { ...file, workspaceId: null },
+        viewerUserId: 'auditor-id',
+      }),
+    ).resolves.toEqual({ allowed: false });
+
+    expect(mocks.isModuleEnabled).toHaveBeenCalledWith('audit');
+    expect(mocks.loadPlatformAuthContext).not.toHaveBeenCalled();
     expect(mocks.getOrCreate).not.toHaveBeenCalled();
   });
 

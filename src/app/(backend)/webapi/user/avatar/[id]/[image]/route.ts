@@ -57,8 +57,9 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
 
     return new Response(userAvatar, {
       headers: {
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': 'private, max-age=31536000, immutable',
         'Content-Type': type,
+        'Vary': 'Cookie',
       },
       status: 200,
     });

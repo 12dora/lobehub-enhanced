@@ -12,10 +12,16 @@ import { recordAuditorFileOpen, resolveFileAccess } from '@/server/services/file
 import { createFileServiceModule } from '@/server/services/file/impls';
 
 const log = debug('lobe-file:proxy');
+
+const cacheHeaders = {
+  'Cache-Control': 'private, no-store',
+  'Vary': 'Cookie',
+} as const;
+
 const redirectToObject = (location: string, mimeType: string): Response =>
   new Response(null, {
     headers: {
-      'Cache-Control': 'private, no-store',
+      ...cacheHeaders,
       'Content-Type': mimeType,
       'Location': location,
       'X-Content-Type-Options': 'nosniff',
@@ -23,12 +29,15 @@ const redirectToObject = (location: string, mimeType: string): Response =>
     status: 302,
   });
 
+const textResponse = (body: string, status: number): Response =>
+  new Response(body, { headers: cacheHeaders, status });
+
 type Params = Promise<{ id: string }>;
 
 const isUnauthorizedAuthError = (error: unknown) =>
   !!error && typeof error === 'object' && 'code' in error && error.code === 'UNAUTHORIZED';
 
-const unauthorized = () => new Response('Unauthorized', { status: 401 });
+const unauthorized = () => textResponse('Unauthorized', 401);
 
 /**
  * File proxy service
@@ -55,7 +64,7 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
     const db = await getServerDB();
 
     if (id.startsWith('pba_')) {
-      if (!isPlatformBrandingAssetId(id)) return new Response('File not found', { status: 404 });
+      if (!isPlatformBrandingAssetId(id)) return textResponse('File not found', 404);
       const [asset] = await db
         .select({
           mimeType: platformBrandingAssets.mimeType,
@@ -70,7 +79,7 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
           ),
         )
         .limit(1);
-      if (!asset) return new Response('File not found', { status: 404 });
+      if (!asset) return textResponse('File not found', 404);
       const redirectUrl = await createFileServiceModule(db).createCachedPreSignedUrlForPreview(
         asset.objectKey,
       );
@@ -104,9 +113,7 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
 
     if (!file) {
       log('File not found: %s', id);
-      return new Response('File not found', {
-        status: 404,
-      });
+      return textResponse('File not found', 404);
     }
 
     const access = await resolveFileAccess({
@@ -121,7 +128,7 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
     });
 
     if (!access.allowed) {
-      return new Response('Forbidden', { status: 403 });
+      return textResponse('Forbidden', 403);
     }
 
     if (access.reason === 'auditor') {
@@ -136,8 +143,6 @@ export const GET = async (req: Request, segmentData: { params: Params }) => {
     return redirectToObject(redirectUrl, file.fileType || 'application/octet-stream');
   } catch (error) {
     console.error('File proxy error:', error);
-    return new Response('Internal server error', {
-      status: 500,
-    });
+    return textResponse('Internal server error', 500);
   }
 };

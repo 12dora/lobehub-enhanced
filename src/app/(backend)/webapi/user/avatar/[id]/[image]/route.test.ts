@@ -55,6 +55,8 @@ describe('GET /webapi/user/avatar/:id/:image', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('image/png');
+    expect(response.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
+    expect(response.headers.get('vary')).toBe('Cookie');
     expect(Buffer.from(await response.arrayBuffer()).toString()).toBe('avatar-bytes');
     expect(userServiceMocks.getUserAvatar).toHaveBeenCalledWith('u1', 'a.png');
   });

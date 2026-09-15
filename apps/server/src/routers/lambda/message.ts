@@ -347,11 +347,13 @@ export const messageRouter = router({
         const messageModel = new MessageModel(ctx.serverDB, share.ownerId);
         const fileService = new FileService(ctx.serverDB, share.ownerId);
 
+        // Anonymous share pages cannot fetch cookie-gated `/f/:id`; give
+        // short-lived presigned object URLs instead.
         return messageModel.query(
           { ...queryParams, topicId: share.topicId },
           {
             postProcessUrl: (path, file) =>
-              fileService.getFileAccessUrl({ id: file.id, url: path }),
+              fileService.getMachineReadableUrl({ id: file.id, url: path }),
           },
         );
       }

@@ -6,6 +6,8 @@ import { auth } from '@/auth';
 import { FileModel } from '@/database/models/file';
 import type { FileItem } from '@/database/schemas';
 import { getServerDB } from '@/database/server';
+import { OIDCUserInactiveError } from '@/libs/oidc-provider/access-control';
+import { assertUserActiveCached } from '@/libs/oidc-provider/userActiveCache';
 import { FileService } from '@/server/services/file';
 
 import { GET } from './route';
@@ -71,6 +73,11 @@ const sessionOf = (userId: string) => ({
   user: { id: userId },
 });
 
+const expectPrivateNoStore = (response: Response) => {
+  expect(response.headers.get('cache-control')).toBe('private, no-store');
+  expect(response.headers.get('vary')).toBe('Cookie');
+};
+
 describe('file proxy route', () => {
   const platformAssetRows: unknown[] = [];
   const db = {
@@ -86,6 +93,7 @@ describe('file proxy route', () => {
     platformAssetRows.length = 0;
 
     vi.mocked(getServerDB).mockResolvedValue(db);
+    vi.mocked(assertUserActiveCached).mockResolvedValue(undefined);
     vi.mocked(auth.api.getSession).mockResolvedValue(sessionOf('owner-user-id') as never);
     vi.mocked(FileModel.getFileById).mockResolvedValue({
       fileType: 'image/png',
@@ -114,6 +122,7 @@ describe('file proxy route', () => {
 
     expect(response.status).toBe(401);
     expect(await response.text()).toBe('Unauthorized');
+    expectPrivateNoStore(response);
     expect(FileModel.getFileById).not.toHaveBeenCalled();
     expect(fileAccessMocks.resolveFileAccess).not.toHaveBeenCalled();
   });
@@ -126,6 +135,7 @@ describe('file proxy route', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('https://s3.example.com/presigned-preview-url');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('vary')).toBe('Cookie');
     expect(response.headers.get('content-type')).toBe('image/png');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(FileModel.getFileById).toHaveBeenCalledWith(db, 'file-id');
@@ -157,6 +167,7 @@ describe('file proxy route', () => {
 
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Forbidden');
+    expectPrivateNoStore(response);
     expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).not.toHaveBeenCalled();
     expect(fileAccessMocks.recordAuditorFileOpen).not.toHaveBeenCalled();
   });
@@ -179,6 +190,7 @@ describe('file proxy route', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('https://s3.example.com/presigned-preview-url');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('vary')).toBe('Cookie');
   });
 
   it('returns 403 for an auditor with metadata_only (no body access)', async () => {
@@ -190,6 +202,7 @@ describe('file proxy route', () => {
     });
 
     expect(response.status).toBe(403);
+    expectPrivateNoStore(response);
     expect(fileAccessMocks.recordAuditorFileOpen).not.toHaveBeenCalled();
     expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).not.toHaveBeenCalled();
   });
@@ -203,6 +216,7 @@ describe('file proxy route', () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('File not found');
+    expectPrivateNoStore(response);
     expect(fileAccessMocks.resolveFileAccess).not.toHaveBeenCalled();
   });
 
@@ -218,6 +232,7 @@ describe('file proxy route', () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe('Internal server error');
+    expectPrivateNoStore(response);
     expect(fileServiceMocks.instance.createCachedPreSignedUrlForPreview).not.toHaveBeenCalled();
   });
 
@@ -236,6 +251,7 @@ describe('file proxy route', () => {
       'https://s3.example.com/platform-branding-object',
     );
     expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('vary')).toBe('Cookie');
     expect(response.headers.get('content-type')).toBe('image/png');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(auth.api.getSession).not.toHaveBeenCalled();
@@ -251,6 +267,7 @@ describe('file proxy route', () => {
     );
 
     expect(response.status).toBe(404);
+    expectPrivateNoStore(response);
     expect(FileModel.getFileById).not.toHaveBeenCalled();
     expect(auth.api.getSession).not.toHaveBeenCalled();
   });
@@ -264,8 +281,37 @@ describe('file proxy route', () => {
     );
 
     expect(response.status).toBe(404);
+    expectPrivateNoStore(response);
     expect(FileModel.getFileById).not.toHaveBeenCalled();
     expect(db.select).not.toHaveBeenCalled();
     expect(auth.api.getSession).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when assertUserActiveCached throws UNAUTHORIZED', async () => {
+    vi.mocked(assertUserActiveCached).mockRejectedValue(new OIDCUserInactiveError());
+
+    const response = await GET(new Request('https://lobehub.com/f/file-id'), {
+      params: Promise.resolve({ id: 'file-id' }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe('Unauthorized');
+    expectPrivateNoStore(response);
+    expect(FileModel.getFileById).not.toHaveBeenCalled();
+    expect(fileAccessMocks.resolveFileAccess).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when assertUserActiveCached throws a non-auth error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(assertUserActiveCached).mockRejectedValue(new Error('db down'));
+
+    const response = await GET(new Request('https://lobehub.com/f/file-id'), {
+      params: Promise.resolve({ id: 'file-id' }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('Internal server error');
+    expectPrivateNoStore(response);
+    expect(FileModel.getFileById).not.toHaveBeenCalled();
   });
 });

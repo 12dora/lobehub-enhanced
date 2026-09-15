@@ -53,8 +53,8 @@ export class FileModel {
     );
 
   /**
-   * Get file by ID without userId filter (public access)
-   * Use this for scenarios like file proxy where file should be accessible by ID alone
+   * Internal id lookup with no authorization.
+   * Callers must authorize (the file proxy route uses `resolveFileAccess`).
    *
    * @param db - Database instance
    * @param id - File ID

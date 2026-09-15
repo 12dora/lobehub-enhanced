@@ -31,13 +31,18 @@ administrative access, including the enterprise additions: the `/admin` console,
 managed resources, shared OAuth, audit, database-driven identity providers, and platform secret
 encryption.
 
+Authenticated `GET /f/:id` (non-`pba_*`) requires a Better Auth session and one of: file owner,
+workspace member (public/NULL visibility), topic link-share attachment owned by the file owner,
+or auditor with conversation body access.
+
 **Out of scope**
 
 - Issues that require super-admin or host access; the platform administrator is a trusted party.
 - Vulnerabilities in upstream LobeHub that also affect the unmodified upstream project — report those
   to [lobehub/lobehub](https://github.com/lobehub/lobehub/security/advisories/new). We will pick up
   the fix when the change is merged upstream.
-- Public platform branding via `/f/pba_*` (login chrome, emails). Other `/f/:id` objects require a Better Auth session and one of: owner, workspace member (public/NULL visibility), topic link-share, or auditor with conversation body access.
+- Public platform branding assets served at `/f/pba_*` (login chrome, emails), which are
+  intentionally unauthenticated.
 - User-existence signals on login endpoints, which are part of the standard sign-in UX.
 - Client-side API keys stored in the browser in self-hosted client mode.
 - Theoretical attacks without a working proof of concept against a realistic deployment.

@@ -12,6 +12,11 @@ import { FileService } from '@/server/services/file';
 
 import { messageRouter } from '../message';
 
+const fileServiceMocks = vi.hoisted(() => ({
+  getFileAccessUrl: vi.fn(),
+  getMachineReadableUrl: vi.fn(),
+}));
+
 vi.mock('@/database/models/message', () => ({
   MessageModel: vi.fn(),
 }));
@@ -23,11 +28,18 @@ vi.mock('@/database/models/topicShare', () => ({
 }));
 
 vi.mock('@/server/services/file', () => ({
-  FileService: vi.fn(),
+  FileService: vi.fn(() => ({
+    getFileAccessUrl: fileServiceMocks.getFileAccessUrl,
+    getMachineReadableUrl: fileServiceMocks.getMachineReadableUrl,
+  })),
 }));
 
 vi.mock('@/database/server', () => ({
   getServerDB: vi.fn(),
+}));
+
+vi.mock('@/database/core/db-adaptor', () => ({
+  getServerDB: vi.fn().mockResolvedValue({}),
 }));
 
 describe('messageRouter', () => {
@@ -389,9 +401,9 @@ describe('messageRouter', () => {
       ];
 
       const mockQuery = vi.fn().mockResolvedValue(mockMessages);
-      const mockGetFullFileUrl = vi
-        .fn()
-        .mockImplementation((path: string) => `https://cdn/${path}`);
+      fileServiceMocks.getMachineReadableUrl.mockImplementation(
+        async ({ url }: { url: string }) => `https://s3.example/${url}`,
+      );
 
       vi.mocked(TopicShareModel.findByShareIdWithAccessCheck).mockResolvedValue(mockShare as any);
       vi.mocked(MessageModel).mockImplementation(
@@ -403,28 +415,38 @@ describe('messageRouter', () => {
       vi.mocked(FileService).mockImplementation(
         () =>
           ({
-            getFullFileUrl: mockGetFullFileUrl,
+            getFileAccessUrl: fileServiceMocks.getFileAccessUrl,
+            getMachineReadableUrl: fileServiceMocks.getMachineReadableUrl,
           }) as any,
       );
 
-      // Simulate the router logic
-      const share = await TopicShareModel.findByShareIdWithAccessCheck(
-        {} as any,
+      const caller = messageRouter.createCaller({} as never);
+      const result = await caller.getMessages({ topicShareId: 'share-123' });
+
+      expect(TopicShareModel.findByShareIdWithAccessCheck).toHaveBeenCalledWith(
+        {},
         'share-123',
         undefined,
       );
-
-      expect(share).toBeDefined();
-      expect(share.topicId).toBe('topic-1');
-      expect(share.ownerId).toBe('owner-user');
-
-      // Create model using owner's id
-      const messageModel = new MessageModel({} as any, share.ownerId);
-      const result = await messageModel.query(
-        { topicId: share.topicId },
-        { postProcessUrl: mockGetFullFileUrl },
+      expect(MessageModel).toHaveBeenCalledWith({}, 'owner-user');
+      expect(FileService).toHaveBeenCalledWith({}, 'owner-user');
+      expect(mockQuery).toHaveBeenCalledWith(
+        { topicId: 'topic-1' },
+        expect.objectContaining({ postProcessUrl: expect.any(Function) }),
       );
 
+      const postProcessUrl = mockQuery.mock.calls[0][1].postProcessUrl as (
+        path: string,
+        file: { id: string },
+      ) => Promise<string>;
+      await expect(postProcessUrl('files/cat.png', { id: 'file-1' })).resolves.toBe(
+        'https://s3.example/files/cat.png',
+      );
+      expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith({
+        id: 'file-1',
+        url: 'files/cat.png',
+      });
+      expect(fileServiceMocks.getFileAccessUrl).not.toHaveBeenCalled();
       expect(result).toEqual(mockMessages);
     });
 

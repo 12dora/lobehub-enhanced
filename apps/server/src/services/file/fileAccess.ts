@@ -5,9 +5,11 @@ import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import { PlatformAuditPolicyModel } from '@/database/models/platform';
 import { WorkspaceMemberModel } from '@/database/models/workspaceMember';
 import { messages, messagesFiles, topicShares } from '@/database/schemas';
+import { isPlatformAdminFeatureEnabled } from '@/server/enterprise/featureFlags';
 import { loadPlatformAuthContext } from '@/server/enterprise/guards/platformPermission';
 import { appendAuditAccessLog } from '@/server/enterprise/services/audit/accessLog';
 import { resolveConversationContentAccess } from '@/server/enterprise/services/audit/contentPolicy';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 
 export type FileAccessFile = {
   id: string;
@@ -24,26 +26,36 @@ const isWorkspaceMemberVisible = (visibility?: string | null): boolean =>
 
 const hasLinkSharedTopicAttachment = async (
   db: LobeChatDatabase,
-  fileId: string,
+  file: Pick<FileAccessFile, 'id' | 'userId'>,
 ): Promise<boolean> => {
   const rows = await db
     .select({ shareId: topicShares.id })
     .from(messagesFiles)
     .innerJoin(messages, eq(messagesFiles.messageId, messages.id))
     .innerJoin(topicShares, eq(topicShares.topicId, messages.topicId))
-    .where(and(eq(messagesFiles.fileId, fileId), eq(topicShares.visibility, 'link')))
+    .where(
+      and(
+        eq(messagesFiles.fileId, file.id),
+        eq(messagesFiles.userId, file.userId),
+        eq(topicShares.userId, file.userId),
+        eq(topicShares.visibility, 'link'),
+      ),
+    )
     .limit(1);
 
   return rows.length > 0;
 };
 
 const tryAuditorAccess = async (db: LobeChatDatabase, viewerUserId: string): Promise<boolean> => {
+  if (!isPlatformAdminFeatureEnabled()) return false;
+  if (!(await isModuleEnabled('audit'))) return false;
+
   let permissions: string[];
   try {
     const platformAuth = await loadPlatformAuthContext({ db, userId: viewerUserId });
     permissions = platformAuth.permissions;
   } catch {
-    // Platform admin module disabled or RBAC lookup failed — not an auditor.
+    // RBAC lookup failed — not an auditor.
     return false;
   }
 
@@ -79,7 +91,7 @@ export const resolveFileAccess = async (params: {
     if (member) return { allowed: true, reason: 'workspace' };
   }
 
-  if (await hasLinkSharedTopicAttachment(db, file.id)) {
+  if (await hasLinkSharedTopicAttachment(db, file)) {
     return { allowed: true, reason: 'topic_share' };
   }
 
