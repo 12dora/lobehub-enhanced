@@ -4,12 +4,14 @@ import {
   DEFAULT_AGENT_META,
   DEFAULT_HOTKEY_CONFIG,
   DEFAULT_MEMORY_SETTINGS,
+  DEFAULT_NOTIFICATION_SETTINGS,
   DEFAULT_SYSTEM_AGENT_CONFIG,
   DEFAULT_TTS_CONFIG,
 } from '@lobechat/const';
 import {
   type GlobalLLMProviderKey,
   type HotkeyId,
+  type NotificationSettings,
   type ProviderConfig,
   type UserModelProviderConfig,
   type UserSettings,
@@ -33,6 +35,13 @@ const currentMemorySettings = (s: UserStore) =>
 
 const memoryEnabled = (s: UserStore) => currentMemorySettings(s).enabled !== false;
 
+/**
+ * Notification preferences with the all-on defaults applied, so callers can read a
+ * dense object instead of re-implementing "missing = enabled" at every call site.
+ */
+const currentNotificationSettings = (s: UserStore): NotificationSettings =>
+  merge(DEFAULT_NOTIFICATION_SETTINGS, currentSettings(s).notification);
+
 const currentTTS = (s: UserStore) => merge(DEFAULT_TTS_CONFIG, currentSettings(s).tts);
 
 const defaultAgent = (s: UserStore) => merge(DEFAULT_AGENT, currentSettings(s).defaultAgent);
@@ -51,6 +60,7 @@ const getHotkeyById = (id: HotkeyId) => (s: UserStore) =>
 export const settingsSelectors = {
   currentImageSettings,
   currentMemorySettings,
+  currentNotificationSettings,
   currentSettings,
   currentSystemAgent,
   currentTTS,

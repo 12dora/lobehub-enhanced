@@ -9,6 +9,7 @@ import WideScreenContainer from '@/features/WideScreenContainer';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { usePermission } from '@/hooks/usePermission';
+import InboxButton from '@/routes/(main)/home/_layout/Header/components/InboxButton';
 import { useGlobalStore } from '@/store/global';
 import { systemStatusSelectors } from '@/store/global/selectors';
 import { useTaskStore } from '@/store/task';
@@ -16,6 +17,7 @@ import { taskListSelectors } from '@/store/task/selectors';
 import type { TaskViewMode } from '@/store/task/slices/list/initialState';
 
 import { createTaskModal } from '../CreateTaskModal';
+import ReminderSettingsButton from '../ReminderSettings';
 import Breadcrumb from '../shared/Breadcrumb';
 import { taskDetailPath } from '../shared/taskDetailPath';
 import CreateTaskInlineEntry from './CreateTaskInlineEntry';
@@ -142,6 +144,8 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
               />
             )}
             <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />
+            <ReminderSettingsButton />
+            <InboxButton />
             {showTaskAgentPanelToggle && (
               <ToggleRightPanelButton
                 hideWhenExpanded

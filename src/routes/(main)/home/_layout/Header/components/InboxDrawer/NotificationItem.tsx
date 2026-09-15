@@ -1,12 +1,29 @@
 'use client';
 
 import { ActionIcon, Block, Flexbox, Icon, Text } from '@lobehub/ui';
+import { Tag } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import dayjs from 'dayjs';
-import { ArchiveIcon, BellIcon, ImageIcon, MegaphoneIcon, VideoIcon } from 'lucide-react';
+import {
+  ArchiveIcon,
+  BellIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CircleHelpIcon,
+  ImageIcon,
+  ListChecksIcon,
+  MegaphoneIcon,
+  VideoIcon,
+} from 'lucide-react';
 import { memo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+import {
+  TASK_NOTIFICATION_CATEGORY,
+  TASK_NOTIFICATION_TYPES,
+  type TaskNotificationType,
+} from '@/types/user/settings';
 
 import { createNotificationDetailModal } from './NotificationDetailModal';
 
@@ -42,7 +59,29 @@ const styles = createStaticStyles(({ css }) => ({
 const TYPE_ICON_MAP: Record<string, typeof BellIcon> = {
   image_generation_completed: ImageIcon,
   system_announcement: MegaphoneIcon,
+  task_completed: ListChecksIcon,
+  task_run_completed: CircleCheckIcon,
+  task_run_failed: CircleAlertIcon,
+  task_waiting_for_user: CircleHelpIcon,
   video_generation_completed: VideoIcon,
+};
+
+const TASK_TYPES = new Set<string>(TASK_NOTIFICATION_TYPES);
+
+/**
+ * Task rows all carry the task name as their title, so the event kind has to be a
+ * chip — without it "每日晨报" reads the same whether the run finished or failed.
+ */
+const isTaskNotificationType = (
+  category: string | undefined,
+  type: string,
+): type is TaskNotificationType => category === TASK_NOTIFICATION_CATEGORY && TASK_TYPES.has(type);
+
+const TASK_TAG_COLOR: Record<TaskNotificationType, 'success' | 'error' | 'warning' | undefined> = {
+  task_completed: 'success',
+  task_run_completed: undefined,
+  task_run_failed: 'error',
+  task_waiting_for_user: 'warning',
 };
 
 interface NotificationItemProps {
@@ -72,7 +111,9 @@ const NotificationItem = memo<NotificationItemProps>(
     onArchive,
   }) => {
     const navigate = useWorkspaceAwareNavigate();
+    const { t } = useTranslation('notification');
     const TypeIcon = TYPE_ICON_MAP[type] || BellIcon;
+    const taskType = isTaskNotificationType(category, type) ? type : undefined;
 
     const handleClick = useCallback(() => {
       if (!isRead) onMarkAsRead(id);
@@ -123,6 +164,11 @@ const NotificationItem = memo<NotificationItemProps>(
             <Flexbox horizontal align="center" gap={4} justify="space-between">
               <Flexbox horizontal align="center" flex={1} gap={6} style={{ overflow: 'hidden' }}>
                 {!isRead && <span className={styles.unreadDot} />}
+                {taskType && (
+                  <Tag color={TASK_TAG_COLOR[taskType]} size={'small'} style={{ flexShrink: 0 }}>
+                    {t(`task.event.${taskType}` as never)}
+                  </Tag>
+                )}
                 <Text
                   ellipsis={{ tooltipWhenOverflow: true }}
                   style={{ fontWeight: isRead ? 400 : 600 }}

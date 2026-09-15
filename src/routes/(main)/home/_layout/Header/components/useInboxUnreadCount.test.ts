@@ -11,7 +11,6 @@ import {
 
 const mocks = vi.hoisted(() => ({
   state: {
-    enableBusinessFeatures: true,
     isSignedIn: false,
   },
   useClientPollingSWR: vi.fn(() => ({ data: undefined })),
@@ -27,16 +26,6 @@ vi.mock('@/services/notification', () => ({
   },
 }));
 
-vi.mock('@/store/serverConfig', () => ({
-  serverConfigSelectors: {
-    enableBusinessFeatures: (state: { serverConfig: { enableBusinessFeatures: boolean } }) =>
-      state.serverConfig.enableBusinessFeatures,
-  },
-  useServerConfigStore: (
-    selector: (state: { serverConfig: { enableBusinessFeatures: boolean } }) => boolean,
-  ) => selector({ serverConfig: { enableBusinessFeatures: mocks.state.enableBusinessFeatures } }),
-}));
-
 vi.mock('@/store/user', () => ({
   useUserStore: (selector: (state: { isSignedIn: boolean }) => boolean) =>
     selector({ isSignedIn: mocks.state.isSignedIn }),
@@ -49,7 +38,6 @@ vi.mock('@/store/user/selectors', () => ({
 }));
 
 beforeEach(() => {
-  mocks.state.enableBusinessFeatures = true;
   mocks.state.isSignedIn = false;
   mocks.useClientPollingSWR.mockClear();
   mocks.useClientPollingSWR.mockReturnValue({ data: undefined });
@@ -66,7 +54,11 @@ describe('useInboxUnreadCount', () => {
     });
   });
 
-  it('requests unread count when business features are enabled and user is logged in', () => {
+  /**
+   * Task reminders land in this inbox for everyone, so the bell must not depend on
+   * `enableBusinessFeatures` any more — the hook no longer reads the server config at all.
+   */
+  it('requests unread count for any signed-in user, without the business feature flag', () => {
     mocks.state.isSignedIn = true;
 
     const { result } = renderHook(() => useInboxUnreadCount());
