@@ -27,6 +27,7 @@ AIHub 是基于 LobeHub 的企业内部版二次开发。本目录是这套二�
 
 ## 文档地图
 
+- **[file-access.md](./file-access.md)** — `/f/:id` 会话鉴权、审计员附件访问、模型侧预签名改写、对象键前缀策略（v1.3.5）
 - **[reference/database-tables.md](./reference/database-tables.md)** — 平台数据库表清单与设计规约。
 - **[reference/trpc-api.md](./reference/trpc-api.md)** — 企业 tRPC 路由 → procedure → 权限映射与接口统一规则。
 - **[reference/admin-routes.md](./reference/admin-routes.md)** — `/admin` 路由与页面目录（以 `adminNavMeta.ts` 为准）与路由实现要求。
