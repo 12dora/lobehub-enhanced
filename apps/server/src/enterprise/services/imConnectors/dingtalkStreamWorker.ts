@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type {
   DingTalkCardCallback,
   DingTalkRobotMessage,
@@ -24,11 +26,19 @@ const log = debug('lobe-server:messenger:dingtalk-stream');
 const POLL_INTERVAL_MS = 30_000;
 const WEBHOOK_TIMEOUT_MS = 30_000;
 
+/** Equality fingerprint — includes the secret. Never log this string. */
 const configFingerprint = (config: MessengerDingTalkConfig | null): string => {
   if (!config) return 'disabled';
   return [config.clientId, config.clientSecret, config.robotCode, String(config.chatEnabled)].join(
     '|',
   );
+};
+
+/** Log-safe fingerprint: clientId, robotCode, chatEnabled, sha256(secret).slice(0, 8). */
+const configFingerprintLog = (config: MessengerDingTalkConfig | null): string => {
+  if (!config) return 'disabled';
+  const secretHash = createHash('sha256').update(config.clientSecret).digest('hex').slice(0, 8);
+  return [config.clientId, config.robotCode, String(config.chatEnabled), secretHash].join('|');
 };
 
 const resolveWebhookUrl = (): string => {
@@ -50,8 +60,11 @@ const mapStreamState = (
 export class DingTalkStreamWorker {
   private connection: DingTalkStreamConnection | null = null;
   private fingerprint = 'disabled';
+  private fingerprintLog = 'disabled';
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = true;
+  /** Serializes ticks so overlapping interval/test calls cannot connect twice. */
+  private tickLock: Promise<void> = Promise.resolve();
 
   private connectedAt: string | null = null;
   private lastError: string | null = null;
@@ -93,15 +106,32 @@ export class DingTalkStreamWorker {
   }
 
   private async tick(): Promise<void> {
-    if (this.stopped) return;
+    let release!: () => void;
+    const previous = this.tickLock;
+    this.tickLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      if (this.stopped) return;
+      await this.runTick();
+    } finally {
+      release();
+    }
+  }
+
+  private async runTick(): Promise<void> {
     const config = await getMessengerDingTalkConfig();
     const enabled = Boolean(config?.chatEnabled);
-    const next = configFingerprint(enabled ? config : null);
+    const nextConfig = enabled ? config : null;
+    const next = configFingerprint(nextConfig);
+    const nextLog = configFingerprintLog(nextConfig);
 
     if (next !== this.fingerprint) {
-      log('config changed (%s → %s), restarting connection', this.fingerprint, next);
+      log('config changed (%s → %s), restarting connection', this.fingerprintLog, nextLog);
       this.disconnect();
       this.fingerprint = next;
+      this.fingerprintLog = nextLog;
       if (enabled && config) {
         await this.connect(config);
       } else {
@@ -180,7 +210,7 @@ export class DingTalkStreamWorker {
     config: MessengerDingTalkConfig,
   ): Promise<void> {
     try {
-      await fetch(webhookUrl, {
+      const request = new Request(webhookUrl, {
         body: JSON.stringify(data),
         headers: {
           'Content-Type': 'application/json',
@@ -194,8 +224,19 @@ export class DingTalkStreamWorker {
         method: 'POST',
         signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
       });
+      // Lazy import: MessengerRouter pulls AgentBridge / binders; a static import
+      // would cycle through messenger platforms that load this worker's push side-effect.
+      const { getMessengerRouter } = await import('@/server/services/messenger');
+      const response = await getMessengerRouter().getWebhookHandler('dingtalk')(request);
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        // Frame is already acked — a 401/404/500 must be visible without DEBUG=.
+        console.warn(
+          `[dingtalk-stream] webhook handler returned ${response.status} for event ${eventType}: ${body}`,
+        );
+      }
     } catch (error) {
-      log('Failed to forward event %s to webhook: %O', eventType, error);
+      console.warn(`[dingtalk-stream] failed to dispatch event ${eventType}`, error);
     }
   }
 

@@ -151,11 +151,57 @@ describe('DingTalkStreamConnection', () => {
         this.emit('close');
       }
     }
-    const ctor = vi.fn((url: string) => new ClosingSocket(url));
+    let socket: ClosingSocket | undefined;
+    const ctor = vi.fn((url: string) => {
+      socket = new ClosingSocket(url);
+      return socket;
+    });
     Object.assign(ctor, { CLOSED: 3, CLOSING: 2, CONNECTING: 0, OPEN: 1 });
     const conn = create({ WebSocketImpl: ctor as unknown as typeof WebSocket });
     await expect(conn.connect()).rejects.toThrow(/closed before open/);
     expect(conn.state).toBe('error');
+    expect(socket).toBeDefined();
+    expect(socket!.listenerCount('open')).toBe(0);
+    expect(socket!.listenerCount('close')).toBe(0);
+    expect(socket!.listenerCount('message')).toBe(0);
+    expect(socket!.listenerCount('error')).toBe(0);
+  });
+
+  it('cleans up a connecting socket before connect() throws on socket error', async () => {
+    class ErrorSocket extends EventEmitter {
+      static CLOSED = 3;
+      static CLOSING = 2;
+      static CONNECTING = 0;
+      static OPEN = 1;
+      readyState = ErrorSocket.CONNECTING;
+      sent: string[] = [];
+      terminated = false;
+      url: string;
+      constructor(url: string) {
+        super();
+        this.url = url;
+        queueMicrotask(() => {
+          this.emit('error', new Error('socket boom'));
+        });
+      }
+      send() {}
+      terminate() {
+        this.terminated = true;
+        this.readyState = ErrorSocket.CLOSED;
+      }
+    }
+    let socket: ErrorSocket | undefined;
+    const ctor = vi.fn((url: string) => {
+      socket = new ErrorSocket(url);
+      return socket;
+    });
+    Object.assign(ctor, { CLOSED: 3, CLOSING: 2, CONNECTING: 0, OPEN: 1 });
+    const conn = create({ WebSocketImpl: ctor as unknown as typeof WebSocket });
+    await expect(conn.connect()).rejects.toThrow(/socket boom/);
+    expect(conn.state).toBe('error');
+    expect(socket?.terminated).toBe(true);
+    expect(socket!.listenerCount('error')).toBe(0);
+    expect(socket!.listenerCount('close')).toBe(0);
   });
 
   it('echoes SYSTEM ping data', async () => {

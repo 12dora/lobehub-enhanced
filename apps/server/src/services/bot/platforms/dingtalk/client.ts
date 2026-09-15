@@ -275,6 +275,9 @@ class DingTalkWSClientImpl implements PlatformClient {
 
       log('DingTalkClient (ws) appId=%s started', this.applicationId);
     } catch (error) {
+      // Close the stream and drop the bot before rethrowing so a discarded
+      // client cannot keep reconnecting / writing Redis `connected`.
+      await this.teardownRuntime();
       await updateBotRuntimeStatus(
         {
           applicationId: this.applicationId,
@@ -290,6 +293,18 @@ class DingTalkWSClientImpl implements PlatformClient {
 
   async stop(): Promise<void> {
     log('Stopping DingTalkClient (ws) appId=%s', this.applicationId);
+    await this.teardownRuntime();
+    await updateBotRuntimeStatus(
+      {
+        applicationId: this.applicationId,
+        platform: this.id,
+        status: BOT_RUNTIME_STATUSES.disconnected,
+      },
+      { redisClient: this.context.redisClient as any },
+    );
+  }
+
+  private async teardownRuntime(): Promise<void> {
     this.stopped = true;
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer);
@@ -301,14 +316,6 @@ class DingTalkWSClientImpl implements PlatformClient {
       await this.bot.shutdown().catch(() => {});
       this.bot = null;
     }
-    await updateBotRuntimeStatus(
-      {
-        applicationId: this.applicationId,
-        platform: this.id,
-        status: BOT_RUNTIME_STATUSES.disconnected,
-      },
-      { redisClient: this.context.redisClient as any },
-    );
   }
 
   createAdapter(): Record<string, any> {

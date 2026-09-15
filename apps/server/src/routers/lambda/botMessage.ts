@@ -133,11 +133,36 @@ const createServiceForCredentials = (
   }
 };
 
+/**
+ * Merge stored bot-channel credentials with plaintext settings.
+ * `robotCode` is DingTalk-only and must not overwrite credentials with
+ * `undefined` when settings omit it (or leak onto other platforms).
+ */
+export const mergeBotProviderCredentials = (
+  platform: string,
+  credentials: Record<string, any>,
+  settings: Record<string, unknown> | undefined,
+): Record<string, any> => {
+  const merged: Record<string, any> = { ...credentials };
+  if (platform !== 'dingtalk') return merged;
+
+  const robotCode = settings?.robotCode ?? merged.robotCode;
+  if (typeof robotCode === 'string' && robotCode.length > 0) {
+    merged.robotCode = robotCode;
+  }
+  return merged;
+};
+
 const createServiceForBot = (provider: DecryptedBotProvider): MessageRuntimeService =>
-  createServiceForCredentials(provider.platform, provider.applicationId, {
-    ...(provider.credentials as Record<string, any>),
-    robotCode: (provider.settings as Record<string, unknown> | undefined)?.robotCode,
-  });
+  createServiceForCredentials(
+    provider.platform,
+    provider.applicationId,
+    mergeBotProviderCredentials(
+      provider.platform,
+      provider.credentials as Record<string, any>,
+      provider.settings as Record<string, unknown> | undefined,
+    ),
+  );
 
 const resolveBot = async (
   model: AgentBotProviderModel,

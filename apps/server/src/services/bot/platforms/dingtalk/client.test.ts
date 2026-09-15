@@ -7,6 +7,7 @@ const mockGatewayStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockGatewayClose = vi.hoisted(() => vi.fn());
 const mockGatewayState = vi.hoisted(() => ({ value: 'connected' as string }));
 const mockGatewayCtorOptions = vi.hoisted(() => ({ last: undefined as any }));
+const mockChatShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   createDingTalkAdapter: mockCreateDingTalkAdapter,
@@ -54,7 +55,7 @@ vi.mock('./gateway', () => ({
 vi.mock('chat', () => ({
   Chat: class {
     async initialize() {}
-    async shutdown() {}
+    shutdown = mockChatShutdown;
   },
   ConsoleLogger: class {},
 }));
@@ -79,6 +80,7 @@ describe('DingTalkClientFactory', () => {
     vi.clearAllMocks();
     mockGatewayState.value = 'connected';
     mockGatewayStart.mockResolvedValue(undefined);
+    mockChatShutdown.mockResolvedValue(undefined);
     mockCreateDingTalkAdapter.mockReturnValue({ name: 'dingtalk' });
     vi.mocked(DingTalkWSConnection).mockImplementation(((options: any) => {
       mockGatewayCtorOptions.last = options;
@@ -150,6 +152,14 @@ describe('DingTalkClientFactory', () => {
     expect(statuses).not.toContain('connected');
   });
 
+  it('start() closes the gateway and shuts down the bot before rethrowing a connect failure', async () => {
+    mockGatewayStart.mockRejectedValueOnce(new Error('DingTalk gateway open failed: 401'));
+    const client = createClient();
+    await expect(client.start({ durationMs: 1000 })).rejects.toThrow(/401/);
+    expect(mockGatewayClose).toHaveBeenCalled();
+    expect(mockChatShutdown).toHaveBeenCalled();
+  });
+
   it('start() wires onStateChange and does not mark connected unless the stream is connected', async () => {
     mockGatewayState.value = 'error';
     mockGatewayStart.mockResolvedValueOnce(undefined);
@@ -158,5 +168,14 @@ describe('DingTalkClientFactory', () => {
     const statuses = vi.mocked(updateBotRuntimeStatus).mock.calls.map((call) => call[0].status);
     expect(statuses).not.toContain('connected');
     expect(mockGatewayCtorOptions.last.onStateChange).toBeTypeOf('function');
+  });
+
+  it('start() stops the gateway and bot when the stream is not connected', async () => {
+    mockGatewayState.value = 'error';
+    mockGatewayStart.mockResolvedValueOnce(undefined);
+    const client = createClient();
+    await expect(client.start({ durationMs: 1000 })).rejects.toThrow(/failed to connect/);
+    expect(mockGatewayClose).toHaveBeenCalled();
+    expect(mockChatShutdown).toHaveBeenCalled();
   });
 });

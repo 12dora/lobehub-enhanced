@@ -110,6 +110,7 @@ export class DingTalkStreamConnection {
       }
       await this.openSocket(dwUrl);
     } catch (error) {
+      this.cleanupSocket();
       const err = error instanceof Error ? error : new Error(String(error));
       this.setState('error', err);
       this.connecting = false;
