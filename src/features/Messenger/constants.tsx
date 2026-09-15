@@ -1,15 +1,44 @@
-import { Discord, Slack, Telegram } from '@lobehub/ui/icons';
+import { DingTalk, Discord, Slack, Telegram } from '@lobehub/ui/icons';
 import type { ReactNode } from 'react';
 
-export type MessengerPlatform = 'telegram' | 'slack' | 'discord';
+export type MessengerPlatform = 'telegram' | 'slack' | 'discord' | 'dingtalk';
 
 export const SUPPORTED_MESSENGER_PLATFORMS = [
   { id: 'telegram', name: 'Telegram' },
   { id: 'slack', name: 'Slack' },
   { id: 'discord', name: 'Discord' },
+  { id: 'dingtalk', name: '钉钉' },
 ] as const satisfies readonly { id: MessengerPlatform; name: string }[];
 
+/**
+ * Per-platform feature switches published by `messenger.availablePlatforms`.
+ * Admins can turn the chat side or the proactive-push side of a connector off
+ * independently, so the settings detail page explains which half is disabled
+ * instead of silently doing nothing.
+ */
+export interface MessengerPlatformCapabilities {
+  chat: boolean;
+  push: boolean;
+}
+
+/**
+ * DingTalk robot commands, Chinese-primary with English aliases (both are
+ * accepted by the bot). Kept as data rather than i18n so the literal a user
+ * types stays identical in every locale; only the descriptions are localized.
+ */
+export const DINGTALK_COMMANDS = [
+  { command: '/助手', id: 'agents' },
+  { command: '/切换 N', id: 'use' },
+  { command: '/新会话', id: 'new' },
+  { command: '/会话', id: 'topics' },
+  { command: '/继续 N', id: 'resume' },
+  { command: '/当前', id: 'status' },
+  { command: '/停止', id: 'stop' },
+  { command: '/帮助', id: 'help' },
+] as const;
+
 export const PLATFORM_TAB_ICONS: Record<MessengerPlatform, ReactNode> = {
+  dingtalk: <DingTalk.Color size={16} />,
   discord: <Discord.Color size={16} />,
   slack: <Slack.Color size={16} />,
   telegram: <Telegram.Color size={16} />,
@@ -24,6 +53,7 @@ export const PlatformAvatar = ({
 }) => {
   if (platform === 'telegram') return <Telegram.Avatar size={size} />;
   if (platform === 'discord') return <Discord.Avatar size={size} />;
+  if (platform === 'dingtalk') return <DingTalk.Avatar size={size} />;
   return <Slack.Avatar size={size} />;
 };
 
@@ -36,6 +66,7 @@ export const PlatformBrandIcon = ({
 }) => {
   if (platform === 'telegram') return <Telegram.Color size={size} />;
   if (platform === 'discord') return <Discord.Color size={size} />;
+  if (platform === 'dingtalk') return <DingTalk.Color size={size} />;
   return <Slack.Color size={size} />;
 };
 

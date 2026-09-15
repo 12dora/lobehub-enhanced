@@ -1,7 +1,7 @@
 'use client';
 
-import { Flexbox, Skeleton, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Button, Skeleton, Text } from '@lobehub/ui/base-ui';
 import { App } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { memo, useEffect, useState } from 'react';
@@ -16,7 +16,11 @@ import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwar
 import { messengerKeys } from '@/libs/swr/keys';
 import { messengerService } from '@/services/messenger';
 
-import { type MessengerPlatform, PlatformAvatar } from './constants';
+import {
+  type MessengerPlatform,
+  type MessengerPlatformCapabilities,
+  PlatformAvatar,
+} from './constants';
 import { getDiscordInstallErrorReason, getSlackInstallErrorReason } from './i18n';
 import IntegrationDetail from './IntegrationDetail';
 import IntegrationList from './IntegrationList';
@@ -27,10 +31,24 @@ interface BlockedInstall {
   platform: 'slack' | 'discord';
 }
 
-const VALID_PLATFORMS: ReadonlySet<MessengerPlatform> = new Set(['slack', 'telegram', 'discord']);
+const VALID_PLATFORMS: ReadonlySet<MessengerPlatform> = new Set([
+  'slack',
+  'telegram',
+  'discord',
+  'dingtalk',
+]);
 
 const isMessengerPlatform = (value: string | undefined): value is MessengerPlatform =>
   !!value && VALID_PLATFORMS.has(value as MessengerPlatform);
+
+/**
+ * `capabilities` is served by `messenger.availablePlatforms` for connectors
+ * whose chat / push halves can be switched off independently (DingTalk today).
+ * Read it defensively so the page keeps working against a server build that
+ * predates the field.
+ */
+const readCapabilities = (meta: unknown): MessengerPlatformCapabilities | undefined =>
+  (meta as { capabilities?: MessengerPlatformCapabilities } | undefined)?.capabilities;
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   emptyState: css`
@@ -129,7 +147,8 @@ const MessengerSettings = memo(() => {
         {selected && selectedMeta ? (
           <IntegrationDetail
             appId={selectedMeta.appId}
-            botUsername={selectedMeta.botUsername}
+            botUsername={selectedMeta.botUsername ?? undefined}
+            capabilities={readCapabilities(selectedMeta)}
             name={selectedMeta.name}
             platform={selected}
             onBack={() => navigate('/settings/messenger')}
@@ -143,7 +162,7 @@ const MessengerSettings = memo(() => {
               errorVariant={'block'}
               isEmpty={platforms.length === 0}
               isLoading={platformsSWR.isLoading}
-              loading={<Skeleton active paragraph={{ rows: 3 }} title={false} />}
+              loading={<Skeleton.Text rows={3} />}
               empty={
                 <div className={styles.emptyState}>{t('messenger.noPlatformsConfigured')}</div>
               }
@@ -171,7 +190,7 @@ const MessengerSettings = memo(() => {
           <Flexbox align="center" gap={20} style={{ paddingBlock: 16 }}>
             <PlatformAvatar platform={blocked.platform} size={56} />
             <Flexbox align="center" gap={8}>
-              <Text strong style={{ fontSize: 16, textAlign: 'center' }}>
+              <Text strong align="center" fontSize={16}>
                 {blocked.name
                   ? t(`messenger.${blocked.platform}.installBlocked.withName` as const, {
                       appName,
@@ -181,7 +200,7 @@ const MessengerSettings = memo(() => {
                       appName,
                     })}
               </Text>
-              <Text style={{ textAlign: 'center' }} type="secondary">
+              <Text align="center" type="secondary">
                 {t(`messenger.${blocked.platform}.installBlocked.suggestion` as const, { appName })}
               </Text>
             </Flexbox>

@@ -18,7 +18,7 @@ import Body from './Body';
 import { Heading, IconRow, styles } from './Body/shared';
 
 const isSupportedPlatform = (value: string): value is MessengerPlatform =>
-  value === 'telegram' || value === 'slack' || value === 'discord';
+  value === 'telegram' || value === 'slack' || value === 'discord' || value === 'dingtalk';
 
 const MessengerVerifyPage = memo(() => {
   const { t } = useTranslation('messenger');

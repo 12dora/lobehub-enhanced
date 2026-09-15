@@ -3,6 +3,7 @@
 import { memo } from 'react';
 
 import type { MessengerPlatform } from '../../constants';
+import DingTalkBody from './DingTalk';
 import DiscordBody from './Discord';
 import type { ExistingLink, PeekedToken, PlatformMeta } from './shared';
 import SlackBody from './Slack';
@@ -29,6 +30,11 @@ const Body = memo<BodyProps>(({ platform, ...rest }) => {
     }
     case 'telegram': {
       return <TelegramBody {...rest} />;
+    }
+    // DingTalk auto-links on first inbound message, so there is nothing to
+    // confirm here — the body just explains that.
+    case 'dingtalk': {
+      return <DingTalkBody />;
     }
   }
 });

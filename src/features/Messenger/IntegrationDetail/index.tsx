@@ -2,7 +2,8 @@
 
 import { memo } from 'react';
 
-import type { MessengerPlatform } from '../constants';
+import type { MessengerPlatform, MessengerPlatformCapabilities } from '../constants';
+import DingTalkDetail from './DingTalk';
 import DiscordDetail from './Discord';
 import SlackDetail from './Slack';
 import TelegramDetail from './Telegram';
@@ -10,13 +11,15 @@ import TelegramDetail from './Telegram';
 interface IntegrationDetailProps {
   appId?: string;
   botUsername?: string;
+  /** Per-platform admin switches; only DingTalk publishes them today. */
+  capabilities?: MessengerPlatformCapabilities;
   /** Brand-name label (e.g. `"Slack"`) sourced from the registry. */
   name: string;
   onBack: () => void;
   platform: MessengerPlatform;
 }
 
-const IntegrationDetail = memo<IntegrationDetailProps>(({ platform, ...rest }) => {
+const IntegrationDetail = memo<IntegrationDetailProps>(({ capabilities, platform, ...rest }) => {
   switch (platform) {
     case 'slack': {
       return <SlackDetail {...rest} />;
@@ -26,6 +29,9 @@ const IntegrationDetail = memo<IntegrationDetailProps>(({ platform, ...rest }) =
     }
     case 'telegram': {
       return <TelegramDetail {...rest} />;
+    }
+    case 'dingtalk': {
+      return <DingTalkDetail {...rest} capabilities={capabilities} />;
     }
   }
 });

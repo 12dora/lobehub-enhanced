@@ -4,6 +4,7 @@ import { Flexbox } from '@lobehub/ui';
 import { memo } from 'react';
 
 import type { MessengerPlatform } from '../constants';
+import DingTalkLinkBody from './DingTalk';
 import DiscordLinkBody from './Discord';
 import SlackLinkBody from './Slack';
 import TelegramLinkBody from './Telegram';
@@ -26,6 +27,9 @@ const LinkModalContent = memo<LinkModalContentProps>(({ appId, botUsername, name
       }
       case 'telegram': {
         return <TelegramLinkBody botUsername={botUsername} name={name} />;
+      }
+      case 'dingtalk': {
+        return <DingTalkLinkBody botUsername={botUsername} name={name} />;
       }
     }
   };

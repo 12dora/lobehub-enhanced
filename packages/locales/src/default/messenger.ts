@@ -105,6 +105,38 @@ export default {
   'messenger.discord.userPending.hint':
     'Open the bot on Discord and send any message to finish linking your account.',
   'messenger.discord.userPending.name': 'Not linked yet',
+  'messenger.dingtalk.agent.hint':
+    'Messages from DingTalk are routed to this agent. You can switch at any time by sending /助手 in the chat.',
+  'messenger.dingtalk.agent.label': 'Default agent',
+  'messenger.dingtalk.capabilities.chatDisabled': 'Chat has been turned off by your administrator.',
+  'messenger.dingtalk.capabilities.pushDisabled':
+    'Notification delivery has been turned off by your administrator.',
+  'messenger.dingtalk.commands.agents': 'List and switch agents',
+  'messenger.dingtalk.commands.aliasNote':
+    'English aliases are also accepted: /agents /use /new /topics /resume /status /stop /help.',
+  'messenger.dingtalk.commands.commandHeader': 'Command',
+  'messenger.dingtalk.commands.descriptionHeader': 'Description',
+  'messenger.dingtalk.commands.groupNote':
+    'In group chats, @mention the robot to talk to it. Each member has their own isolated conversation.',
+  'messenger.dingtalk.commands.help': 'Show all commands',
+  'messenger.dingtalk.commands.new': 'Start a new conversation',
+  'messenger.dingtalk.commands.resume': 'Resume conversation N',
+  'messenger.dingtalk.commands.status': 'Show the current agent and conversation',
+  'messenger.dingtalk.commands.stop': 'Stop the current run',
+  'messenger.dingtalk.commands.title': 'Usage',
+  'messenger.dingtalk.commands.topics': 'List recent conversations',
+  'messenger.dingtalk.commands.use': 'Switch to agent N',
+  'messenger.dingtalk.status.accountLabel': 'DingTalk account',
+  'messenger.dingtalk.status.instructions':
+    'Find the robot “{{botName}}” in DingTalk and send it any message to complete the binding automatically.',
+  'messenger.dingtalk.status.linkedAt': 'Linked at {{time}}',
+  'messenger.dingtalk.status.notStarted': 'No conversation yet',
+  'messenger.dingtalk.status.title': 'Binding status',
+  'messenger.dingtalk.verify.description':
+    'DingTalk binds automatically. Send any message to the robot in DingTalk to finish linking — nothing needs to be confirmed here.',
+  'messenger.dingtalk.verify.title': 'DingTalk binds automatically',
+  'messenger.list.dingtalk.description':
+    'Chat with your {{appName}} agents in DingTalk and receive task notifications there.',
   'messenger.list.discord.description':
     'Chat with your {{appName}} agents on Discord by DMing the bot from any server.',
   'messenger.list.slack.description':
