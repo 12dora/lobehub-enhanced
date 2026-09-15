@@ -7,7 +7,6 @@ import type { LobeChatDatabase, Transaction } from '@/database/type';
 import { parseEnterpriseFeatureFlags } from '../../featureFlags';
 import { SafeOutboundHttpClient } from '../../security/outboundHttp';
 import { PlatformSecretService } from '../../security/secret';
-import { invalidatePlatformPublicSnapshot } from '../branding/publicSnapshotCache';
 import {
   IdentityProviderDiscoveryValidator,
   isTransientOidcDiscoveryError,
@@ -16,6 +15,8 @@ import type { IdentityProviderRevocationJournalEntry } from './lkg';
 import { readIdentityProviderRevocationJournal } from './lkg';
 import { resolveIdentityProviderOutboundMode } from './outboundMode';
 import { parsePublishedIdentityProviderPayload } from './publicationService';
+import type { RestartController } from './restartController';
+import { ProcessRestartController } from './restartController';
 import {
   commitIdentityProviderStartupFailure,
   commitIdentityProviderStartupSnapshot,
@@ -41,11 +42,15 @@ export type {
   IdentityProviderStartupSource,
 } from './startupArtifact';
 
+const DISCOVERY_RECOVERY_RESTART_OWNER_FENCE = 'identity-provider-discovery-recovery';
+const DISCOVERY_RECOVERY_RESTART_REQUEST_ID = 'identity-provider-discovery-recovery';
+
 interface LoadOptions {
   cache?: boolean;
   db?: LobeChatDatabase;
   discovery?: Pick<IdentityProviderDiscoveryValidator, 'discover'>;
   env?: Record<string, string | undefined>;
+  restartController?: RestartController;
   testHooks?: {
     afterCanonicalRecheck?: () => Promise<void>;
   };
@@ -175,6 +180,7 @@ const scheduleFailedClosedRevalidation = (input: {
   environmentProviderIds: string[];
   environmentProviderIdSet: Set<string>;
   options: LoadOptions;
+  restartController: RestartController;
   secrets: PlatformSecretService;
 }): void => {
   scheduleIdentityProviderBackgroundRevalidation({
@@ -193,11 +199,29 @@ const scheduleFailedClosedRevalidation = (input: {
       });
       return result.ok ? result.snapshot : null;
     },
-    onRecovered: (snapshot) => {
-      commitIdentityProviderStartupSnapshot(snapshot);
-      startupPromise = Promise.resolve(snapshot);
-      invalidatePlatformPublicSnapshot();
-      console.info('[identityProviderStartup] discovery recovered; snapshot promoted to healthy');
+    onRecovered: async () => {
+      console.info(
+        '[identityProviderStartup] discovery recovered; remaining fail-closed until process restart',
+      );
+      const capability = input.restartController.capability();
+      if (!capability.supported) {
+        console.info('[identityProviderStartup] discovery recovery restart unsupported', {
+          reason: capability.reason,
+        });
+        return false;
+      }
+      try {
+        await input.restartController.schedule({
+          ownerFence: DISCOVERY_RECOVERY_RESTART_OWNER_FENCE,
+          requestId: DISCOVERY_RECOVERY_RESTART_REQUEST_ID,
+        });
+        return true;
+      } catch (error) {
+        console.error('[identityProviderStartup] discovery recovery restart failed', {
+          errorClass: error instanceof Error ? error.name : 'UnknownError',
+        });
+        return false;
+      }
     },
   });
 };
@@ -297,13 +321,14 @@ const loadUncached = async (options: LoadOptions): Promise<IdentityProviderStart
       error: databaseError,
       loadedAt,
     });
-    if (isTransientOidcDiscoveryError(databaseError)) {
+    if (isTransientOidcDiscoveryError(databaseResult.error)) {
       scheduleFailedClosedRevalidation({
         discovery,
         env,
         environmentProviderIds,
         environmentProviderIdSet,
         options,
+        restartController: options.restartController ?? new ProcessRestartController({ env }),
         secrets,
       });
     }

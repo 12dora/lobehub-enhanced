@@ -16,7 +16,7 @@ const sleep = (ms: number): Promise<void> =>
 
 /**
  * Retry a database snapshot load only for discovery/network-class failures.
- * Schema, secret, and issuer errors fail closed on the first attempt.
+ * Schema, secret, issuer, and semantic metadata errors fail closed on the first attempt.
  */
 export const retryOnTransientDiscoveryError = async <T extends { ok: boolean; error?: unknown }>(
   load: () => Promise<SnapshotLoadAttempt<T>>,
@@ -58,12 +58,15 @@ export const isIdentityProviderBackgroundRevalidationScheduled = (): boolean =>
 /**
  * While the IdP is failed-closed after a transient discovery error, re-check
  * every 5 minutes (unref'd, single-flight). A recovered database snapshot is
- * passed to `onRecovered` and the timer stops.
+ * passed to `onRecovered`. Return `false` to keep polling (restart unsupported);
+ * any other result stops the timer.
  */
 export const scheduleIdentityProviderBackgroundRevalidation = (input: {
   intervalMs?: number;
   load: () => Promise<IdentityProviderStartupSnapshot | null>;
-  onRecovered: (snapshot: IdentityProviderStartupSnapshot) => void;
+  onRecovered: (
+    snapshot: IdentityProviderStartupSnapshot,
+  ) => boolean | void | Promise<boolean | void>;
 }): void => {
   if (revalidationTimer) return;
   const generation = revalidationGeneration;
@@ -75,8 +78,9 @@ export const scheduleIdentityProviderBackgroundRevalidation = (input: {
         if (generation !== revalidationGeneration) return;
         const snapshot = await input.load();
         if (generation !== revalidationGeneration || !snapshot) return;
-        input.onRecovered(snapshot);
-        stopIdentityProviderBackgroundRevalidation();
+        const stop = await input.onRecovered(snapshot);
+        if (generation !== revalidationGeneration) return;
+        if (stop !== false) stopIdentityProviderBackgroundRevalidation();
       })
       .catch((error) => {
         console.error('[identityProviderStartup] background revalidation failed', {

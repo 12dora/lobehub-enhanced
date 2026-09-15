@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -22,6 +22,7 @@ import {
 } from '@/database/schemas/platform';
 import type { LobeChatDatabase } from '@/database/type';
 import { PlatformSecretService } from '@/server/enterprise/security/secret';
+import { getServerAuthConfig } from '@/server/globalConfig/getServerAuthConfig';
 
 import { getPlatformPublicSnapshotEpoch } from '../branding/publicSnapshotCache';
 import { IdentityProviderValidationError } from './discoveryValidator';
@@ -33,7 +34,11 @@ import {
   recordIdentityProviderRevocation,
 } from './lkg';
 import type { PublishedIdentityProviderPayload } from './publicationService';
-import { getIdentityProviderStartupArtifactHealth } from './startupArtifact';
+import type { RestartController } from './restartController';
+import {
+  getIdentityProviderStartupArtifactHealth,
+  getInitializedIdentityProviderPublicArtifact,
+} from './startupArtifact';
 import {
   loadIdentityProviderStartupSnapshot,
   resetIdentityProviderStartupSnapshotForTest,
@@ -41,6 +46,7 @@ import {
 import {
   IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS,
   IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS,
+  isIdentityProviderBackgroundRevalidationScheduled,
 } from './startupSnapshotDiscoveryRetry';
 
 const db: LobeChatDatabase = await getTestDB();
@@ -911,7 +917,77 @@ describe('identity provider startup snapshot', () => {
     }
   });
 
-  it('revalidates in the background after fail-closed discovery and invalidates the public snapshot', async () => {
+  it.each(['alg none', 'issuer mismatch'] as const)(
+    'does not retry or schedule background revalidation for %s',
+    async () => {
+      const env = { ...(await baseEnv()), AUTH_SSO_PROVIDERS: 'google' };
+      await seedPublished(env);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const discover = vi.fn(async () => {
+        throw new IdentityProviderValidationError('OIDC_DISCOVERY_METADATA_REJECTED');
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+      try {
+        const snapshot = await loadIdentityProviderStartupSnapshot({
+          cache: false,
+          db,
+          discovery: { discover },
+          env,
+        });
+
+        expect(snapshot).toMatchObject({ source: 'break_glass' });
+        expect(discover).toHaveBeenCalledTimes(1);
+        expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+        errorSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+    },
+  );
+
+  it('schedules background revalidation when database discovery is transient even if LKG is not', async () => {
+    const env = { ...(await baseEnv()), AUTH_SSO_PROVIDERS: 'google' };
+    await seedPublished(env);
+    await loadSnapshot({ cache: false, db, env });
+    const envelope = JSON.parse(await readFile(env.PLATFORM_OIDC_LKG_PATH!, 'utf8')) as Record<
+      string,
+      string
+    >;
+    envelope.ciphertext = `${envelope.ciphertext}x`;
+    await writeFile(env.PLATFORM_OIDC_LKG_PATH!, JSON.stringify(envelope));
+    resetIdentityProviderStartupSnapshotForTest();
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const discover = vi.fn(async () => {
+      throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+    try {
+      const pending = loadIdentityProviderStartupSnapshot({
+        cache: false,
+        db,
+        discovery: { discover },
+        env,
+      });
+      await advanceDiscoveryRetries();
+      const snapshot = await pending;
+
+      expect(snapshot).toMatchObject({ source: 'break_glass' });
+      expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps a recovered discovery fail-closed so getServerAuthConfig and a frozen defineConfig stay empty until restart', async () => {
     const env = { ...(await baseEnv()), AUTH_SSO_PROVIDERS: 'google' };
     await seedPublished(env);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -935,23 +1011,92 @@ describe('identity provider startup snapshot', () => {
       expect(snapshot).toMatchObject({ source: 'break_glass' });
       expect(getIdentityProviderStartupArtifactHealth()?.source).toBe('break_glass');
 
+      const frozenDefineConfig = {
+        databaseProviders: [...snapshot.databaseProviders],
+        providerIds: [...snapshot.providerIds],
+      };
+      expect(getServerAuthConfig().oAuthSSOProviders).toEqual(frozenDefineConfig.providerIds);
+      expect(getServerAuthConfig().oAuthSSOProviders).not.toContain('work');
+      expect(getInitializedIdentityProviderPublicArtifact().providerIds).toEqual(
+        frozenDefineConfig.providerIds,
+      );
+
       const epochBefore = getPlatformPublicSnapshotEpoch();
       failDiscovery = false;
       await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS);
       vi.useRealTimers();
       await vi.waitFor(() => {
-        expect(getIdentityProviderStartupArtifactHealth()).toMatchObject({
-          health: 'healthy',
-          source: 'database',
-        });
+        expect(
+          infoSpy.mock.calls.some((call) => String(call[0]).includes('discovery recovered')),
+        ).toBe(true);
       });
-      expect(getPlatformPublicSnapshotEpoch()).toBeGreaterThan(epochBefore);
+
+      expect(getIdentityProviderStartupArtifactHealth()).toMatchObject({
+        source: 'break_glass',
+      });
+      expect(getServerAuthConfig().oAuthSSOProviders).toEqual(frozenDefineConfig.providerIds);
+      expect(getServerAuthConfig().oAuthSSOProviders).not.toContain('work');
+      expect(getInitializedIdentityProviderPublicArtifact().source).toBe('break_glass');
+      expect(getPlatformPublicSnapshotEpoch()).toBe(epochBefore);
+      expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(true);
       const cached = await loadIdentityProviderStartupSnapshot({
         db,
         discovery: { discover },
         env,
       });
-      expect(cached).toMatchObject({ health: 'healthy', source: 'database' });
+      expect(cached).toMatchObject({ source: 'break_glass' });
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
+  it('schedules a supervisor restart on recovery and still does not advertise recovered providers', async () => {
+    const env = { ...(await baseEnv()), AUTH_SSO_PROVIDERS: 'google' };
+    await seedPublished(env);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const schedule = vi.fn(async () => undefined);
+    const restartController: RestartController = {
+      capability: () => ({ reason: null, supported: true }),
+      schedule,
+    };
+    let failDiscovery = true;
+    const discover = vi.fn(async (issuer: string) => {
+      if (failDiscovery) throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
+      return discovery.discover(issuer);
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+
+    try {
+      const pending = loadIdentityProviderStartupSnapshot({
+        db,
+        discovery: { discover },
+        env,
+        restartController,
+      });
+      await advanceDiscoveryRetries();
+      const snapshot = await pending;
+      expect(snapshot).toMatchObject({ source: 'break_glass' });
+      const frozenProviderIds = [...snapshot.providerIds];
+
+      failDiscovery = false;
+      await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS);
+      vi.useRealTimers();
+      await vi.waitFor(() => {
+        expect(schedule).toHaveBeenCalledWith({
+          ownerFence: 'identity-provider-discovery-recovery',
+          requestId: 'identity-provider-discovery-recovery',
+        });
+      });
+
+      expect(getIdentityProviderStartupArtifactHealth()?.source).toBe('break_glass');
+      expect(getServerAuthConfig().oAuthSSOProviders).toEqual(frozenProviderIds);
+      expect(getServerAuthConfig().oAuthSSOProviders).not.toContain('work');
+      expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(false);
     } finally {
       vi.useRealTimers();
       errorSpy.mockRestore();

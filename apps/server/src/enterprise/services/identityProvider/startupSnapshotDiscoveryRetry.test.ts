@@ -76,6 +76,19 @@ describe('retryOnTransientDiscoveryError', () => {
     await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS[2]);
     expect(load).toHaveBeenCalledTimes(1);
   });
+
+  it('does not retry semantic metadata rejection', async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => ({
+      error: new IdentityProviderValidationError('OIDC_DISCOVERY_METADATA_REJECTED'),
+      ok: false as const,
+    }));
+
+    await expect(retryOnTransientDiscoveryError(load)).resolves.toMatchObject({ ok: false });
+    expect(load).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_DISCOVERY_RETRY_BACKOFF_MS[2]);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('scheduleIdentityProviderBackgroundRevalidation', () => {
@@ -104,6 +117,48 @@ describe('scheduleIdentityProviderBackgroundRevalidation', () => {
     await Promise.resolve();
 
     expect(onRecovered).toHaveBeenCalledWith(healthySnapshot);
+    expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(false);
+  });
+
+  it('leaves the interval running when load returns null', async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => null);
+    const onRecovered = vi.fn();
+
+    scheduleIdentityProviderBackgroundRevalidation({ load, onRecovered });
+    await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(onRecovered).not.toHaveBeenCalled();
+    expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(onRecovered).not.toHaveBeenCalled();
+    expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(true);
+  });
+
+  it('skips onRecovered when stop() runs during an in-flight load', async () => {
+    vi.useFakeTimers();
+    let resolveLoad!: (snapshot: IdentityProviderStartupSnapshot | null) => void;
+    const load = vi.fn(
+      () =>
+        new Promise<IdentityProviderStartupSnapshot | null>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+    const onRecovered = vi.fn();
+
+    scheduleIdentityProviderBackgroundRevalidation({ load, onRecovered });
+    await vi.advanceTimersByTimeAsync(IDENTITY_PROVIDER_BACKGROUND_REVALIDATION_INTERVAL_MS);
+    expect(load).toHaveBeenCalledTimes(1);
+
+    stopIdentityProviderBackgroundRevalidation();
+    resolveLoad(healthySnapshot);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onRecovered).not.toHaveBeenCalled();
     expect(isIdentityProviderBackgroundRevalidationScheduled()).toBe(false);
   });
 

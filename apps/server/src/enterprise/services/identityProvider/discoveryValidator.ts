@@ -13,11 +13,12 @@ const DISCOVERY_MAX_REDIRECTS = 2;
 
 export type IdentityProviderValidationErrorCode =
   | 'OIDC_DISCOVERY_INVALID'
+  | 'OIDC_DISCOVERY_METADATA_REJECTED'
   | 'OIDC_DISCOVERY_UNAVAILABLE'
   | 'OIDC_ISSUER_INVALID'
   | 'OIDC_NETWORK_BLOCKED';
 
-/** Discovery/network failures that may recover after a container/network blip. */
+/** HTTP/network document failures that may recover after a container/network blip. */
 export const TRANSIENT_OIDC_DISCOVERY_ERROR_CODES = [
   'OIDC_DISCOVERY_INVALID',
   'OIDC_DISCOVERY_UNAVAILABLE',
@@ -34,11 +35,6 @@ export class IdentityProviderValidationError extends Error {
 export const isTransientOidcDiscoveryError = (error: unknown): boolean =>
   error instanceof IdentityProviderValidationError &&
   (TRANSIENT_OIDC_DISCOVERY_ERROR_CODES as readonly string[]).includes(error.code);
-
-const DISCOVERY_ERROR_BODY_PREVIEW_CHARS = 200;
-
-const previewDiscoveryBody = (body: Buffer): string =>
-  body.toString('utf8').slice(0, DISCOVERY_ERROR_BODY_PREVIEW_CHARS);
 
 const isJsonContentType = (value: string | null): boolean => {
   const mediaType = value?.split(';', 1)[0]?.trim().toLowerCase();
@@ -158,7 +154,6 @@ export class IdentityProviderDiscoveryValidator {
       !isJsonContentType(response.headers.get('content-type'))
     ) {
       console.warn('[identityProviderDiscovery] invalid discovery response', {
-        bodyPreview: previewDiscoveryBody(response.body),
         contentType: response.headers.get('content-type'),
         status: response.status,
       });
@@ -169,6 +164,10 @@ export class IdentityProviderDiscoveryValidator {
     try {
       raw = await response.json();
     } catch {
+      console.warn('[identityProviderDiscovery] discovery JSON parse failed', {
+        contentType: response.headers.get('content-type'),
+        status: response.status,
+      });
       throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
     }
     const parsed = oidcDiscoveryMetadataSchema.safeParse(raw);
@@ -181,9 +180,9 @@ export class IdentityProviderDiscoveryValidator {
     const metadata = toMetadata(parsed.data);
 
     try {
-      parseSafeHttpsUrl(metadata.issuer, 'OIDC_DISCOVERY_INVALID');
+      parseSafeHttpsUrl(metadata.issuer, 'OIDC_DISCOVERY_METADATA_REJECTED');
     } catch {
-      throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
+      throw new IdentityProviderValidationError('OIDC_DISCOVERY_METADATA_REJECTED');
     }
     if (
       metadata.issuer !== issuer ||
@@ -201,7 +200,7 @@ export class IdentityProviderDiscoveryValidator {
         (value) => value === 'client_secret_basic' || value === 'client_secret_post',
       )
     ) {
-      throw new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID');
+      throw new IdentityProviderValidationError('OIDC_DISCOVERY_METADATA_REJECTED');
     }
 
     const endpointInputs = [
@@ -212,7 +211,7 @@ export class IdentityProviderDiscoveryValidator {
     ];
     try {
       const endpoints = endpointInputs.map((endpoint) =>
-        parseSafeHttpsUrl(endpoint, 'OIDC_DISCOVERY_INVALID'),
+        parseSafeHttpsUrl(endpoint, 'OIDC_DISCOVERY_METADATA_REJECTED'),
       );
       await Promise.all(endpoints.map((endpoint) => this.outbound.preflight(endpoint)));
     } catch (error) {

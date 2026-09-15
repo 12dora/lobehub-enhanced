@@ -200,7 +200,7 @@ describe('IdentityProviderDiscoveryValidator', () => {
       validatorFor({ transport: async () => response(metadata({ issuer: discovered })) }).discover(
         input,
       ),
-    ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_INVALID' });
+    ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_METADATA_REJECTED' });
   });
 
   it('preflights every discovered endpoint and blocks a private endpoint host', async () => {
@@ -236,7 +236,7 @@ describe('IdentityProviderDiscoveryValidator', () => {
     }
   });
 
-  it('logs HTTP status, content-type, and a 200-char body preview for a non-JSON discovery response', async () => {
+  it('logs HTTP status and content-type without a body preview for a non-JSON discovery response', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const html = `<html>${'x'.repeat(400)}</html>`;
     try {
@@ -254,14 +254,11 @@ describe('IdentityProviderDiscoveryValidator', () => {
       expect(warn).toHaveBeenCalledWith(
         '[identityProviderDiscovery] invalid discovery response',
         expect.objectContaining({
-          bodyPreview: html.slice(0, 200),
           contentType: 'text/html; charset=utf-8',
           status: 502,
         }),
       );
-      expect(
-        (warn.mock.calls[0]?.[1] as { bodyPreview: string }).bodyPreview.length,
-      ).toBeLessThanOrEqual(200);
+      expect(warn.mock.calls[0]?.[1]).not.toHaveProperty('bodyPreview');
     } finally {
       warn.mockRestore();
     }
@@ -288,7 +285,23 @@ describe('IdentityProviderDiscoveryValidator', () => {
     }
   });
 
-  it('treats discovery/network codes as transient and issuer/schema codes as not', () => {
+  it.each([
+    ['issuer mismatch', metadata({ issuer: 'https://other.example.com/application/o/work/' })],
+    ['alg none', metadata({ id_token_signing_alg_values_supported: ['none'] })],
+  ])('rejects %s as non-transient metadata', async (_label, body) => {
+    await expect(
+      validatorFor({ transport: async () => response(body) }).discover(
+        'https://login.example.com/application/o/work/',
+      ),
+    ).rejects.toMatchObject({ code: 'OIDC_DISCOVERY_METADATA_REJECTED' });
+    expect(
+      isTransientOidcDiscoveryError(
+        new IdentityProviderValidationError('OIDC_DISCOVERY_METADATA_REJECTED'),
+      ),
+    ).toBe(false);
+  });
+
+  it('treats discovery/network codes as transient and issuer/schema/metadata codes as not', () => {
     expect(
       isTransientOidcDiscoveryError(new IdentityProviderValidationError('OIDC_DISCOVERY_INVALID')),
     ).toBe(true);
@@ -300,6 +313,11 @@ describe('IdentityProviderDiscoveryValidator', () => {
     expect(
       isTransientOidcDiscoveryError(new IdentityProviderValidationError('OIDC_NETWORK_BLOCKED')),
     ).toBe(true);
+    expect(
+      isTransientOidcDiscoveryError(
+        new IdentityProviderValidationError('OIDC_DISCOVERY_METADATA_REJECTED'),
+      ),
+    ).toBe(false);
     expect(
       isTransientOidcDiscoveryError(new IdentityProviderValidationError('OIDC_ISSUER_INVALID')),
     ).toBe(false);
