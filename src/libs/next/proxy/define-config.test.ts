@@ -150,4 +150,24 @@ describe('defineConfig public routes', () => {
       expect(response?.headers.get('location'), path).toContain('/signin');
     }
   });
+
+  it.each(['/verify', '/verify/run-1'])(
+    'redirects an unauthenticated %s visitor to sign-in',
+    async (path) => {
+      getSessionMock.mockResolvedValue(null);
+
+      const response = await middleware(new NextRequest(`http://localhost:3010${path}`));
+
+      expect(response?.headers.get('location')).toContain('/signin');
+    },
+  );
+
+  it('lets an unauthenticated /verify-im visitor through', async () => {
+    getSessionMock.mockResolvedValue(null);
+
+    const response = await middleware(new NextRequest('http://localhost:3010/verify-im'));
+
+    expect(response?.headers.get('location')).toBeNull();
+    expect(response?.headers.get('x-middleware-rewrite')).toBeTruthy();
+  });
 });

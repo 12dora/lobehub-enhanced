@@ -844,10 +844,13 @@ export const verifyRouter = router({
    * One-shot payload for the standalone report viewer: the session, its report,
    * and every check result with its evidence. Authed + workspace-scoped — there is
    * no public share page for verify reports (SPA `/verify/:runId` uses lambdaClient
-   * under the signed-in session).
+   * under the signed-in session). Missing / out-of-scope runs return `null` so
+   * the viewer can render its notFound empty state (a thrown NOT_FOUND would
+   * show the error + Retry branch instead).
    */
   getReportBundle: verifyProcedure.input(verifyRunIdInputSchema).query(async ({ ctx, input }) => {
-    const run = await resolveVerifyRun(ctx, input.verifyRunId);
+    const run = await ctx.runModel.findById(input.verifyRunId);
+    if (!run) return null;
     const [report, results] = await Promise.all([
       ctx.serverDB.query.verifyReports.findFirst({
         where: eq(verifyReports.verifyRunId, run.id),

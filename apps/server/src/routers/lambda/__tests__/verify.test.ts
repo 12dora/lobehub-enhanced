@@ -413,12 +413,12 @@ describe('verifyRouter', () => {
       expect(modelMocks.findRunById).not.toHaveBeenCalled();
     });
 
-    it("rejects a run outside the caller's scope", async () => {
+    it('returns null for a missing or out-of-scope run', async () => {
       modelMocks.findRunById.mockResolvedValueOnce(undefined);
 
       await expect(
         createCaller().getReportBundle({ verifyRunId: 'other-user-run' }),
-      ).rejects.toThrow('Verification run not found');
+      ).resolves.toBeNull();
 
       expect(modelMocks.findRunById).toHaveBeenCalledWith('other-user-run');
     });

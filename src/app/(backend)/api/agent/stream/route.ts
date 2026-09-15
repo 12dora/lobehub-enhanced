@@ -39,6 +39,9 @@ export const GET = checkAuth(async (request, { userId, serverDB }) => {
   // recorded (`recordStart`) before execAgent returns the operationId, so it
   // exists by the time a client subscribes. Workspace scoping is deliberately
   // ignored: the SPA stream client sends no workspace header.
+  // `recordStart` is best-effort for ordinary operations (a DB failure is
+  // swallowed and must not block runtime startup), but this subscribe path
+  // now requires the row: a swallowed insert surfaces here as 404.
   const operation = await new AgentOperationModel(serverDB, userId).findOwnedById(operationId);
   if (!operation) {
     return jsonError('operation not found', 404);

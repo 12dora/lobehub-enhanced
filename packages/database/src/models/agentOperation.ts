@@ -366,7 +366,7 @@ export class AgentOperationModel {
    */
   async findOwnedById(operationId: string) {
     const [row] = await this.db
-      .select()
+      .select({ id: agentOperations.id })
       .from(agentOperations)
       .where(and(eq(agentOperations.id, operationId), eq(agentOperations.userId, this.userId)))
       .limit(1);

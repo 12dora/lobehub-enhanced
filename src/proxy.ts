@@ -50,6 +50,8 @@ export const config = {
     '/signin(.*)',
     '/verify-email(.*)',
     '/verify-im(.*)',
+    // `/verify` is session-gated (not a public route). Keep it in the matcher
+    // so anonymous visitors get the edge redirect to /signin.
     '/verify',
     '/verify/(.*)',
     '/reset-password(.*)',

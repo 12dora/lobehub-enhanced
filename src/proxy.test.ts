@@ -18,6 +18,13 @@ describe('proxy SPA matcher', () => {
     },
   );
 
+  it.each(['/verify', '/verify/run-1', '/verify-im'])(
+    'runs the proxy for %s so session gating can apply',
+    (url) => {
+      expect(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url })).toBe(true);
+    },
+  );
+
   it('does not overmatch non-admin routes with the same prefix', () => {
     expect(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url: '/administrator' })).toBe(
       false,

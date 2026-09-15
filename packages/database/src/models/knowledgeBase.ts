@@ -90,7 +90,7 @@ export class KnowledgeBaseModel {
       resolvedFileIds,
     );
     const ownedIdSet = new Set(ownedFiles.map((file) => file.id));
-    const ownedFileIds = resolvedFileIds.filter((fileId) => ownedIdSet.has(fileId));
+    const ownedFileIds = [...new Set(resolvedFileIds.filter((fileId) => ownedIdSet.has(fileId)))];
     if (ownedFileIds.length === 0) {
       return [];
     }

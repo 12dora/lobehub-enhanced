@@ -23,15 +23,26 @@ const serverDB: LobeChatDatabase = await getTestDB();
 const userId = 'session-group-model-test-user-id';
 const knowledgeBaseModel = new KnowledgeBaseModel(serverDB, userId);
 
-beforeEach(async () => {
-  await serverDB.delete(users);
+// `global_files.creator` is NOT NULL with `onDelete: set null`, so users cannot
+// be deleted while those rows still exist. Files also reference global_files
+// with `onDelete: no action`.
+const resetDb = async () => {
+  await serverDB.delete(knowledgeBaseFiles);
+  await serverDB.delete(documents);
+  await serverDB.delete(files);
   await serverDB.delete(globalFiles);
+  await serverDB.delete(knowledgeBases);
+  await serverDB.delete(workspaces);
+  await serverDB.delete(users);
+};
+
+beforeEach(async () => {
+  await resetDb();
   await serverDB.insert(users).values([{ id: userId }, { id: 'user2' }]);
 });
 
 afterEach(async () => {
-  await serverDB.delete(users).where(eq(users.id, userId));
-  await serverDB.delete(knowledgeBases).where(eq(knowledgeBases.userId, userId));
+  await resetDb();
 });
 
 describe('KnowledgeBaseModel', () => {
