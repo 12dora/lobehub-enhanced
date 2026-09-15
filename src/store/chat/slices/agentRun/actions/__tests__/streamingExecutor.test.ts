@@ -1,6 +1,7 @@
 import type { AgentState } from '@lobechat/agent-runtime';
 import * as agentRuntime from '@lobechat/agent-runtime';
 import type * as LobeChatConst from '@lobechat/const';
+import { INBOX_SESSION_ID } from '@lobechat/const';
 import { type UIChatMessage } from '@lobechat/types';
 import { act, renderHook } from '@testing-library/react';
 import { type EnabledAiModel, ModelProvider } from 'model-bank';
@@ -11,6 +12,7 @@ import { chatService } from '@/services/chat';
 import * as agentConfigResolver from '@/services/chat/mecha/agentConfigResolver';
 import { useAgentStore } from '@/store/agent';
 import { useAiInfraStore } from '@/store/aiInfra';
+import { useTaskStore } from '@/store/task';
 import { pageAgentRuntime } from '@/store/tool/slices/builtin/executors/lobe-page-agent';
 import { useUserStore } from '@/store/user';
 
@@ -1584,6 +1586,115 @@ describe('StreamingExecutor actions', () => {
       });
 
       expect(streamSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('internal_createAgentState task manager context', () => {
+    const setupTaskManagerCreateState = () => {
+      act(() => {
+        useChatStore.setState({ executeClientAgent: realExecAgentRuntime });
+        useAgentStore.setState({
+          agentMap: { agt_inbox: { title: 'Published assistant' } as any },
+          builtinAgentIdMap: { [INBOX_SESSION_ID]: 'agt_inbox' },
+        });
+      });
+
+      const { result } = renderHook(() => useChatStore());
+      const userMessage = {
+        content: TEST_CONTENT.USER_MESSAGE,
+        id: TEST_IDS.USER_MESSAGE_ID,
+        role: 'user',
+        sessionId: TEST_IDS.SESSION_ID,
+        topicId: TEST_IDS.TOPIC_ID,
+      } as UIChatMessage;
+
+      vi.spyOn(agentConfigResolver, 'resolveAgentConfig').mockReturnValue({
+        agentConfig: createMockAgentConfig(),
+        chatConfig: createMockChatConfig(),
+        isBuiltinAgent: false,
+        plugins: [],
+      });
+      vi.spyOn(toolEngineering, 'createAgentToolsEngine').mockReturnValue({
+        generateToolsDetailed: vi.fn().mockReturnValue({
+          enabledManifests: [],
+          enabledToolIds: [],
+          tools: [],
+        }),
+      } as any);
+
+      return { result, userMessage };
+    };
+
+    it('injects the store inbox display name into the task list prompt', () => {
+      act(() => {
+        useTaskStore.setState({ tasks: [], tasksTotal: 0 });
+      });
+
+      const { result, userMessage } = setupTaskManagerCreateState();
+      const { operationId } = result.current.startOperation({
+        context: {
+          agentId: TEST_IDS.SESSION_ID,
+          defaultTaskAssigneeAgentId: 'agt_inbox',
+          topicId: TEST_IDS.TOPIC_ID,
+          viewedTask: { type: 'list' },
+        },
+        type: 'execAgentRuntime',
+      });
+
+      const { context } = result.current.internal_createAgentState({
+        agentId: TEST_IDS.SESSION_ID,
+        messages: [userMessage],
+        operationId,
+        parentMessageId: userMessage.id,
+        topicId: TEST_IDS.TOPIC_ID,
+      });
+
+      expect(context.initialContext?.taskManager?.contextPrompt).toContain(
+        'Default assistant agent id: agt_inbox',
+      );
+      expect(context.initialContext?.taskManager?.contextPrompt).toContain(
+        'assigned to Published assistant.',
+      );
+    });
+
+    it('injects the store inbox display name into the task detail prompt', () => {
+      act(() => {
+        useTaskStore.setState({
+          taskDetailMap: {
+            'T-1': {
+              identifier: 'T-1',
+              instruction: 'Do the work',
+              name: 'Chapter 1',
+              priority: 3,
+              status: 'backlog',
+            },
+          },
+        });
+      });
+
+      const { result, userMessage } = setupTaskManagerCreateState();
+      const { operationId } = result.current.startOperation({
+        context: {
+          agentId: TEST_IDS.SESSION_ID,
+          defaultTaskAssigneeAgentId: 'agt_inbox',
+          topicId: TEST_IDS.TOPIC_ID,
+          viewedTask: { taskId: 'T-1', type: 'detail' },
+        },
+        type: 'execAgentRuntime',
+      });
+
+      const { context } = result.current.internal_createAgentState({
+        agentId: TEST_IDS.SESSION_ID,
+        messages: [userMessage],
+        operationId,
+        parentMessageId: userMessage.id,
+        topicId: TEST_IDS.TOPIC_ID,
+      });
+
+      expect(context.initialContext?.taskManager?.contextPrompt).toContain(
+        'assigned to Published assistant.',
+      );
+      expect(context.initialContext?.taskManager?.contextPrompt).toContain('T-1');
     });
   });
 

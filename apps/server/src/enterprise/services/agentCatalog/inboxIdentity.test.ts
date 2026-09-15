@@ -11,6 +11,7 @@ import { resolveServerRuntimeBranding } from '../branding';
 import { PlatformDefaultInboxService } from './defaultInbox';
 import {
   isInboxIdentityAgent,
+  loadResolvedInboxIdentity,
   overlayInboxIdentityOnAgentAvatars,
   resolveInboxRankIdentity,
 } from './inboxIdentity';
@@ -267,6 +268,26 @@ describe('inbox identity overlay', () => {
         avatar: 'https://brand.example/icon.png',
         backgroundColor: '#123456',
         title: 'Published assistant',
+      });
+      expect(resolveServerRuntimeBranding).toHaveBeenCalledWith();
+    });
+  });
+
+  describe('loadResolvedInboxIdentity', () => {
+    const db = {} as LobeChatDatabase;
+
+    it('falls back to branding when the catalog resolver throws', async () => {
+      vi.spyOn(PlatformDefaultInboxService.prototype, 'getPublishedIdentity').mockRejectedValue(
+        new Error('catalog unavailable'),
+      );
+      vi.mocked(resolveServerRuntimeBranding).mockResolvedValue({
+        ...PUBLISHED_BRANDING,
+      } as Awaited<ReturnType<typeof resolveServerRuntimeBranding>>);
+
+      await expect(loadResolvedInboxIdentity(db, 'user-1')).resolves.toEqual({
+        avatar: 'https://brand.example/icon.png',
+        backgroundColor: null,
+        title: 'AI 助手',
       });
       expect(resolveServerRuntimeBranding).toHaveBeenCalledWith();
     });

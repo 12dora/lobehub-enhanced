@@ -111,6 +111,7 @@ import type {
   PlatformAgentOperationHandle,
 } from '@/server/enterprise/services/agentCatalog';
 import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
+import { loadResolvedInboxIdentity } from '@/server/enterprise/services/agentCatalog/inboxIdentity';
 import {
   type ConnectorApprovalReceipt,
   ConnectorOperationProofSigner,
@@ -3844,6 +3845,7 @@ export class AiAgentService {
       appContext?.scope === 'task' &&
       appContext.defaultTaskAssigneeAgentId
     ) {
+      const inboxIdentity = await loadResolvedInboxIdentity(this.db, this.userId);
       initialContext = {
         ...initialContext,
         initialContext: {
@@ -3851,6 +3853,7 @@ export class AiAgentService {
           taskManager: {
             contextPrompt: (await import('@lobechat/prompts')).buildTaskManagerDefaultsPrompt({
               defaultAssigneeAgentId: appContext.defaultTaskAssigneeAgentId,
+              defaultAssigneeDisplayName: inboxIdentity.title,
             }),
           },
         },

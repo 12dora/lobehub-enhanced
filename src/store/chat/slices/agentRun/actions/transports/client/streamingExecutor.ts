@@ -29,8 +29,10 @@ import {
 } from '@lobechat/types';
 import debug from 'debug';
 
+import { getRuntimeBranding } from '@/enterprise/client/providers/RuntimeBrandingProvider';
 import { getEffectiveApprovalMode } from '@/helpers/approvalMode';
 import { createAgentToolsEngine } from '@/helpers/toolEngineering';
+import { resolveDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { aiAgentService } from '@/services/aiAgent';
 import { isCanUseVideo, isCanUseVision } from '@/services/chat/helper';
 import { type ResolvedAgentConfig } from '@/services/chat/mecha';
@@ -39,7 +41,7 @@ import { captureClientPlatformSkillSnapshot } from '@/services/chat/mecha/skillE
 import { localFileService } from '@/services/electron/localFileService';
 import { messageService } from '@/services/message';
 import { getAgentStoreState } from '@/store/agent';
-import { agentSelectors } from '@/store/agent/selectors';
+import { agentSelectors, builtinAgentSelectors } from '@/store/agent/selectors';
 import { aiModelSelectors } from '@/store/aiInfra/selectors';
 import { getAiInfraStoreState } from '@/store/aiInfra/store';
 import { createAgentExecutors } from '@/store/chat/agents/createAgentExecutors';
@@ -372,11 +374,16 @@ export class StreamingExecutorActionImpl {
     if (viewedTask) {
       try {
         const taskState = getTaskStoreState();
+        const defaultAssigneeDisplayName = resolveDefaultInboxDisplayName(
+          builtinAgentSelectors.inboxAgentTitle(getAgentStoreState()),
+          getRuntimeBranding(),
+        );
         let contextPrompt: string | undefined;
 
         if (viewedTask.type === 'list') {
           contextPrompt = buildTaskListPrompt({
             defaultAssigneeAgentId: operation.context.defaultTaskAssigneeAgentId,
+            defaultAssigneeDisplayName,
             tasks: taskState.tasks,
             total: taskState.tasksTotal || taskState.tasks.length,
           });
@@ -385,6 +392,7 @@ export class StreamingExecutorActionImpl {
           if (detail)
             contextPrompt = buildTaskDetailPrompt({
               defaultAssigneeAgentId: operation.context.defaultTaskAssigneeAgentId,
+              defaultAssigneeDisplayName,
               task: detail,
             });
         }

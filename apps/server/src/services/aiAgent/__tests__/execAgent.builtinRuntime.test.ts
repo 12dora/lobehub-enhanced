@@ -16,6 +16,7 @@ const {
   mockGetBuiltinAgent,
   mockGetInfoForAIGeneration,
   mockIsAgentSignalEnabledForUser,
+  mockLoadResolvedInboxIdentity,
   mockMessageCreate,
   mockMessageQuery,
   mockResolveTask,
@@ -26,6 +27,7 @@ const {
   mockGetBuiltinAgent: vi.fn(),
   mockGetInfoForAIGeneration: vi.fn(),
   mockIsAgentSignalEnabledForUser: vi.fn(),
+  mockLoadResolvedInboxIdentity: vi.fn(),
   mockMessageCreate: vi.fn(),
   mockMessageQuery: vi.fn(),
   mockResolveTask: vi.fn(),
@@ -160,6 +162,10 @@ vi.mock('@/server/services/file', () => ({
   })),
 }));
 
+vi.mock('@/server/enterprise/services/agentCatalog/inboxIdentity', () => ({
+  loadResolvedInboxIdentity: mockLoadResolvedInboxIdentity,
+}));
+
 vi.mock('@/server/modules/Mecha', () => ({
   createServerAgentToolsEngine: vi.fn().mockReturnValue({
     generateToolsDetailed: vi.fn().mockImplementation(() => ({ enabledToolIds: [], tools: [] })),
@@ -220,6 +226,11 @@ describe('AiAgentService.execAgent - builtin agent runtime config', () => {
     mockGetInfoForAIGeneration.mockResolvedValue({
       responseLanguage: 'en-US',
       userName: 'Test User',
+    });
+    mockLoadResolvedInboxIdentity.mockResolvedValue({
+      avatar: '/avatars/lobe.png',
+      backgroundColor: null,
+      title: 'Published assistant',
     });
     mockToolsEnv.VISUAL_UNDERSTANDING_MODEL = 'vision-model';
     mockToolsEnv.VISUAL_UNDERSTANDING_PROVIDER = 'test-provider';
@@ -657,6 +668,10 @@ describe('AiAgentService.execAgent - builtin agent runtime config', () => {
     expect(callArgs.initialContext.initialContext.taskManager.contextPrompt).toContain(
       'Default assistant agent id: agt_inbox',
     );
+    expect(callArgs.initialContext.initialContext.taskManager.contextPrompt).toContain(
+      'assigned to Published assistant.',
+    );
+    expect(mockLoadResolvedInboxIdentity).toHaveBeenCalledWith(mockDb, userId);
   });
 
   it('should inject lobe-agent when history has visual media and model lacks vision', async () => {

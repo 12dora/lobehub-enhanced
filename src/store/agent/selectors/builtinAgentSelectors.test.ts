@@ -156,6 +156,13 @@ describe('builtinAgentSelectors', () => {
       ).toMatchObject({ title: 'Workspace A Assistant' });
     });
 
+    it('returns the configured inbox title from the loaded projection', () => {
+      expect(builtinAgentSelectors.inboxAgentTitle(loadedInWorkspaceA)).toBe(
+        'Workspace A Assistant',
+      );
+      expect(builtinAgentSelectors.inboxAgentTitle(createState())).toBeUndefined();
+    });
+
     it('does not change non-inbox projections', () => {
       const state = createState({
         ...loadedInWorkspaceA,

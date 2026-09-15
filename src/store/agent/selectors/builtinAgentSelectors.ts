@@ -50,6 +50,12 @@ const inboxAgentMetaForScope = (scope: string | undefined) => (s: AgentStoreStat
   return id ? s.agentMap[id] : undefined;
 };
 
+/** Configured inbox title from the loaded builtin projection (not branding-resolved). */
+const inboxAgentTitle = (s: AgentStoreState) => {
+  const id = inboxAgentId(s);
+  return id ? s.agentMap[id]?.title : undefined;
+};
+
 /**
  * Check if inbox agent is initialized
  */
@@ -84,6 +90,7 @@ export const builtinAgentSelectors = {
   inboxAgentId,
   inboxAgentIdForScope,
   inboxAgentMetaForScope,
+  inboxAgentTitle,
   isBuiltinAgentInit,
   isInboxAgent,
   isInboxAgentConfigInit,

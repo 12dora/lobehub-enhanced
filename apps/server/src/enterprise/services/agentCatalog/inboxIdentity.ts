@@ -7,11 +7,14 @@ import { BRANDING_LOGO_URL } from '@lobechat/business-const';
 import { DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
 import type { AgentRankItem } from '@lobechat/types';
 import { isTrimmedNonEmptyString } from '@lobechat/utils';
+import debug from 'debug';
 
 import type { LobeChatDatabase } from '@/database/type';
 
 import { resolveServerRuntimeBranding } from '../branding';
 import { PlatformDefaultInboxService } from './defaultInbox';
+
+const log = debug('lobe-server:agent-catalog:inbox-identity');
 
 export interface InboxRankIdentitySources {
   branding: {
@@ -82,7 +85,13 @@ export const loadResolvedInboxIdentity = async (
   db: LobeChatDatabase,
   userId: string,
 ): Promise<ResolvedInboxIdentity> => {
-  const catalog = await new PlatformDefaultInboxService(db, userId).getPublishedIdentity();
+  let catalog: InboxRankIdentitySources['catalog'] = null;
+  try {
+    catalog = await new PlatformDefaultInboxService(db, userId).getPublishedIdentity();
+  } catch (error) {
+    // Task reads overlay this identity; a catalog outage must not 500 those paths.
+    log('failed to load published inbox identity: %O', error);
+  }
 
   if (isCustomisedInboxAvatar(catalog?.avatar) && isTrimmedNonEmptyString(catalog?.title)) {
     return resolveInboxRankIdentity({ branding: {}, catalog });
