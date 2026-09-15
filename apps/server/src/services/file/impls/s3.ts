@@ -40,9 +40,13 @@ export class S3StaticFileImpl implements FileServiceImpl {
   private _s3?: FileS3;
   private s3Fingerprint?: string;
   private readonly db: LobeChatDatabase;
+  private readonly userId?: string;
+  private readonly workspaceId?: string;
 
-  constructor(db: LobeChatDatabase) {
+  constructor(db: LobeChatDatabase, userId?: string, workspaceId?: string) {
     this.db = db;
+    this.userId = userId || undefined;
+    this.workspaceId = workspaceId;
   }
 
   /** Sync accessor for tests / env fallback. Production methods go through {@link getS3}. */
@@ -233,6 +237,20 @@ export class S3StaticFileImpl implements FileServiceImpl {
     return publicUrl;
   }
 
+  private async lookupFileProxyStorageKey(fileId: string): Promise<string | null> {
+    if (this.userId) {
+      const file = await new FileModel(this.db, this.userId, this.workspaceId).findById(fileId);
+      if (!file) {
+        log('scoped /f/ lookup missed fileId=%s userId=%s', fileId, this.userId);
+        return null;
+      }
+      return file.url ?? null;
+    }
+
+    const file = await FileModel.getFileById(this.db, fileId);
+    return file?.url ?? null;
+  }
+
   async getKeyFromFullUrl(url: string): Promise<string | null> {
     try {
       const urlObject = new URL(url);
@@ -241,8 +259,8 @@ export class S3StaticFileImpl implements FileServiceImpl {
       // Case 1: File proxy URL pattern /f/{fileId} - query database for S3 key
       if (pathname.startsWith('/f/')) {
         const fileId = pathname.slice(3); // Remove '/f/' prefix
-        const file = await FileModel.getFileById(this.db, fileId);
-        return file?.url ?? null;
+        if (!fileId) return null;
+        return this.lookupFileProxyStorageKey(fileId);
       }
 
       // Case 2: Legacy S3 URL - extract key from pathname

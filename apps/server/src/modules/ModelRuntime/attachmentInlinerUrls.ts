@@ -209,9 +209,10 @@ export const applyInlinedUrl = (
   url: string,
   resolved: OwnOriginAttachmentBytes | null,
   maxBytes: number,
+  previewUrl?: string | null,
 ): string => {
   const usable = takeIfWithinCap(url, resolved, maxBytes);
-  if (!usable) return url;
+  if (!usable) return previewUrl || url;
   return toDataUri(usable.mimeType || 'application/octet-stream', usable.bytes);
 };
 
@@ -232,14 +233,17 @@ export const resolveUniqueUrls = async (
 
 /**
  * Rewrite own-deployment app-file URLs in an image-edit `imageUrls` list to data
- * URIs. Foreign URLs, data URIs, S3/presigned URLs, over-cap files, and resolver
- * failures are left unchanged. Does not mutate `urls`.
+ * URIs. Foreign URLs, data URIs, and S3/presigned URLs are left unchanged. When
+ * inlining fails (over-cap, fetch error) and `resolvePreviewUrl` is provided, the
+ * leftover `/f/<id>` is replaced with a machine-readable object URL.
+ * Does not mutate `urls`.
  */
 export const inlineOwnOriginImageUrls = async (
   urls: readonly string[],
   resolver: OwnOriginAttachmentResolver,
   origins: OwnDeploymentOrigins,
   imageMaxBytes: number = DEFAULT_IMAGE_INLINE_MAX_BYTES,
+  resolvePreviewUrl?: (url: string) => Promise<string | null>,
 ): Promise<string[]> => {
   const maxBytesByUrl = new Map<string, number>();
   for (const url of urls) {
@@ -249,9 +253,46 @@ export const inlineOwnOriginImageUrls = async (
   if (maxBytesByUrl.size === 0) return [...urls];
 
   const resolvedByUrl = await resolveUniqueUrls(maxBytesByUrl, resolver);
+  const previewUrlByUrl = await resolvePreviewUrlsForFailures(
+    resolvedByUrl,
+    resolvePreviewUrl,
+  );
 
   return urls.map((url) => {
     if (!resolvedByUrl.has(url)) return url;
-    return applyInlinedUrl(url, resolvedByUrl.get(url) ?? null, imageMaxBytes);
+    return applyInlinedUrl(
+      url,
+      resolvedByUrl.get(url) ?? null,
+      imageMaxBytes,
+      previewUrlByUrl.get(url),
+    );
   });
+};
+
+export const resolvePreviewUrlsForFailures = async (
+  resolvedByUrl: Map<string, OwnOriginAttachmentBytes | null>,
+  resolvePreviewUrl?: (url: string) => Promise<string | null>,
+): Promise<Map<string, string>> => {
+  const previewUrlByUrl = new Map<string, string>();
+  if (!resolvePreviewUrl) return previewUrlByUrl;
+
+  const failedUrls = [...resolvedByUrl.entries()]
+    .filter(([, resolved]) => !resolved)
+    .map(([url]) => url);
+  if (failedUrls.length === 0) return previewUrlByUrl;
+
+  await mapWithConcurrency(failedUrls, INLINE_RESOLVE_CONCURRENCY, async (url) => {
+    try {
+      const preview = await resolvePreviewUrl(url);
+      if (preview) previewUrlByUrl.set(url, preview);
+    } catch (error) {
+      log(
+        'failed to resolve preview url host=%s error=%s',
+        sanitizedUrlHost(url),
+        error instanceof Error ? error.message : error,
+      );
+    }
+  });
+
+  return previewUrlByUrl;
 };

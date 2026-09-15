@@ -36,7 +36,7 @@ export class FileService {
     this.db = db;
     this.userId = userId;
     this.fileModel = new FileModel(db, userId, workspaceId);
-    this.impl = createFileServiceModule(db);
+    this.impl = createFileServiceModule(db, userId || undefined, workspaceId);
   }
 
   /**
@@ -135,6 +135,25 @@ export class FileService {
     }
 
     return this.getFullFileUrl(file.url);
+  }
+
+  /**
+   * URL for cookie-less machine consumers (LLM providers, server-side fetchers).
+   * Always a public or short-lived presigned object URL — never `/f/<id>`.
+   */
+  public async getMachineReadableUrl(
+    file: FileAccessUrlItem,
+    expiresIn?: number,
+  ): Promise<string> {
+    if (file.url) return this.getFullFileUrl(file.url, expiresIn);
+
+    const fileId = file.fileId || file.id;
+    if (!fileId) return '';
+
+    const record = await this.fileModel.findById(fileId);
+    if (!record?.url) return '';
+
+    return this.getFullFileUrl(record.url, expiresIn);
   }
 
   /**
@@ -430,15 +449,33 @@ export class FileService {
   }
 
   /**
-   * Download file from external URL, upload to S3, and create database record
-   * @param externalUrl - External file URL to download (e.g., Discord CDN)
-   * @param pathname - File storage path in S3 (must include file extension)
-   * @returns Contains key (storage path), fileId (database record ID) and url (proxy access path)
+   * Download an own-deployment `/f/<id>` URL from object storage (cookie-less
+   * HTTP would 401 after session-only `/f/`) or fetch a foreign URL over HTTP.
    */
-  public async uploadFromUrl(
+  private async downloadUploadSource(
     externalUrl: string,
-    pathname: string,
-  ): Promise<{ fileId: string; key: string; url: string }> {
+  ): Promise<{ buffer: Buffer; fileType: string }> {
+    try {
+      if (new URL(externalUrl).pathname.startsWith('/f/')) {
+        const key = await this.getKeyFromFullUrl(externalUrl);
+        if (!key) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Failed to download file from URL: file not found or not accessible',
+          });
+        }
+        const bytes = await this.getFileByteArray(key);
+        return { buffer: Buffer.from(bytes), fileType: '' };
+      }
+    } catch (error) {
+      if (error instanceof TRPCError) throw error;
+      if (error instanceof TypeError) {
+        // Invalid URL — fall through to fetch, which will fail with a clear status.
+      } else {
+        throw error;
+      }
+    }
+
     const response = await fetch(externalUrl);
 
     if (!response.ok) {
@@ -448,7 +485,23 @@ export class FileService {
       });
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      fileType: response.headers.get('content-type') || '',
+    };
+  }
+
+  /**
+   * Download file from external URL, upload to S3, and create database record
+   * @param externalUrl - External file URL to download (e.g., Discord CDN)
+   * @param pathname - File storage path in S3 (must include file extension)
+   * @returns Contains key (storage path), fileId (database record ID) and url (proxy access path)
+   */
+  public async uploadFromUrl(
+    externalUrl: string,
+    pathname: string,
+  ): Promise<{ fileId: string; key: string; url: string }> {
+    const { buffer, fileType: downloadedType } = await this.downloadUploadSource(externalUrl);
 
     // Upload to storage (S3 or local)
     const { key } = await this.uploadMedia(pathname, buffer);
@@ -458,7 +511,7 @@ export class FileService {
 
     // Calculate file metadata
     const size = buffer.length;
-    let fileType = response.headers.get('content-type') || '';
+    let fileType = downloadedType;
     if (!fileType || fileType === 'application/octet-stream') {
       try {
         fileType = inferContentTypeFromImageUrl(pathname);

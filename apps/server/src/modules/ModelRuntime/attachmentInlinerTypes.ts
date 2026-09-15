@@ -44,6 +44,7 @@ export interface CreateOwnOriginAttachmentInlineHooksInput {
   /** When false (Cursor), document-feed notices tell the model to name pages. */
   tools?: boolean;
   userId?: string;
+  workspaceId?: string;
 }
 
 export interface InlineOwnOriginAttachmentsOptions {
@@ -61,5 +62,10 @@ export interface InlineOwnOriginAttachmentsOptions {
   maxDocsPerRequest?: number;
   /** Resolves a `files` row by id (FileModel + FileService). Used for `<files_info>` PDFs. */
   resolveByFileId?: OwnOriginFileIdResolver;
+  /**
+   * Presigned/public object URL for an own-deployment `/f/<id>` that could not
+   * be inlined (size cap, fetch error). Cookie-less providers fetch this instead.
+   */
+  resolvePreviewUrl?: (url: string) => Promise<string | null>;
   tools?: boolean;
 }

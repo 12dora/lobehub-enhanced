@@ -20,6 +20,7 @@ import { getDocumentFeedStats, resetDocumentFeedStatsForTest } from './documentF
 const fileServiceMocks = vi.hoisted(() => ({
   getFileByteArray: vi.fn(),
   getFileContent: vi.fn(),
+  getMachineReadableUrl: vi.fn(),
 }));
 
 const fileModelMocks = vi.hoisted(() => ({
@@ -49,6 +50,7 @@ vi.mock('@/server/services/file', () => ({
   FileService: class FileService {
     getFileByteArray = fileServiceMocks.getFileByteArray;
     getFileContent = fileServiceMocks.getFileContent;
+    getMachineReadableUrl = fileServiceMocks.getMachineReadableUrl;
   },
 }));
 
@@ -56,7 +58,7 @@ vi.mock('@/database/models/file', () => ({
   FileModel: class FileModel {
     static getFileById = async (_db: unknown, _id: string) => undefined;
     findById = fileModelMocks.findById;
-    constructor(_db?: unknown, _userId?: string) {}
+    constructor(_db?: unknown, _userId?: string, _workspaceId?: string) {}
   },
 }));
 
@@ -76,6 +78,7 @@ const FOREIGN_URL = 'https://cdn.example.com/cat.png';
 const S3_URL = 'http://localhost:9000/lobe-files/secret.png';
 const S3_PRESIGNED_URL = `${S3_URL}?X-Amz-Signature=secret`;
 const DATA_URI = 'data:image/png;base64,aaaa';
+const PREVIEW_URL = 'https://presigned.example.com/files/cat.png';
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 const PNG_DATA_URI = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString('base64')}`;
 const CURSOR_IMAGE_INLINE_MAX_BYTES = 6 * 1024 * 1024;
@@ -233,6 +236,20 @@ describe('inlineOwnOriginAttachments', () => {
     expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
   });
 
+  it('replaces an over-cap own-origin URL with a preview URL when provided', async () => {
+    const resolver = vi.fn(async () => ({
+      bytes: { byteLength: DEFAULT_IMAGE_INLINE_MAX_BYTES + 1 } as Uint8Array,
+      mimeType: 'image/png',
+    }));
+    const resolvePreviewUrl = vi.fn(async () => PREVIEW_URL);
+    const messages = [imageMessage(OWN_FILE_URL)];
+
+    await inlineOwnOriginAttachments(messages, resolver, ownOrigins, { resolvePreviewUrl });
+
+    expect(resolvePreviewUrl).toHaveBeenCalledWith(OWN_FILE_URL);
+    expect(messages[0].content).toEqual([{ image_url: { url: PREVIEW_URL }, type: 'image_url' }]);
+  });
+
   it('leaves an image over the Cursor 6 MiB cap in place', async () => {
     const resolver = vi.fn(async () => ({
       bytes: { byteLength: CURSOR_IMAGE_INLINE_MAX_BYTES + 1 } as Uint8Array,
@@ -268,6 +285,19 @@ describe('inlineOwnOriginAttachments', () => {
       inlineOwnOriginAttachments(messages, resolver, ownOrigins),
     ).resolves.toBeUndefined();
     expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
+  });
+
+  it('replaces a failed own-origin URL with a preview URL when provided', async () => {
+    const resolver = vi.fn(async () => {
+      throw new Error('s3 unavailable');
+    });
+    const resolvePreviewUrl = vi.fn(async () => PREVIEW_URL);
+    const messages = [imageMessage(OWN_FILE_URL)];
+
+    await inlineOwnOriginAttachments(messages, resolver, ownOrigins, { resolvePreviewUrl });
+
+    expect(resolvePreviewUrl).toHaveBeenCalledWith(OWN_FILE_URL);
+    expect(messages[0].content).toEqual([{ image_url: { url: PREVIEW_URL }, type: 'image_url' }]);
   });
 
   it('strips own-origin url attributes from files_info user text and keeps foreign ones', async () => {
@@ -1004,6 +1034,25 @@ describe('inlineOwnOriginImageUrls', () => {
     ]);
   });
 
+  it('replaces an over-cap own-origin URL with a preview URL when provided', async () => {
+    const resolver = vi.fn(async () => ({
+      bytes: { byteLength: DEFAULT_IMAGE_INLINE_MAX_BYTES + 1 } as Uint8Array,
+      mimeType: 'image/png',
+    }));
+    const resolvePreviewUrl = vi.fn(async () => PREVIEW_URL);
+
+    await expect(
+      inlineOwnOriginImageUrls(
+        [OWN_FILE_URL],
+        resolver,
+        ownOrigins,
+        DEFAULT_IMAGE_INLINE_MAX_BYTES,
+        resolvePreviewUrl,
+      ),
+    ).resolves.toEqual([PREVIEW_URL]);
+    expect(resolvePreviewUrl).toHaveBeenCalledWith(OWN_FILE_URL);
+  });
+
   it('leaves the URL in place when the resolver fails', async () => {
     const resolver = vi.fn(async () => {
       throw new Error('s3 unavailable');
@@ -1012,6 +1061,23 @@ describe('inlineOwnOriginImageUrls', () => {
     await expect(inlineOwnOriginImageUrls([OWN_FILE_URL], resolver, ownOrigins)).resolves.toEqual([
       OWN_FILE_URL,
     ]);
+  });
+
+  it('replaces a failed own-origin URL with a preview URL when provided', async () => {
+    const resolver = vi.fn(async () => {
+      throw new Error('s3 unavailable');
+    });
+    const resolvePreviewUrl = vi.fn(async () => PREVIEW_URL);
+
+    await expect(
+      inlineOwnOriginImageUrls(
+        [OWN_FILE_URL],
+        resolver,
+        ownOrigins,
+        DEFAULT_IMAGE_INLINE_MAX_BYTES,
+        resolvePreviewUrl,
+      ),
+    ).resolves.toEqual([PREVIEW_URL]);
   });
 
   it('does not call the resolver when every URL is foreign or already a data URI', async () => {
@@ -1028,6 +1094,11 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fileServiceMocks.getFileByteArray.mockReset();
+    fileServiceMocks.getMachineReadableUrl.mockReset();
+    fileServiceMocks.getMachineReadableUrl.mockImplementation(
+      async (file: { url?: string | null }) =>
+        file.url ? `https://presigned.example.com/${file.url}` : '',
+    );
     fileModelMocks.findById.mockReset();
     fileModelMocks.findById.mockResolvedValue(undefined);
   });
@@ -1036,12 +1107,8 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     vi.restoreAllMocks();
   });
 
-  it('skips an over-cap files-row without reading bytes', async () => {
-    vi.spyOn(FileModel, 'getFileById').mockResolvedValue({
-      fileType: 'image/png',
-      size: DEFAULT_IMAGE_INLINE_MAX_BYTES + 1,
-      url: 'files/huge.png',
-    } as never);
+  it('does not look up files when userId is missing', async () => {
+    const getFileById = vi.spyOn(FileModel, 'getFileById');
     fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
 
     const messages = [imageMessage(OWN_FILE_URL)];
@@ -1052,13 +1119,45 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(FileModel.getFileById).toHaveBeenCalledWith(expect.anything(), 'file-1');
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
+    expect(getFileById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
+    expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
   });
 
-  it('skips a Cursor-capped files-row without reading bytes', async () => {
-    vi.spyOn(FileModel, 'getFileById').mockResolvedValue({
+  it('skips an over-cap files-row without reading bytes and falls back to a preview URL', async () => {
+    fileModelMocks.findById.mockResolvedValue({
+      fileType: 'image/png',
+      size: DEFAULT_IMAGE_INLINE_MAX_BYTES + 1,
+      url: 'files/huge.png',
+    } as never);
+    const getFileById = vi.spyOn(FileModel, 'getFileById');
+    fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
+
+    const messages = [imageMessage(OWN_FILE_URL)];
+    const hooks = createOwnOriginAttachmentInlineHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeChat?.({ messages, model: 'test' } as never);
+
+    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-1');
+    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
+    expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith({
+      id: 'file-1',
+      url: 'files/huge.png',
+    });
+    expect(messages[0].content).toEqual([
+      { image_url: { url: 'https://presigned.example.com/files/huge.png' }, type: 'image_url' },
+    ]);
+  });
+
+  it('skips a Cursor-capped files-row without reading bytes and falls back to a preview URL', async () => {
+    fileModelMocks.findById.mockResolvedValue({
       fileType: 'image/png',
       size: CURSOR_IMAGE_INLINE_MAX_BYTES + 1,
       url: 'files/cursor-huge.png',
@@ -1070,12 +1169,18 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
       db: {} as never,
       imageMaxBytes: CURSOR_IMAGE_INLINE_MAX_BYTES,
       ownOrigins,
+      userId: 'user-1',
     });
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
-    expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
+    expect(messages[0].content).toEqual([
+      {
+        image_url: { url: 'https://presigned.example.com/files/cursor-huge.png' },
+        type: 'image_url',
+      },
+    ]);
   });
 
   it('does not look up a raw S3 URL', async () => {
@@ -1084,37 +1189,69 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     const hooks = createOwnOriginAttachmentInlineHooks({
       db: {} as never,
       ownOrigins: s3Origins,
+      userId: 'user-1',
     });
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
     expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
   });
 
   it('inlines a /f/<id> image through FileModel then getFileByteArray(file.url)', async () => {
-    vi.spyOn(FileModel, 'getFileById').mockResolvedValue({
+    fileModelMocks.findById.mockResolvedValue({
       fileType: 'image/png',
       size: PNG_BYTES.byteLength,
       url: 'files/cat.png',
     } as never);
+    const getFileById = vi.spyOn(FileModel, 'getFileById');
     fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
 
     const messages = [imageMessage(OWN_FILE_URL)];
     const hooks = createOwnOriginAttachmentInlineHooks({
       db: {} as never,
       ownOrigins,
+      userId: 'user-1',
     });
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(FileModel.getFileById).toHaveBeenCalledWith(expect.anything(), 'file-1');
+    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-1');
+    expect(getFileById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).toHaveBeenCalledWith('files/cat.png');
+    expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([{ image_url: { url: PNG_DATA_URI }, type: 'image_url' }]);
   });
 
+  it('falls back to a preview URL when byte fetch fails', async () => {
+    fileModelMocks.findById.mockResolvedValue({
+      fileType: 'image/png',
+      size: PNG_BYTES.byteLength,
+      url: 'files/cat.png',
+    } as never);
+    fileServiceMocks.getFileByteArray.mockRejectedValue(new Error('s3 unavailable'));
+
+    const messages = [imageMessage(OWN_FILE_URL)];
+    const hooks = createOwnOriginAttachmentInlineHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeChat?.({ messages, model: 'test' } as never);
+
+    expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith({
+      id: 'file-1',
+      url: 'files/cat.png',
+    });
+    expect(messages[0].content).toEqual([
+      { image_url: { url: 'https://presigned.example.com/files/cat.png' }, type: 'image_url' },
+    ]);
+  });
+
   it('applies the same /f/<id> rules to beforeCreateImage', async () => {
-    vi.spyOn(FileModel, 'getFileById').mockResolvedValue({
+    fileModelMocks.findById.mockResolvedValue({
       fileType: 'image/png',
       size: PNG_BYTES.byteLength,
       url: 'files/cat.png',
@@ -1125,6 +1262,7 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     const hooks = createOwnOriginAttachmentInlineHooks({
       db: {} as never,
       ownOrigins: s3Origins,
+      userId: 'user-1',
     });
 
     await hooks.beforeCreateImage?.({ model: 'test', params } as never);
@@ -1460,7 +1598,7 @@ describe('document render feed + viewDocumentPages markers', () => {
 
   it('applies resolveFeedLimits to the shared per-request image budget', async () => {
     pdfPageImagesMocks.renderPdfPagesToPng.mockResolvedValue(rasterPageWithTiles());
-    vi.spyOn(FileModel, 'getFileById').mockResolvedValue({
+    fileModelMocks.findById.mockResolvedValue({
       fileType: 'application/pdf',
       size: PDF_BYTES.byteLength,
       url: 'files/scan.pdf',
@@ -1478,6 +1616,7 @@ describe('document render feed + viewDocumentPages markers', () => {
       imageMaxCount: 6,
       ownOrigins,
       resolveFeedLimits: async () => ({ imageMaxCount: 1, maxDocsPerRequest: 2 }),
+      userId: 'user-1',
     });
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);

@@ -43,6 +43,7 @@ import {
   collectOwnOriginAttachmentUrls,
   countImageUrlParts,
   isImageUrlPart,
+  resolvePreviewUrlsForFailures,
   resolveUniqueUrls,
   stripOwnOriginUrlAttributesInFilesInfo,
 } from './attachmentInlinerUrls';
@@ -69,6 +70,7 @@ interface PipelineContext {
   loadTextIndex?: InlineOwnOriginAttachmentsOptions['loadTextIndex'];
   maxDocsPerRequest: number;
   messages: OpenAIChatMessage[];
+  previewUrlByUrl: Map<string, string>;
   rasterBudget: { pdfsRemaining: number };
   rasterMemo: Map<string, Promise<RasterizedPdfImages>>;
   resolveByFileId?: InlineOwnOriginAttachmentsOptions['resolveByFileId'];
@@ -133,6 +135,10 @@ const createPipelineContext = async (
     maxBytesByUrl.size === 0
       ? new Map<string, OwnOriginAttachmentBytes | null>()
       : await resolveUniqueUrls(maxBytesByUrl, resolver);
+  const previewUrlByUrl = await resolvePreviewUrlsForFailures(
+    resolvedByUrl,
+    options?.resolvePreviewUrl,
+  );
   const lastUserMessageIndex = findLastUserMessageIndex(messages);
 
   return {
@@ -150,6 +156,7 @@ const createPipelineContext = async (
     loadTextIndex: options?.loadTextIndex,
     maxDocsPerRequest: options?.maxDocsPerRequest ?? DOCUMENT_RENDER_DEFAULTS.maxDocsPerRequest,
     messages,
+    previewUrlByUrl,
     rasterBudget: { pdfsRemaining: PAYLOAD_MAX_RASTERIZED_PDFS },
     rasterMemo: new Map<string, Promise<RasterizedPdfImages>>(),
     resolveByFileId: options?.resolveByFileId,
@@ -247,6 +254,7 @@ const applyInlinedParts = async (context: PipelineContext, role: 'assistant' | '
             url,
             context.resolvedByUrl.get(url) ?? null,
             context.imageMaxBytes,
+            context.previewUrlByUrl.get(url),
           );
         }
         next.push(part);
@@ -262,7 +270,12 @@ const applyInlinedParts = async (context: PipelineContext, role: 'assistant' | '
         ? (context.resolvedByUrl.get(url) ?? null)
         : null;
       if (context.resolvedByUrl.has(url)) {
-        part.file_url.url = applyInlinedUrl(url, resolved, context.fileMaxBytes);
+        part.file_url.url = applyInlinedUrl(
+          url,
+          resolved,
+          context.fileMaxBytes,
+          context.previewUrlByUrl.get(url),
+        );
       }
       next.push(part);
       if (!resolved || resolved.bytes.byteLength > context.fileMaxBytes) continue;
@@ -513,7 +526,8 @@ const injectToolPageImages = async (context: PipelineContext) => {
 
 /**
  * Replace own-deployment `/f/<id>` URLs in user and assistant structured parts
- * with data URIs, strip own-origin `url="…"` attributes from `<files_info>`
+ * with data URIs (or a presigned object URL when inlining is not possible),
+ * strip own-origin `url="…"` attributes from `<files_info>`
  * blocks in user text only, and rasterize empty-text PDFs that arrive only as
  * `<files_info>` markup (no `file_url` part). Mutates `messages`.
  */

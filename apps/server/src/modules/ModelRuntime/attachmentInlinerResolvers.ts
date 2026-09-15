@@ -60,8 +60,10 @@ class FileServiceResolvers {
       const db = await resolveMaybeLazy(this.input.db ?? getServerDB);
       return {
         db,
-        fileModel: this.input.userId ? new FileModel(db, this.input.userId) : undefined,
-        fileService: new FileService(db, this.input.userId ?? ''),
+        fileModel: this.input.userId
+          ? new FileModel(db, this.input.userId, this.input.workspaceId)
+          : undefined,
+        fileService: new FileService(db, this.input.userId ?? '', this.input.workspaceId),
       };
     })();
     return this.loaded;
@@ -71,10 +73,10 @@ class FileServiceResolvers {
     const existing = this.fileLookup.get(fileId);
     if (existing) return existing;
     const pending = (async () => {
-      const { db, fileModel } = await this.load();
+      const { fileModel } = await this.load();
       if (fileModel) return fileModel.findById(fileId);
-      log('unscoped file lookup id=%s (no userId; internal caller)', fileId);
-      return FileModel.getFileById(db, fileId);
+      log('skip file lookup id=%s (no userId)', fileId);
+      return undefined;
     })();
     this.fileLookup.set(fileId, pending);
     const file = await pending;
@@ -151,13 +153,11 @@ class FileServiceResolvers {
       let render = readFileRenderMetadata(file?.metadata);
       if (!file || !isFreshPendingRender(render)) return render;
       bumpDocumentFeedStat('pendingWaits');
-      const { fileModel, db } = await this.load();
+      const { fileModel } = await this.load();
       this.renderWaitDeadline ??= Date.now() + RENDER_WAIT_BUDGET_MS;
       while (render && render.status === 'pending' && Date.now() < this.renderWaitDeadline) {
         await new Promise((resolve) => setTimeout(resolve, RENDER_WAIT_POLL_MS));
-        const current = fileModel
-          ? await fileModel.findById(fileId)
-          : await FileModel.getFileById(db, fileId);
+        const current = fileModel ? await fileModel.findById(fileId) : undefined;
         render = readFileRenderMetadata(current?.metadata) ?? render;
       }
       return render;
@@ -214,6 +214,26 @@ class FileServiceResolvers {
       return null;
     }
   }
+
+  async resolvePreviewUrl(url: string): Promise<string | null> {
+    if (!isResolvableAppFileUrl(url, this.origins)) return null;
+    const fileId = extractFileProxyId(url);
+    if (!fileId) return null;
+    try {
+      const file = await this.lookupFile(fileId);
+      if (!file?.url) return null;
+      const { fileService } = await this.load();
+      const preview = await fileService.getMachineReadableUrl({ id: fileId, url: file.url });
+      return preview || null;
+    } catch (error) {
+      log(
+        'failed to resolve preview url id=%s error=%s',
+        fileId,
+        error instanceof Error ? error.message : error,
+      );
+      return null;
+    }
+  }
 }
 
 export const createFileServiceResolvers = (
@@ -226,6 +246,7 @@ export const createFileServiceResolvers = (
   loadTextIndex: (fileId: string, key: string) => Promise<FileRenderTextIndex | undefined>;
   resolveByFileId: OwnOriginFileIdResolver;
   resolveByUrl: OwnOriginAttachmentResolver;
+  resolvePreviewUrl: (url: string) => Promise<string | null>;
 } => {
   const resolvers = new FileServiceResolvers(input, origins);
   return {
@@ -235,5 +256,6 @@ export const createFileServiceResolvers = (
     loadTextIndex: (fileId, key) => resolvers.loadTextIndex(fileId, key),
     resolveByFileId: (fileId, maxBytes) => resolvers.resolveByFileId(fileId, maxBytes),
     resolveByUrl: (url, maxBytes) => resolvers.resolveByUrl(url, maxBytes),
+    resolvePreviewUrl: (url) => resolvers.resolvePreviewUrl(url),
   };
 };

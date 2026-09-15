@@ -66,6 +66,7 @@ export const createOwnOriginAttachmentInlineHooks = (
           loadTextIndex: resolvers.loadTextIndex,
           maxDocsPerRequest: limits.maxDocsPerRequest,
           resolveByFileId: resolvers.resolveByFileId,
+          resolvePreviewUrl: resolvers.resolvePreviewUrl,
           tools,
         });
       } catch (error) {
@@ -81,11 +82,13 @@ export const createOwnOriginAttachmentInlineHooks = (
         if (!urls?.some((url) => typeof url === 'string' && !isDataUri(url))) return;
 
         const origins = await resolveMaybeLazy(input.ownOrigins);
+        const resolvers = createFileServiceResolvers(input, origins);
         payload.params.imageUrls = await inlineOwnOriginImageUrls(
           urls,
-          createFileServiceResolvers(input, origins).resolveByUrl,
+          resolvers.resolveByUrl,
           origins,
           imageMaxBytes,
+          resolvers.resolvePreviewUrl,
         );
       } catch (error) {
         log(

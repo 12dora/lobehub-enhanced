@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileModel } from '@/database/models/file';
-
 import { S3StaticFileImpl } from './s3';
 
 const redisMocks = vi.hoisted(() => ({
@@ -11,6 +9,19 @@ const redisMocks = vi.hoisted(() => ({
   redis: {
     get: vi.fn(),
     set: vi.fn(),
+  },
+}));
+
+const fileModelMocks = vi.hoisted(() => ({
+  findById: vi.fn(),
+  getFileById: vi.fn(),
+}));
+
+vi.mock('@/database/models/file', () => ({
+  FileModel: class FileModel {
+    static getFileById = (...args: unknown[]) => fileModelMocks.getFileById(...args);
+    findById = fileModelMocks.findById;
+    constructor(_db?: unknown, _userId?: string, _workspaceId?: string) {}
   },
 }));
 
@@ -362,22 +373,22 @@ describe('S3StaticFileImpl', () => {
       const proxyUrl = 'http://localhost:3010/f/abc123';
       const expectedKey = 'ppp/491067/image.jpg';
 
-      vi.spyOn(FileModel, 'getFileById').mockResolvedValue({ url: expectedKey } as any);
+      fileModelMocks.getFileById.mockResolvedValue({ url: expectedKey });
 
       const result = await fileService.getKeyFromFullUrl(proxyUrl);
 
-      expect(FileModel.getFileById).toHaveBeenCalledWith(mockDb, 'abc123');
+      expect(fileModelMocks.getFileById).toHaveBeenCalledWith(mockDb, 'abc123');
       expect(result).toBe(expectedKey);
     });
 
     it('should return null when file is not found in database', async () => {
       const proxyUrl = 'http://localhost:3010/f/nonexistent';
 
-      vi.spyOn(FileModel, 'getFileById').mockResolvedValue(undefined);
+      fileModelMocks.getFileById.mockResolvedValue(undefined);
 
       const result = await fileService.getKeyFromFullUrl(proxyUrl);
 
-      expect(FileModel.getFileById).toHaveBeenCalledWith(mockDb, 'nonexistent');
+      expect(fileModelMocks.getFileById).toHaveBeenCalledWith(mockDb, 'nonexistent');
       expect(result).toBeNull();
     });
 
@@ -385,11 +396,11 @@ describe('S3StaticFileImpl', () => {
       const proxyUrl = 'https://example.com/f/file456';
       const expectedKey = 'uploads/file.png';
 
-      vi.spyOn(FileModel, 'getFileById').mockResolvedValue({ url: expectedKey } as any);
+      fileModelMocks.getFileById.mockResolvedValue({ url: expectedKey });
 
       const result = await fileService.getKeyFromFullUrl(proxyUrl);
 
-      expect(FileModel.getFileById).toHaveBeenCalledWith(mockDb, 'file456');
+      expect(fileModelMocks.getFileById).toHaveBeenCalledWith(mockDb, 'file456');
       expect(result).toBe(expectedKey);
     });
 
@@ -418,6 +429,36 @@ describe('S3StaticFileImpl', () => {
       const result = await fileService.getKeyFromFullUrl(invalidUrl);
 
       expect(result).toBeNull();
+    });
+
+    it('should resolve /f/ via scoped findById when a viewer userId is set', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a');
+      fileModelMocks.findById.mockResolvedValue({ url: 'owned/key.jpg' });
+
+      const result = await scoped.getKeyFromFullUrl('http://localhost:3010/f/abc123');
+
+      expect(fileModelMocks.findById).toHaveBeenCalledWith('abc123');
+      expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
+      expect(result).toBe('owned/key.jpg');
+    });
+
+    it('should return null when the viewer does not own the /f/ file', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a');
+      fileModelMocks.findById.mockResolvedValue(undefined);
+
+      const result = await scoped.getKeyFromFullUrl('http://localhost:3010/f/other-user-file');
+
+      expect(result).toBeNull();
+      expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
+    });
+
+    it('should not let a scoped viewer read another user object via getFullFileUrl', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a');
+      fileModelMocks.findById.mockResolvedValue(undefined);
+
+      await expect(scoped.getFullFileUrl('http://localhost:3010/f/other-user-file')).rejects.toThrow(
+        'Key not found from url',
+      );
     });
   });
 

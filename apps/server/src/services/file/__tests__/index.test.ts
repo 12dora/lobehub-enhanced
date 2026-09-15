@@ -279,6 +279,33 @@ describe('FileService', () => {
     expect(result).toBe(expectedUrl);
   });
 
+  it('should resolve getMachineReadableUrl from the storage key, never /f/', async () => {
+    const expectedUrl = 'https://presigned.example.com/files/cat.png';
+    vi.mocked(service['impl'].getFullFileUrl).mockResolvedValue(expectedUrl);
+
+    const result = await service.getMachineReadableUrl({
+      id: 'file-1',
+      url: 'files/cat.png',
+    });
+
+    expect(service['impl'].getFullFileUrl).toHaveBeenCalledWith('files/cat.png', undefined);
+    expect(result).toBe(expectedUrl);
+    expect(result).not.toContain('/f/');
+  });
+
+  it('should look up the storage key when getMachineReadableUrl is given only a file id', async () => {
+    mockFileModel.findById.mockResolvedValue({ url: 'files/cat.png' });
+    vi.mocked(service['impl'].getFullFileUrl).mockResolvedValue(
+      'https://presigned.example.com/files/cat.png',
+    );
+
+    const result = await service.getMachineReadableUrl({ id: 'file-1' });
+
+    expect(mockFileModel.findById).toHaveBeenCalledWith('file-1');
+    expect(service['impl'].getFullFileUrl).toHaveBeenCalledWith('files/cat.png', undefined);
+    expect(result).toBe('https://presigned.example.com/files/cat.png');
+  });
+
   it('should delegate getKeyFromFullUrl to implementation', async () => {
     const testUrl = 'https://example.com/path/to/file.jpg';
     const expectedKey = 'path/to/file.jpg';
@@ -551,6 +578,40 @@ describe('FileService', () => {
         }),
         false,
       );
+    });
+  });
+
+  describe('uploadFromUrl', () => {
+    beforeEach(() => {
+      mockFileModel.checkHash = vi.fn().mockResolvedValue({ isExist: false });
+      mockFileModel.create = vi.fn().mockResolvedValue({ id: 'copied-id' });
+      vi.mocked(service['impl'].uploadMedia).mockResolvedValue({ key: 'files/copy.png' });
+    });
+
+    it('should copy an own /f/ URL from storage instead of HTTP fetch', async () => {
+      vi.mocked(service['impl'].getKeyFromFullUrl).mockResolvedValue('files/source.png');
+      vi.mocked(service['impl'].getFileByteArray).mockResolvedValue(new Uint8Array([1, 2, 3]));
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      const result = await service.uploadFromUrl(
+        'https://lobehub.com/f/file-1',
+        'files/copy.png',
+      );
+
+      expect(service['impl'].getKeyFromFullUrl).toHaveBeenCalledWith('https://lobehub.com/f/file-1');
+      expect(service['impl'].getFileByteArray).toHaveBeenCalledWith('files/source.png');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result.url).toBe('https://lobehub.com/f/copied-id');
+    });
+
+    it('should reject an inaccessible /f/ URL without fetching', async () => {
+      vi.mocked(service['impl'].getKeyFromFullUrl).mockResolvedValue(null);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      await expect(
+        service.uploadFromUrl('https://lobehub.com/f/secret', 'files/copy.png'),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -958,6 +958,8 @@ export const initModelRuntimeWithUserPayload = (
         resolveFeedLimits,
         tools: attachmentCaps.tools,
         userId: typeof restParams.userId === 'string' ? restParams.userId : undefined,
+        workspaceId:
+          typeof restParams.workspaceId === 'string' ? restParams.workspaceId : undefined,
       })
     : undefined;
   const composedHooks = mergeModelRuntimeHooks(attachmentInlineHooks, hooks);
