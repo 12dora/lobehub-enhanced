@@ -7,6 +7,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { FORM_STYLE } from '@/const/layoutTokens';
+import { useScopedDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { useAgentStore } from '@/store/agent';
 import { builtinAgentSelectors } from '@/store/agent/selectors';
 
@@ -14,6 +15,7 @@ import { selectors, useStore } from '../store';
 
 const AgentSelfIteration = memo(() => {
   const { t } = useTranslation('setting');
+  const inboxName = useScopedDefaultInboxDisplayName();
   const [form] = Form.useForm();
   const [disabled, updateConfig] = useStore((s) => [s.disabled, s.setChatConfig]);
   const config = useStore(selectors.currentChatConfig, isEqual);
@@ -22,7 +24,7 @@ const AgentSelfIteration = memo(() => {
   const selfIterationItem = isInbox
     ? {
         children: <Switch checked disabled />,
-        desc: t('settingSelfIteration.enabled.managedDesc'),
+        desc: t('settingSelfIteration.enabled.managedDesc', { name: inboxName }),
         label: t('settingSelfIteration.enabled.title'),
         layout: 'horizontal' as const,
         minWidth: undefined,

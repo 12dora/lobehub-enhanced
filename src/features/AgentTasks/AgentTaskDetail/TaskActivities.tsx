@@ -17,6 +17,7 @@ import CommentCard from './CommentCard';
 import CommentInput from './CommentInput';
 import TaskBriefCard from './TaskBriefCard';
 import TopicCard from './TopicCard';
+import { useActivityAuthorDisplay } from './useActivityAuthorDisplay';
 
 const ROW_TYPE_ICON = {
   comment: MessageCircle,
@@ -69,10 +70,11 @@ const ActivityRow = memo<{ activity: TaskDetailActivity }>(({ activity }) => {
   const TypeIcon = ROW_TYPE_ICON[activity.type as keyof typeof ROW_TYPE_ICON] ?? MessageCircle;
   const { text: relTime, title: relTimeTitle } = useActivityTime(activity.time);
   const text = getRowText(activity, t);
+  const author = useActivityAuthorDisplay(activity.author);
 
-  const isAgent = activity.author?.type === 'agent';
-  const avatarNode = activity.author?.avatar ? (
-    <Avatar avatar={activity.author.avatar} size={24} />
+  const isAgent = author?.type === 'agent';
+  const avatarNode = author?.avatar ? (
+    <Avatar avatar={author.avatar} size={24} />
   ) : (
     <div className={styles.activityAvatar}>
       <TypeIcon size={12} />
@@ -82,12 +84,12 @@ const ActivityRow = memo<{ activity: TaskDetailActivity }>(({ activity }) => {
   const authorNode = (
     <Flexbox horizontal align={'center'} gap={6} style={{ flexShrink: 0 }}>
       {avatarNode}
-      {activity.author?.name && (
+      {author?.name && (
         <Text
           className={isAgent ? styles.agentAuthorName : undefined}
           style={isAgent ? undefined : { color: cssVar.colorTextSecondary, fontWeight: 500 }}
         >
-          {activity.author.name}
+          {author.name}
         </Text>
       )}
       {isAgent && (
@@ -100,10 +102,10 @@ const ActivityRow = memo<{ activity: TaskDetailActivity }>(({ activity }) => {
 
   return (
     <Flexbox horizontal align={'center'} gap={8} paddingBlock={4} paddingInline={9}>
-      {isAgent && activity.author?.id ? (
+      {isAgent && author?.id ? (
         <AgentProfilePopup
-          agent={{ avatar: activity.author.avatar, title: activity.author.name }}
-          agentId={activity.author.id}
+          agent={{ avatar: author.avatar, title: author.name }}
+          agentId={author.id}
           trigger={'hover'}
         >
           {authorNode}

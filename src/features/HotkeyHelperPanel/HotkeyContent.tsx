@@ -5,6 +5,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { HOTKEYS_REGISTRATION } from '@/const/hotkeys';
+import { useScopedDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import hotkeyMeta from '@/locales/default/hotkey';
 import { useUserStore } from '@/store/user';
 import { settingsSelectors } from '@/store/user/slices/settings/selectors';
@@ -34,6 +35,7 @@ interface HotkeyContentProps {
 const HotkeyContent = memo<HotkeyContentProps>(({ groupId }) => {
   const settings = useUserStore(settingsSelectors.currentSettings, isEqual);
   const { t } = useTranslation('hotkey');
+  const inboxName = useScopedDefaultInboxDisplayName();
   return (
     <>
       {HOTKEYS_REGISTRATION.filter((item) => item.group === groupId).map((item) => (
@@ -41,7 +43,7 @@ const HotkeyContent = memo<HotkeyContentProps>(({ groupId }) => {
           <Flexbox flex={1} gap={4} justify={'space-between'}>
             <span>{t(`${item.id}.title`)}</span>
             {hotkeyMeta[`${item.id}.desc`] ? (
-              <span className={styles.desc}>{t(`${item.id}.desc`)}</span>
+              <span className={styles.desc}>{t(`${item.id}.desc`, { name: inboxName })}</span>
             ) : null}
           </Flexbox>
           <Hotkey

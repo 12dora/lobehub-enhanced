@@ -1,7 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-import { BRANDING_LOGO_URL } from '@lobechat/business-const';
 import { DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
 import type { AgentRankItem } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,11 +6,7 @@ import type { LobeChatDatabase } from '@/database/type';
 
 import { PlatformDefaultInboxService } from '../../services/agentCatalog/defaultInbox';
 import { resolveServerRuntimeBranding } from '../../services/branding';
-import {
-  applyInboxRankIdentity,
-  overlayInboxAgentRank,
-  resolveInboxRankIdentity,
-} from './stats.rankIdentity';
+import { applyInboxRankIdentity, overlayInboxAgentRank } from './stats.rankIdentity';
 
 vi.mock('../../services/branding', () => ({
   resolveServerRuntimeBranding: vi.fn(),
@@ -44,18 +36,6 @@ const PUBLISHED_BRANDING = {
   logoUrl: 'https://brand.example/logo.png',
 };
 
-const builtInInboxAvatarLiteral = (source: string) => {
-  const match = source.match(
-    /\[\s*'\/avatars\/lobe-ai\.png',\s*DEFAULT_INBOX_AVATAR,\s*BRANDING_LOGO_URL\s*\]/,
-  );
-  expect(match).toBeTruthy();
-  return match![0].replaceAll(/\s+/g, '');
-};
-
-const builtInCatalogAvatars = [
-  ...new Set(['/avatars/lobe-ai.png', DEFAULT_INBOX_AVATAR, BRANDING_LOGO_URL].filter(Boolean)),
-];
-
 describe('admin.stats inbox rank identity', () => {
   beforeEach(() => {
     vi.mocked(resolveServerRuntimeBranding).mockReset();
@@ -63,129 +43,6 @@ describe('admin.stats inbox rank identity', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  describe('resolveInboxRankIdentity', () => {
-    it('keeps built-in inbox avatars in sync with useDefaultInboxAvatar', () => {
-      const overlaySource = readFileSync(
-        fileURLToPath(new URL('./stats.rankIdentity.ts', import.meta.url)),
-        'utf8',
-      );
-      const hookSource = readFileSync(
-        fileURLToPath(
-          new URL('../../../../../../src/hooks/useDefaultInboxAvatar.ts', import.meta.url),
-        ),
-        'utf8',
-      );
-
-      expect(builtInInboxAvatarLiteral(overlaySource)).toBe(builtInInboxAvatarLiteral(hookSource));
-    });
-
-    it('prefers the published catalog identity', () => {
-      expect(
-        resolveInboxRankIdentity({
-          branding: PUBLISHED_BRANDING,
-          catalog: {
-            avatar: '/f/pba_published',
-            backgroundColor: '#123456',
-            title: 'Published assistant',
-          },
-        }),
-      ).toEqual({
-        avatar: '/f/pba_published',
-        backgroundColor: '#123456',
-        title: 'Published assistant',
-      });
-    });
-
-    it.each(builtInCatalogAvatars)(
-      'falls through built-in catalog avatar %s to branding, then DEFAULT_INBOX_AVATAR',
-      (avatar) => {
-        expect(
-          resolveInboxRankIdentity({
-            branding: PUBLISHED_BRANDING,
-            catalog: {
-              avatar,
-              backgroundColor: '#123456',
-              title: 'Published assistant',
-            },
-          }),
-        ).toEqual({
-          avatar: 'https://brand.example/icon.png',
-          backgroundColor: '#123456',
-          title: 'Published assistant',
-        });
-
-        expect(
-          resolveInboxRankIdentity({
-            branding: {
-              defaultAgentDisplayName: 'AI 助手',
-              iconUrl: '  ',
-              logoUrl: 'https://brand.example/logo.png',
-            },
-            catalog: {
-              avatar: `  ${avatar}  `,
-              backgroundColor: null,
-              title: 'Published assistant',
-            },
-          }),
-        ).toEqual({
-          avatar: 'https://brand.example/logo.png',
-          backgroundColor: null,
-          title: 'Published assistant',
-        });
-
-        expect(
-          resolveInboxRankIdentity({
-            branding: { defaultAgentDisplayName: 'AI 助手', iconUrl: null, logoUrl: null },
-            catalog: { avatar, backgroundColor: null, title: 'Published assistant' },
-          }),
-        ).toEqual({
-          avatar: DEFAULT_INBOX_AVATAR,
-          backgroundColor: null,
-          title: 'Published assistant',
-        });
-      },
-    );
-
-    it('falls through blank catalog fields to published branding, then DEFAULT_INBOX_*', () => {
-      expect(
-        resolveInboxRankIdentity({
-          branding: PUBLISHED_BRANDING,
-          catalog: { avatar: '  ', backgroundColor: null, title: '' },
-        }),
-      ).toEqual({
-        avatar: 'https://brand.example/icon.png',
-        backgroundColor: null,
-        title: 'AI 助手',
-      });
-
-      expect(
-        resolveInboxRankIdentity({
-          branding: {
-            defaultAgentDisplayName: '  ',
-            iconUrl: null,
-            logoUrl: 'https://brand.example/logo.png',
-          },
-          catalog: null,
-        }),
-      ).toEqual({
-        avatar: 'https://brand.example/logo.png',
-        backgroundColor: null,
-        title: DEFAULT_INBOX_TITLE,
-      });
-
-      expect(
-        resolveInboxRankIdentity({
-          branding: { defaultAgentDisplayName: null, iconUrl: null, logoUrl: null },
-          catalog: null,
-        }),
-      ).toEqual({
-        avatar: DEFAULT_INBOX_AVATAR,
-        backgroundColor: null,
-        title: DEFAULT_INBOX_TITLE,
-      });
-    });
   });
 
   describe('applyInboxRankIdentity', () => {

@@ -334,6 +334,8 @@ export interface TaskDetailWorkspaceNode {
 export interface TaskDetailActivityAuthor {
   avatar?: string | null;
   id: string;
+  /** True when this agent is the platform default inbox assistant. */
+  isInbox?: boolean;
   name?: string | null;
   type: 'agent' | 'user';
 }
@@ -417,6 +419,8 @@ export interface TaskDetailData {
   checkpoint?: CheckpointConfig;
   config?: Record<string, unknown>;
   createdAt?: string;
+  /** Agent that created the task via a tool call; null/undefined for UI-created tasks. */
+  createdByAgentId?: string | null;
   /** Creator of the task; used by the UI to gate creator-only actions (e.g. make private). */
   createdByUserId?: string | null;
   dependencies?: Array<{ dependsOn: string; type: string }>;

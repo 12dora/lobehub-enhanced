@@ -6,6 +6,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import HeterogeneousTag from '@/features/HeterogeneousTag';
+import { useScopedDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { useHomeStore } from '@/store/home';
 import { homeAgentListSelectors } from '@/store/home/selectors';
 import { useTaskStore } from '@/store/task';
@@ -17,6 +18,7 @@ import { useAgentDisplayMeta } from '../shared/useAgentDisplayMeta';
 
 const TaskDetailAssignee = memo(() => {
   const { t } = useTranslation('chat');
+  const inboxName = useScopedDefaultInboxDisplayName();
   const taskId = useTaskStore(taskDetailSelectors.activeTaskId);
   const status = useTaskStore(taskDetailSelectors.activeTaskStatus) as TaskStatus | undefined;
   const assigneeAgentId = useTaskStore(taskDetailSelectors.activeTaskAgentId);
@@ -35,7 +37,9 @@ const TaskDetailAssignee = memo(() => {
       disabled={status === 'running'}
       taskIdentifier={taskId}
     >
-      <Tooltip title={assigneeAgentId ? undefined : t('taskList.unassignedHint')}>
+      <Tooltip
+        title={assigneeAgentId ? undefined : t('taskList.unassignedHint', { name: inboxName })}
+      >
         <Block
           clickable
           horizontal

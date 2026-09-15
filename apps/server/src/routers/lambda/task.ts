@@ -14,10 +14,12 @@ import type { LobeChatDatabase } from '@/database/type';
 import { assertAgentUsableBy } from '@/database/utils/agent-access';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { overlayInboxIdentityOnAgentAvatars } from '@/server/enterprise/services/agentCatalog/inboxIdentity';
 import { EditLockService } from '@/server/services/editLock';
 import { publishResourceEvent } from '@/server/services/resourceEvents';
 import { TaskService } from '@/server/services/task';
 import { TaskLifecycleService } from '@/server/services/taskLifecycle';
+import { TaskNotificationService } from '@/server/services/taskNotification';
 import { TaskRunnerService } from '@/server/services/taskRunner';
 import { hasWorkspaceScopedPermission } from '@/server/services/workspacePermission';
 import { TransferErrorCode } from '@/types/transferError';
@@ -598,6 +600,18 @@ export const taskRouter = router({
           type: 'error',
         });
 
+        await new TaskNotificationService().notify({
+          agentId: task.assigneeAgentId || undefined,
+          content: 'Heartbeat timeout',
+          db: ctx.serverDB,
+          taskId: task.id,
+          taskIdentifier: task.identifier,
+          taskName: task.name,
+          topicId: task.currentTopicId ?? undefined,
+          type: 'task_run_failed',
+          userId: task.createdByUserId,
+        });
+
         failed.push(task.identifier);
       }
 
@@ -662,7 +676,13 @@ export const taskRouter = router({
         ...new Set(result.tasks.map((t) => t.assigneeAgentId).filter((id): id is string => !!id)),
       ];
       const agents =
-        assigneeIds.length > 0 ? await ctx.agentModel.getAgentAvatarsByIds(assigneeIds) : [];
+        assigneeIds.length > 0
+          ? await overlayInboxIdentityOnAgentAvatars(
+              ctx.serverDB,
+              ctx.userId,
+              await ctx.agentModel.getAgentAvatarsByIds(assigneeIds),
+            )
+          : [];
       const agentMap = new Map(agents.map((a) => [a.id, a]));
 
       const data: TaskListItem[] = result.tasks.map((task) => {

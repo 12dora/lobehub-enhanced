@@ -916,7 +916,7 @@ export default {
   'settingSelfIteration.enabled.desc':
     'Allow this assistant to review recent signals and improve its own skills when the self-iteration workflow runs.',
   'settingSelfIteration.enabled.managedDesc':
-    'Always on for Lobe AI while Self-Iteration is available.',
+    'Always on for {{name}} while Self-Iteration is available.',
   'settingSelfIteration.enabled.title': 'Enable Self-Iteration',
   'settingSelfIteration.title': 'Self-Iteration',
   'settingSystem.oauth.info.desc': 'Logged in',

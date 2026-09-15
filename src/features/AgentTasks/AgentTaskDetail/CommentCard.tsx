@@ -30,6 +30,7 @@ import { useActivityTime } from '@/hooks/useActivityTime';
 import { useTaskStore } from '@/store/task';
 
 import { styles } from '../shared/style';
+import { useActivityAuthorDisplay } from './useActivityAuthorDisplay';
 
 // Keep saved comments visually consistent with the editor: render FileNodes
 // as the Linear-style card on its own row instead of the default inline pill.
@@ -58,6 +59,7 @@ const CommentCard = memo<CommentCardProps>(({ activity }) => {
   const { text: relTime, title: relTimeTitle } = useActivityTime(activity.time);
   const content = activity.content || t('taskDetail.activities.fallback.comment');
   const commentId = activity.id;
+  const author = useActivityAuthorDisplay(activity.author);
 
   const editorData = useMemo(
     () => ({
@@ -141,16 +143,14 @@ const CommentCard = memo<CommentCardProps>(({ activity }) => {
       variant={'outlined'}
     >
       <Flexbox horizontal align={'center'} gap={8}>
-        {activity.author?.avatar ? (
-          <Avatar avatar={activity.author.avatar} size={24} />
+        {author?.avatar ? (
+          <Avatar avatar={author.avatar} size={24} />
         ) : (
           <div className={styles.activityAvatar}>
             <MessageCircle size={12} />
           </div>
         )}
-        <Text weight={500}>
-          {activity.author?.name || t('taskDetail.activities.fallback.comment')}
-        </Text>
+        <Text weight={500}>{author?.name || t('taskDetail.activities.fallback.comment')}</Text>
         {relTime && (
           <Text fontSize={12} title={relTimeTitle} type={'secondary'}>
             {relTime}

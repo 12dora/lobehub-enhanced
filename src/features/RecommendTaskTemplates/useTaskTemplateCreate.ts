@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import { taskDetailPath } from '@/features/AgentTasks/shared/taskDetailPath';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
+import { useScopedDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { usePermission } from '@/hooks/usePermission';
 import { taskTemplateService } from '@/services/taskTemplate';
 import { useAgentStore } from '@/store/agent';
@@ -53,6 +54,7 @@ export const useTaskTemplateCreate = ({
   title,
 }: UseTaskTemplateCreateOptions): UseTaskTemplateCreateResult => {
   const { t } = useTranslation('common');
+  const inboxName = useScopedDefaultInboxDisplayName();
   const { message } = App.useApp();
   const { allowed: canCreateTask } = usePermission('create_content');
   const [loading, setLoading] = useState(false);
@@ -88,6 +90,7 @@ export const useTaskTemplateCreate = ({
       }
       setCreated(true);
       onCreated(template.id);
+      message.success(t('taskTemplate.action.create.success', { name: inboxName }));
       if (createdTask?.identifier) {
         navigate(
           taskDetailPath(createdTask.identifier, createdTask.assigneeAgentId ?? inboxAgentId),
@@ -103,6 +106,7 @@ export const useTaskTemplateCreate = ({
     createTask,
     description,
     inboxAgentId,
+    inboxName,
     message,
     navigate,
     onCreated,

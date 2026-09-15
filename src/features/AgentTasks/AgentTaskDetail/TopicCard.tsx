@@ -37,6 +37,7 @@ import { taskDetailSelectors } from '@/store/task/selectors';
 import { styles } from '../shared/style';
 import RunReplyEditor from './RunReplyEditor';
 import TopicStatusIcon from './TopicStatusIcon';
+import { useActivityAuthorDisplay } from './useActivityAuthorDisplay';
 
 const runContentStyles = createStaticStyles(({ css, cssVar }) => ({
   clipInner: css`
@@ -263,9 +264,10 @@ const TopicCard = memo<TopicCardProps>(({ activity }) => {
   ];
 
   const isAgent = activity.author?.type === 'agent';
+  const author = useActivityAuthorDisplay(activity.author);
 
-  const avatarNode = activity.author?.avatar ? (
-    <Avatar avatar={activity.author.avatar} size={24} />
+  const avatarNode = author?.avatar ? (
+    <Avatar avatar={author.avatar} size={24} />
   ) : (
     <div className={styles.activityAvatar}>
       <CircleDot size={12} />
@@ -284,10 +286,10 @@ const TopicCard = memo<TopicCardProps>(({ activity }) => {
     >
       <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>
         <Flexbox horizontal align={'center'} gap={8} style={{ minWidth: 0, overflow: 'hidden' }}>
-          {isAgent && activity.author?.id ? (
+          {isAgent && author?.id ? (
             <AgentProfilePopup
-              agent={{ avatar: activity.author.avatar, title: activity.author.name }}
-              agentId={activity.author.id}
+              agent={{ avatar: author.avatar, title: author.name }}
+              agentId={author.id}
               trigger={'hover'}
             >
               {avatarNode}

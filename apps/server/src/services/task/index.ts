@@ -18,11 +18,13 @@ import { TaskTopicModel } from '@/database/models/taskTopic';
 import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
+import { overlayInboxIdentityOnAgentAvatars } from '@/server/enterprise/services/agentCatalog/inboxIdentity';
 
 import { AiAgentService } from '../aiAgent';
 import { extractFileIdsFromEditorData } from '../file/extractFileIdsFromEditorData';
 import { resolveAttachmentMetadata } from '../file/resolveAttachments';
 import { type SubtaskGraphPlan, TaskGraphService } from '../taskGraph';
+import { TaskNotificationService } from '../taskNotification';
 import { type ReviewResult, TaskReviewService } from '../taskReview';
 import { TaskRunnerService } from '../taskRunner';
 
@@ -387,6 +389,24 @@ export class TaskService {
     let checkpointTriggered = false;
 
     if (status === 'completed') {
+      // Agent-caused completion (createdByAgentId / assigneeAgentId path).
+      // UI complete of an unassigned task does not notify. Notify before
+      // cascade so a downstream kickoff failure cannot swallow the event.
+      if (resolved.createdByAgentId || resolved.assigneeAgentId) {
+        const lastOutput = await this.readLatestRunOutput(task.id);
+        await new TaskNotificationService().notify({
+          agentId: resolved.assigneeAgentId ?? resolved.createdByAgentId ?? undefined,
+          content: task.instruction?.trim() || lastOutput || task.identifier,
+          db: this.db,
+          taskId: task.id,
+          taskIdentifier: task.identifier,
+          taskName: task.name,
+          topicId: task.currentTopicId ?? undefined,
+          type: 'task_completed',
+          userId: this.userId,
+        });
+      }
+
       if (task.parentTaskId) {
         const parentTask = await this.taskModel.findById(task.parentTaskId);
         if (parentTask && this.taskModel.shouldPauseAfterComplete(parentTask, task.identifier)) {
@@ -487,6 +507,17 @@ export class TaskService {
     const task = await this.taskModel.resolve(idOrIdentifier);
     if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
     return task;
+  }
+
+  /** Latest topic handoff text — used as `task_completed` content fallback. */
+  private async readLatestRunOutput(taskId: string): Promise<string> {
+    try {
+      const topics = await this.taskTopicModel.findByTaskId(taskId);
+      const handoff = topics[0]?.handoff as { content?: string; summary?: string } | null;
+      return handoff?.content?.trim() || handoff?.summary?.trim() || '';
+    } catch {
+      return '';
+    }
   }
 
   async getTaskDetail(taskIdOrIdentifier: string): Promise<TaskDetailData | null> {
@@ -606,7 +637,11 @@ export class TaskService {
     ];
     const subtaskAgents =
       subtaskAssigneeIds.length > 0
-        ? await this.agentModel.getAgentAvatarsByIds(subtaskAssigneeIds)
+        ? await overlayInboxIdentityOnAgentAvatars(
+            this.db,
+            this.userId,
+            await this.agentModel.getAgentAvatarsByIds(subtaskAssigneeIds),
+          )
         : [];
     const subtaskAgentMap = new Map(subtaskAgents.map((a) => [a.id, a]));
 
@@ -787,6 +822,7 @@ export class TaskService {
       checkpoint: this.taskModel.getCheckpointConfig(task),
       config: taskConfig,
       createdAt: task.createdAt ? new Date(task.createdAt).toISOString() : undefined,
+      createdByAgentId: task.createdByAgentId ?? null,
       createdByUserId: task.createdByUserId,
       dependencies: dependencies.map((d) => {
         const info = depIdToInfo.get(d.dependsOnId);
@@ -835,6 +871,7 @@ export class TaskService {
 
   /**
    * Batch-resolve agent and user IDs to author info (name + avatar).
+   * Inbox-slug agents get the platform default-assistant overlay (catalog → branding → DEFAULT_INBOX_*).
    */
   private async resolveAuthors(
     agentIds: Set<string>,
@@ -843,12 +880,20 @@ export class TaskService {
     const map = new Map<string, TaskDetailActivityAuthor>();
 
     const [agentRows, userRows] = await Promise.all([
-      this.agentModel.getAgentAvatarsByIds([...agentIds]),
+      this.agentModel
+        .getAgentAvatarsByIds([...agentIds])
+        .then((rows) => overlayInboxIdentityOnAgentAvatars(this.db, this.userId, rows)),
       UserModel.findByIds(this.db, [...userIds]),
     ]);
 
     for (const a of agentRows) {
-      map.set(a.id, { avatar: a.avatar, id: a.id, name: a.title, type: 'agent' });
+      map.set(a.id, {
+        avatar: a.avatar,
+        id: a.id,
+        name: a.title,
+        type: 'agent',
+        ...(a.isInbox ? { isInbox: true } : {}),
+      });
     }
     for (const u of userRows) {
       map.set(u.id, { avatar: u.avatar, id: u.id, name: u.fullName, type: 'user' });

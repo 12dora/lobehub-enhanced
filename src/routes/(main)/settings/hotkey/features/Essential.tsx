@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import AutoSaveHint from '@/components/Editor/AutoSaveHint';
 import { HOTKEYS_REGISTRATION } from '@/const/hotkeys';
 import { FORM_STYLE } from '@/const/layoutTokens';
+import { useScopedDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { useSaveState } from '@/hooks/useSaveState';
 import hotkeyMeta from '@/locales/default/hotkey';
 import { useUserStore } from '@/store/user';
@@ -18,6 +19,7 @@ import { type HotkeyItem } from '@/types/hotkey';
 
 const HotkeySetting = memo(() => {
   const { t } = useTranslation(['setting', 'hotkey']);
+  const inboxName = useScopedDefaultInboxDisplayName();
   const [form] = Form.useForm();
 
   const { hotkey } = useUserStore(settingsSelectors.currentSettings, isEqual);
@@ -53,7 +55,9 @@ const HotkeySetting = memo(() => {
           onClear={() => void clearHotkeyBinding(item.id)}
         />
       ),
-      desc: hotkeyMeta[`${item.id}.desc`] ? t(`${item.id}.desc`, { ns: 'hotkey' }) : undefined,
+      desc: hotkeyMeta[`${item.id}.desc`]
+        ? t(`${item.id}.desc`, { name: inboxName, ns: 'hotkey' })
+        : undefined,
       label: t(`${item.id}.title`, { ns: 'hotkey' }),
       name: item.id,
     };

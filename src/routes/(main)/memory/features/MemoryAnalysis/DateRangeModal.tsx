@@ -9,11 +9,13 @@ import { t as i18nT } from 'i18next';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useScopedDefaultInboxDisplayName } from '@/hooks/useDefaultInboxDisplayName';
 import { useMemoryAnalysisAsyncTask } from '@/routes/(main)/memory/features/MemoryAnalysis/useTask';
 import { memoryExtractionService } from '@/services/userMemory/extraction';
 
 const DateRangeContent = memo(() => {
   const { t } = useTranslation('memory');
+  const inboxName = useScopedDefaultInboxDisplayName();
   const { close } = useModalContext();
   const { message } = App.useApp();
   const { refresh } = useMemoryAnalysisAsyncTask();
@@ -62,7 +64,7 @@ const DateRangeContent = memo(() => {
   return (
     <Flexbox gap={16}>
       <Flexbox gap={12}>
-        <Text type={'secondary'}>{t('analysis.modal.helper')}</Text>
+        <Text type={'secondary'}>{t('analysis.modal.helper', { name: inboxName })}</Text>
         <DatePicker.RangePicker
           allowClear
           disabledDate={disabledDate}

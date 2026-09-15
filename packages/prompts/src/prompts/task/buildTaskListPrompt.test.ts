@@ -70,7 +70,7 @@ describe('buildTaskListPrompt', () => {
     expect(result).not.toContain('ago');
   });
 
-  it('includes default Lobe AI assignee hint when provided', () => {
+  it('includes default assistant assignee hint when provided', () => {
     const result = buildTaskListPrompt(
       {
         defaultAssigneeAgentId: 'agt_inbox',
@@ -81,7 +81,23 @@ describe('buildTaskListPrompt', () => {
     );
 
     expect(result).toContain('<task_manager_defaults>');
-    expect(result).toContain('Default Lobe AI agent id: agt_inbox');
+    expect(result).toContain('Default assistant agent id: agt_inbox');
+    expect(result).toContain('the default assistant');
     expect(result).toContain('Do not use it as a listTasks filter');
+  });
+
+  it('injects the supplied default assistant display name into the hint', () => {
+    const result = buildTaskListPrompt(
+      {
+        defaultAssigneeAgentId: 'agt_inbox',
+        defaultAssigneeDisplayName: 'Published assistant',
+        tasks: [],
+        total: 0,
+      },
+      NOW,
+    );
+
+    expect(result).toContain('assigned to Published assistant.');
+    expect(result).toContain("Published assistant's tasks");
   });
 });

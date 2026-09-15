@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentModel } from '@/database/models/agent';
@@ -7,6 +8,7 @@ import { TaskModel } from '@/database/models/task';
 import { TaskTopicModel } from '@/database/models/taskTopic';
 import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
+import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
 
 import { TaskService } from './index';
 
@@ -155,6 +157,7 @@ describe('TaskService', () => {
       expect(result?.agentId).toBe('agent-1');
       expect(result?.userId).toBe('user-1');
       expect(result?.createdAt).toBe('2024-01-01T00:00:00.000Z');
+      expect(result?.createdByAgentId).toBeNull();
       expect(result?.subtasks).toEqual([]);
       expect(result?.dependencies).toEqual([]);
       expect(result?.activities).toBeUndefined();
@@ -1323,6 +1326,137 @@ describe('TaskService', () => {
       // comment with time should come first, topic without time at end
       expect(result?.activities?.[0].type).toBe('comment');
       expect(result?.activities?.[1].type).toBe('topic');
+    });
+
+    it('exposes createdByAgentId and overlays inbox authors via catalog identity', async () => {
+      const task = {
+        assigneeAgentId: 'agt_local',
+        assigneeUserId: null,
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        createdByAgentId: 'agt_inbox',
+        createdByUserId: 'user-1',
+        description: null,
+        error: null,
+        heartbeatInterval: null,
+        heartbeatTimeout: null,
+        id: 'task_001',
+        identifier: 'TASK-1',
+        instruction: null,
+        lastHeartbeatAt: null,
+        name: 'Inbox created',
+        parentTaskId: null,
+        priority: 'normal',
+        status: 'todo',
+        totalTopics: 0,
+      };
+
+      mockTaskModel.resolve.mockResolvedValue(task);
+      mockTaskModel.findAllDescendants.mockResolvedValue([]);
+      mockTaskModel.getDependencies.mockResolvedValue([]);
+      mockTaskTopicModel.findWithHandoff.mockResolvedValue([]);
+      mockBriefModel.findByTaskId.mockResolvedValue([]);
+      mockTaskModel.getComments.mockResolvedValue([]);
+      mockTaskModel.getTreePinnedDocuments.mockResolvedValue({ nodeMap: {}, tree: [] });
+      mockTaskModel.findByIds.mockResolvedValue([]);
+      mockTaskModel.getCheckpointConfig.mockReturnValue({});
+      mockTaskModel.getVerifyConfig.mockReturnValue(undefined);
+      mockAgentModel.getAgentAvatarsByIds.mockResolvedValue([
+        {
+          avatar: DEFAULT_INBOX_AVATAR,
+          backgroundColor: null,
+          id: 'agt_inbox',
+          isInbox: true,
+          slug: INBOX_SESSION_ID,
+          title: DEFAULT_INBOX_TITLE,
+        },
+        {
+          avatar: '🤖',
+          backgroundColor: '#000',
+          id: 'agt_local',
+          isInbox: false,
+          slug: 'researcher',
+          title: 'Local assistant',
+        },
+      ]);
+      vi.spyOn(PlatformDefaultInboxService.prototype, 'getPublishedIdentity').mockResolvedValue({
+        avatar: '/f/pba_published',
+        backgroundColor: '#123456',
+        title: 'Published assistant',
+      });
+
+      const service = new TaskService(db, userId);
+      const result = await service.getTaskDetail('TASK-1');
+
+      expect(result?.createdByAgentId).toBe('agt_inbox');
+      expect(result?.createdByUserId).toBe('user-1');
+
+      const created = result?.activities?.find((a) => a.type === 'created');
+      expect(created?.author).toEqual({
+        avatar: '/f/pba_published',
+        id: 'agt_inbox',
+        isInbox: true,
+        name: 'Published assistant',
+        type: 'agent',
+      });
+    });
+
+    it('keeps a non-inbox agent author title and avatar unchanged', async () => {
+      const task = {
+        assigneeAgentId: 'agt_local',
+        assigneeUserId: null,
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        createdByAgentId: 'agt_local',
+        createdByUserId: 'user-1',
+        description: null,
+        error: null,
+        heartbeatInterval: null,
+        heartbeatTimeout: null,
+        id: 'task_001',
+        identifier: 'TASK-1',
+        instruction: null,
+        lastHeartbeatAt: null,
+        name: 'Local created',
+        parentTaskId: null,
+        priority: 'normal',
+        status: 'todo',
+        totalTopics: 0,
+      };
+
+      mockTaskModel.resolve.mockResolvedValue(task);
+      mockTaskModel.findAllDescendants.mockResolvedValue([]);
+      mockTaskModel.getDependencies.mockResolvedValue([]);
+      mockTaskTopicModel.findWithHandoff.mockResolvedValue([]);
+      mockBriefModel.findByTaskId.mockResolvedValue([]);
+      mockTaskModel.getComments.mockResolvedValue([]);
+      mockTaskModel.getTreePinnedDocuments.mockResolvedValue({ nodeMap: {}, tree: [] });
+      mockTaskModel.findByIds.mockResolvedValue([]);
+      mockTaskModel.getCheckpointConfig.mockReturnValue({});
+      mockTaskModel.getVerifyConfig.mockReturnValue(undefined);
+      mockAgentModel.getAgentAvatarsByIds.mockResolvedValue([
+        {
+          avatar: '🤖',
+          backgroundColor: '#000',
+          id: 'agt_local',
+          isInbox: false,
+          slug: 'researcher',
+          title: 'Local assistant',
+        },
+      ]);
+      const getPublishedIdentity = vi.spyOn(
+        PlatformDefaultInboxService.prototype,
+        'getPublishedIdentity',
+      );
+
+      const service = new TaskService(db, userId);
+      const result = await service.getTaskDetail('TASK-1');
+
+      expect(getPublishedIdentity).not.toHaveBeenCalled();
+      expect(result?.activities?.find((a) => a.type === 'created')?.author).toEqual({
+        avatar: '🤖',
+        id: 'agt_local',
+        name: 'Local assistant',
+        type: 'agent',
+      });
     });
   });
 

@@ -49,7 +49,7 @@ import {
 } from '../schemas';
 import type { LobeChatDatabase } from '../type';
 import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
-import { normalizeInboxAgentMeta } from '../utils/inboxAgent';
+import { isInboxAgentIdentity, normalizeInboxAgentMeta } from '../utils/inboxAgent';
 import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 
 /**
@@ -418,8 +418,10 @@ export class AgentModel {
   };
 
   /**
-   * Get minimal agent info (avatar, title, backgroundColor) by IDs.
-   * For inbox agent (slug='inbox'), falls back to LobeAI defaults when avatar/title are missing.
+   * Get minimal agent info (avatar, title, backgroundColor, slug, isInbox) by IDs.
+   * For inbox agent (slug='inbox'), falls back to DEFAULT_INBOX_* when avatar/title are blank.
+   * Callers that need the platform catalog overlay must apply it themselves — this
+   * model must not import enterprise catalog services.
    */
   getAgentAvatarsByIds = async (ids: string[]) => {
     if (ids.length === 0) return [];
@@ -435,7 +437,14 @@ export class AgentModel {
       .from(agents)
       .where(and(this.ownership(), inArray(agents.id, ids)));
 
-    return rows.map(({ slug, ...row }) => normalizeInboxAgentMeta(row, { slug }));
+    return rows.map(({ slug, ...row }) => {
+      const isInbox = isInboxAgentIdentity({ slug });
+      return {
+        ...normalizeInboxAgentMeta(row, { slug }),
+        isInbox,
+        slug,
+      };
+    });
   };
 
   /** Owner/workspace-scoped batch identity lookup for managed mutation guards. */

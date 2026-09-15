@@ -57,6 +57,8 @@ describe('AgentModel.getAgentAvatarsByIds', () => {
       avatar: '🤖',
       backgroundColor: '#ff0000',
       id: 'agent-av-1',
+      isInbox: false,
+      slug: 'agent-av-1',
       title: 'Agent One',
     });
   });
@@ -92,6 +94,8 @@ describe('AgentModel.getAgentAvatarsByIds', () => {
       avatar: DEFAULT_INBOX_AVATAR,
       backgroundColor: null,
       id: 'agent-inbox',
+      isInbox: true,
+      slug: INBOX_SESSION_ID,
       title: DEFAULT_INBOX_TITLE,
     });
   });
@@ -114,6 +118,8 @@ describe('AgentModel.getAgentAvatarsByIds', () => {
       avatar: '🤖',
       backgroundColor: '#123456',
       id: 'agent-inbox-custom',
+      isInbox: true,
+      slug: 'inbox',
       title: 'Custom Inbox',
     });
   });
@@ -133,6 +139,13 @@ describe('AgentModel.getAgentAvatarsByIds', () => {
     const result = await model.getAgentAvatarsByIds(['agent-fields']);
 
     expect(result).toHaveLength(1);
-    expect(Object.keys(result[0]).sort()).toEqual(['avatar', 'backgroundColor', 'id', 'title']);
+    expect(Object.keys(result[0]).sort()).toEqual([
+      'avatar',
+      'backgroundColor',
+      'id',
+      'isInbox',
+      'slug',
+      'title',
+    ]);
   });
 });
