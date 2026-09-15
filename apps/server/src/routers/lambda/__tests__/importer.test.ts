@@ -69,12 +69,12 @@ describe('importerRouter', () => {
     it('should successfully import file data', async () => {
       const caller = importerRouter.createCaller(ctx);
 
-      const result = await caller.importByFile({ pathname: 'test.json' });
+      const result = await caller.importByFile({ pathname: 'files/test.json' });
 
       expect(result).toEqual(mockImportResult);
-      expect(mockGetFileContent).toHaveBeenCalledWith('test.json');
+      expect(mockGetFileContent).toHaveBeenCalledWith('files/test.json');
       expect(mockImportData).toHaveBeenCalledWith(JSON.parse(mockFileContent));
-      expect(mockDeleteFile).toHaveBeenCalledWith('test.json');
+      expect(mockDeleteFile).toHaveBeenCalledWith('files/test.json');
     });
 
     it('should handle PG data import', async () => {
@@ -82,7 +82,7 @@ describe('importerRouter', () => {
 
       const caller = importerRouter.createCaller(ctx);
 
-      const result = await caller.importByFile({ pathname: 'test.json' });
+      const result = await caller.importByFile({ pathname: 'files/test.json' });
 
       expect(result).toEqual(mockImportResult);
       expect(mockImportPgData).toHaveBeenCalledWith(mockPgData);
@@ -93,7 +93,8 @@ describe('importerRouter', () => {
 
       const caller = importerRouter.createCaller(ctx);
 
-      await expect(caller.importByFile({ pathname: 'test.json' })).rejects.toThrow(TRPCError);
+      await expect(caller.importByFile({ pathname: 'files/test.json' })).rejects.toThrow(TRPCError);
+      expect(mockDeleteFile).not.toHaveBeenCalled();
     });
 
     it('should throw error for invalid JSON', async () => {
@@ -101,7 +102,29 @@ describe('importerRouter', () => {
 
       const caller = importerRouter.createCaller(ctx);
 
-      await expect(caller.importByFile({ pathname: 'test.json' })).rejects.toThrow(TRPCError);
+      await expect(caller.importByFile({ pathname: 'files/test.json' })).rejects.toThrow(TRPCError);
+    });
+
+    it('should reject a pathname outside the client upload prefix before reading or deleting', async () => {
+      const caller = importerRouter.createCaller(ctx);
+
+      await expect(
+        caller.importByFile({ pathname: 'user/avatar/user_1/photo.png' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mockGetFileContent).not.toHaveBeenCalled();
+      expect(mockDeleteFile).not.toHaveBeenCalled();
+    });
+
+    it('should reject a pathname with parent-directory segments before deleting', async () => {
+      const caller = importerRouter.createCaller(ctx);
+
+      await expect(
+        caller.importByFile({ pathname: 'files/../secrets/data.json' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mockGetFileContent).not.toHaveBeenCalled();
+      expect(mockDeleteFile).not.toHaveBeenCalled();
     });
   });
 

@@ -16,6 +16,7 @@ import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { AgentEvalRunService } from '@/server/services/agentEvalRun';
 import { FileService } from '@/server/services/file';
+import { assertClientObjectKey } from '@/server/services/file/objectKeyPolicy';
 import { AgentEvalRunWorkflow } from '@/server/workflows/agentEvalRun';
 
 const rubricTypeSchema = z.enum([
@@ -293,13 +294,14 @@ export const agentEvalRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const pathname = assertClientObjectKey(input.pathname);
       const format = input.format || 'auto';
-      const resolvedFilename = input.filename || input.pathname;
+      const resolvedFilename = input.filename || pathname;
       const isXlsx = format === 'xlsx' || resolvedFilename?.match(/\.xlsx?$/i);
 
       const content = isXlsx
-        ? await ctx.fileService.getFileByteArray(input.pathname)
-        : await ctx.fileService.getFileContent(input.pathname);
+        ? await ctx.fileService.getFileByteArray(pathname)
+        : await ctx.fileService.getFileContent(pathname);
 
       try {
         const result = await parseDataset(content, {
@@ -341,13 +343,14 @@ export const agentEvalRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const pathname = assertClientObjectKey(input.pathname);
       const format = input.format || 'auto';
-      const resolvedFilename = input.filename || input.pathname;
+      const resolvedFilename = input.filename || pathname;
       const isXlsx = format === 'xlsx' || resolvedFilename?.match(/\.xlsx?$/i);
 
       const content = isXlsx
-        ? await ctx.fileService.getFileByteArray(input.pathname)
-        : await ctx.fileService.getFileContent(input.pathname);
+        ? await ctx.fileService.getFileByteArray(pathname)
+        : await ctx.fileService.getFileContent(pathname);
 
       let parsed;
       try {

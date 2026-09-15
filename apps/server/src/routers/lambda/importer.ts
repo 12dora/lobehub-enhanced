@@ -7,6 +7,7 @@ import { DataImporterRepos } from '@/database/repositories/dataImporter';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { FileService } from '@/server/services/file';
+import { assertClientObjectKey } from '@/server/services/file/objectKeyPolicy';
 import { type ImportPgDataStructure } from '@/types/export';
 import { type ImporterEntryData, type ImportResultData } from '@/types/importer';
 
@@ -28,10 +29,11 @@ export const importerRouter = router({
   importByFile: workspaceImportProcedure
     .input(z.object({ pathname: z.string() }))
     .mutation(async ({ input, ctx }): Promise<ImportResultData> => {
+      const pathname = assertClientObjectKey(input.pathname);
       let data: ImporterEntryData | undefined;
 
       try {
-        const dataStr = await ctx.fileService.getFileContent(input.pathname);
+        const dataStr = await ctx.fileService.getFileContent(pathname);
         data = JSON.parse(dataStr);
       } catch {
         data = undefined;
@@ -40,7 +42,7 @@ export const importerRouter = router({
       if (!data) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `Failed to read file at ${input.pathname}`,
+          message: `Failed to read file at ${pathname}`,
         });
       }
 
@@ -54,7 +56,7 @@ export const importerRouter = router({
       }
 
       // clean file after upload
-      await ctx.fileService.deleteFile(input.pathname);
+      await ctx.fileService.deleteFile(pathname);
 
       return result;
     }),

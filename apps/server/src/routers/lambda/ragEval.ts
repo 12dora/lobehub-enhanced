@@ -29,6 +29,7 @@ import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { createAsyncCaller } from '@/server/routers/async';
 import { FileService } from '@/server/services/file';
+import { assertClientObjectKey } from '@/server/services/file/objectKeyPolicy';
 
 const ragEvalProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
@@ -144,7 +145,8 @@ export const ragEvalRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const dataStr = await ctx.fileService.getFileContent(input.pathname);
+      const pathname = assertClientObjectKey(input.pathname);
+      const dataStr = await ctx.fileService.getFileContent(pathname);
       const items = JSONL.parse<InsertEvalDatasetRecord>(dataStr);
 
       insertEvalDatasetRecordSchema.array().parse(items);
