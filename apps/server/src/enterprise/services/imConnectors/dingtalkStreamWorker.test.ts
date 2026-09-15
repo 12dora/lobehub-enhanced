@@ -67,6 +67,25 @@ describe('DingTalkStreamWorker', () => {
     );
   });
 
+  it('retries a failed first connect on the next tick without a config change', async () => {
+    mockConnect.mockRejectedValueOnce(new Error('gateway 401'));
+    const worker = new DingTalkStreamWorker();
+    await worker.tickForTest();
+    expect(mockConnect).toHaveBeenCalledTimes(1);
+    expect(worker.connectionForTest).toBeNull();
+    expect(writeDingTalkStreamStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lastError: 'gateway 401', state: 'error' }),
+    );
+
+    await worker.tickForTest();
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+    expect(worker.connectionForTest).not.toBeNull();
+
+    // once open, later ticks do not re-create the connection
+    await worker.tickForTest();
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+  });
+
   it('reconnects when credentials change', async () => {
     const worker = new DingTalkStreamWorker();
     await worker.tickForTest();

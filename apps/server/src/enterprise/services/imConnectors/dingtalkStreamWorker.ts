@@ -112,6 +112,13 @@ export class DingTalkStreamWorker {
       return;
     }
 
+    // A failed first connect disposes the connection (see `connect`); retry on every tick
+    // until the stream opens once, after which the connection reconnects by itself.
+    if (enabled && config && !this.connection) {
+      await this.connect(config);
+      return;
+    }
+
     await this.flushStatus();
   }
 
@@ -154,7 +161,9 @@ export class DingTalkStreamWorker {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.lastErrorAt = new Date().toISOString();
       await this.flushStatus();
-      log('connect failed: %O', error);
+      log('connect failed, will retry on the next tick: %O', error);
+      this.connection?.disconnect();
+      this.connection = null;
     }
   }
 
