@@ -5,7 +5,12 @@ import type {
 } from '@lobechat/chat-adapter-dingtalk';
 import {
   buildDingTalkForwardHeaders,
+  DINGTALK_NOT_ASKER_REPLY,
+  DingTalkApiClient,
   DingTalkStreamConnection,
+  getDingTalkCard,
+  getDingTalkSession,
+  isSessionWebhookLive,
 } from '@lobechat/chat-adapter-dingtalk';
 import debug from 'debug';
 
@@ -90,8 +95,72 @@ export class DingTalkWSConnection {
         response.status,
         this.options.webhookUrl,
       );
+      if (eventType === 'card.callback') {
+        await this.maybeReplyNotAsker(data as DingTalkCardCallback, response);
+      }
     } catch (err) {
       log('Failed to forward event %s to webhook: %O', eventType, err);
+    }
+  }
+
+  private async maybeReplyNotAsker(
+    payload: DingTalkCardCallback,
+    response: Response,
+  ): Promise<void> {
+    let body: { ignored?: string; replied?: boolean };
+    try {
+      body = (await response.json()) as { ignored?: string; replied?: boolean };
+    } catch {
+      return;
+    }
+    if (body.ignored !== 'not_asker' || body.replied === true) return;
+
+    const card = payload.outTrackId ? getDingTalkCard(payload.outTrackId) : undefined;
+    const session = card
+      ? (getDingTalkSession(card.threadId) ?? getDingTalkSession(card.conversationId))
+      : undefined;
+    const api = new DingTalkApiClient(this.options.clientId, this.options.clientSecret);
+    const atUserIds = payload.userId ? [payload.userId] : [];
+    const text = payload.userId
+      ? `@${payload.userId} ${DINGTALK_NOT_ASKER_REPLY}`
+      : DINGTALK_NOT_ASKER_REPLY;
+
+    try {
+      if (isSessionWebhookLive(session) && session?.sessionWebhook) {
+        const webhookPayload: Record<string, unknown> = {
+          markdown: { text, title: DINGTALK_NOT_ASKER_REPLY },
+          msgtype: 'markdown',
+        };
+        if (atUserIds.length > 0) webhookPayload.at = { atUserIds };
+        await api.sendBySessionWebhook(session.sessionWebhook, webhookPayload);
+        return;
+      }
+
+      const robotCode = session?.robotCode;
+      if (!robotCode) return;
+      const msgParam = JSON.stringify({ text, title: DINGTALK_NOT_ASKER_REPLY });
+      const isDm = (card?.conversationType ?? session?.conversationType) === '1';
+      if (isDm) {
+        const userId = payload.userId || session?.senderStaffId;
+        if (!userId) return;
+        await api.sendOtoMessage({
+          msgKey: 'sampleMarkdown',
+          msgParam,
+          robotCode,
+          userIds: [userId],
+        });
+        return;
+      }
+      const openConversationId = card?.conversationId;
+      if (!openConversationId) return;
+      await api.sendGroupMessage({
+        msgKey: 'sampleMarkdown',
+        msgParam,
+        openConversationId,
+        robotCode,
+      });
+    } catch (error) {
+      log('maybeReplyNotAsker: failed: %O', error);
     }
   }
 }

@@ -16,6 +16,7 @@ import {
   clearDingTalkReplySink,
   getDingTalkReplySink,
 } from '@/server/services/messenger/platforms/dingtalk/cards';
+import { DINGTALK_TOPIC_TITLE_PREFIX } from '@/server/services/messenger/platforms/dingtalk/const';
 import { forwardDingTalkWaitingQuestion } from '@/server/services/messenger/platforms/dingtalk/questions';
 import { drainDingTalkQueue } from '@/server/services/messenger/platforms/dingtalk/queue';
 import { SystemAgentService } from '@/server/services/systemAgent';
@@ -740,7 +741,7 @@ export class BotCallbackService {
         const prefixed = body.topicTitlePrefix
           ? `${body.topicTitlePrefix}${title}`
           : platform === 'dingtalk'
-            ? `钉钉 · ${title}`
+            ? `${DINGTALK_TOPIC_TITLE_PREFIX}${title}`
             : title;
 
         await topicModel.update(topicId, { title: prefixed });

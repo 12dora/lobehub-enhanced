@@ -1308,4 +1308,49 @@ describe('BotCallbackService', () => {
     );
     expect(mockEditMessage).not.toHaveBeenCalled();
   });
+
+  it('prefixes DingTalk auto titles with DINGTALK_TOPIC_TITLE_PREFIX when the body omits topicTitlePrefix', async () => {
+    const { DINGTALK_TOPIC_TITLE_PREFIX } =
+      await import('@/server/services/messenger/platforms/dingtalk/const');
+    mockFindById.mockResolvedValue({ title: null });
+    mockGenerateTopicTitle.mockResolvedValue('周报');
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '这是周报',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        topicId: 'topic-dt',
+        type: 'completion',
+        userId: 'user-1',
+        userPrompt: '写周报',
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockTopicUpdate).toHaveBeenCalledWith('topic-dt', {
+      title: `${DINGTALK_TOPIC_TITLE_PREFIX}周报`,
+    });
+  });
+
+  it('uses body.topicTitlePrefix when provided', async () => {
+    mockFindById.mockResolvedValue({ title: null });
+    mockGenerateTopicTitle.mockResolvedValue('周报');
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '这是周报',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        topicId: 'topic-dt',
+        topicTitlePrefix: '钉钉 · ',
+        type: 'completion',
+        userId: 'user-1',
+        userPrompt: '写周报',
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockTopicUpdate).toHaveBeenCalledWith('topic-dt', { title: '钉钉 · 周报' });
+  });
 });

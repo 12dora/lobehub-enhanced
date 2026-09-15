@@ -225,6 +225,7 @@ export class DingTalkApiClient {
       body: JSON.stringify(payload),
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
       method: 'POST',
+      redirect: 'error',
     });
     if (!response.ok) {
       await throwApiError('POST', 'sessionWebhook', response);

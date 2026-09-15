@@ -36,7 +36,13 @@ import type {
   DingTalkSessionContext,
   DingTalkThreadId,
 } from './types';
-import { CONVERSATION_TYPE_DM, CONVERSATION_TYPE_GROUP, MARKDOWN_MAX_BYTES } from './types';
+import {
+  CONVERSATION_TYPE_DM,
+  CONVERSATION_TYPE_GROUP,
+  DINGTALK_MARKDOWN_TITLE_FALLBACK,
+  DINGTALK_NOT_ASKER_REPLY,
+  MARKDOWN_MAX_BYTES,
+} from './types';
 
 class DingTalkFormatConverter extends BaseFormatConverter {
   fromAst(ast: Root): string {
@@ -129,8 +135,8 @@ export function chunkMarkdown(text: string, maxBytes: number = MARKDOWN_MAX_BYTE
 
 const markdownTitle = (text: string): string => {
   const line = text.split('\n').find((item) => item.trim());
-  if (!line) return 'Reply';
-  return line.replace(/^#+\s*/, '').slice(0, 32) || 'Reply';
+  if (!line) return DINGTALK_MARKDOWN_TITLE_FALLBACK;
+  return line.replace(/^#+\s*/, '').slice(0, 32) || DINGTALK_MARKDOWN_TITLE_FALLBACK;
 };
 
 const guessMimeFromName = (name: string, fallback: string): string => {
@@ -612,16 +618,29 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
     });
   }
 
-  private handleCardCallback(body: Record<string, unknown>, options?: WebhookOptions): Response {
+  private async handleCardCallback(
+    body: Record<string, unknown>,
+    options?: WebhookOptions,
+  ): Promise<Response> {
     const outTrackId = typeof body.outTrackId === 'string' ? body.outTrackId : '';
     const card = outTrackId ? getDingTalkCard(outTrackId) : undefined;
     if (!card) {
-      return Response.json({ ok: true });
+      return Response.json({ ignored: 'unknown_card', ok: true });
     }
 
     const userId = typeof body.userId === 'string' ? body.userId : undefined;
     if (userId !== card.askerStaffId) {
-      return Response.json({ ignored: 'not_asker', ok: true });
+      try {
+        const session =
+          getDingTalkSession(card.threadId) ?? getDingTalkSession(card.conversationId);
+        const atUserIds =
+          userId && card.conversationType === CONVERSATION_TYPE_GROUP ? [userId] : [];
+        const text = userId ? `@${userId} ${DINGTALK_NOT_ASKER_REPLY}` : DINGTALK_NOT_ASKER_REPLY;
+        await this.dispatchMarkdown(card.threadId, session, text, atUserIds);
+      } catch (error) {
+        this.logger?.warn?.('Failed to send not_asker reply: %s', error);
+      }
+      return Response.json({ ignored: 'not_asker', ok: true, replied: true });
     }
 
     const command = extractCardCommand(body);

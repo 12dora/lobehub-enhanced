@@ -105,4 +105,37 @@ describe('tryAutoLinkDingTalk', () => {
     expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
     expect(mockUpsertForPlatform).not.toHaveBeenCalled();
   });
+
+  it('treats an empty staffId as unknown and still sends the login sentence', async () => {
+    const link = await tryAutoLinkDingTalk({
+      binder,
+      chatId: 'cid_1',
+      senderStaffId: '   ',
+      serverDB,
+    });
+
+    expect(link).toBeNull();
+    expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
+    expect(mockFindByEmail).not.toHaveBeenCalled();
+    expect(mockUpsertForPlatform).not.toHaveBeenCalled();
+  });
+
+  it('logs send failures of the unknown-user reply at error level', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    sendDmText.mockRejectedValueOnce(new Error('webhook expired'));
+
+    const link = await tryAutoLinkDingTalk({
+      binder,
+      chatId: 'cid_1',
+      senderStaffId: 'unknown_staff',
+      serverDB,
+    });
+
+    expect(link).toBeNull();
+    expect(error).toHaveBeenCalledWith(
+      'tryAutoLinkDingTalk: failed to send unknown-user reply',
+      expect.any(Error),
+    );
+    error.mockRestore();
+  });
 });

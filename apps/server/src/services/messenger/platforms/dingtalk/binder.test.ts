@@ -55,6 +55,8 @@ vi.mock('@/server/services/bot/platforms/dingtalk/client', () => ({
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
+const { getDingTalkSession, isSessionWebhookLive } =
+  await import('@lobechat/chat-adapter-dingtalk');
 const { MessengerDingTalkBinder } = await import('./binder');
 
 const VALID_CONFIG = {
@@ -75,6 +77,8 @@ beforeEach(() => {
   sendBySessionWebhook.mockResolvedValue(undefined);
   sendGroupMessage.mockResolvedValue({});
   mockGetDingTalkCard.mockReturnValue(undefined);
+  vi.mocked(getDingTalkSession).mockReturnValue(undefined);
+  vi.mocked(isSessionWebhookLive).mockReturnValue(false);
   createClient.mockReturnValue({ id: 'client' });
 });
 
@@ -99,6 +103,27 @@ describe('MessengerDingTalkBinder.sendDmText', () => {
     vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce(null);
     await new MessengerDingTalkBinder().sendDmText('staff_1', 'hello');
     expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('uses 回复 as markdown title when the body has no title line', async () => {
+    vi.mocked(getDingTalkSession).mockReturnValue({
+      conversationId: 'cid',
+      conversationType: '1',
+      senderStaffId: 'staff_1',
+      sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      sessionWebhookExpiredTime: Date.now() + 60_000,
+    } as any);
+    vi.mocked(isSessionWebhookLive).mockReturnValue(true);
+
+    await new MessengerDingTalkBinder().sendDmText('dingtalk:cid', '\n\n');
+
+    expect(sendBySessionWebhook).toHaveBeenCalledWith(
+      'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      expect.objectContaining({
+        markdown: expect.objectContaining({ title: '回复' }),
+        msgtype: 'markdown',
+      }),
+    );
   });
 });
 

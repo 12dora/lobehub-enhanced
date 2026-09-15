@@ -16,7 +16,11 @@ import type { AgentReplySink } from '@/server/services/bot/AgentBridgeService';
 import { sendDingTalkAttachments } from '@/server/services/bot/platforms/dingtalk/sendAttachments';
 
 import type { DingTalkOutboundAttachment } from './attachments';
-import { DINGTALK_LIST_PAGE_SIZE, DINGTALK_THINKING_REPLY } from './const';
+import {
+  DINGTALK_LIST_PAGE_SIZE,
+  DINGTALK_MARKDOWN_TITLE_FALLBACK,
+  DINGTALK_THINKING_REPLY,
+} from './const';
 
 const log = debug('lobe-server:messenger:dingtalk:cards');
 
@@ -36,8 +40,8 @@ export interface DingTalkChoiceEntry {
 
 const markdownTitle = (text: string): string => {
   const line = text.split('\n').find((item) => item.trim());
-  if (!line) return 'Reply';
-  return line.replace(/^#+\s*/, '').slice(0, 32) || 'Reply';
+  if (!line) return DINGTALK_MARKDOWN_TITLE_FALLBACK;
+  return line.replace(/^#+\s*/, '').slice(0, 32) || DINGTALK_MARKDOWN_TITLE_FALLBACK;
 };
 
 export const wrapDingTalkAskerCommand = (

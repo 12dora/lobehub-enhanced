@@ -6,13 +6,24 @@ import { AgentBridgeService } from '@/server/services/bot/AgentBridgeService';
 
 import { MessengerRouter } from './MessengerRouter';
 import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
+import { tryAutoLinkDingTalk } from './platforms/dingtalk/autoLink';
 import { sendDingTalkChoiceList } from './platforms/dingtalk/cards';
+import {
+  DINGTALK_CHAT_DISABLED_REPLY,
+  DINGTALK_IDLE_NEW_TOPIC_NOTICE,
+  DINGTALK_NO_ACTIVE_AGENT_REPLY,
+  DINGTALK_TOPIC_TITLE_PREFIX,
+} from './platforms/dingtalk/const';
 import {
   clearDingTalkPendingQuestion,
   loadDingTalkPendingQuestion,
   resolveQuestionAnswer,
 } from './platforms/dingtalk/questions';
 import { pushDingTalkQueuedMessage } from './platforms/dingtalk/queue';
+import {
+  claimDingTalkChatDisabledNotice,
+  incrementDingTalkDailyCounter,
+} from './platforms/dingtalk/redis';
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn().mockResolvedValue({}),
@@ -343,6 +354,11 @@ beforeEach(() => {
   mockDingTalkBinder.extractCallbackAction.mockReset();
   mockDingTalkBinder.extractCallbackAction.mockResolvedValue(null);
   mockSetActiveAgentById.mockReset();
+  vi.mocked(tryAutoLinkDingTalk).mockReset();
+  vi.mocked(tryAutoLinkDingTalk).mockResolvedValue(null);
+  vi.mocked(claimDingTalkChatDisabledNotice).mockReset();
+  vi.mocked(claimDingTalkChatDisabledNotice).mockResolvedValue(false);
+  vi.mocked(incrementDingTalkDailyCounter).mockReset();
   mockTopicQuery.mockReset();
   mockTopicQuery.mockResolvedValue({ items: [], total: 0 });
   mockTopicFindById.mockReset();
@@ -1664,5 +1680,143 @@ describe('MessengerRouter DingTalk conversation UX', () => {
         },
       }),
     );
+  });
+});
+
+describe('MessengerRouter DingTalk G2a glue', () => {
+  const runInbound = async (text = 'hello from ding') => {
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    const thread = fakeDingTalkDm();
+    await handler(
+      thread,
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text,
+      }),
+    );
+    return thread;
+  };
+
+  it('auto-links before verify-im and never calls handleUnlinkedMessage', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValueOnce(undefined);
+    vi.mocked(tryAutoLinkDingTalk).mockResolvedValueOnce(fakeDingTalkLink() as any);
+
+    await runInbound();
+
+    expect(tryAutoLinkDingTalk).toHaveBeenCalledWith(
+      expect.objectContaining({ senderStaffId: 'staff_1' }),
+    );
+    expect(mockDingTalkBinder.handleUnlinkedMessage).not.toHaveBeenCalled();
+    expect(mockHandleMention).toHaveBeenCalled();
+  });
+
+  it('returns after unknown staff auto-link without the verify-im flow', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValueOnce(undefined);
+    vi.mocked(tryAutoLinkDingTalk).mockResolvedValueOnce(null);
+
+    await runInbound();
+
+    expect(mockDingTalkBinder.handleUnlinkedMessage).not.toHaveBeenCalled();
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('drops inbound when chat is disabled and sends the daily notice once', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...DINGTALK_CONFIG,
+      chatEnabled: false,
+    } as any);
+    vi.mocked(claimDingTalkChatDisabledNotice).mockResolvedValueOnce(true);
+
+    await runInbound();
+
+    expect(claimDingTalkChatDisabledNotice).toHaveBeenCalledWith('staff_1');
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      DINGTALK_CHAT_DISABLED_REPLY,
+    );
+    expect(mockHandleMention).not.toHaveBeenCalled();
+  });
+
+  it('increments the daily inbound message counter', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+
+    await runInbound();
+
+    expect(incrementDingTalkDailyCounter).toHaveBeenCalledWith('messages');
+  });
+
+  it('passes idle / title bridge opts and stamps topic metadata', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    const thread = fakeDingTalkDm();
+    thread.state = Promise.resolve({ topicId: 'topic_dt' });
+
+    const handler = mockChatBot.onNewMention.mock.calls[0][0] as (
+      thread: any,
+      msg: any,
+    ) => Promise<void>;
+    await handler(
+      thread,
+      fakeMessage({
+        author: { isBot: false, userId: 'staff_1', userName: 'alice' },
+        text: 'hello from ding',
+      }),
+    );
+
+    expect(mockHandleMention).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        topicStaleReplyPrefix: DINGTALK_IDLE_NEW_TOPIC_NOTICE,
+        topicStaleThresholdMs: 24 * 60 * 60 * 1000,
+        topicTitlePrefix: DINGTALK_TOPIC_TITLE_PREFIX,
+      }),
+    );
+    expect(mockTopicUpdate).toHaveBeenCalledWith('topic_dt', {
+      metadata: {
+        messenger: { conversationType: 'dm', platform: 'dingtalk' },
+      },
+    });
+  });
+
+  it('disables idle rotation with Infinity when idleNewTopicEnabled is false', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue(fakeDingTalkLink());
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...DINGTALK_CONFIG,
+      idleNewTopicEnabled: false,
+    } as any);
+
+    await runInbound();
+
+    expect(mockHandleMention).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        topicStaleThresholdMs: Number.POSITIVE_INFINITY,
+        topicTitlePrefix: DINGTALK_TOPIC_TITLE_PREFIX,
+      }),
+    );
+  });
+
+  it('prompts DingTalk users with no agent to send /助手', async () => {
+    await loadDingTalkBot();
+    mockFindLink.mockResolvedValue({ ...fakeDingTalkLink(), activeAgentId: null });
+
+    await runInbound();
+
+    expect(mockDingTalkBinder.sendDmText).toHaveBeenCalledWith(
+      'dingtalk:cid',
+      DINGTALK_NO_ACTIVE_AGENT_REPLY,
+    );
+    expect(mockHandleMention).not.toHaveBeenCalled();
   });
 });

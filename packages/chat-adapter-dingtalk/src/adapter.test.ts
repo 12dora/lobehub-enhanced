@@ -267,7 +267,20 @@ describe('DingTalkAdapter inbound', () => {
         userId: 'staff_bob',
       }),
     );
-    expect(await res.json()).toEqual({ ignored: 'not_asker', ok: true });
+    expect(await res.json()).toEqual({ ignored: 'not_asker', ok: true, replied: true });
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns ignored unknown_card when the tap has no remembered card', async () => {
+    await init();
+    const res = await adapter.handleWebhook(
+      makeRequest({
+        content: { cardPrivateData: { actionIds: ['switch:agent_1'] } },
+        outTrackId: 'missing',
+        userId: 'staff_alice',
+      }),
+    );
+    expect(await res.json()).toEqual({ ignored: 'unknown_card', ok: true });
     expect(processMessage).not.toHaveBeenCalled();
   });
 

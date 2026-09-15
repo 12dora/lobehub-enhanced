@@ -5,6 +5,8 @@ import type { BotMessageAttachment } from '../types';
 
 const log = debug('bot-platform:dingtalk:send-attachments');
 
+const DINGTALK_IMAGE_SEND_FAILED = '图片发送失败';
+
 const fallbackFilename = (att: BotMessageAttachment, index: number): string => {
   if (att.name) return att.name;
   if (att.fetchUrl) {
@@ -106,9 +108,10 @@ const sendImage = async (
     await sendRobotMessage(api, target, 'sampleImageMsg', JSON.stringify({ photoURL }));
     return true;
   }
-  log(
+  console.error(
     'sendDingTalkAttachments: skipping image — robot API sampleImageMsg needs an https photoURL (have media_id only)',
   );
+  await notifyImageSendFailed(api, target);
   return false;
 };
 
@@ -135,6 +138,22 @@ const sendFile = async (
   return true;
 };
 
+const notifyImageSendFailed = async (
+  api: DingTalkApiClient,
+  target: DingTalkSendTarget,
+): Promise<void> => {
+  try {
+    await sendRobotMessage(
+      api,
+      target,
+      'sampleText',
+      JSON.stringify({ content: DINGTALK_IMAGE_SEND_FAILED }),
+    );
+  } catch (error) {
+    console.error('sendDingTalkAttachments: failed to notify image send failure', error);
+  }
+};
+
 export const sendDingTalkAttachments = async (
   api: DingTalkApiClient,
   target: DingTalkSendTarget,
@@ -149,6 +168,13 @@ export const sendDingTalkAttachments = async (
         continue;
       }
       const filename = fallbackFilename(att, index);
+      if (att.type === 'image' && !target.sessionWebhook && !isHttpsPhotoUrl(att.fetchUrl)) {
+        console.error(
+          'sendDingTalkAttachments: cannot deliver image without session webhook or https photoURL',
+        );
+        await notifyImageSendFailed(api, target);
+        continue;
+      }
       const mediaType = att.type === 'image' ? 'image' : 'file';
       const mediaId = await api.uploadMedia({ buffer, filename, type: mediaType });
 

@@ -81,13 +81,21 @@ describe('sendDingTalkAttachments', () => {
     });
   });
 
-  it('does not send sampleImageMsg when the only handle is media_id', async () => {
+  it('does not send sampleImageMsg when the only handle is media_id and notifies the user', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const delivered = await sendDingTalkAttachments(api, { robotCode: 'r', userIds: ['staff_1'] }, [
       { data: Buffer.from('img').toString('base64'), name: 'pic.jpg', type: 'image' },
     ]);
     expect(delivered).toBe(0);
-    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(uploadMedia).not.toHaveBeenCalled();
+    expect(sendOtoMessage).toHaveBeenCalledWith({
+      msgKey: 'sampleText',
+      msgParam: JSON.stringify({ content: '图片发送失败' }),
+      robotCode: 'r',
+      userIds: ['staff_1'],
+    });
     expect(sendBySessionWebhook).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
   it('sends files via sampleFile { mediaId, fileName, fileType } on the robot API', async () => {

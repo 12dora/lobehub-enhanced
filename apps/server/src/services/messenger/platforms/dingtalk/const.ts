@@ -33,6 +33,7 @@ export const DINGTALK_RESUME_USAGE_REPLY = '用法：/继续 N';
 export const DINGTALK_RESUME_RANGE_REPLY = '序号超出范围。发送 /会话 查看最近会话。';
 export const DINGTALK_RESUMED_REPLY = '已切换到该会话。';
 export const DINGTALK_NO_ACTIVE_AGENT_REPLY = '未选择助手。发送 /助手 选择一个。';
+export const DINGTALK_MARKDOWN_TITLE_FALLBACK = '回复';
 
 export const DINGTALK_HELP_TEXT = [
   '命令：',

@@ -17,6 +17,14 @@ import {
 
 const log = debug('lobe-server:messenger:dingtalk:auto-link');
 
+const replyUnknownUser = async (params: TryAutoLinkDingTalkParams): Promise<void> => {
+  try {
+    await params.binder.sendDmText(params.chatId, DINGTALK_UNKNOWN_USER_REPLY);
+  } catch (error) {
+    console.error('tryAutoLinkDingTalk: failed to send unknown-user reply', error);
+  }
+};
+
 const findUserByDingTalkEmail = async (db: LobeChatDatabase, staffId: string) => {
   const email = buildDingTalkIdentityEmail(staffId);
   const exact = await UserModel.findByEmail(db, email);
@@ -55,7 +63,7 @@ export const tryAutoLinkDingTalk = async (
 ): Promise<MessengerAccountLinkItem | null> => {
   const staffId = params.senderStaffId.trim();
   if (!staffId) {
-    log('tryAutoLinkDingTalk: empty staffId');
+    await replyUnknownUser(params);
     return null;
   }
 
@@ -66,11 +74,7 @@ export const tryAutoLinkDingTalk = async (
       staffId,
       resolveDingTalkIdentityEmailDomain(),
     );
-    try {
-      await params.binder.sendDmText(params.chatId, DINGTALK_UNKNOWN_USER_REPLY);
-    } catch (error) {
-      log('tryAutoLinkDingTalk: failed to send unknown-user reply: %O', error);
-    }
+    await replyUnknownUser(params);
     return null;
   }
 

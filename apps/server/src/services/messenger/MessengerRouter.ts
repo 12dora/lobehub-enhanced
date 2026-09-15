@@ -571,13 +571,14 @@ export class MessengerRouter {
       if (platform === 'dingtalk') {
         await incrementDingTalkDailyCounter('messages');
         if (!link) {
-          link = await tryAutoLinkDingTalk({
-            binder,
-            chatId,
-            senderNick: message.author.userName,
-            senderStaffId: senderId,
-            serverDB,
-          });
+          link =
+            (await tryAutoLinkDingTalk({
+              binder,
+              chatId,
+              senderNick: message.author.userName,
+              senderStaffId: senderId,
+              serverDB,
+            })) ?? undefined;
           // Unknown staffId already received the login sentence. Never fall
           // through to the verify-im link-token flow.
           if (!link) return;
@@ -662,7 +663,10 @@ export class MessengerRouter {
         // In a channel, route the prompt ephemerally so the entire channel
         // doesn't see the system message.
         if (!link.activeAgentId) {
-          const noAgentText = 'No active agent selected. Send /agents to pick one.';
+          const noAgentText =
+            platform === 'dingtalk'
+              ? DINGTALK_NO_ACTIVE_AGENT_REPLY
+              : 'No active agent selected. Send /agents to pick one.';
           if (isChannelMention && binder.replyEphemeral) {
             const threadTs = String(thread.id).split(':')[2];
             await binder.replyEphemeral({

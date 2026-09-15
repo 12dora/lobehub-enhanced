@@ -174,6 +174,7 @@ export interface RememberDingTalkCardInput {
  */
 export function rememberDingTalkCard(outTrackId: string, memory: RememberDingTalkCardInput): void {
   if (!outTrackId) return;
+  if (!memory.conversationId.trim() || !memory.askerStaffId.trim()) return;
   const conversationType = memory.conversationType || CONVERSATION_TYPE_DM;
   const threadId =
     memory.threadId ??

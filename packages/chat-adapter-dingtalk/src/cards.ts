@@ -58,8 +58,9 @@ export function buildActionCardParam(options: {
 
 export interface DingTalkAiCardStreamOptions {
   cardTemplateId: string;
-  /** DM conversation id. Required to remember the card → thread mapping. */
+  /** Robot-message conversation id. Required (with staffId) to remember the card. */
   conversationId?: string;
+  /** Group open-conversation id for card delivery only — never used as conversationId. */
   openConversationId?: string;
   outTrackId?: string;
   robotCode: string;
@@ -93,10 +94,11 @@ export class DingTalkAiCardStream {
         staffId: this.options.staffId,
       });
       this.created = true;
-      const conversationId = this.options.conversationId || this.options.openConversationId || '';
-      if (this.options.staffId || conversationId) {
+      const conversationId = this.options.conversationId?.trim() ?? '';
+      const staffId = this.options.staffId?.trim() ?? '';
+      if (conversationId && staffId) {
         rememberDingTalkCard(this.outTrackId, {
-          askerStaffId: this.options.staffId ?? '',
+          askerStaffId: staffId,
           conversationId,
           conversationType: this.options.openConversationId
             ? CONVERSATION_TYPE_GROUP

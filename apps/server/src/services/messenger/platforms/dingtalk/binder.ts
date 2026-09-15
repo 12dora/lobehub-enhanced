@@ -22,7 +22,7 @@ import type {
   UnlinkedMessageContext,
 } from '../../types';
 import { wrapDingTalkAskerCommand } from './cards';
-import { DINGTALK_UNKNOWN_USER_REPLY } from './const';
+import { DINGTALK_MARKDOWN_TITLE_FALLBACK, DINGTALK_UNKNOWN_USER_REPLY } from './const';
 
 const log = debug('lobe-server:messenger:dingtalk');
 
@@ -30,8 +30,8 @@ const CALLBACK_PREFIX = 'messenger:';
 
 const markdownTitle = (text: string): string => {
   const line = text.split('\n').find((item) => item.trim());
-  if (!line) return 'Reply';
-  return line.replace(/^#+\s*/, '').slice(0, 32) || 'Reply';
+  if (!line) return DINGTALK_MARKDOWN_TITLE_FALLBACK;
+  return line.replace(/^#+\s*/, '').slice(0, 32) || DINGTALK_MARKDOWN_TITLE_FALLBACK;
 };
 
 const resolveRobotTarget = (chatId: string) => {

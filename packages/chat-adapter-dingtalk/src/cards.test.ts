@@ -71,4 +71,40 @@ describe('DingTalkAiCardStream', () => {
       threadId: 'dingtalk:cid_dm_1',
     });
   });
+
+  it('does not remember a card when conversationId is empty even if openConversationId is set', async () => {
+    const { clearDingTalkCards, getDingTalkCard } = await import('./threadId');
+    clearDingTalkCards();
+    const api = {
+      createAndDeliverCard: async () => ({}),
+    } as unknown as DingTalkApiClient;
+
+    const stream = new DingTalkAiCardStream(api, {
+      cardTemplateId: 'tpl',
+      openConversationId: 'cid_open_group',
+      outTrackId: 'out_open_only',
+      robotCode: 'r',
+      staffId: 'staff_1',
+    });
+    await stream.create();
+    expect(getDingTalkCard('out_open_only')).toBeUndefined();
+  });
+
+  it('does not remember a card when staffId is empty', async () => {
+    const { clearDingTalkCards, getDingTalkCard } = await import('./threadId');
+    clearDingTalkCards();
+    const api = {
+      createAndDeliverCard: async () => ({}),
+    } as unknown as DingTalkApiClient;
+
+    const stream = new DingTalkAiCardStream(api, {
+      cardTemplateId: 'tpl',
+      conversationId: 'cid_dm_1',
+      outTrackId: 'out_no_staff',
+      robotCode: 'r',
+      staffId: '',
+    });
+    await stream.create();
+    expect(getDingTalkCard('out_no_staff')).toBeUndefined();
+  });
 });

@@ -85,6 +85,7 @@ describe('DingTalkApiClient', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe('https://oapi.dingtalk.com/robot/sendBySession?session=abc');
+      expect((init as RequestInit).redirect).toBe('error');
       expect(
         (init.headers as Record<string, string>)['x-acs-dingtalk-access-token'],
       ).toBeUndefined();

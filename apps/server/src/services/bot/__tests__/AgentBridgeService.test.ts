@@ -5,10 +5,11 @@ const mockExecAgent = vi.hoisted(() => vi.fn());
 const mockFormatPrompt = vi.hoisted(() => vi.fn());
 const mockGetPlatform = vi.hoisted(() => vi.fn());
 const mockIsQueueAgentRuntimeEnabled = vi.hoisted(() => vi.fn());
+const mockTopicFindById = vi.hoisted(() => vi.fn());
 
 vi.mock('@/database/models/topic', () => ({
   TopicModel: vi.fn().mockImplementation(() => ({
-    findById: vi.fn().mockResolvedValue(undefined),
+    findById: mockTopicFindById,
   })),
 }));
 
@@ -121,6 +122,7 @@ describe('AgentBridgeService', () => {
     mockGetPlatform.mockReturnValue({ id: 'discord', supportsMessageEdit: true });
     mockGetUserSettings.mockResolvedValue({ general: { timezone: 'UTC' } });
     mockIsQueueAgentRuntimeEnabled.mockReturnValue(true);
+    mockTopicFindById.mockResolvedValue(undefined);
   });
 
   it('calls execAgent with hooks in queue mode for mention', async () => {
@@ -497,6 +499,86 @@ describe('AgentBridgeService', () => {
           resume: true,
           resumeToolResult,
         }),
+      );
+    });
+  });
+
+  describe('topic stale threshold and title prefix', () => {
+    const completionWebhookBody = () => {
+      const call = mockExecAgent.mock.calls.at(-1);
+      const hooks = call?.[0]?.hooks as
+        Array<{ id?: string; webhook?: { body?: Record<string, unknown> } }> | undefined;
+      return hooks?.find((h) => h.id === 'bot-completion')?.webhook?.body;
+    };
+
+    it('maps a stale topic into handleMention with topicStaleReplyPrefix as firstReplyPrefix', async () => {
+      mockTopicFindById.mockResolvedValue({
+        updatedAt: new Date(Date.now() - 5 * 60 * 60 * 1000),
+      });
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        topicStaleReplyPrefix: '已开始新会话',
+        topicStaleThresholdMs: 4 * 60 * 60 * 1000,
+      });
+
+      expect(thread.setState).toHaveBeenCalledWith(expect.objectContaining({ topicId: undefined }));
+      expect(completionWebhookBody()).toEqual(
+        expect.objectContaining({ firstReplyPrefix: '已开始新会话' }),
+      );
+    });
+
+    it('does not rotate when topicStaleThresholdMs is Infinity', async () => {
+      mockTopicFindById.mockResolvedValue({
+        updatedAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      });
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        topicStaleThresholdMs: Number.POSITIVE_INFINITY,
+        topicTitlePrefix: '钉钉 · ',
+      });
+
+      expect(thread.setState).not.toHaveBeenCalledWith(
+        expect.objectContaining({ topicId: undefined }),
+      );
+      expect(mockExecAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          appContext: { topicId: 'topic-1' },
+        }),
+      );
+      expect(completionWebhookBody()).toEqual(
+        expect.objectContaining({ topicTitlePrefix: '钉钉 · ' }),
+      );
+    });
+
+    it('forwards topicTitlePrefix on a fresh mention', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        topicTitlePrefix: '钉钉 · ',
+      });
+
+      expect(completionWebhookBody()).toEqual(
+        expect.objectContaining({ topicTitlePrefix: '钉钉 · ' }),
       );
     });
   });
