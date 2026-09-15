@@ -20,10 +20,26 @@ export const isDingTalkPushAvailable = (platforms: unknown): boolean =>
     return platform?.id === 'dingtalk' && platform?.capabilities?.push === true;
   });
 
+export type DingTalkPushStatus = 'available' | 'error' | 'loading' | 'unavailable';
+
+/**
+ * `unavailable` is a diagnosis ("the admin has not enabled push"), so it must not be
+ * reported while the platform list is still in flight or when the request failed —
+ * both of those also yield `available === false`, but for reasons the user can act on.
+ */
 export const useDingTalkPushAvailable = () => {
-  const { data, isLoading } = useSWR(messengerKeys.availablePlatforms(), () =>
+  const { data, error, isLoading, mutate } = useSWR(messengerKeys.availablePlatforms(), () =>
     messengerService.availablePlatforms(),
   );
 
-  return { available: isDingTalkPushAvailable(data), isLoading };
+  const available = isDingTalkPushAvailable(data);
+  const status: DingTalkPushStatus = isLoading
+    ? 'loading'
+    : error
+      ? 'error'
+      : available
+        ? 'available'
+        : 'unavailable';
+
+  return { available, retry: () => mutate(), status };
 };

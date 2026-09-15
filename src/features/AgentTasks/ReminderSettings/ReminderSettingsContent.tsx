@@ -3,7 +3,7 @@
 import { Flexbox, toast } from '@lobehub/ui';
 import { Button, Switch, Text, useModalContext } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { DEFAULT_NOTIFICATION_SETTINGS } from '@/const/settings';
@@ -19,33 +19,9 @@ import {
   setChannelEnabled,
   setChannelItem,
 } from './draft';
-import { useDingTalkPushAvailable } from './useDingTalkPushAvailable';
+import { type DingTalkPushStatus, useDingTalkPushAvailable } from './useDingTalkPushAvailable';
 
 const styles = createStaticStyles(({ css }) => ({
-  channelRow: css`
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
-    justify-content: space-between;
-
-    padding-block: 12px;
-
-    & + & {
-      border-block-start: 1px solid ${cssVar.colorBorderSecondary};
-    }
-  `,
-  eventRow: css`
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
-    justify-content: space-between;
-
-    padding-block: 12px;
-
-    & + & {
-      border-block-start: 1px solid ${cssVar.colorBorderSecondary};
-    }
-  `,
   // Each column is the same fixed width as its header so the switches line up
   // under the channel names without a table layout.
   eventSwitches: css`
@@ -60,11 +36,53 @@ const styles = createStaticStyles(({ css }) => ({
       width: 72px;
     }
   `,
+  row: css`
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    justify-content: space-between;
+
+    padding-block: 12px;
+
+    & + & {
+      border-block-start: 1px solid ${cssVar.colorBorderSecondary};
+    }
+  `,
   sectionTitle: css`
     font-size: 12px;
     color: ${cssVar.colorTextSecondary};
   `,
 }));
+
+/**
+ * Explicit type → i18n key maps. Building the key by template literal would need an
+ * `as never` cast and silently survive a renamed or missing key.
+ */
+const CHANNEL_LABEL_KEY = {
+  dingtalk: 'task.reminder.channel.dingtalk',
+  inbox: 'task.reminder.channel.inbox',
+} as const satisfies Record<ReminderChannelId, string>;
+
+const EVENT_LABEL_KEY = {
+  task_completed: 'task.event.task_completed',
+  task_run_completed: 'task.event.task_run_completed',
+  task_run_failed: 'task.event.task_run_failed',
+  task_waiting_for_user: 'task.event.task_waiting_for_user',
+} as const satisfies Record<TaskNotificationType, string>;
+
+const EVENT_DESC_KEY = {
+  task_completed: 'task.event.task_completedDesc',
+  task_run_completed: 'task.event.task_run_completedDesc',
+  task_run_failed: 'task.event.task_run_failedDesc',
+  task_waiting_for_user: 'task.event.task_waiting_for_userDesc',
+} as const satisfies Record<TaskNotificationType, string>;
+
+const DINGTALK_HINT_KEY = {
+  available: 'task.reminder.channel.dingtalkDesc',
+  error: 'task.reminder.channel.dingtalkCheckFailed',
+  loading: 'task.reminder.channel.dingtalkChecking',
+  unavailable: 'task.reminder.channel.dingtalkUnavailable',
+} as const satisfies Record<DingTalkPushStatus, string>;
 
 interface ReminderSettingsContentProps {
   /** Injected in tests; production closes through the imperative modal context. */
@@ -77,16 +95,33 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
   const close = onClose ?? modal?.close;
 
   const notification = useUserStore(settingsSelectors.currentNotificationSettings);
+  const isUserStateInit = useUserStore((s) => s.isUserStateInit);
   const setSettings = useUserStore((s) => s.setSettings);
-  const { available: dingtalkAvailable } = useDingTalkPushAvailable();
+  const {
+    available: dingtalkAvailable,
+    retry: retryDingTalk,
+    status: dingtalkStatus,
+  } = useDingTalkPushAvailable();
 
   const [draft, setDraft] = useState(() => buildReminderDraft(notification));
   const [saving, setSaving] = useState(false);
 
+  // Opening the modal before the user state hydrates would seed the draft from the
+  // all-on defaults, and saving that would overwrite real stored opt-outs. Re-seed once
+  // the first authoritative snapshot lands; the form is inert until then.
+  const hydratedRef = useRef(isUserStateInit);
+  useEffect(() => {
+    if (hydratedRef.current || !isUserStateInit) return;
+    hydratedRef.current = true;
+    setDraft(buildReminderDraft(notification));
+  }, [isUserStateInit, notification]);
+
+  const locked = saving || !isUserStateInit;
+
   const channelLabel: Record<ReminderChannelId, string> = useMemo(
     () => ({
-      dingtalk: t('task.reminder.channel.dingtalk'),
-      inbox: t('task.reminder.channel.inbox'),
+      dingtalk: t(CHANNEL_LABEL_KEY.dingtalk),
+      inbox: t(CHANNEL_LABEL_KEY.inbox),
     }),
     [t],
   );
@@ -117,7 +152,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (saving) return;
+    if (locked) return;
     setSaving(true);
     try {
       await setSettings({ notification: mergeReminderDraft(draft, notification) });
@@ -128,7 +163,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
     } finally {
       setSaving(false);
     }
-  }, [close, draft, notification, saving, setSettings, t]);
+  }, [close, draft, locked, notification, setSettings, t]);
 
   return (
     <Flexbox gap={20}>
@@ -136,25 +171,33 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
         <Text className={styles.sectionTitle}>{t('task.reminder.section.channels')}</Text>
         <div>
           {REMINDER_CHANNELS.map((channel) => {
-            // An unprovisioned channel reads as off and cannot be touched, but the draft
+            // An unconfirmed channel reads as off and cannot be touched, but the draft
             // keeps whatever the user chose before: if the admin turns DingTalk push back
             // on, their original preference comes back instead of a silent opt-out.
-            const unavailable = channel === 'dingtalk' && !dingtalkAvailable;
+            const isDingTalk = channel === 'dingtalk';
+            const blocked = isDingTalk && !dingtalkAvailable;
 
             return (
-              <div className={styles.channelRow} data-channel={channel} key={channel}>
+              <div className={styles.row} data-channel={channel} key={channel}>
                 <Flexbox gap={2}>
                   <Text>{channelLabel[channel]}</Text>
-                  <Text fontSize={12} type={'secondary'}>
-                    {unavailable
-                      ? t('task.reminder.channel.dingtalkUnavailable')
-                      : t(`task.reminder.channel.${channel}Desc` as never)}
-                  </Text>
+                  <Flexbox horizontal align={'center'} gap={6}>
+                    <Text fontSize={12} type={'secondary'}>
+                      {isDingTalk
+                        ? t(DINGTALK_HINT_KEY[dingtalkStatus])
+                        : t('task.reminder.channel.inboxDesc')}
+                    </Text>
+                    {isDingTalk && dingtalkStatus === 'error' && (
+                      <Button outdent size={'small'} type={'link'} onClick={retryDingTalk}>
+                        {t('task.reminder.channel.dingtalkRetry')}
+                      </Button>
+                    )}
+                  </Flexbox>
                 </Flexbox>
                 <Switch
                   aria-label={channelLabel[channel]}
-                  checked={!unavailable && draft[channel].enabled}
-                  disabled={unavailable || saving}
+                  checked={!blocked && draft[channel].enabled}
+                  disabled={blocked || locked}
                   onChange={(next) => handleChannelToggle(channel, next)}
                 />
               </div>
@@ -171,7 +214,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
           </Text>
         ) : (
           <div>
-            <div className={styles.eventRow} style={{ borderBlockStart: 'none' }}>
+            <div className={styles.row}>
               <span />
               <div className={styles.eventSwitches}>
                 {activeChannels.map((channel) => (
@@ -182,20 +225,20 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
               </div>
             </div>
             {TASK_NOTIFICATION_TYPES.map((type) => (
-              <div className={styles.eventRow} data-event={type} key={type}>
+              <div className={styles.row} data-event={type} key={type}>
                 <Flexbox gap={2}>
-                  <Text>{t(`task.event.${type}` as never)}</Text>
+                  <Text>{t(EVENT_LABEL_KEY[type])}</Text>
                   <Text fontSize={12} type={'secondary'}>
-                    {t(`task.event.${type}Desc` as never)}
+                    {t(EVENT_DESC_KEY[type])}
                   </Text>
                 </Flexbox>
                 <div className={styles.eventSwitches}>
                   {activeChannels.map((channel) => (
                     <span key={channel}>
                       <Switch
-                        aria-label={`${channelLabel[channel]} ${t(`task.event.${type}` as never)}`}
+                        aria-label={`${channelLabel[channel]} ${t(EVENT_LABEL_KEY[type])}`}
                         checked={draft[channel].items[type]}
-                        disabled={saving}
+                        disabled={locked}
                         onChange={(next) => handleItemToggle(channel, type, next)}
                       />
                     </span>
@@ -208,10 +251,10 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
       </Flexbox>
 
       <Flexbox horizontal gap={8} justify={'flex-end'}>
-        <Button disabled={saving} onClick={handleReset}>
+        <Button disabled={locked} onClick={handleReset}>
           {t('task.reminder.reset')}
         </Button>
-        <Button loading={saving} type={'primary'} onClick={handleSave}>
+        <Button disabled={!isUserStateInit} loading={saving} type={'primary'} onClick={handleSave}>
           {t('task.reminder.save')}
         </Button>
       </Flexbox>

@@ -19,11 +19,7 @@ import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
-import {
-  TASK_NOTIFICATION_CATEGORY,
-  TASK_NOTIFICATION_TYPES,
-  type TaskNotificationType,
-} from '@/types/user/settings';
+import { TASK_NOTIFICATION_CATEGORY, type TaskNotificationType } from '@/types/user/settings';
 
 import { createNotificationDetailModal } from './NotificationDetailModal';
 
@@ -66,23 +62,30 @@ const TYPE_ICON_MAP: Record<string, typeof BellIcon> = {
   video_generation_completed: VideoIcon,
 };
 
-const TASK_TYPES = new Set<string>(TASK_NOTIFICATION_TYPES);
-
 /**
  * Task rows all carry the task name as their title, so the event kind has to be a
  * chip — without it "每日晨报" reads the same whether the run finished or failed.
+ * The key is spelled out per type so a renamed locale key fails to compile.
  */
-const isTaskNotificationType = (
-  category: string | undefined,
-  type: string,
-): type is TaskNotificationType => category === TASK_NOTIFICATION_CATEGORY && TASK_TYPES.has(type);
+const TASK_EVENT_LABEL_KEY = {
+  task_completed: 'task.event.task_completed',
+  task_run_completed: 'task.event.task_run_completed',
+  task_run_failed: 'task.event.task_run_failed',
+  task_waiting_for_user: 'task.event.task_waiting_for_user',
+} as const satisfies Record<TaskNotificationType, string>;
 
-const TASK_TAG_COLOR: Record<TaskNotificationType, 'success' | 'error' | 'warning' | undefined> = {
+const TASK_TAG_COLOR = {
   task_completed: 'success',
   task_run_completed: undefined,
   task_run_failed: 'error',
   task_waiting_for_user: 'warning',
-};
+} as const satisfies Record<TaskNotificationType, 'success' | 'error' | 'warning' | undefined>;
+
+const isTaskNotificationType = (
+  category: string | undefined,
+  type: string,
+): type is TaskNotificationType =>
+  category === TASK_NOTIFICATION_CATEGORY && type in TASK_EVENT_LABEL_KEY;
 
 interface NotificationItemProps {
   actionUrl?: string | null;
@@ -166,7 +169,7 @@ const NotificationItem = memo<NotificationItemProps>(
                 {!isRead && <span className={styles.unreadDot} />}
                 {taskType && (
                   <Tag color={TASK_TAG_COLOR[taskType]} size={'small'} style={{ flexShrink: 0 }}>
-                    {t(`task.event.${taskType}` as never)}
+                    {t(TASK_EVENT_LABEL_KEY[taskType])}
                   </Tag>
                 )}
                 <Text

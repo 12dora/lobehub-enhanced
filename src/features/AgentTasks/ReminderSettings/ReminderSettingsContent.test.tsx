@@ -10,20 +10,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReminderSettingsContent from './ReminderSettingsContent';
 
 const mocks = vi.hoisted(() => ({
-  dingtalkAvailable: true,
+  dingtalkStatus: 'available' as 'available' | 'error' | 'loading' | 'unavailable',
+  isUserStateInit: true,
+  retryDingTalk: vi.fn(),
   setSettings: vi.fn(),
   settings: {} as { notification?: NotificationSettings },
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
 vi.mock('./useDingTalkPushAvailable', () => ({
-  useDingTalkPushAvailable: () => ({ available: mocks.dingtalkAvailable, isLoading: false }),
+  useDingTalkPushAvailable: () => ({
+    available: mocks.dingtalkStatus === 'available',
+    retry: mocks.retryDingTalk,
+    status: mocks.dingtalkStatus,
+  }),
 }));
 
 vi.mock('@/store/user', () => ({
   useUserStore: (selector: (state: unknown) => unknown) =>
     selector({
       defaultSettings: DEFAULT_SETTINGS,
+      isUserStateInit: mocks.isUserStateInit,
       setSettings: mocks.setSettings,
       settings: mocks.settings,
     }),
@@ -63,7 +70,9 @@ const switchFor = (label: string) => screen.getByRole('switch', { name: label })
 const checkedOf = (label: string) => switchFor(label).getAttribute('aria-checked');
 
 beforeEach(() => {
-  mocks.dingtalkAvailable = true;
+  mocks.dingtalkStatus = 'available';
+  mocks.isUserStateInit = true;
+  mocks.retryDingTalk.mockReset();
   mocks.settings = {};
   mocks.setSettings.mockReset();
   mocks.setSettings.mockResolvedValue(undefined);
@@ -153,7 +162,7 @@ describe('ReminderSettingsContent', () => {
   });
 
   it('disables the DingTalk row and explains why when the platform is not provisioned', () => {
-    mocks.dingtalkAvailable = false;
+    mocks.dingtalkStatus = 'unavailable';
 
     render(<ReminderSettingsContent />);
 
@@ -174,6 +183,62 @@ describe('ReminderSettingsContent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'task.reminder.reset' }));
 
     expect(checkedOf('task.reminder.channel.inbox')).toBe('true');
+    expect(mocks.setSettings).not.toHaveBeenCalled();
+  });
+
+  it('does not blame the administrator while the platform list is still loading', () => {
+    mocks.dingtalkStatus = 'loading';
+
+    render(<ReminderSettingsContent />);
+
+    expect(screen.queryByText('task.reminder.channel.dingtalkUnavailable')).toBeNull();
+    expect(screen.getByText('task.reminder.channel.dingtalkChecking')).toBeTruthy();
+    expect(switchFor('task.reminder.channel.dingtalk')).toHaveProperty('disabled', true);
+  });
+
+  it('offers a retry instead of the admin diagnosis when the lookup failed', () => {
+    mocks.dingtalkStatus = 'error';
+
+    render(<ReminderSettingsContent />);
+
+    expect(screen.queryByText('task.reminder.channel.dingtalkUnavailable')).toBeNull();
+    expect(screen.getByText('task.reminder.channel.dingtalkCheckFailed')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'task.reminder.channel.dingtalkRetry' }));
+    expect(mocks.retryDingTalk).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Before hydration `currentNotificationSettings` is just the all-on defaults; saving
+   * that would wipe real stored opt-outs.
+   */
+  it('stays inert until the user state hydrates, then re-seeds the draft', () => {
+    // Pre-hydration the store holds no settings at all, so the draft can only be the
+    // all-on defaults; the stored opt-out arrives together with `isUserStateInit`.
+    mocks.isUserStateInit = false;
+    mocks.settings = {};
+
+    // A fresh `onClose` identity on each render defeats `memo` without remounting, so
+    // the re-seed has to come from the effect rather than the useState initializer.
+    const { rerender } = render(<ReminderSettingsContent onClose={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'task.reminder.save' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(switchFor('task.reminder.channel.inbox')).toHaveProperty('disabled', true);
+    // Seeded from the un-hydrated store, the inbox row still reads as the all-on default.
+    expect(checkedOf('task.reminder.channel.inbox')).toBe('true');
+
+    mocks.isUserStateInit = true;
+    mocks.settings = { notification: { inbox: { enabled: false } } };
+    rerender(<ReminderSettingsContent onClose={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'task.reminder.save' })).toHaveProperty(
+      'disabled',
+      false,
+    );
+    expect(checkedOf('task.reminder.channel.inbox')).toBe('false');
     expect(mocks.setSettings).not.toHaveBeenCalled();
   });
 
