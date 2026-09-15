@@ -376,7 +376,7 @@ export interface ExistingLink {
 
 export interface PlatformMeta {
   appId?: string;
-  botUsername?: string;
+  botUsername?: string | null;
   id: string;
   name: string;
 }
