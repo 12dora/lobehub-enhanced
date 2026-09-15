@@ -203,8 +203,12 @@ export class BotCallbackService {
       AgentBridgeService.clearActiveThread(platformThreadId);
       if (platform === 'dingtalk') {
         clearDingTalkReplySink(platformThreadId);
-        await releaseDingTalkThreadBusy(platformThreadId);
-        if (body.reason !== 'waiting_for_human') {
+        if (body.reason === 'waiting_for_human') {
+          await releaseDingTalkThreadBusy(platformThreadId);
+        } else {
+          // Keep the busy flag held across drain. The drain handler
+          // tryAcquires (no-op when this process already owns it), LPOP's the
+          // next inbound, and only DELs when the overflow list is empty.
           await drainDingTalkQueue(platformThreadId);
         }
       }

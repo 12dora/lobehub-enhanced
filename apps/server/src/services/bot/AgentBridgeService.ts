@@ -196,6 +196,12 @@ interface BridgeHandlerOpts {
    */
   onRunSettled?: (info: AgentRunSettledInfo) => Promise<void>;
   /**
+   * Called when this thread already has an in-flight execution. Messenger
+   * DingTalk re-queues the inbound and releases the busy flag so SET NX
+   * cannot leak until TTL after a skip.
+   */
+  onSkippedActive?: (info: { message: Message; thread: Thread<ThreadState> }) => Promise<void>;
+  /**
    * Called when the operation parks in `waiting_for_human` (agent question).
    * Messenger DingTalk forwards the question to the chat. Other platforms
    * leave this unset and keep existing completion behaviour.
@@ -547,6 +553,7 @@ export class AgentBridgeService {
     // Skip if there's already an active execution for this thread
     if (AgentBridgeService.activeThreads.has(thread.id)) {
       log('handleMention: skipping, thread=%s already has an active execution', thread.id);
+      await opts.onSkippedActive?.({ message, thread });
       return;
     }
 
@@ -673,6 +680,7 @@ export class AgentBridgeService {
         'handleSubscribedMessage: skipping, thread=%s already has an active execution',
         thread.id,
       );
+      await opts.onSkippedActive?.({ message, thread });
       return;
     }
 

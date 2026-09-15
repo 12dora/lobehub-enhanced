@@ -1308,6 +1308,29 @@ describe('BotCallbackService', () => {
       expect.objectContaining({ lastAssistantContent: '是否继续？', operationId: 'op_dt' }),
     );
     expect(mockEditMessage).not.toHaveBeenCalled();
+    const { drainDingTalkQueue, releaseDingTalkThreadBusy } =
+      await import('@/server/services/messenger/platforms/dingtalk/queue');
+    expect(releaseDingTalkThreadBusy).toHaveBeenCalledWith('dingtalk:cid');
+    expect(drainDingTalkQueue).not.toHaveBeenCalled();
+  });
+
+  it('drains the DingTalk overflow on completion without releasing busy first', async () => {
+    const { drainDingTalkQueue, releaseDingTalkThreadBusy } =
+      await import('@/server/services/messenger/platforms/dingtalk/queue');
+    vi.mocked(drainDingTalkQueue).mockClear();
+    vi.mocked(releaseDingTalkThreadBusy).mockClear();
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: 'done',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'done',
+        type: 'completion',
+      }),
+    );
+
+    expect(drainDingTalkQueue).toHaveBeenCalledWith('dingtalk:cid');
+    expect(releaseDingTalkThreadBusy).not.toHaveBeenCalled();
   });
 
   it('prefixes DingTalk auto titles with DINGTALK_TOPIC_TITLE_PREFIX when the body omits topicTitlePrefix', async () => {

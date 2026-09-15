@@ -43,6 +43,19 @@ export const DINGTALK_MARKDOWN_TITLE_FALLBACK = '回复';
 
 export const formatDingTalkAgentSwitched = (title: string): string => `已切换到：${title}`;
 
+export const formatDingTalkCurrentAgent = (title: string): string => `当前助手：${title}`;
+
+export const formatDingTalkScopeSwitched = (scopeName: string, agentTitle?: string): string =>
+  agentTitle ? `已切换到：${scopeName}，当前助手：${agentTitle}` : `已切换到：${scopeName}`;
+
+export const formatDingTalkCurrentScope = (scopeName: string): string => `当前范围：${scopeName}`;
+
+export const DINGTALK_AGENT_NOT_FOUND_REPLY = '未找到该助手';
+export const DINGTALK_UNKNOWN_ACTION_REPLY = '未知操作';
+export const DINGTALK_SCOPE_NOT_FOUND_REPLY = '未找到该范围';
+export const DINGTALK_SCOPE_PICKER_PROMPT = '点选要切换的范围';
+export const DINGTALK_PERSONAL_SCOPE_LABEL = '个人';
+
 export const DINGTALK_HELP_TEXT = [
   '命令：',
   '• /助手 — 查看或切换助手',

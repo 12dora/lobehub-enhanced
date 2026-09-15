@@ -123,6 +123,8 @@ describe('AgentBridgeService', () => {
     mockGetUserSettings.mockResolvedValue({ general: { timezone: 'UTC' } });
     mockIsQueueAgentRuntimeEnabled.mockReturnValue(true);
     mockTopicFindById.mockResolvedValue(undefined);
+    (AgentBridgeService as any).activeThreads.clear();
+    (AgentBridgeService as any).activeOperations.clear();
   });
 
   it('calls execAgent with hooks in queue mode for mention', async () => {
@@ -628,6 +630,46 @@ describe('AgentBridgeService', () => {
       expect(completionWebhookBody()).toEqual(
         expect.objectContaining({ topicTitlePrefix: '钉钉 · ' }),
       );
+    });
+  });
+
+  describe('already-active skip path', () => {
+    it('handleMention notifies onSkippedActive and does not execAgent', async () => {
+      (AgentBridgeService as any).activeThreads.add(THREAD_ID);
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const onSkippedActive = vi.fn();
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        onSkippedActive,
+      });
+
+      expect(onSkippedActive).toHaveBeenCalledWith({ message, thread });
+      expect(mockExecAgent).not.toHaveBeenCalled();
+    });
+
+    it('handleSubscribedMessage notifies onSkippedActive and does not execAgent', async () => {
+      (AgentBridgeService as any).activeThreads.add(THREAD_ID);
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+      const onSkippedActive = vi.fn();
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platformThreadId: THREAD_ID } as any,
+        client,
+        onSkippedActive,
+      });
+
+      expect(onSkippedActive).toHaveBeenCalledWith({ message, thread });
+      expect(mockExecAgent).not.toHaveBeenCalled();
     });
   });
 });

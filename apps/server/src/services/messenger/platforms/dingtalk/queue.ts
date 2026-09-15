@@ -29,7 +29,99 @@ const queueKey = (threadId: string): string => `${DINGTALK_QUEUE_KEY_PREFIX}${th
 
 const busyKey = (threadId: string): string => `${DINGTALK_BUSY_KEY_PREFIX}${threadId}`;
 
-const memoryBusy = new Set<string>();
+/** This process currently owns the busy flag (Redis or memory). */
+const processOwned = new Set<string>();
+
+/** threadId → expiry epoch ms. Used when Redis is unset or SET throws. */
+const memoryBusyExpiry = new Map<string, number>();
+
+const memoryBusyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const memoryQueues = new Map<string, DingTalkQueuedMessage[]>();
+
+const memoryQueueTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const busyTtlMs = () => DINGTALK_BUSY_TTL_SECONDS * 1000;
+
+const queueTtlMs = () => DINGTALK_QUEUE_TTL_SECONDS * 1000;
+
+const clearTimer = (timers: Map<string, ReturnType<typeof setTimeout>>, key: string): void => {
+  const timer = timers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    timers.delete(key);
+  }
+};
+
+const armTimer = (
+  timers: Map<string, ReturnType<typeof setTimeout>>,
+  key: string,
+  ttlMs: number,
+  onExpire: () => void,
+): void => {
+  clearTimer(timers, key);
+  const timer = setTimeout(onExpire, ttlMs);
+  timer.unref?.();
+  timers.set(key, timer);
+};
+
+const pruneMemoryBusy = (threadId?: string): void => {
+  const now = Date.now();
+  const ids = threadId ? [threadId] : [...memoryBusyExpiry.keys()];
+  for (const id of ids) {
+    const expiresAt = memoryBusyExpiry.get(id);
+    if (expiresAt !== undefined && expiresAt <= now) {
+      memoryBusyExpiry.delete(id);
+      processOwned.delete(id);
+      clearTimer(memoryBusyTimers, id);
+    }
+  }
+};
+
+const armMemoryBusy = (threadId: string): void => {
+  memoryBusyExpiry.set(threadId, Date.now() + busyTtlMs());
+  processOwned.add(threadId);
+  armTimer(memoryBusyTimers, threadId, busyTtlMs(), () => {
+    memoryBusyExpiry.delete(threadId);
+    processOwned.delete(threadId);
+    memoryBusyTimers.delete(threadId);
+  });
+};
+
+const clearMemoryBusy = (threadId: string): void => {
+  memoryBusyExpiry.delete(threadId);
+  processOwned.delete(threadId);
+  clearTimer(memoryBusyTimers, threadId);
+};
+
+const armMemoryQueue = (threadId: string): void => {
+  armTimer(memoryQueueTimers, threadId, queueTtlMs(), () => {
+    memoryQueues.delete(threadId);
+    memoryQueueTimers.delete(threadId);
+  });
+};
+
+const toQueuedPayload = (
+  item: Omit<DingTalkQueuedMessage, 'queuedAt'> & { queuedAt?: number },
+): DingTalkQueuedMessage => ({
+  authorUserName: item.authorUserName,
+  queuedAt: item.queuedAt ?? Date.now(),
+  raw: item.raw,
+  senderStaffId: item.senderStaffId,
+  text: item.text,
+  topicId: item.topicId,
+});
+
+const parseQueuedPayload = (raw: string): DingTalkQueuedMessage | null => {
+  try {
+    const parsed = JSON.parse(raw) as DingTalkQueuedMessage;
+    if (!parsed || typeof parsed.text !== 'string') return null;
+    return parsed;
+  } catch (error) {
+    log('parseQueuedPayload failed: %O', error);
+    return null;
+  }
+};
 
 /**
  * Atomically enqueue when there is room. RPUSH + LTRIM 0..(max-1) + EXPIRE
@@ -47,21 +139,26 @@ redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
 return 1
 `;
 
+const pushMemoryQueue = (
+  threadId: string,
+  payload: DingTalkQueuedMessage,
+): DingTalkQueuePushResult => {
+  const list = memoryQueues.get(threadId) ?? [];
+  if (list.length >= DINGTALK_QUEUE_MAX_LENGTH) return 'full';
+  list.push(payload);
+  memoryQueues.set(threadId, list);
+  armMemoryQueue(threadId);
+  return 'queued';
+};
+
 export const pushDingTalkQueuedMessage = async (
   threadId: string,
   item: Omit<DingTalkQueuedMessage, 'queuedAt'> & { queuedAt?: number },
 ): Promise<DingTalkQueuePushResult> => {
+  const payload = toQueuedPayload(item);
   const redis = getAgentRuntimeRedisClient();
-  if (!redis) return 'unavailable';
+  if (!redis) return pushMemoryQueue(threadId, payload);
   const key = queueKey(threadId);
-  const payload: DingTalkQueuedMessage = {
-    authorUserName: item.authorUserName,
-    queuedAt: item.queuedAt ?? Date.now(),
-    raw: item.raw,
-    senderStaffId: item.senderStaffId,
-    text: item.text,
-    topicId: item.topicId,
-  };
   try {
     const queued = await redis.eval(
       PUSH_SCRIPT,
@@ -82,7 +179,18 @@ export const popDingTalkQueuedMessage = async (
   threadId: string,
 ): Promise<DingTalkQueuedMessage | null> => {
   const redis = getAgentRuntimeRedisClient();
-  if (!redis) return null;
+  if (!redis) {
+    const list = memoryQueues.get(threadId);
+    if (!list?.length) return null;
+    const next = list.shift() ?? null;
+    if (list.length === 0) {
+      memoryQueues.delete(threadId);
+      clearTimer(memoryQueueTimers, threadId);
+    } else {
+      armMemoryQueue(threadId);
+    }
+    return next;
+  }
   const key = queueKey(threadId);
   try {
     const raw = await redis.lpop(key);
@@ -90,18 +198,40 @@ export const popDingTalkQueuedMessage = async (
     if ((await redis.llen(key)) > 0) {
       await redis.expire(key, DINGTALK_QUEUE_TTL_SECONDS);
     }
-    const parsed = JSON.parse(raw) as DingTalkQueuedMessage;
-    if (!parsed || typeof parsed.text !== 'string') return null;
-    return parsed;
+    return parseQueuedPayload(raw);
   } catch (error) {
     log('popDingTalkQueuedMessage failed: %O', error);
     return null;
   }
 };
 
+/** Put a popped item back at the head (LPUSH) so drain can retry. */
+export const unshiftDingTalkQueuedMessage = async (
+  threadId: string,
+  item: DingTalkQueuedMessage,
+): Promise<void> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) {
+    const list = memoryQueues.get(threadId) ?? [];
+    list.unshift(item);
+    if (list.length > DINGTALK_QUEUE_MAX_LENGTH) {
+      list.length = DINGTALK_QUEUE_MAX_LENGTH;
+    }
+    memoryQueues.set(threadId, list);
+    armMemoryQueue(threadId);
+    return;
+  }
+  try {
+    await redis.lpush(queueKey(threadId), JSON.stringify(item));
+    await redis.expire(queueKey(threadId), DINGTALK_QUEUE_TTL_SECONDS);
+  } catch (error) {
+    log('unshiftDingTalkQueuedMessage failed: %O', error);
+  }
+};
+
 export const peekDingTalkQueueLength = async (threadId: string): Promise<number> => {
   const redis = getAgentRuntimeRedisClient();
-  if (!redis) return 0;
+  if (!redis) return memoryQueues.get(threadId)?.length ?? 0;
   try {
     return await redis.llen(queueKey(threadId));
   } catch (error) {
@@ -112,29 +242,51 @@ export const peekDingTalkQueueLength = async (threadId: string): Promise<number>
 
 /**
  * Atomic per-thread busy flag. SET NX with TTL, taken before dispatch so two
- * concurrent Chat-SDK handlers cannot both start a run. Process-local Set is
- * the fallback when Redis is not configured.
+ * concurrent Chat-SDK handlers cannot both start a run. Process-local Map is
+ * the fallback when Redis is not configured or SET throws. TTL matches Redis
+ * (1 h) so a crashed settle cannot pin the thread forever.
  */
 export const tryAcquireDingTalkThreadBusy = async (
   threadId: string,
 ): Promise<DingTalkBusyClaim> => {
+  pruneMemoryBusy(threadId);
   const redis = getAgentRuntimeRedisClient();
   if (!redis) {
-    if (memoryBusy.has(threadId)) return 'busy';
-    memoryBusy.add(threadId);
+    if (memoryBusyExpiry.has(threadId)) return 'busy';
+    armMemoryBusy(threadId);
     return 'acquired';
   }
   try {
     const result = await redis.set(busyKey(threadId), '1', 'EX', DINGTALK_BUSY_TTL_SECONDS, 'NX');
-    return result === 'OK' ? 'acquired' : 'busy';
+    if (result === 'OK') {
+      processOwned.add(threadId);
+      armTimer(memoryBusyTimers, threadId, busyTtlMs(), () => {
+        processOwned.delete(threadId);
+        memoryBusyTimers.delete(threadId);
+      });
+      return 'acquired';
+    }
+    return 'busy';
   } catch (error) {
-    log('tryAcquireDingTalkThreadBusy failed: %O', error);
-    return 'unavailable';
+    log('tryAcquireDingTalkThreadBusy failed, falling back to memory: %O', error);
+    if (memoryBusyExpiry.has(threadId) || processOwned.has(threadId)) return 'busy';
+    armMemoryBusy(threadId);
+    return 'acquired';
   }
 };
 
+/**
+ * Drain may run while this process already holds the flag. SET NX would
+ * fail in that case and skip the overflow list. Re-enter without a second NX.
+ */
+export const acquireDingTalkDrainLock = async (threadId: string): Promise<DingTalkBusyClaim> => {
+  pruneMemoryBusy(threadId);
+  if (processOwned.has(threadId)) return 'acquired';
+  return tryAcquireDingTalkThreadBusy(threadId);
+};
+
 export const releaseDingTalkThreadBusy = async (threadId: string): Promise<void> => {
-  memoryBusy.delete(threadId);
+  clearMemoryBusy(threadId);
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return;
   try {
@@ -145,7 +297,8 @@ export const releaseDingTalkThreadBusy = async (threadId: string): Promise<void>
 };
 
 export const isDingTalkThreadBusy = async (threadId: string): Promise<boolean> => {
-  if (memoryBusy.has(threadId)) return true;
+  pruneMemoryBusy(threadId);
+  if (processOwned.has(threadId) || memoryBusyExpiry.has(threadId)) return true;
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return false;
   try {
@@ -200,4 +353,15 @@ export const drainDingTalkQueue = async (threadId: string): Promise<void> => {
   } catch (error) {
     log('drainDingTalkQueue handler failed: %O', error);
   }
+};
+
+/** Test-only: drop process-local busy/queue state between cases. */
+export const resetDingTalkQueueMemoryForTests = (): void => {
+  processOwned.clear();
+  memoryBusyExpiry.clear();
+  memoryQueues.clear();
+  for (const timer of memoryBusyTimers.values()) clearTimeout(timer);
+  memoryBusyTimers.clear();
+  for (const timer of memoryQueueTimers.values()) clearTimeout(timer);
+  memoryQueueTimers.clear();
 };
