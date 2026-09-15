@@ -447,6 +447,27 @@ describe('DingTalkStreamConnection', () => {
     expect(sockets[0].terminated).toBe(true);
   });
 
+  it('terminates when socket.ping throws', async () => {
+    vi.useFakeTimers();
+    const sockets: MockSocket[] = [];
+    const warn = vi.fn();
+    const conn = create({
+      WebSocketImpl: createWsCtor(sockets),
+      frameSilenceTimeoutMs: 60 * 60_000,
+      logger: { warn },
+      reconnectBaseIntervalMs: 60_000,
+    });
+    await conn.connect();
+    sockets[0].ping = () => {
+      throw new Error('not connected');
+    };
+
+    await vi.advanceTimersByTimeAsync(DINGTALK_STREAM_WS_PING_INTERVAL_MS);
+    expect(conn.state).toBe('error');
+    expect(sockets[0].terminated).toBe(true);
+    expect(warn).toHaveBeenCalledWith('DingTalk stream ping failed', expect.any(Error));
+  });
+
   it('logs malformed frames instead of swallowing them', async () => {
     const warn = vi.fn();
     const sockets: MockSocket[] = [];

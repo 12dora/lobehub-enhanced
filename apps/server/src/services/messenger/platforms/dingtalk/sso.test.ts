@@ -373,6 +373,42 @@ describe('exchangeDingTalkSso', () => {
     expect(logged).not.toContain('app_secret');
     warn.mockRestore();
   });
+
+  it('evicts the cached legacy token when getuserinfo returns 40014', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let gettokenCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.startsWith(DINGTALK_LEGACY_TOKEN_URL)) {
+          gettokenCount += 1;
+          return jsonResponse({ access_token: `legacy-token-${gettokenCount}`, errcode: 0 });
+        }
+        if (url.includes('access_token=legacy-token-1')) {
+          return jsonResponse({ errcode: 40014, errmsg: '不合法的access_token' });
+        }
+        return jsonResponse({ errcode: 0, result: { userid: 'staff_1' } });
+      }),
+    );
+
+    await expect(
+      exchangeDingTalkSso({ code: 'auth-code', ip: '1.1.1.1', redirect: '/home' }),
+    ).resolves.toEqual({ detail: '40014', ok: false, reason: 'exchange_failed' });
+    expect(gettokenCount).toBe(1);
+
+    const retry = await exchangeDingTalkSso({
+      code: 'auth-code',
+      ip: '1.1.1.2',
+      redirect: '/home',
+    });
+    expect(retry.ok).toBe(true);
+    expect(gettokenCount).toBe(2);
+    expect(
+      vi.mocked(fetch).mock.calls.some((call) => String(call[0]).includes('legacy-token-2')),
+    ).toBe(true);
+    warn.mockRestore();
+  });
 });
 
 describe('DINGTALK_SSO_TWO_FACTOR_SESSION_PATH', () => {

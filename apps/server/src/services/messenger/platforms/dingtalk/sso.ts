@@ -475,19 +475,31 @@ export const exchangeDingTalkSso = async (input: {
   if (!accessToken.ok) return { detail: accessToken.detail, ok: false, reason: 'exchange_failed' };
 
   const staffId = await exchangeAuthCodeForUserId(accessToken.token, code);
-  if (!staffId.ok) return { detail: staffId.detail, ok: false, reason: 'exchange_failed' };
+  if (!staffId.ok) {
+    // 40014 = invalid access_token. Drop the 1h cache so the next attempt refetches.
+    if (staffId.detail === '40014') legacyTokenCache.delete(config.clientId);
+    return { detail: staffId.detail, ok: false, reason: 'exchange_failed' };
+  }
 
   const db = await getServerDB();
   const user = await findUserByStaffId(db, staffId.userid);
   if (!user?.id) {
-    log('sso user_not_found staffId=%s domain=%s', staffId, resolveDingTalkIdentityEmailDomain());
+    log(
+      'sso user_not_found staffId=%s domain=%s',
+      staffId.userid,
+      resolveDingTalkIdentityEmailDomain(),
+    );
     return { ok: false, reason: 'user_not_found' };
   }
 
   // Same predicate as better-auth's admin plugin (`banned` + unexpired `banExpires`).
   // Return `user_not_found` so a ban is not distinguishable from an unknown staffId.
   if (isEffectivelyBanned(user)) {
-    log('sso user_not_found staffId=%s domain=%s', staffId, resolveDingTalkIdentityEmailDomain());
+    log(
+      'sso user_not_found staffId=%s domain=%s',
+      staffId.userid,
+      resolveDingTalkIdentityEmailDomain(),
+    );
     return { ok: false, reason: 'user_not_found' };
   }
 

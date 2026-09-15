@@ -85,14 +85,16 @@ const wrapDingTalkSsoRedirect = (actionUrl: string): string | null => {
 
 /**
  * Open an https URL inside the DingTalk micro-app container.
- * `agentId` is the numeric AgentId (not prefixed with `0_`).
+ * `agentId` is the numeric AgentId (not prefixed with `0_`). A pasted `0_<id>`
+ * is normalised so `app_id` does not become `0_0_…`.
  */
 export const buildDingTalkOpenAppUrl = (params: {
   agentId: string;
   corpId: string;
   url: string;
 }): string => {
-  const agentId = params.agentId.trim();
+  const trimmedAgentId = params.agentId.trim();
+  const agentId = trimmedAgentId.startsWith('0_') ? trimmedAgentId.slice(2) : trimmedAgentId;
   const corpId = params.corpId.trim();
   const query = [
     `corpid=${encodeURIComponent(corpId)}`,

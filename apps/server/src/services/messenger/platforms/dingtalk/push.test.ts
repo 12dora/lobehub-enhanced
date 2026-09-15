@@ -288,6 +288,19 @@ describe('buildDingTalkOpenAppUrl', () => {
       `dingtalk://dingtalkclient/action/openapp?corpid=ding42&container_type=work_platform&app_id=0_4617854000&redirect_type=jump&redirect_url=${encodeURIComponent(httpsSso)}`,
     );
   });
+
+  it('strips a pasted 0_ prefix so app_id is not 0_0_…', () => {
+    const httpsSso = 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1';
+    expect(
+      buildDingTalkOpenAppUrl({
+        agentId: '0_4617854000',
+        corpId: 'ding42',
+        url: httpsSso,
+      }),
+    ).toBe(
+      `dingtalk://dingtalkclient/action/openapp?corpid=ding42&container_type=work_platform&app_id=0_4617854000&redirect_type=jump&redirect_url=${encodeURIComponent(httpsSso)}`,
+    );
+  });
 });
 
 describe('DingTalkMessengerPushProvider openapp deep link', () => {

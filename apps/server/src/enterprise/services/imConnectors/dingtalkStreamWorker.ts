@@ -292,7 +292,7 @@ export class DingTalkStreamWorker {
       lastEventAt: this.lastEventAt,
       lastFrameAt: this.readLastFrameAtIso(),
       state: this.statusState,
-    } as Parameters<typeof writeDingTalkStreamStatus>[0]);
+    });
   }
 }
 

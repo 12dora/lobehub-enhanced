@@ -27,6 +27,7 @@ export interface DingTalkStreamStatusJson {
   lastError: string | null;
   lastErrorAt: string | null;
   lastEventAt: string | null;
+  lastFrameAt: string | null;
   pid: number | null;
   state: 'disabled' | 'connecting' | 'connected' | 'error';
   updatedAt: string;
@@ -90,6 +91,7 @@ export const writeDingTalkStreamStatus = async (
     lastError: status.lastError,
     lastErrorAt: status.lastErrorAt,
     lastEventAt: status.lastEventAt,
+    lastFrameAt: status.lastFrameAt,
     pid: status.pid ?? process.pid,
     state: status.state,
     updatedAt: new Date().toISOString(),

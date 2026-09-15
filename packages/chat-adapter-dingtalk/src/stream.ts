@@ -103,6 +103,10 @@ const isAbortError = (error: unknown): boolean => {
  * a silent socket after 3 minutes (configurable). Protocol-level `ws` ping
  * every 30s terminates if `pong` does not arrive within 10s. Gateway and
  * WebSocket open are bounded at 15s so a hung attempt can never block forever.
+ *
+ * Ping stays at 30s (official `dingtalk-stream` uses 8s): fewer false kills
+ * through HTTP(S)_PROXY, still far faster than the 180s frame watchdog that
+ * left a half-open socket up for ~17 minutes.
  */
 export class DingTalkStreamConnection {
   private readonly options: DingTalkStreamOptions;
@@ -294,6 +298,7 @@ export class DingTalkStreamConnection {
       const openTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        this.connectAbort?.signal.removeEventListener('abort', onAbort);
         this.cleanupSocket();
         reject(new Error('DingTalk stream socket open timed out'));
       }, timeoutMs);
@@ -442,6 +447,7 @@ export class DingTalkStreamConnection {
       }
     }, watchdogMs);
 
+    // 30s ping / 10s pong (not the official 8s heartbeat): see class doc.
     const pingMs = this.options.wsPingIntervalMs ?? DINGTALK_STREAM_WS_PING_INTERVAL_MS;
     const pongMs = this.options.wsPongTimeoutMs ?? DINGTALK_STREAM_WS_PONG_TIMEOUT_MS;
     this.wsPingTimer = setInterval(() => {
@@ -467,12 +473,8 @@ export class DingTalkStreamConnection {
     try {
       socket.ping();
     } catch (error) {
-      this.awaitingPong = false;
-      if (this.pongTimer) {
-        clearTimeout(this.pongTimer);
-        this.pongTimer = undefined;
-      }
       this.warn('DingTalk stream ping failed', error);
+      this.markSocketDead(new Error('DingTalk stream ping failed'));
     }
   }
 

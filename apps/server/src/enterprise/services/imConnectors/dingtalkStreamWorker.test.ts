@@ -97,6 +97,11 @@ describe('DingTalkStreamWorker', () => {
     expect(writeDingTalkStreamStatus).toHaveBeenCalledWith(
       expect.objectContaining({ lastFrameAt: null, state: 'connecting' }),
     );
+    expect(writeDingTalkStreamStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        lastFrameAt: new Date(1_715_000_000_000).toISOString(),
+      }),
+    );
   });
 
   it('retries a failed first connect on the next tick without a config change', async () => {

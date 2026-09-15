@@ -11,10 +11,20 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
 }));
 
 const { getAgentRuntimeRedisClient } = await import('@/server/modules/AgentRuntime/redis');
-const { consumeDingTalkLastList, rememberDingTalkCorpId, setDingTalkLastList } =
-  await import('./redis');
-const { DINGTALK_CORP_ID_KEY, DINGTALK_LAST_LIST_KEY_PREFIX, DINGTALK_LAST_LIST_TTL_SECONDS } =
-  await import('./const');
+const {
+  consumeDingTalkLastList,
+  rememberDingTalkCorpId,
+  setDingTalkLastList,
+  writeDingTalkStreamStatus,
+} = await import('./redis');
+const {
+  DINGTALK_CORP_ID_KEY,
+  DINGTALK_LAST_LIST_KEY_PREFIX,
+  DINGTALK_LAST_LIST_TTL_SECONDS,
+  DINGTALK_STREAM_STATUS_TTL_SECONDS,
+} = await import('./const');
+const { IM_CONNECTOR_STREAM_STATUS_KEY } =
+  await import('@/server/enterprise/services/imConnectors/status');
 
 describe('rememberDingTalkCorpId', () => {
   beforeEach(() => {
@@ -89,5 +99,39 @@ describe('DingTalk last-list', () => {
     await setDingTalkLastList(threadId, 'question');
     await expect(consumeDingTalkLastList(threadId)).resolves.toBe('question');
     await expect(consumeDingTalkLastList(threadId)).resolves.toBeNull();
+  });
+});
+
+describe('writeDingTalkStreamStatus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAgentRuntimeRedisClient).mockReturnValue(mockRedis as any);
+    mockRedis.set.mockResolvedValue('OK');
+  });
+
+  it('writes lastFrameAt into the Redis JSON payload', async () => {
+    const lastFrameAt = '2024-03-29T07:33:20.000Z';
+    await writeDingTalkStreamStatus({
+      connectedAt: lastFrameAt,
+      lastError: null,
+      lastErrorAt: null,
+      lastEventAt: '2024-03-29T07:33:21.000Z',
+      lastFrameAt,
+      state: 'connected',
+    });
+
+    expect(mockRedis.set).toHaveBeenCalledTimes(1);
+    const [key, raw, flag, ttl] = mockRedis.set.mock.calls[0] as [string, string, string, number];
+    expect(key).toBe(IM_CONNECTOR_STREAM_STATUS_KEY('dingtalk'));
+    expect(flag).toBe('EX');
+    expect(ttl).toBe(DINGTALK_STREAM_STATUS_TTL_SECONDS);
+    expect(JSON.parse(raw)).toEqual(
+      expect.objectContaining({
+        lastEventAt: '2024-03-29T07:33:21.000Z',
+        lastFrameAt,
+        pid: process.pid,
+        state: 'connected',
+      }),
+    );
   });
 });
