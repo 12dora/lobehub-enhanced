@@ -838,6 +838,7 @@
   "audit.logs.action.system.infra.mail.update": "Update mail service",
   "audit.logs.action.system.infra.object_storage.update": "Update object storage",
   "audit.logs.action.system.infra.sandbox.update": "Update sandbox",
+  "audit.logs.action.system.im_connector.update": "Update IM connector",
   "audit.logs.action.user.connectors.disconnect": "Disconnect connector",
   "audit.logs.action.user.connectors.oauthCallback": "Complete connector OAuth callback",
   "audit.logs.columns.action": "Action",

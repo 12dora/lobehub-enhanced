@@ -2857,6 +2857,7 @@ export default {
   'audit.logs.action.system.infra.object_storage.update': 'Update object storage',
   'audit.logs.action.system.infra.document_render.update': 'Update document render',
   'audit.logs.action.system.infra.sandbox.update': 'Update sandbox',
+  'audit.logs.action.system.im_connector.update': 'Update IM connector',
   'audit.logs.action.platform.managed_policy.publish': 'Publish managed policy',
   'audit.logs.action.platform.provider.publish': 'Publish provider',
   'audit.logs.action.platform.roles.replace': 'Replace roles',

@@ -1,0 +1,173 @@
+import { z } from 'zod';
+
+import { secretSafeAuditReasonSchema } from './shared';
+
+/**
+ * Strict Zod contracts for `admin.imConnectors.*` (管理端 → 通用设置 → IM 连接器).
+ *
+ * One global connector per IM platform. Credentials are stored in `system_bot_providers`
+ * (platform = `dingtalk`): `application_id` = Client ID (AppKey, plaintext), `credentials` =
+ * AES-GCM JSON `{ clientSecret }`, `settings` = the plaintext tunables below. The same row is what
+ * `getEnabledMessengerPlatforms()` reads, so enabling the connector lights up 设置 → 聊天平台.
+ */
+
+export const imConnectorPlatformSchema = z.enum(['dingtalk']);
+export type ImConnectorPlatform = z.infer<typeof imConnectorPlatformSchema>;
+
+export const IM_CONNECTOR_IDLE_HOURS_MIN = 1;
+export const IM_CONNECTOR_IDLE_HOURS_MAX = 720;
+export const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
+
+/** Plaintext `system_bot_providers.settings` shape for platform `dingtalk`. */
+export const dingTalkConnectorSettingsSchema = z
+  .object({
+    /** Optional DingTalk AI card template id (卡片平台 → AI 卡片). Empty = markdown fallback. */
+    aiCardTemplateId: z.string().trim().max(200).nullable().default(null),
+    /** Inbound chat (Clawbot) capability. */
+    chatEnabled: z.boolean().default(true),
+    /** Auto-start a new topic when the last message is older than `idleNewTopicHours`. */
+    idleNewTopicEnabled: z.boolean().default(true),
+    idleNewTopicHours: z
+      .number()
+      .int()
+      .min(IM_CONNECTOR_IDLE_HOURS_MIN)
+      .max(IM_CONNECTOR_IDLE_HOURS_MAX)
+      .default(IM_CONNECTOR_IDLE_HOURS_DEFAULT),
+    /** Proactive push (task reminders) capability. */
+    pushEnabled: z.boolean().default(true),
+    /** RobotCode from the DingTalk robot page (often equals the Client ID). */
+    robotCode: z.string().trim().min(1).max(200),
+    /** Optional interactive "select" card template id (助手/会话选择卡片). Empty = ActionCard fallback. */
+    selectCardTemplateId: z.string().trim().max(200).nullable().default(null),
+  })
+  .strict();
+export type DingTalkConnectorSettings = z.infer<typeof dingTalkConnectorSettingsSchema>;
+
+export const imConnectorStreamStateSchema = z.enum([
+  'disabled',
+  'connecting',
+  'connected',
+  'error',
+  'unknown',
+]);
+export type ImConnectorStreamState = z.infer<typeof imConnectorStreamStateSchema>;
+
+/**
+ * Live status written by the stream worker to Redis key `messenger:dingtalk:stream-status`
+ * (JSON, TTL 120 s, refreshed every 30 s). `unknown` = no heartbeat in Redis.
+ */
+export const imConnectorStatusSchema = z
+  .object({
+    connectedAt: z.string().nullable(),
+    lastError: z.string().nullable(),
+    lastErrorAt: z.string().nullable(),
+    lastEventAt: z.string().nullable(),
+    state: imConnectorStreamStateSchema,
+  })
+  .strict();
+export type ImConnectorStatus = z.infer<typeof imConnectorStatusSchema>;
+
+/**
+ * Counters: `linkedUsers` = rows in `messenger_account_links` for the platform; `messages7d` /
+ * `pushes7d` = sum of the daily Redis counters `messenger:<platform>:counter:messages:<YYYY-MM-DD>` /
+ * `messenger:<platform>:counter:pushes:<YYYY-MM-DD>` (INCR by the worker / push service, TTL 8 days).
+ */
+export const imConnectorStatsSchema = z
+  .object({
+    linkedUsers: z.number().int().nonnegative(),
+    messages7d: z.number().int().nonnegative(),
+    pushes7d: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ImConnectorStats = z.infer<typeof imConnectorStatsSchema>;
+
+export const adminImConnectorViewSchema = z
+  .object({
+    aiCardTemplateId: z.string().nullable(),
+    chatEnabled: z.boolean(),
+    /** Client ID (AppKey). Null when never configured. */
+    clientId: z.string().nullable(),
+    /** Short fingerprint of the stored secret for display; never the secret itself. */
+    clientSecretFingerprint: z.string().nullable(),
+    /** True once a row exists (even if disabled). */
+    configured: z.boolean(),
+    enabled: z.boolean(),
+    hasClientSecret: z.boolean(),
+    idleNewTopicEnabled: z.boolean(),
+    idleNewTopicHours: z.number().int(),
+    platform: imConnectorPlatformSchema,
+    pushEnabled: z.boolean(),
+    robotCode: z.string().nullable(),
+    selectCardTemplateId: z.string().nullable(),
+    stats: imConnectorStatsSchema,
+    status: imConnectorStatusSchema,
+    updatedAt: z.string().nullable(),
+  })
+  .strict();
+export type AdminImConnectorView = z.infer<typeof adminImConnectorViewSchema>;
+
+export const adminImConnectorGetInputSchema = z
+  .object({ platform: imConnectorPlatformSchema })
+  .strict();
+export type AdminImConnectorGetInput = z.infer<typeof adminImConnectorGetInputSchema>;
+
+export const adminImConnectorListOutputSchema = z
+  .object({ items: z.array(adminImConnectorViewSchema) })
+  .strict();
+
+/**
+ * Upsert. `clientSecret`: `{ action: 'keep' }` leaves the stored secret untouched (only valid when
+ * one is stored), `{ action: 'replace', value }` stores a new one. Enabling requires a stored or
+ * replaced secret.
+ */
+export const adminImConnectorSecretInputSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('keep') }).strict(),
+  z.object({ action: z.literal('replace'), value: z.string().trim().min(1).max(500) }).strict(),
+]);
+
+export const adminImConnectorUpsertInputSchema = z
+  .object({
+    aiCardTemplateId: z.string().trim().max(200).nullable(),
+    chatEnabled: z.boolean(),
+    clientId: z.string().trim().min(1).max(200),
+    clientSecret: adminImConnectorSecretInputSchema,
+    enabled: z.boolean(),
+    idleNewTopicEnabled: z.boolean(),
+    idleNewTopicHours: z
+      .number()
+      .int()
+      .min(IM_CONNECTOR_IDLE_HOURS_MIN)
+      .max(IM_CONNECTOR_IDLE_HOURS_MAX),
+    platform: imConnectorPlatformSchema,
+    pushEnabled: z.boolean(),
+    reason: secretSafeAuditReasonSchema.optional(),
+    robotCode: z.string().trim().min(1).max(200),
+    selectCardTemplateId: z.string().trim().max(200).nullable(),
+  })
+  .strict();
+export type AdminImConnectorUpsertInput = z.infer<typeof adminImConnectorUpsertInputSchema>;
+
+/** Test with explicit values (unsaved form) or the stored row when a field is omitted. */
+export const adminImConnectorTestInputSchema = z
+  .object({
+    clientId: z.string().trim().min(1).max(200).optional(),
+    clientSecret: z.string().trim().min(1).max(500).optional(),
+    platform: imConnectorPlatformSchema,
+    robotCode: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+export type AdminImConnectorTestInput = z.infer<typeof adminImConnectorTestInputSchema>;
+
+export const adminImConnectorTestOutputSchema = z
+  .object({
+    /** Stable error code for i18n (`auth_failed` | `network` | `missing_credentials` | `unknown`). */
+    errorCode: z.string().nullable(),
+    /** Raw provider error message for the details drawer. */
+    errorMessage: z.string().nullable(),
+    latencyMs: z.number().int().nonnegative().nullable(),
+    ok: z.boolean(),
+    /** Robot display name when the API exposes it. */
+    robotName: z.string().nullable(),
+  })
+  .strict();
+export type AdminImConnectorTestOutput = z.infer<typeof adminImConnectorTestOutputSchema>;

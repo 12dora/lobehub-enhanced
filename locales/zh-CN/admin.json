@@ -838,6 +838,7 @@
   "audit.logs.action.system.infra.mail.update": "更新邮件服务",
   "audit.logs.action.system.infra.object_storage.update": "更新对象存储",
   "audit.logs.action.system.infra.sandbox.update": "更新沙箱",
+  "audit.logs.action.system.im_connector.update": "更新 IM 连接器",
   "audit.logs.action.user.connectors.disconnect": "断开连接器",
   "audit.logs.action.user.connectors.oauthCallback": "完成连接器 OAuth 回调",
   "audit.logs.columns.action": "操作",

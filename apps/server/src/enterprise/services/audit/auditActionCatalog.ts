@@ -203,6 +203,7 @@ export const AUDIT_ACTIONS = [
   'system.infra.mail.update',
   'system.infra.object_storage.update',
   'system.infra.sandbox.update',
+  'system.im_connector.update',
   'managedResource.legacyMutation',
   'platform.managed_policy.publish',
   'platform.provider.publish',
@@ -237,6 +238,7 @@ export const AUDIT_ACTION = {
   SYSTEM_INFRA_MAIL_UPDATE: 'system.infra.mail.update',
   SYSTEM_INFRA_OBJECT_STORAGE_UPDATE: 'system.infra.object_storage.update',
   SYSTEM_INFRA_SANDBOX_UPDATE: 'system.infra.sandbox.update',
+  SYSTEM_IM_CONNECTOR_UPDATE: 'system.im_connector.update',
   PERMISSION_DENIED: 'admin.permission.denied',
   MANAGED_RESOURCE_LEGACY_MUTATION: 'managedResource.legacyMutation',
 } as const satisfies Record<string, AuditAction>;
