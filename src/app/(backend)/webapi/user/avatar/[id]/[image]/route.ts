@@ -1,3 +1,4 @@
+import { auth } from '@/auth';
 import { serverDB } from '@/database/server';
 import { UserService } from '@/server/services/user';
 
@@ -26,9 +27,24 @@ function getContentType(filename: string): string {
   return CONTENT_TYPE_MAP[extension] || 'application/octet-stream';
 }
 
+const isUnsafePathSegment = (value: string): boolean =>
+  value.includes('/') || value.includes('\\') || value.includes('..');
+
 export const GET = async (req: Request, segmentData: { params: Params }) => {
   try {
     const params = await segmentData.params;
+
+    if (isUnsafePathSegment(params.id) || isUnsafePathSegment(params.image)) {
+      return new Response('Bad request', { status: 400 });
+    }
+
+    const session = await auth.api.getSession({
+      headers: req.headers,
+    });
+    if (!session?.user?.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
     const type = getContentType(params.image);
     const userService = new UserService(serverDB);
 

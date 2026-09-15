@@ -37,7 +37,7 @@ encryption.
 - Vulnerabilities in upstream LobeHub that also affect the unmodified upstream project — report those
   to [lobehub/lobehub](https://github.com/lobehub/lobehub/security/advisories/new). We will pick up
   the fix when the change is merged upstream.
-- The file proxy endpoint `/f/:id`, which intentionally uses non-enumerable capability URLs.
+- Public platform branding via `/f/pba_*` (login chrome, emails). Other `/f/:id` objects require a Better Auth session and one of: owner, workspace member (public/NULL visibility), topic link-share, or auditor with conversation body access.
 - User-existence signals on login endpoints, which are part of the standard sign-in UX.
 - Client-side API keys stored in the browser in self-hosted client mode.
 - Theoretical attacks without a working proof of concept against a realistic deployment.

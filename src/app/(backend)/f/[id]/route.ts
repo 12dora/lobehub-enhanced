@@ -1,11 +1,14 @@
 import debug from 'debug';
 import { and, eq, isNull } from 'drizzle-orm';
 
+import { auth } from '@/auth';
 import { FileModel } from '@/database/models/file';
 import { platformBrandingAssets } from '@/database/schemas/platform';
 import { getServerDB } from '@/database/server';
+import { assertUserActiveCached } from '@/libs/oidc-provider/userActiveCache';
 import { isPlatformBrandingAssetId } from '@/server/enterprise/contracts/adminBranding';
 import { FileService } from '@/server/services/file';
+import { recordAuditorFileOpen, resolveFileAccess } from '@/server/services/file/fileAccess';
 import { createFileServiceModule } from '@/server/services/file/impls';
 
 const log = debug('lobe-file:proxy');
@@ -22,28 +25,33 @@ const redirectToObject = (location: string, mimeType: string): Response =>
 
 type Params = Promise<{ id: string }>;
 
+const isUnauthorizedAuthError = (error: unknown) =>
+  !!error && typeof error === 'object' && 'code' in error && error.code === 'UNAUTHORIZED';
+
+const unauthorized = () => new Response('Unauthorized', { status: 401 });
+
 /**
  * File proxy service
  * GET /f/:id
  *
- * Features:
- * - Query database to get file record (without userId filter for public access)
- * - Generate a temporary S3 presigned preview URL
- * - Return 302 redirect
+ * Session-authorized file proxy. Browser clients send Better Auth cookies
+ * (same-origin `<img>` / download). Machine consumers (LLM providers,
+ * server-side fetchers) must not call this endpoint — they receive short-lived
+ * presigned object URLs or data URIs from FileService instead.
  *
- * NOTE: This endpoint is intentionally unauthenticated. The proxy URL is
- * embedded in bare `<img>` tags, download links, and links shared to AI — none
- * of which can attach auth headers/cookies. Adding `checkAuth` here would break
- * every previously-shared `/f/:id` link, so access stays public by id.
+ * Platform branding assets (`pba_*`) remain public (login chrome, emails).
+ *
+ * Access: file owner, workspace member (public/NULL visibility), topic
+ * link-share attachment, or auditor with conversation body access. Success is a
+ * 302 to a cached S3 presigned URL with private/no-store headers.
  */
-export const GET = async (_req: Request, segmentData: { params: Params }) => {
+export const GET = async (req: Request, segmentData: { params: Params }) => {
   try {
     const params = await segmentData.params;
     const { id } = params;
 
     log('File proxy request: %s', id);
 
-    // Get database connection
     const db = await getServerDB();
 
     if (id.startsWith('pba_')) {
@@ -69,7 +77,29 @@ export const GET = async (_req: Request, segmentData: { params: Params }) => {
       return redirectToObject(redirectUrl, asset.mimeType);
     }
 
-    // Query file record without userId filter (public access)
+    const session = await auth.api.getSession({
+      headers: req.headers,
+    });
+
+    if (!session?.user?.id) {
+      return unauthorized();
+    }
+
+    const userId = session.user.id;
+    const rawCreatedAt = session.session?.createdAt;
+    const sessionCreatedAt =
+      rawCreatedAt instanceof Date ? rawCreatedAt : rawCreatedAt ? new Date(rawCreatedAt) : null;
+    const credentialIssuedAt =
+      sessionCreatedAt && !Number.isNaN(sessionCreatedAt.getTime()) ? sessionCreatedAt : null;
+    const sessionId = typeof session.session?.id === 'string' ? session.session.id : null;
+
+    try {
+      await assertUserActiveCached(db, userId, { credentialIssuedAt, sessionId });
+    } catch (error) {
+      if (isUnauthorizedAuthError(error)) return unauthorized();
+      throw error;
+    }
+
     const file = await FileModel.getFileById(db, id);
 
     if (!file) {
@@ -79,15 +109,31 @@ export const GET = async (_req: Request, segmentData: { params: Params }) => {
       });
     }
 
-    // Create file service with file owner's userId
+    const access = await resolveFileAccess({
+      db,
+      file: {
+        id: file.id,
+        userId: file.userId,
+        visibility: file.visibility,
+        workspaceId: file.workspaceId,
+      },
+      viewerUserId: userId,
+    });
+
+    if (!access.allowed) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    if (access.reason === 'auditor') {
+      await recordAuditorFileOpen(db, { actorUserId: userId, fileId: file.id });
+    }
+
     const fileService = new FileService(db, file.userId);
 
-    // Web: Generate a cached S3 presigned URL, normalizing legacy full S3 URLs.
     const redirectUrl = await fileService.createCachedPreSignedUrlForPreview(file.url);
     log('Web S3 presigned URL generated');
 
-    // Return 302 redirect
-    return Response.redirect(redirectUrl, 302);
+    return redirectToObject(redirectUrl, file.fileType || 'application/octet-stream');
   } catch (error) {
     console.error('File proxy error:', error);
     return new Response('Internal server error', {
