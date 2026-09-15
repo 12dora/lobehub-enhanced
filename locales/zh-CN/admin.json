@@ -446,6 +446,8 @@
   "audit.conversations.disabled.desc": "会话内容访问当前已关闭。如有权限，请到通用设置页调整审计策略。",
   "audit.conversations.disabled.goRetention": "前往通用设置",
   "audit.conversations.disabled.title": "会话历史已被策略禁用",
+  "audit.conversations.message.attachments": "附件",
+  "audit.conversations.message.openAttachment": "打开附件",
   "audit.conversations.page.desc": "按用户查看会话与消息记录。访问受审计策略控制。",
   "audit.conversations.page.title": "会话历史",
   "audit.conversations.search.heading": "查找用户",

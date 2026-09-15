@@ -1,16 +1,23 @@
 'use client';
 
-import { Flexbox, Skeleton, Tag, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Button, SkeletonText, Tag, Text } from '@lobehub/ui/base-ui';
 import { useReducedMotion } from 'motion/react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { AdminAuditConversationMessage } from '@/enterprise/client/services/adminAudit';
 
+import type { AuditMessageAttachment } from '../shared/auditMessageAttachments';
 import { formatAdminDateTime } from '../shared/format';
+import { linkifyText } from '../shared/linkifyText';
+import { MessageAttachments } from '../shared/MessageAttachments';
 import { styles } from './topicPageStyles';
 import type { TopicEvidence } from './useTopicEvidence';
+
+type TopicMessage = AdminAuditConversationMessage & {
+  attachments?: AuditMessageAttachment[];
+};
 
 /** Keeps server-applied `[REDACTED …]` markers visually distinct from the auditor's own reading. */
 const renderBody = (content: string) => {
@@ -21,7 +28,7 @@ const renderBody = (content: string) => {
         {part}
       </span>
     ) : (
-      <span key={i}>{part}</span>
+      <span key={i}>{linkifyText(part)}</span>
     ),
   );
 };
@@ -39,10 +46,10 @@ const TopicMessageStream = memo<TopicMessageStreamProps>(({ feed }) => {
     <div className={styles.stream}>
       {feed.isLoading && !feed.hasData ? (
         <div aria-label={t('primitives.dataTable.loading')} role="status">
-          <Skeleton active={!reduceMotion} paragraph={{ rows: 5 }} title={false} />
+          <SkeletonText animated={!reduceMotion} rows={5} />
         </div>
       ) : null}
-      {feed.items.map((msg: AdminAuditConversationMessage) => (
+      {feed.items.map((msg: TopicMessage) => (
         <div className={styles.message} key={msg.id}>
           <Flexbox horizontal align="center" gap={8}>
             <Tag size="small">{msg.role}</Tag>
@@ -57,6 +64,7 @@ const TopicMessageStream = memo<TopicMessageStreamProps>(({ feed }) => {
           ) : (
             <Text type="secondary">—</Text>
           )}
+          <MessageAttachments attachments={msg.attachments ?? []} />
         </div>
       ))}
       {feed.hasError && !feed.hasData ? (

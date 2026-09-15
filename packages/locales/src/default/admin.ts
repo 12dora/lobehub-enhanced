@@ -2968,6 +2968,8 @@ export default {
   'audit.conversations.topic.loadBodyConfirm':
     'Loading full message bodies will be recorded in the audit trail. Continue?',
   'audit.conversations.topic.bodyNotLoaded': 'Body not loaded',
+  'audit.conversations.message.attachments': 'Attachments',
+  'audit.conversations.message.openAttachment': 'Open attachment',
   'audit.conversations.topic.emptyMessages': 'No messages in this conversation.',
   'audit.conversations.topic.detailUnavailable':
     'Conversation details are temporarily unavailable. The message evidence below may still be available.',

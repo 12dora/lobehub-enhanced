@@ -98,7 +98,10 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  SkeletonText: () => <div data-testid="skeleton" />,
   Switch: () => <input type="checkbox" />,
+  Tag: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   toast: { error: (...args: unknown[]) => evidence.toastError(...args) },
 }));
 

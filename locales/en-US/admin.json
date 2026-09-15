@@ -446,6 +446,8 @@
   "audit.conversations.disabled.desc": "Conversation content access is currently turned off. Open General settings to adjust the audit policy if you have permission.",
   "audit.conversations.disabled.goRetention": "Open General settings",
   "audit.conversations.disabled.title": "Conversation history is disabled by policy",
+  "audit.conversations.message.attachments": "Attachments",
+  "audit.conversations.message.openAttachment": "Open attachment",
   "audit.conversations.page.desc": "Review conversations and messages by user. Access is governed by the audit policy.",
   "audit.conversations.page.title": "Conversation history",
   "audit.conversations.search.heading": "Find a user",

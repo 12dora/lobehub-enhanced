@@ -1,6 +1,6 @@
 'use client';
 
-import { Tag, Text } from '@lobehub/ui';
+import { Tag, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { memo, useState } from 'react';
@@ -8,7 +8,14 @@ import { useTranslation } from 'react-i18next';
 
 import type { AdminAuditConversationMessage } from '@/enterprise/client/services/adminAudit';
 
+import type { AuditMessageAttachment } from '../shared/auditMessageAttachments';
 import { formatAdminDateTime } from '../shared/format';
+import { linkifyText } from '../shared/linkifyText';
+import { MessageAttachments } from '../shared/MessageAttachments';
+
+type LiveMessage = AdminAuditConversationMessage & {
+  attachments?: AuditMessageAttachment[];
+};
 
 const styles = createStaticStyles(({ css }) => ({
   row: css`
@@ -80,7 +87,7 @@ const renderBody = (content: string) => {
         {part}
       </span>
     ) : (
-      <span key={i}>{part}</span>
+      <span key={i}>{linkifyText(part)}</span>
     ),
   );
 };
@@ -88,7 +95,7 @@ const renderBody = (content: string) => {
 export interface MessageBubbleProps {
   /** When metadata_only / body not loaded */
   bodyHidden?: boolean;
-  message: AdminAuditConversationMessage;
+  message: LiveMessage;
 }
 
 const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
@@ -112,6 +119,8 @@ const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
       ? `${styles.bubble} ${styles.bubbleSystem}`
       : `${styles.bubble} ${styles.bubbleAssistant}`;
 
+  const attachments = bodyHidden ? [] : (message.attachments ?? []);
+
   const body = bodyHidden ? (
     <Text type="secondary">{t('audit.live.message.bodyHidden')}</Text>
   ) : message.content != null && message.content !== '' ? (
@@ -120,6 +129,13 @@ const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
     <Text type="secondary">{t('audit.conversations.topic.bodyNotLoaded')}</Text>
   ) : (
     '—'
+  );
+
+  const bodyWithAttachments = (
+    <>
+      {body}
+      <MessageAttachments attachments={attachments} />
+    </>
   );
 
   return (
@@ -150,7 +166,7 @@ const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
         ) : null}
         {reduceMotion ? (
           bodyOpen ? (
-            <div className={styles.body}>{body}</div>
+            <div className={styles.body}>{bodyWithAttachments}</div>
           ) : null
         ) : (
           <AnimatePresence initial={false}>
@@ -164,7 +180,7 @@ const MessageBubble = memo<MessageBubbleProps>(({ message, bodyHidden }) => {
                 style={{ overflow: 'hidden' }}
                 transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
               >
-                {body}
+                {bodyWithAttachments}
               </m.div>
             ) : null}
           </AnimatePresence>
