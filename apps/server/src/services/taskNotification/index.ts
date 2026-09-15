@@ -13,7 +13,10 @@ import {
   buildDingtalkMarkdown,
   dingtalkPushTitle,
   INBOX_CONTENT_MAX_CHARS,
+  isHeartbeatTimeoutContent,
+  localizeTaskNotifyContent,
   sanitizeNotificationContent,
+  TASK_NOTIFY_UNKNOWN_ERROR_ZH,
 } from './content';
 import { isChannelEnabledForType, mergeNotificationSettings } from './prefs';
 
@@ -25,6 +28,8 @@ export interface TaskNotifyInput {
   agentId?: string;
   content: string;
   db: LobeChatDatabase;
+  /** Used as the dedupe suffix when `topicId` is missing (and this is not a heartbeat timeout). */
+  operationId?: string;
   taskId: string;
   taskIdentifier: string;
   taskName?: string | null;
@@ -33,6 +38,25 @@ export interface TaskNotifyInput {
   /** Task owner (notifications.userId). */
   userId: string;
 }
+
+/**
+ * `task:{taskId}:{type}:{suffix}` — suffix is `topicId`, else `heartbeat-timeout`
+ * for heartbeat failures, else `operationId`, else `kickoff`. Never `Date.now()`.
+ */
+export const buildTaskNotifyDedupeKey = (input: {
+  content?: string;
+  operationId?: string;
+  taskId: string;
+  topicId?: string;
+  type: TaskNotificationType;
+}): string => {
+  const suffix =
+    input.topicId ??
+    (isHeartbeatTimeoutContent(input.content) ? 'heartbeat-timeout' : undefined) ??
+    input.operationId ??
+    'kickoff';
+  return `task:${input.taskId}:${input.type}:${suffix}`;
+};
 
 export interface TopicCompleteNotifyInput {
   db: LobeChatDatabase;
@@ -53,8 +77,9 @@ export interface TopicCompleteNotifyInput {
  * - `notifications` has no jsonb metadata column — `agentId` is accepted on
  *   the input for callers but is not persisted.
  * - `notification_deliveries.notification_id` is NOT NULL. When inbox is off
- *   and DingTalk is on, a parent row is still inserted with `isArchived=true`
- *   so the delivery has a parent and the bell does not show it.
+ *   and DingTalk is on, a parent row is inserted with `isArchived=true` only
+ *   after a non-skipped push so the delivery has a parent and the bell does
+ *   not show it. A DingTalk-only `skipped` push writes no parent row.
  * - Push `skipped` writes NO delivery row (connector/user not mapped).
  */
 export class TaskNotificationService {
@@ -67,11 +92,18 @@ export class TaskNotificationService {
   }
 
   private async notifyUnsafe(input: TaskNotifyInput): Promise<void> {
-    const { db, userId, taskId, taskIdentifier, type, topicId } = input;
+    const { db, userId, taskId, taskIdentifier, type, topicId, operationId } = input;
     const taskName = input.taskName?.trim() || taskIdentifier;
-    const content = sanitizeNotificationContent(input.content, INBOX_CONTENT_MAX_CHARS);
+    const rawContent = localizeTaskNotifyContent(input.content);
+    const content = sanitizeNotificationContent(rawContent, INBOX_CONTENT_MAX_CHARS);
     const actionUrl = `/task/${taskId}`;
-    const dedupeKey = `task:${taskId}:${type}:${topicId ?? Date.now()}`;
+    const dedupeKey = buildTaskNotifyDedupeKey({
+      content: input.content,
+      operationId,
+      taskId,
+      topicId,
+      type,
+    });
 
     const userSettings = await new UserModel(db, userId).getUserSettings();
     const prefs = mergeNotificationSettings(
@@ -92,67 +124,89 @@ export class TaskNotificationService {
       return;
     }
 
-    // Inbox-visible when that channel is on; otherwise archive so DingTalk-only
-    // deliveries have a NOT NULL parent without surfacing in the bell.
-    const created = await model.create({
-      actionUrl,
-      category: TASK_NOTIFICATION_CATEGORY,
-      content,
-      dedupeKey,
-      isArchived: !inboxEnabled,
-      title: taskName,
-      type,
-    });
+    // Defer the parent insert when inbox is off so a DingTalk-only `skipped`
+    // push does not leave an archived row with zero deliveries.
+    const ensureParent = async () => {
+      const created = await model.create({
+        actionUrl,
+        category: TASK_NOTIFICATION_CATEGORY,
+        content,
+        dedupeKey,
+        isArchived: !inboxEnabled,
+        title: taskName,
+        type,
+      });
+      if (!created) {
+        log('skip (create conflict): task=%s type=%s key=%s', taskId, type, dedupeKey);
+      }
+      return created;
+    };
 
-    if (!created) {
-      log('skip (create conflict): task=%s type=%s key=%s', taskId, type, dedupeKey);
-      return;
-    }
+    const pushMessage = {
+      actionLabel: DINGTALK_ACTION_LABEL,
+      actionUrl,
+      markdown: buildDingtalkMarkdown(taskName, rawContent, new Date()),
+      title: dingtalkPushTitle(type, taskName),
+    };
+
+    const recordDingTalkDelivery = async (
+      notificationId: string,
+      push: Awaited<ReturnType<MessengerPushService['pushToUser']>>,
+    ) => {
+      if (push.status === 'skipped') {
+        log('dingtalk skipped: task=%s reason=%s', taskId, push.reason);
+        return;
+      }
+      if (push.status === 'sent') {
+        await model.createDelivery({
+          channel: 'dingtalk',
+          notificationId,
+          providerMessageId: push.providerMessageId,
+          sentAt: new Date(),
+          status: 'sent',
+        });
+        return;
+      }
+      await model.createDelivery({
+        channel: 'dingtalk',
+        failedReason: push.error,
+        notificationId,
+        status: 'failed',
+      });
+    };
 
     if (inboxEnabled) {
+      const created = await ensureParent();
+      if (!created) return;
       await model.createDelivery({
         channel: 'inbox',
         notificationId: created.id,
         sentAt: new Date(),
         status: 'sent',
       });
+      if (!dingtalkEnabled) return;
+      const push = await new MessengerPushService(db).pushToUser({
+        message: pushMessage,
+        platform: 'dingtalk',
+        userId,
+      });
+      await recordDingTalkDelivery(created.id, push);
+      return;
     }
 
-    if (!dingtalkEnabled) return;
-
+    // DingTalk-only: push first; insert the archived parent only on sent/failed.
     const push = await new MessengerPushService(db).pushToUser({
-      message: {
-        actionLabel: DINGTALK_ACTION_LABEL,
-        actionUrl,
-        markdown: buildDingtalkMarkdown(taskName, input.content, new Date()),
-        title: dingtalkPushTitle(type, taskName),
-      },
+      message: pushMessage,
       platform: 'dingtalk',
       userId,
     });
-
     if (push.status === 'skipped') {
-      log('dingtalk skipped: task=%s reason=%s', taskId, push.reason);
+      log('dingtalk skipped (no parent): task=%s reason=%s', taskId, push.reason);
       return;
     }
-
-    if (push.status === 'sent') {
-      await model.createDelivery({
-        channel: 'dingtalk',
-        notificationId: created.id,
-        providerMessageId: push.providerMessageId,
-        sentAt: new Date(),
-        status: 'sent',
-      });
-      return;
-    }
-
-    await model.createDelivery({
-      channel: 'dingtalk',
-      failedReason: push.error,
-      notificationId: created.id,
-      status: 'failed',
-    });
+    const created = await ensureParent();
+    if (!created) return;
+    await recordDingTalkDelivery(created.id, push);
   }
 }
 
@@ -190,7 +244,7 @@ export const notifyAfterTopicComplete = async (input: TopicCompleteNotifyInput):
     if (reason === 'error') {
       await service.notify({
         ...base,
-        content: input.errorMessage?.trim() || runContent || 'Unknown error',
+        content: input.errorMessage?.trim() || runContent || TASK_NOTIFY_UNKNOWN_ERROR_ZH,
         type: 'task_run_failed',
       });
       return;
@@ -256,7 +310,12 @@ export {
   DINGTALK_CONTENT_MAX_CHARS,
   dingtalkPushTitle,
   INBOX_CONTENT_MAX_CHARS,
+  isHeartbeatTimeoutContent,
+  localizeTaskNotifyContent,
   sanitizeNotificationContent,
+  sanitizeTaskNameForMarkdown,
   TASK_NOTIFICATION_ZH_LABELS,
+  TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH,
+  TASK_NOTIFY_UNKNOWN_ERROR_ZH,
 } from './content';
 export { isChannelEnabledForType, mergeNotificationSettings } from './prefs';

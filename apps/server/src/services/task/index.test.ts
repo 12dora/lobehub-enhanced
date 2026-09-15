@@ -46,6 +46,24 @@ vi.mock('@/server/services/file/resolveAttachments', () => ({
   resolveAttachmentMetadata: vi.fn().mockResolvedValue([]),
 }));
 
+const { mockNotify } = vi.hoisted(() => ({
+  mockNotify: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/server/services/taskNotification', () => ({
+  TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH: '心跳超时',
+  TaskNotificationService: vi.fn().mockImplementation(() => ({
+    notify: mockNotify,
+  })),
+}));
+
+vi.mock('@/server/services/taskRunner', () => ({
+  TaskRunnerService: vi.fn().mockImplementation(() => ({
+    cascadeOnCompletion: vi.fn().mockResolvedValue({ failed: [], paused: [], started: [] }),
+    runTask: vi.fn(),
+  })),
+}));
+
 describe('TaskService', () => {
   const db = {} as LobeChatDatabase;
   const userId = 'user-1';
@@ -96,6 +114,8 @@ describe('TaskService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockNotify.mockResolvedValue(undefined);
+    mockTaskTopicModel.findByTaskId.mockResolvedValue([]);
     mockTaskTopicModel.findRunningByTaskIds.mockResolvedValue([]);
     (AgentModel as any).mockImplementation(() => mockAgentModel);
     (TaskModel as any).mockImplementation(() => mockTaskModel);
@@ -1094,10 +1114,12 @@ describe('TaskService', () => {
     });
 
     it('should include heartbeat info when heartbeatTimeout or lastHeartbeatAt is set', async () => {
+      const lastHeartbeatAt = new Date(Date.now() - 1000);
       const task = {
         assigneeAgentId: null,
         assigneeUserId: null,
         createdAt: null,
+        createdByUserId: 'user-1',
         description: null,
         error: null,
         heartbeatInterval: 30,
@@ -1105,7 +1127,7 @@ describe('TaskService', () => {
         id: 'task_001',
         identifier: 'TASK-1',
         instruction: null,
-        lastHeartbeatAt: new Date('2024-01-01T12:00:00Z'),
+        lastHeartbeatAt,
         name: 'Task 1',
         parentTaskId: null,
         priority: 'normal',
@@ -1129,9 +1151,10 @@ describe('TaskService', () => {
 
       expect(result?.heartbeat).toEqual({
         interval: 30,
-        lastAt: '2024-01-01T12:00:00.000Z',
+        lastAt: lastHeartbeatAt.toISOString(),
         timeout: 60,
       });
+      expect(mockNotify).not.toHaveBeenCalled();
     });
 
     it('should not include heartbeat when neither heartbeatTimeout nor lastHeartbeatAt is set', async () => {
@@ -1169,6 +1192,50 @@ describe('TaskService', () => {
       const result = await service.getTaskDetail('TASK-1');
 
       expect(result?.heartbeat).toBeUndefined();
+    });
+
+    it('auto-pause on heartbeat timeout notifies the task owner with 心跳超时', async () => {
+      const ownerId = 'owner-1';
+      const running = {
+        assigneeAgentId: 'agt-1',
+        createdByUserId: ownerId,
+        currentTopicId: 'topic-stuck',
+        heartbeatTimeout: 60,
+        id: 'task_stuck',
+        identifier: 'TASK-STUCK',
+        lastHeartbeatAt: new Date('2024-01-01T12:00:00Z'),
+        name: 'Stuck task',
+        status: 'running',
+      };
+      const paused = { ...running, error: 'Heartbeat timeout', status: 'paused' };
+
+      mockTaskModel.resolve.mockResolvedValueOnce(running).mockResolvedValueOnce(paused);
+      mockTaskModel.updateStatus.mockResolvedValue(paused);
+      mockTaskTopicModel.timeoutRunning.mockResolvedValue(undefined);
+      mockTaskModel.findAllDescendants.mockResolvedValue([]);
+      mockTaskModel.getDependencies.mockResolvedValue([]);
+      mockTaskTopicModel.findWithHandoff.mockResolvedValue([]);
+      mockBriefModel.findByTaskId.mockResolvedValue([]);
+      mockTaskModel.getComments.mockResolvedValue([]);
+      mockTaskModel.getTreePinnedDocuments.mockResolvedValue({ nodeMap: {}, tree: [] });
+      mockTaskModel.findByIds.mockResolvedValue([]);
+      mockTaskModel.getCheckpointConfig.mockReturnValue({});
+      mockTaskModel.getVerifyConfig.mockReturnValue(undefined);
+
+      const service = new TaskService(db, 'member-2', 'ws-1');
+      await service.getTaskDetail('TASK-STUCK');
+
+      expect(mockTaskModel.updateStatus).toHaveBeenCalledWith('task_stuck', 'paused', {
+        error: 'Heartbeat timeout',
+      });
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: '心跳超时',
+          taskId: 'task_stuck',
+          type: 'task_run_failed',
+          userId: ownerId,
+        }),
+      );
     });
 
     it('should gracefully handle failing optional calls via catch', async () => {
@@ -1540,6 +1607,72 @@ describe('TaskService', () => {
       await service.updateStatus({ id: 'T-1', status: 'scheduled' as any });
 
       expect(mockTaskModel.updateContext).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('updateStatus / task_completed notify', () => {
+    const completedTask = (overrides: Record<string, unknown> = {}) => ({
+      assigneeAgentId: 'agt-1',
+      createdByAgentId: null,
+      createdByUserId: 'owner-1',
+      currentTopicId: 'topic-1',
+      id: 'task-1',
+      identifier: 'T-1',
+      instruction: 'write the digest',
+      name: 'Daily report',
+      parentTaskId: null,
+      status: 'paused',
+      ...overrides,
+    });
+
+    it('notifies the owner when the owner completes an assigned task', async () => {
+      const prev = completedTask({ assigneeAgentId: 'agt-1' });
+      mockTaskModel.resolve.mockResolvedValue(prev);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...prev, status: 'completed' });
+
+      const service = new TaskService(db, 'owner-1');
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'task_completed',
+          userId: 'owner-1',
+        }),
+      );
+    });
+
+    it('notifies createdByUserId when a workspace member completes a public assigned task', async () => {
+      const prev = completedTask({
+        assigneeAgentId: 'agt-1',
+        createdByUserId: 'owner-1',
+      });
+      mockTaskModel.resolve.mockResolvedValue(prev);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...prev, status: 'completed' });
+
+      const service = new TaskService(db, 'member-2', 'ws-1');
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'task_completed',
+          userId: 'owner-1',
+        }),
+      );
+      expect(mockNotify.mock.calls[0][0].userId).not.toBe('member-2');
+    });
+
+    it('does not notify on unassigned UI complete', async () => {
+      const prev = completedTask({
+        assigneeAgentId: null,
+        createdByAgentId: null,
+      });
+      mockTaskModel.resolve.mockResolvedValue(prev);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...prev, status: 'completed' });
+
+      const service = new TaskService(db, 'owner-1');
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+
+      expect(mockNotify).not.toHaveBeenCalled();
     });
   });
 

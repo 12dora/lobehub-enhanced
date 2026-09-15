@@ -158,6 +158,64 @@ describe('TaskNotificationService.notify', () => {
     expect(channels).toEqual(['inbox']);
   });
 
+  it('does not insert an archived parent when dingTalk-only push is skipped', async () => {
+    mockGetUserSettings.mockResolvedValue({
+      notification: { inbox: { enabled: false } },
+    });
+    mockPushToUser.mockResolvedValue({ status: 'skipped', reason: 'user_not_mapped' });
+
+    await new TaskNotificationService().notify(baseInput);
+
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockCreateDelivery).not.toHaveBeenCalled();
+  });
+
+  it('uses a stable kickoff suffix when topicId is missing', async () => {
+    await new TaskNotificationService().notify({ ...baseInput, topicId: undefined });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: 'task:task-1:task_run_completed:kickoff' }),
+    );
+  });
+
+  it('uses heartbeat-timeout when topicId is missing and content is a heartbeat failure', async () => {
+    await new TaskNotificationService().notify({
+      ...baseInput,
+      content: 'Heartbeat timeout',
+      topicId: undefined,
+      type: 'task_run_failed',
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '心跳超时',
+        dedupeKey: 'task:task-1:task_run_failed:heartbeat-timeout',
+      }),
+    );
+  });
+
+  it('uses operationId as the suffix when topicId is missing', async () => {
+    await new TaskNotificationService().notify({
+      ...baseInput,
+      operationId: 'op-99',
+      topicId: undefined,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: 'task:task-1:task_run_completed:op-99' }),
+    );
+  });
+
+  it('localizes Unknown error to 未知错误', async () => {
+    await new TaskNotificationService().notify({
+      ...baseInput,
+      content: 'Unknown error',
+      type: 'task_run_failed',
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ content: '未知错误' }));
+  });
+
   it('skips the whole write when both channels are off', async () => {
     mockGetUserSettings.mockResolvedValue({
       notification: { dingtalk: { enabled: false }, inbox: { enabled: false } },

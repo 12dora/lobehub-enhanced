@@ -4,9 +4,8 @@ import type {
   NotificationSettings,
   TaskNotificationType,
 } from '@lobechat/types';
+import { TASK_NOTIFICATION_CATEGORY } from '@lobechat/types';
 import { merge } from '@lobechat/utils';
-
-const TASK_CATEGORY = 'task';
 
 export const mergeNotificationSettings = (
   stored: NotificationSettings | null | undefined,
@@ -23,6 +22,6 @@ export const isChannelEnabledForType = (
 ): boolean => {
   const channelSettings: NotificationChannelSettings | undefined = settings[channel];
   if (channelSettings?.enabled === false) return false;
-  if (channelSettings?.items?.[TASK_CATEGORY]?.[type] === false) return false;
+  if (channelSettings?.items?.[TASK_NOTIFICATION_CATEGORY]?.[type] === false) return false;
   return true;
 };

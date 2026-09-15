@@ -159,4 +159,19 @@ describe('notifyAfterTopicComplete', () => {
     mockFindById.mockRejectedValue(new Error('db down'));
     await expect(notifyAfterTopicComplete({ ...base, reason: 'done' })).resolves.toBeUndefined();
   });
+
+  it('(b) error with no message → 未知错误', async () => {
+    await notifyAfterTopicComplete({
+      ...base,
+      lastAssistantContent: '',
+      reason: 'error',
+    });
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '未知错误',
+        type: 'task_run_failed',
+      }),
+    );
+  });
 });

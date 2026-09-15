@@ -5,6 +5,25 @@ export const INBOX_CONTENT_MAX_CHARS = 2000;
 /** DingTalk markdown body cap (the inner content, not the wrapper). */
 export const DINGTALK_CONTENT_MAX_CHARS = 1500;
 
+/** User-facing body for heartbeat-timeout failures (inbox + DingTalk). */
+export const TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH = '心跳超时';
+/** User-facing body when the producer has no error text. */
+export const TASK_NOTIFY_UNKNOWN_ERROR_ZH = '未知错误';
+
+const TASK_NOTIFY_CONTENT_ZH: Record<string, string> = {
+  'Heartbeat timeout': TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH,
+  'Unknown error': TASK_NOTIFY_UNKNOWN_ERROR_ZH,
+};
+
+/** Map known English error tokens to zh-CN bodies. Unknown strings pass through. */
+export const localizeTaskNotifyContent = (raw: string): string =>
+  TASK_NOTIFY_CONTENT_ZH[raw] ?? raw;
+
+const HEARTBEAT_TIMEOUT_TOKENS = new Set(['Heartbeat timeout', TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH]);
+
+export const isHeartbeatTimeoutContent = (raw: string | undefined): boolean =>
+  Boolean(raw && HEARTBEAT_TIMEOUT_TOKENS.has(raw));
+
 /**
  * Zh labels used only inside the DingTalk push title.
  * The web inbox localises by `notifications.type`.
@@ -42,10 +61,21 @@ export const sanitizeNotificationContent = (
   return truncate(stripped, maxChars);
 };
 
+/**
+ * Strip markdown punctuation / blank lines from a task name so it cannot
+ * break the DingTalk card title (`**name**` wrapper or `label · name`).
+ */
+export const sanitizeTaskNameForMarkdown = (name: string): string =>
+  name
+    .replaceAll(/[*_`~#[\]\\]/g, '')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+
 export const buildDingtalkMarkdown = (taskName: string, content: string, now: Date): string => {
   const body = sanitizeNotificationContent(content, DINGTALK_CONTENT_MAX_CHARS);
   const stamp = formatShanghaiTimestamp(now);
-  return `**${taskName}**\n\n${body}\n\n${stamp}`;
+  const safeName = sanitizeTaskNameForMarkdown(taskName) || taskName;
+  return `**${safeName}**\n\n${body}\n\n${stamp}`;
 };
 
 export const formatShanghaiTimestamp = (date: Date): string => {
@@ -65,5 +95,7 @@ export const formatShanghaiTimestamp = (date: Date): string => {
   return `${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')}`;
 };
 
-export const dingtalkPushTitle = (type: TaskNotificationType, taskName: string): string =>
-  `${TASK_NOTIFICATION_ZH_LABELS[type]} · ${taskName}`;
+export const dingtalkPushTitle = (type: TaskNotificationType, taskName: string): string => {
+  const safeName = sanitizeTaskNameForMarkdown(taskName) || taskName;
+  return `${TASK_NOTIFICATION_ZH_LABELS[type]} · ${safeName}`;
+};

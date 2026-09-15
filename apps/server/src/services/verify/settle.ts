@@ -7,6 +7,7 @@ import { TaskModel } from '@/database/models/task';
 import { VerifyRunModel } from '@/database/models/verifyRun';
 import type { LobeChatDatabase } from '@/database/type';
 import { TaskService } from '@/server/services/task';
+import { TaskNotificationService } from '@/server/services/taskNotification';
 import { TaskResultBridgeService } from '@/server/services/taskResultBridge';
 
 import { maybeAutoRepair } from './repairService';
@@ -68,13 +69,14 @@ export const driveTaskFromVerify = async (
       // - errored: the verifier could not run (infra) — the delivery was NOT
       //   evaluated, so we must not claim it "did not pass".
       const isErrored = run.status === 'errored';
+      const failureReason = isErrored
+        ? 'Verification could not run (internal error); the delivery was not evaluated.'
+        : 'Delivery did not pass verification.';
       await new BriefModel(db, userId, workspaceId).create({
         actions: DEFAULT_BRIEF_ACTIONS['error'],
         agentId: task.assigneeAgentId || undefined,
         priority: 'urgent',
-        summary: isErrored
-          ? 'Verification could not run (internal error); the delivery was not evaluated.'
-          : 'Delivery did not pass verification.',
+        summary: failureReason,
         taskId: op.taskId,
         title: isErrored
           ? `${task.identifier} verification errored`
@@ -83,6 +85,18 @@ export const driveTaskFromVerify = async (
         type: 'error',
       });
       await taskModel.updateStatus(op.taskId, 'paused', { error: null });
+      await new TaskNotificationService().notify({
+        agentId: task.assigneeAgentId || undefined,
+        content: failureReason,
+        db,
+        operationId,
+        taskId: op.taskId,
+        taskIdentifier: task.identifier,
+        taskName: task.name,
+        topicId: op.topicId ?? undefined,
+        type: 'task_waiting_for_user',
+        userId: task.createdByUserId,
+      });
       log(
         isErrored
           ? 'verify errored → task %s paused + brief'

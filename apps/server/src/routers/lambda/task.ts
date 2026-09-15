@@ -19,9 +19,9 @@ import { EditLockService } from '@/server/services/editLock';
 import { publishResourceEvent } from '@/server/services/resourceEvents';
 import { TaskService } from '@/server/services/task';
 import { TaskLifecycleService } from '@/server/services/taskLifecycle';
-import { TaskNotificationService } from '@/server/services/taskNotification';
 import { TaskRunnerService } from '@/server/services/taskRunner';
 import { hasWorkspaceScopedPermission } from '@/server/services/workspacePermission';
+import { runWatchdogScan } from '@/server/workflows-hono/task/handlers/watchdog';
 import { TransferErrorCode } from '@/types/transferError';
 
 const taskProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) => {
@@ -575,52 +575,14 @@ export const taskRouter = router({
     }
   }),
 
-  watchdog: taskProcedureWrite.mutation(async ({ ctx }) => {
+  watchdog: taskProcedureWrite.mutation(async () => {
     try {
-      const stuckTasks = await TaskModel.findStuckTasks(ctx.serverDB);
-      const failed: string[] = [];
-
-      for (const task of stuckTasks) {
-        const wsId = task.workspaceId ?? undefined;
-        const model = new TaskModel(ctx.serverDB, task.createdByUserId, wsId);
-        await model.updateStatus(task.id, 'failed', {
-          completedAt: new Date(),
-          error: 'Heartbeat timeout',
-        });
-
-        // Create error brief
-        const briefModel = new BriefModel(ctx.serverDB, task.createdByUserId, wsId);
-        await briefModel.create({
-          agentId: task.assigneeAgentId || undefined,
-          priority: 'urgent',
-          summary: `Task has been running without heartbeat update for more than ${task.heartbeatTimeout} seconds.`,
-          taskId: task.id,
-          title: `${task.identifier} heartbeat timeout`,
-          trigger: 'task',
-          type: 'error',
-        });
-
-        await new TaskNotificationService().notify({
-          agentId: task.assigneeAgentId || undefined,
-          content: 'Heartbeat timeout',
-          db: ctx.serverDB,
-          taskId: task.id,
-          taskIdentifier: task.identifier,
-          taskName: task.name,
-          topicId: task.currentTopicId ?? undefined,
-          type: 'task_run_failed',
-          userId: task.createdByUserId,
-        });
-
-        failed.push(task.identifier);
-      }
-
+      const result = await runWatchdogScan();
       return {
-        checked: stuckTasks.length,
-        failed,
+        ...result,
         message:
-          failed.length > 0
-            ? `${failed.length} stuck tasks marked as failed`
+          result.failed.length > 0
+            ? `${result.failed.length} stuck tasks marked as failed`
             : 'No stuck tasks found',
         success: true,
       };

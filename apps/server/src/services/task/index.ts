@@ -24,7 +24,7 @@ import { AiAgentService } from '../aiAgent';
 import { extractFileIdsFromEditorData } from '../file/extractFileIdsFromEditorData';
 import { resolveAttachmentMetadata } from '../file/resolveAttachments';
 import { type SubtaskGraphPlan, TaskGraphService } from '../taskGraph';
-import { TaskNotificationService } from '../taskNotification';
+import { TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH, TaskNotificationService } from '../taskNotification';
 import { type ReviewResult, TaskReviewService } from '../taskReview';
 import { TaskRunnerService } from '../taskRunner';
 
@@ -403,7 +403,7 @@ export class TaskService {
           taskName: task.name,
           topicId: task.currentTopicId ?? undefined,
           type: 'task_completed',
-          userId: this.userId,
+          userId: task.createdByUserId,
         });
       }
 
@@ -515,7 +515,8 @@ export class TaskService {
       const topics = await this.taskTopicModel.findByTaskId(taskId);
       const handoff = topics[0]?.handoff as { content?: string; summary?: string } | null;
       return handoff?.content?.trim() || handoff?.summary?.trim() || '';
-    } catch {
+    } catch (error) {
+      console.error('[TaskService.readLatestRunOutput] failed for task %s:', taskId, error);
       return '';
     }
   }
@@ -525,11 +526,25 @@ export class TaskService {
     if (!task) return null;
 
     // Auto-detect heartbeat timeout for running tasks before assembling detail.
+    // Smaller change than removing the mutation: notify here so opening a stuck
+    // task still produces `task_run_failed` even though it leaves `running`
+    // (and would otherwise be skipped by a later watchdog scan).
     if (task.status === 'running' && task.heartbeatTimeout && task.lastHeartbeatAt) {
       const elapsed = (Date.now() - new Date(task.lastHeartbeatAt).getTime()) / 1000;
       if (elapsed > task.heartbeatTimeout) {
         await this.taskModel.updateStatus(task.id, 'paused', { error: 'Heartbeat timeout' });
         await this.taskTopicModel.timeoutRunning(task.id);
+        await new TaskNotificationService().notify({
+          agentId: task.assigneeAgentId ?? undefined,
+          content: TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH,
+          db: this.db,
+          taskId: task.id,
+          taskIdentifier: task.identifier,
+          taskName: task.name,
+          topicId: task.currentTopicId ?? undefined,
+          type: 'task_run_failed',
+          userId: task.createdByUserId,
+        });
         task = await this.taskModel.resolve(taskIdOrIdentifier);
         if (!task) return null;
       }

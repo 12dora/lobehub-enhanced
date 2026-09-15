@@ -3,7 +3,6 @@ import { and, count, desc, eq, inArray, lt, or } from 'drizzle-orm';
 import type {
   NewNotification,
   NewNotificationDelivery,
-  NotificationDeliveryItem,
   NotificationItem,
 } from '../schemas/notification';
 import { notificationDeliveries, notifications } from '../schemas/notification';
@@ -135,54 +134,5 @@ export class NotificationModel {
       .limit(1);
 
     return row ?? null;
-  }
-
-  /**
-   * Insert a notification and its deliveries in one transaction.
-   * On `(userId, dedupeKey)` conflict the notification insert is skipped and
-   * `{ notification: null, deliveries: [] }` is returned (caller should treat
-   * that as already-notified).
-   */
-  async createWithDeliveries(
-    data: Omit<NewNotification, 'userId'>,
-    deliveries: Omit<NewNotificationDelivery, 'notificationId'>[] = [],
-  ): Promise<{ deliveries: NotificationDeliveryItem[]; notification: NotificationItem | null }> {
-    return this.db.transaction(async (tx) => {
-      const [notification] = await tx
-        .insert(notifications)
-        .values({ ...data, userId: this.userId })
-        .onConflictDoNothing({
-          target: [notifications.userId, notifications.dedupeKey],
-        })
-        .returning();
-
-      if (!notification) return { deliveries: [], notification: null };
-      if (deliveries.length === 0) return { deliveries: [], notification };
-
-      const rows = await tx
-        .insert(notificationDeliveries)
-        .values(deliveries.map((d) => ({ ...d, notificationId: notification.id })))
-        .returning();
-
-      return { deliveries: rows, notification };
-    });
-  }
-
-  async updateDeliveryStatus(
-    id: string,
-    patch: {
-      failedReason?: string | null;
-      providerMessageId?: string | null;
-      sentAt?: Date | null;
-      status: NotificationDeliveryItem['status'];
-    },
-  ): Promise<NotificationDeliveryItem | null> {
-    const [result] = await this.db
-      .update(notificationDeliveries)
-      .set(patch)
-      .where(eq(notificationDeliveries.id, id))
-      .returning();
-
-    return result ?? null;
   }
 }

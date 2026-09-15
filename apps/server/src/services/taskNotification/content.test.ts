@@ -43,6 +43,12 @@ describe('buildDingtalkMarkdown', () => {
     expect(markdown).toBe('**Daily digest**\n\nbody text\n\n2026-09-15 16:05');
   });
 
+  it('strips markdown punctuation from the task name so it cannot break the title', () => {
+    const now = new Date('2026-09-15T08:05:00.000Z');
+    const markdown = buildDingtalkMarkdown('**Daily**\n\n# digest', 'body', now);
+    expect(markdown.startsWith('**Daily digest**\n\n')).toBe(true);
+  });
+
   it('caps the inner content at 1500 chars', () => {
     const now = new Date('2026-09-15T00:00:00.000Z');
     const markdown = buildDingtalkMarkdown('T', 'x'.repeat(DINGTALK_CONTENT_MAX_CHARS + 10), now);
@@ -59,6 +65,10 @@ describe('dingtalkPushTitle', () => {
     expect(dingtalkPushTitle('task_run_failed', '报表')).toBe('任务运行失败 · 报表');
     expect(dingtalkPushTitle('task_waiting_for_user', '报表')).toBe('任务等待处理 · 报表');
     expect(dingtalkPushTitle('task_completed', '报表')).toBe('任务已完成 · 报表');
+  });
+
+  it('strips markdown from the task name', () => {
+    expect(dingtalkPushTitle('task_run_failed', '**报表**')).toBe('任务运行失败 · 报表');
   });
 });
 

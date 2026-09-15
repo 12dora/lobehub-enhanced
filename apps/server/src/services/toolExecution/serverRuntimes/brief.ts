@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { BriefModel } from '@/database/models/brief';
 import { TaskModel } from '@/database/models/task';
 import { tasks } from '@/database/schemas';
+import { TaskNotificationService } from '@/server/services/taskNotification';
 
 import { type ServerRuntimeRegistration } from './types';
 
@@ -86,6 +87,21 @@ export const briefRuntime: ServerRuntimeRegistration = {
 
         if (taskId) {
           await taskModel.updateStatus(taskId, 'paused');
+          const task = await taskModel.findById(taskId);
+          if (task) {
+            await new TaskNotificationService().notify({
+              agentId: task.assigneeAgentId ?? agentId,
+              content: args.reason,
+              db,
+              operationId: context.operationId,
+              taskId,
+              taskIdentifier: task.identifier,
+              taskName: task.name,
+              topicId: context.topicId,
+              type: 'task_waiting_for_user',
+              userId: task.createdByUserId,
+            });
+          }
         }
 
         await briefModel.create({

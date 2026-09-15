@@ -12,9 +12,11 @@ const {
   briefCreate,
   serviceUpdateStatus,
   deliverMock,
+  notifyMock,
 } = vi.hoisted(() => ({
   briefCreate: vi.fn(),
   deliverMock: vi.fn(),
+  notifyMock: vi.fn(),
   opFindById: vi.fn(),
   runFindByOperation: vi.fn(),
   runSetMetadata: vi.fn(),
@@ -46,6 +48,9 @@ vi.mock('@/server/services/task', () => ({
 vi.mock('@/server/services/taskResultBridge', () => ({
   TaskResultBridgeService: vi.fn(() => ({ deliver: deliverMock })),
 }));
+vi.mock('@/server/services/taskNotification', () => ({
+  TaskNotificationService: vi.fn(() => ({ notify: notifyMock })),
+}));
 
 const db = {} as any;
 
@@ -60,12 +65,15 @@ describe('driveTaskFromVerify', () => {
       briefCreate,
       serviceUpdateStatus,
       deliverMock,
+      notifyMock,
     ].forEach((m) => m.mockReset());
     opFindById.mockResolvedValue({ taskId: 'task-1', topicId: 'topic-done' });
     taskFindById.mockResolvedValue({
       assigneeAgentId: 'a1',
+      createdByUserId: 'owner-1',
       id: 'task-1',
       identifier: 'T-1',
+      name: 'Verify task',
       status: 'running',
     });
   });
@@ -94,6 +102,13 @@ describe('driveTaskFromVerify', () => {
     expect(serviceUpdateStatus).not.toHaveBeenCalled();
     // Creator is told it failed verification (reason 'error'), not a passed result.
     expect(deliverMock.mock.calls[0][0]).toMatchObject({ reason: 'error', taskId: 'task-1' });
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Delivery did not pass verification.',
+        type: 'task_waiting_for_user',
+        userId: 'owner-1',
+      }),
+    );
   });
 
   it('errored → pauses with a non-accusatory brief; never claims the delivery "did not pass"', async () => {
@@ -115,6 +130,13 @@ describe('driveTaskFromVerify', () => {
     expect(deliverArg.reason).toBe('error');
     expect(deliverArg.errorMessage).not.toBe('Delivery did not pass verification.');
     expect(deliverArg.errorMessage.toLowerCase()).toContain('internal error');
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Verification could not run (internal error); the delivery was not evaluated.',
+        type: 'task_waiting_for_user',
+        userId: 'owner-1',
+      }),
+    );
   });
 
   it('skips when the run has not terminally settled (verifying/repairing)', async () => {
