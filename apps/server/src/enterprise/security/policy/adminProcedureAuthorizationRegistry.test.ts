@@ -110,14 +110,16 @@ describe('admin procedure authorization registry', () => {
     // +1 mutation since: admin.agents.uploadAvatar (image avatar for the platform Agent editor).
     // +1 query since: admin.users.search (shared admin picker; USER_READ | AUDIT_READ | MODERATION_READ).
     // −1 query since: admin.audit.users.search removed (pickers use admin.users.search).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(245);
+    // +2 queries / +2 mutations since: admin.imConnectors.{get,list,upsert,test}
+    // (DingTalk IM connector admin surface).
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(249);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
-    ).toHaveLength(109);
+    ).toHaveLength(111);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
-    ).toHaveLength(136);
-    expect(mutationPaths).toHaveLength(136);
+    ).toHaveLength(138);
+    expect(mutationPaths).toHaveLength(138);
     expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter((entry) => 'selfAccess' in entry)).toEqual(
       [{ kind: 'query', path: 'admin.auth.getMyAccess', selfAccess: true }],
     );

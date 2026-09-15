@@ -148,7 +148,9 @@ describe('ImConnectorsAdminService', () => {
         settings: expect.objectContaining({ robotCode: 'ding-robot' }),
       }),
     );
-    expect(vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2]).not.toHaveProperty('credentials');
+    expect(vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2]).not.toHaveProperty(
+      'credentials',
+    );
     expect(SystemBotProviderModel.upsertByPlatform).not.toHaveBeenCalled();
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
   });
@@ -183,6 +185,48 @@ describe('ImConnectorsAdminService', () => {
     expect(SystemBotProviderModel.update).not.toHaveBeenCalled();
   });
 
+  it('creates a new row via upsertByPlatform on first-time replace', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    const createdRow = {
+      ...existingRow,
+      credentials: { clientSecret: REPLACED_SECRET },
+    };
+    vi.mocked(SystemBotProviderModel.findByPlatform)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(createdRow as never);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: {
+        ...upsertInput,
+        clientSecret: { action: 'replace', value: REPLACED_SECRET },
+      },
+    });
+
+    expect(SystemBotProviderModel.upsertByPlatform).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        applicationId: 'ding-app-key',
+        connectionMode: 'websocket',
+        credentials: { clientSecret: REPLACED_SECRET },
+        enabled: true,
+        platform: 'dingtalk',
+      }),
+      expect.anything(),
+    );
+    expect(SystemBotProviderModel.update).not.toHaveBeenCalled();
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'system.im_connector.update',
+        afterDiff: expect.objectContaining({ rotation: 'replaced' }),
+        targetId: 'dingtalk',
+        targetType: 'im_connector',
+      }),
+    );
+    expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
+  });
+
   it('rejects enabling without a stored or replaced secret', async () => {
     vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue(null);
     const service = new ImConnectorsAdminService(createDb());
@@ -205,9 +249,9 @@ describe('ImConnectorsAdminService', () => {
         actorUserId: 'operator-1',
         afterDiff: expect.objectContaining({
           clientId: 'ding-app-key',
-          credentialAction: 'kept',
           enabled: true,
           robotCode: 'ding-robot',
+          rotation: 'kept',
         }),
         reason: 'enable dingtalk connector',
         result: 'success',

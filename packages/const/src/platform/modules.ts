@@ -200,7 +200,7 @@ export const PLATFORM_MODULES: Readonly<Record<PlatformModuleId, PlatformModuleD
     workers: ['auditExport', 'auditRetention'],
   }),
   bots: def({
-    adminRouterKeys: [],
+    adminRouterKeys: ['imConnectors'],
     asyncRouterKeys: [],
     cost: {
       backgroundJobs: 1,

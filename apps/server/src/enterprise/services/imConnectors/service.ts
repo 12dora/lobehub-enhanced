@@ -187,7 +187,8 @@ export class ImConnectorsAdminService {
     const { input } = params;
     const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
     const replacing = input.clientSecret.action === 'replace';
-    const replacementSecret = input.clientSecret.action === 'replace' ? input.clientSecret.value : undefined;
+    const replacementSecret =
+      input.clientSecret.action === 'replace' ? input.clientSecret.value : undefined;
     const settings = settingsFromUpsert(input);
 
     await this.db.transaction(async (tx) => {
@@ -234,7 +235,7 @@ export class ImConnectorsAdminService {
           aiCardTemplateId: settings.aiCardTemplateId,
           chatEnabled: settings.chatEnabled,
           clientId: input.clientId,
-          credentialAction: replacing ? 'replaced' : 'kept',
+          rotation: replacing ? 'replaced' : 'kept',
           enabled: input.enabled,
           idleNewTopicEnabled: settings.idleNewTopicEnabled,
           idleNewTopicHours: settings.idleNewTopicHours,

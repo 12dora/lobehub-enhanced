@@ -1,9 +1,12 @@
+import debug from 'debug';
 import { count, eq } from 'drizzle-orm';
 
 import { messengerAccountLinks } from '@/database/schemas';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
 
 import type { ImConnectorStats } from '../../contracts/adminImConnectors';
+
+const log = debug('lobe-server:admin:imConnectors');
 
 export const IM_CONNECTOR_STATS_TIMEZONE = 'Asia/Shanghai';
 export const IM_CONNECTOR_STATS_WINDOW_DAYS = 7;
@@ -54,7 +57,8 @@ const sumCounters = async (redis: ImConnectorRedisMget | null, keys: string[]): 
   try {
     const values = await redis.mget(...keys);
     return values.reduce((total, value) => total + parseCounter(value), 0);
-  } catch {
+  } catch (error) {
+    log('Redis mget failed for IM connector stats, falling back to 0: %O', error);
     return 0;
   }
 };

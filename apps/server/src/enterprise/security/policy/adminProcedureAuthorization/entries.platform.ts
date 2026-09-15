@@ -2,7 +2,7 @@ import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 
 import type { AdminProcedureAuthorization } from './types';
 
-/** Authorization declarations for admin.browserProfile/branding/contentModeration/managedResources/security/settings/sidebarLayout/stats/system procedures. */
+/** Authorization declarations for admin.browserProfile/branding/contentModeration/imConnectors/managedResources/security/settings/sidebarLayout/stats/system procedures. */
 export const ADMIN_PROCEDURE_AUTHORIZATION_PLATFORM = [
   {
     kind: 'query',
@@ -92,6 +92,26 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_PLATFORM = [
     kind: 'mutation',
     path: 'admin.contentModeration.updateSettings',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.MODERATION_MANAGE] },
+  },
+  {
+    kind: 'query',
+    path: 'admin.imConnectors.get',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
+  },
+  {
+    kind: 'query',
+    path: 'admin.imConnectors.list',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
+  },
+  {
+    kind: 'mutation',
+    path: 'admin.imConnectors.test',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
+  },
+  {
+    kind: 'mutation',
+    path: 'admin.imConnectors.upsert',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
   },
   {
     kind: 'query',

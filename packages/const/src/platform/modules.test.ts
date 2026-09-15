@@ -84,6 +84,11 @@ describe('platform modules contract', () => {
     );
   });
 
+  it('gates admin.imConnectors through the bots module', () => {
+    expect(PLATFORM_MODULES.bots.adminRouterKeys).toEqual(['imConnectors']);
+    expect(MODULE_BY_ADMIN_ROUTER_KEY.imConnectors).toBe('bots');
+  });
+
   it('every workers name is unique across modules', () => {
     const names = PLATFORM_MODULE_IDS.flatMap((id) => [...PLATFORM_MODULES[id].workers]);
     expect(names).toEqual(unique(names));

@@ -2,6 +2,7 @@ import {
   conditional,
   conditionalReauth,
   dangerousMutation,
+  enforced,
   identityLkg,
   noReason,
   notApplicable,
@@ -63,6 +64,32 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
     'medium',
     'Replace the platform content-moderation configuration with CAS and a sanitized audit row.',
     { reason: noReason },
+  ),
+  'admin.imConnectors.test': regularMutation(
+    'admin.imConnectors.test',
+    'low',
+    'Probe DingTalk OAuth accessToken without persisting any change.',
+    {
+      audit: notApplicable(
+        'The bounded live probe does not persist configuration or write an audit row.',
+      ),
+      lastKnownGood: remoteProbeNoLkg,
+      outbound: enforced(
+        'Hardcoded POST to api.dingtalk.com/v1.0/oauth2/accessToken; does not use the enterprise outbound policy client.',
+      ),
+      reason: noReason,
+    },
+  ),
+  'admin.imConnectors.upsert': regularMutation(
+    'admin.imConnectors.upsert',
+    'medium',
+    'Replace the installation-wide IM connector row for one platform and invalidate the messenger config cache.',
+    {
+      audit: enforced(
+        'Service persists a sanitized platform audit outcome with action system.im_connector.update.',
+      ),
+      reason: optionalReasonInput,
+    },
   ),
   'admin.managedResources.save': dangerousMutation(
     'admin.managedResources.save',
