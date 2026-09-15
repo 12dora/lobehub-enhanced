@@ -16,8 +16,8 @@ const ddInside = (code = 'auth-code'): DingTalkJsApi => ({
   runtime: { permission: { requestAuthCode: ({ onSuccess }) => onSuccess?.({ code }) } },
 });
 
-const jsonResponse = (body: unknown, ok = true) =>
-  ({ json: () => Promise.resolve(body), ok }) as unknown as Response;
+const jsonResponse = (body: unknown, ok = true, status = ok ? 200 : 500) =>
+  ({ json: () => Promise.resolve(body), ok, status }) as unknown as Response;
 
 beforeEach(() => {
   document.head.innerHTML = '';
@@ -40,6 +40,8 @@ describe('sanitizeRedirect', () => {
     'javascript:alert(1)',
     'tasks',
     '',
+    '/%2f%2fevil.example',
+    '/foo\r\nSet-Cookie: x',
   ])('refuses %s', (input) => {
     expect(sanitizeRedirect(input)).toBe('/');
   });
@@ -188,6 +190,22 @@ describe('runDingTalkSso', () => {
         redirect: '/tasks',
       }),
     ).resolves.toEqual({ redirect: '/', status: 'signed-in' });
+  });
+
+  it('falls back to / when the exchange rejects the redirect with 400', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ corpId: 'ding-corp', enabled: true }))
+      .mockResolvedValueOnce(jsonResponse({ ok: false, reason: 'bad_redirect' }, false, 400));
+
+    await expect(
+      runDingTalkSso({
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        getDd: ddInside,
+        loadScript,
+        redirect: '/tasks',
+      }),
+    ).resolves.toEqual({ redirect: '/', status: 'fallback' });
   });
 
   it('falls back when the exchange is rejected', async () => {

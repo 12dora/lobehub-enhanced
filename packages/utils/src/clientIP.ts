@@ -1,4 +1,38 @@
 /**
+ * Client IP for rate-limiting when the app sits behind **one** reverse proxy
+ * (Caddy) that **appends** the observed peer address to `x-forwarded-for`.
+ *
+ * With a single trusted proxy, the last XFF hop is the address Caddy added
+ * (the real connecting client). Earlier hops are client-settable and ignored.
+ * Falls back to `x-real-ip`, then `socketAddress` (direct TCP peer) if the
+ * caller can supply it. Other forwarding headers (`cf-connecting-ip`,
+ * `x-client-ip`, `forwarded`, …) are not consulted — they are client-settable
+ * when Caddy is the only proxy.
+ */
+export const getTrustedProxyClientIP = (
+  headers: Headers,
+  socketAddress?: string | null,
+): string => {
+  const forwarded = headers.get('x-forwarded-for');
+  if (forwarded) {
+    const hops = forwarded
+      .split(',')
+      .map((hop) => hop.trim())
+      .filter((hop) => hop.length > 0);
+    const lastHop = hops.at(-1);
+    if (lastHop) return lastHop;
+  }
+
+  const realIp = headers.get('x-real-ip')?.trim();
+  if (realIp) return realIp;
+
+  const socket = socketAddress?.trim();
+  if (socket) return socket;
+
+  return '';
+};
+
+/**
  * Get client IP address
  * @param headers HTTP request headers
  */

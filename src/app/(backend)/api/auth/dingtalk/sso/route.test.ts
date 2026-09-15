@@ -62,6 +62,48 @@ describe('POST /api/auth/dingtalk/sso', () => {
     expect(serializeDingTalkSsoSessionCookie).toHaveBeenCalledWith(cookie);
   });
 
+  it('rate-limits using the last x-forwarded-for hop so a spoofed first hop is ignored', async () => {
+    exchangeDingTalkSso.mockResolvedValueOnce({ cookie, ok: true, redirect: '/home' });
+
+    await POST(
+      new NextRequest('https://app.example.test/api/auth/dingtalk/sso', {
+        body: JSON.stringify({ code: 'auth-code', redirect: '/home' }),
+        headers: {
+          'content-type': 'application/json',
+          'cf-connecting-ip': '8.8.8.8',
+          'x-forwarded-for': '1.1.1.1, 203.0.113.10',
+        },
+        method: 'POST',
+      }),
+    );
+
+    expect(exchangeDingTalkSso).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '203.0.113.10' }),
+    );
+  });
+
+  it('maps exchange_failed to 502', async () => {
+    exchangeDingTalkSso.mockResolvedValueOnce({ ok: false, reason: 'exchange_failed' });
+
+    const response = await post({ code: 'auth-code', redirect: '/home' });
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ ok: false, reason: 'exchange_failed' });
+  });
+
+  it('maps a forbidden session-mint APIError to 403 exchange_failed', async () => {
+    exchangeDingTalkSso.mockResolvedValueOnce({
+      httpStatus: 403,
+      ok: false,
+      reason: 'exchange_failed',
+    });
+
+    const response = await post({ code: 'auth-code', redirect: '/home' });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ ok: false, reason: 'exchange_failed' });
+  });
+
   it('maps unknown user to 404', async () => {
     exchangeDingTalkSso.mockResolvedValueOnce({ ok: false, reason: 'user_not_found' });
 

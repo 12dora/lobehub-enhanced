@@ -5,7 +5,7 @@ import {
   exchangeDingTalkSso,
   serializeDingTalkSsoSessionCookie,
 } from '@/server/services/messenger/platforms/dingtalk/sso';
-import { getClientIP } from '@/utils/clientIP';
+import { getTrustedProxyClientIP } from '@/utils/clientIP';
 
 export const runtime = 'nodejs';
 
@@ -38,9 +38,10 @@ export async function POST(req: NextRequest) {
   }
 
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const socketAddress = (req as { socket?: { remoteAddress?: string } }).socket?.remoteAddress;
   const result = await exchangeDingTalkSso({
     code: 'code' in record ? record.code : undefined,
-    ip: getClientIP(req.headers) || 'unknown',
+    ip: getTrustedProxyClientIP(req.headers, socketAddress) || 'unknown',
     redirect: 'redirect' in record ? record.redirect : undefined,
     userAgent: req.headers.get('user-agent') ?? undefined,
   });
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
   if (!result.ok) {
     return NextResponse.json(
       { ok: false, reason: result.reason },
-      { headers, status: statusForReason(result.reason) },
+      { headers, status: result.httpStatus ?? statusForReason(result.reason) },
     );
   }
 

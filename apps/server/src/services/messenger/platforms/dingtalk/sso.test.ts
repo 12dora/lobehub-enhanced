@@ -60,10 +60,11 @@ vi.mock('@/auth', () => ({
 }));
 
 const {
+  DINGTALK_CORP_ID_KEY,
   DINGTALK_GETUSERINFO_URL,
   DINGTALK_LEGACY_TOKEN_URL,
-  DINGTALK_SSO_CORP_ID_REDIS_KEY,
   DINGTALK_SSO_RATE_LIMIT_MAX,
+  DINGTALK_SSO_TWO_FACTOR_SESSION_PATH,
   exchangeDingTalkSso,
   getDingTalkSsoConfig,
   isSafeDingTalkSsoRedirect,
@@ -155,7 +156,7 @@ describe('getDingTalkSsoConfig', () => {
       corpId: 'ding-from-redis',
       enabled: true,
     });
-    expect(mockRedisGet).toHaveBeenCalledWith(DINGTALK_SSO_CORP_ID_REDIS_KEY);
+    expect(mockRedisGet).toHaveBeenCalledWith(DINGTALK_CORP_ID_KEY);
   });
 });
 
@@ -185,7 +186,11 @@ describe('exchangeDingTalkSso', () => {
     );
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       expect.stringContaining(`${DINGTALK_LEGACY_TOKEN_URL}?`),
-      expect.objectContaining({ method: 'GET' }),
+      expect.objectContaining({ method: 'GET', redirect: 'error' }),
+    );
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.stringContaining(`${DINGTALK_GETUSERINFO_URL}?`),
+      expect.objectContaining({ method: 'POST', redirect: 'error' }),
     );
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain('appkey=app_key');
   });
@@ -226,5 +231,97 @@ describe('exchangeDingTalkSso', () => {
     await expect(
       exchangeDingTalkSso({ code: 'auth-code', ip: '198.51.100.9', redirect: '/home' }),
     ).resolves.toEqual({ ok: false, reason: 'rate_limited' });
+  });
+
+  it('returns user_not_found for an effectively banned user without leaking ban', async () => {
+    mockFindByEmail.mockResolvedValueOnce({
+      banExpires: null,
+      banned: true,
+      email: 'staff_1@dingtalk.jiefakj.com',
+      id: 'user_1',
+    });
+
+    await expect(
+      exchangeDingTalkSso({ code: 'auth-code', ip: '1.1.1.1', redirect: '/home' }),
+    ).resolves.toEqual({ ok: false, reason: 'user_not_found' });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('mints a session when a temporary ban has expired', async () => {
+    mockFindByEmail.mockResolvedValueOnce({
+      banExpires: new Date(Date.now() - 1000),
+      banned: true,
+      email: 'staff_1@dingtalk.jiefakj.com',
+      id: 'user_1',
+    });
+
+    const result = await exchangeDingTalkSso({
+      code: 'auth-code',
+      ip: '1.1.1.1',
+      redirect: '/home',
+    });
+    expect(result.ok).toBe(true);
+    expect(mockCreateSession).toHaveBeenCalled();
+  });
+
+  it('mints a session for a 2FA-enabled user (DingTalk 免登 is IdP-delegated)', async () => {
+    mockFindByEmail.mockResolvedValueOnce({
+      banExpires: null,
+      banned: false,
+      email: 'staff_1@dingtalk.jiefakj.com',
+      id: 'user_1',
+      twoFactorEnabled: true,
+    });
+
+    const result = await exchangeDingTalkSso({
+      code: 'auth-code',
+      ip: '1.1.1.1',
+      redirect: '/home',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.cookie.name).toBe(SESSION_COOKIE_NAME);
+    expect(mockCreateSession).toHaveBeenCalled();
+  });
+
+  it('maps a FORBIDDEN APIError from createSession to exchange_failed without throwing', async () => {
+    const { APIError } = await import('better-auth/api');
+    mockCreateSession.mockRejectedValueOnce(
+      new APIError('FORBIDDEN', { code: 'TWO_FACTOR_REQUIRED', message: 'totp' }),
+    );
+
+    await expect(
+      exchangeDingTalkSso({ code: 'auth-code', ip: '1.1.1.1', redirect: '/home' }),
+    ).resolves.toEqual({ httpStatus: 403, ok: false, reason: 'exchange_failed' });
+  });
+
+  it('maps an unexpected createSession throw to exchange_failed 502', async () => {
+    mockCreateSession.mockRejectedValueOnce(new Error('adapter down'));
+
+    await expect(
+      exchangeDingTalkSso({ code: 'auth-code', ip: '1.1.1.1', redirect: '/home' }),
+    ).resolves.toEqual({ httpStatus: 502, ok: false, reason: 'exchange_failed' });
+  });
+
+  it('caches the legacy app token per clientId', async () => {
+    await exchangeDingTalkSso({ code: 'auth-code', ip: '10.0.0.1', redirect: '/home' });
+    await exchangeDingTalkSso({ code: 'auth-code', ip: '10.0.0.2', redirect: '/home' });
+    const gettokenCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter((call) => String(call[0]).startsWith(DINGTALK_LEGACY_TOKEN_URL));
+    expect(gettokenCalls).toHaveLength(1);
+
+    mockGetMessengerDingTalkConfig.mockResolvedValue({ ...VALID_CONFIG, clientId: 'other_key' });
+    await exchangeDingTalkSso({ code: 'auth-code', ip: '10.0.0.3', redirect: '/home' });
+    const after = vi
+      .mocked(fetch)
+      .mock.calls.filter((call) => String(call[0]).startsWith(DINGTALK_LEGACY_TOKEN_URL));
+    expect(after).toHaveLength(2);
+  });
+});
+
+describe('DINGTALK_SSO_TWO_FACTOR_SESSION_PATH', () => {
+  it('is an OAuth-callback path so the 2FA session gate allows 免登', () => {
+    expect(DINGTALK_SSO_TWO_FACTOR_SESSION_PATH.startsWith('/callback/')).toBe(true);
   });
 });

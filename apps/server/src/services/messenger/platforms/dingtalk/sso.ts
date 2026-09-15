@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { runWithEndpointContext } from '@better-auth/core/context';
+import { isAPIError } from 'better-auth/api';
 import { makeSignature } from 'better-auth/crypto';
 import debug from 'debug';
 import { sql } from 'drizzle-orm';
@@ -9,13 +11,19 @@ import { getServerDB } from '@/database/core/db-adaptor';
 import { UserModel } from '@/database/models/user';
 import { users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
+import { isEffectivelyBanned } from '@/database/utils/userBan';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
-import { buildDingTalkIdentityEmail, resolveDingTalkIdentityEmailDomain } from './const';
+import {
+  buildDingTalkIdentityEmail,
+  DINGTALK_CORP_ID_KEY,
+  resolveDingTalkIdentityEmailDomain,
+} from './const';
 
 const log = debug('lobe-server:messenger:dingtalk:sso');
 
-export const DINGTALK_SSO_CORP_ID_REDIS_KEY = 'messenger:dingtalk:corp-id';
+/** Same Redis key the stream worker writes via `rememberDingTalkCorpId`. */
+export { DINGTALK_CORP_ID_KEY };
 export const DINGTALK_SSO_RATE_LIMIT_MAX = 10;
 export const DINGTALK_SSO_RATE_LIMIT_WINDOW_MS = 60_000;
 export const DINGTALK_LEGACY_TOKEN_URL = 'https://oapi.dingtalk.com/gettoken';
@@ -52,7 +60,18 @@ export type DingTalkSsoConfigResult = { corpId: string | null; enabled: true } |
 
 export type DingTalkSsoExchangeResult =
   | { cookie: DingTalkSsoSessionCookie; ok: true; redirect: string }
-  | { ok: false; reason: DingTalkSsoFailReason };
+  | { httpStatus?: 403 | 502; ok: false; reason: DingTalkSsoFailReason };
+
+/**
+ * Synthetic better-auth path for DingTalk 免登 session minting.
+ *
+ * 免登 is IdP-delegated SSO (DingTalk JSAPI `requestAuthCode` after the user
+ * is already signed in at DingTalk), the same policy as OAuth callbacks:
+ * TOTP is not required. `isOAuthCallbackPath` allows `/callback/:id`, so we
+ * mint under this path instead of relying on the "no HTTP path = bootstrap"
+ * allowance in `enforceTwoFactorSessionGate`.
+ */
+export const DINGTALK_SSO_TWO_FACTOR_SESSION_PATH = '/callback/dingtalk';
 
 interface LegacyTokenCache {
   expiresAt: number;
@@ -64,7 +83,7 @@ interface RateLimitEntry {
   windowStartedAt: number;
 }
 
-let legacyTokenCache: LegacyTokenCache | null = null;
+const legacyTokenCache = new Map<string, LegacyTokenCache>();
 const rateLimitMemory = new Map<string, RateLimitEntry>();
 
 interface BetterAuthSessionCookieSpec {
@@ -91,7 +110,7 @@ interface BetterAuthSsoContext {
 }
 
 export const resetDingTalkSsoStateForTest = (): void => {
-  legacyTokenCache = null;
+  legacyTokenCache.clear();
   rateLimitMemory.clear();
 };
 
@@ -144,7 +163,7 @@ const readRedisCorpId = async (): Promise<string | null> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return null;
   try {
-    const value = await redis.get(DINGTALK_SSO_CORP_ID_REDIS_KEY);
+    const value = await redis.get(DINGTALK_CORP_ID_KEY);
     return emptyToNull(typeof value === 'string' ? value : null);
   } catch (error) {
     log('readRedisCorpId failed: %O', error);
@@ -198,7 +217,8 @@ const fetchLegacyAppToken = async (
   clientSecret: string,
   now = Date.now(),
 ): Promise<string | null> => {
-  if (legacyTokenCache && legacyTokenCache.expiresAt > now) return legacyTokenCache.token;
+  const cached = legacyTokenCache.get(clientId);
+  if (cached && cached.expiresAt > now) return cached.token;
 
   const url = new URL(DINGTALK_LEGACY_TOKEN_URL);
   url.searchParams.set('appkey', clientId);
@@ -206,7 +226,8 @@ const fetchLegacyAppToken = async (
 
   let response: Response;
   try {
-    response = await fetch(url.toString(), { cache: 'no-store', method: 'GET' });
+    // `redirect: 'error'` so a 30x off oapi.dingtalk.com cannot forward appsecret in the query.
+    response = await fetch(url.toString(), { cache: 'no-store', method: 'GET', redirect: 'error' });
   } catch (error) {
     log('fetchLegacyAppToken network error: %O', error);
     return null;
@@ -229,8 +250,12 @@ const fetchLegacyAppToken = async (
   }
   if (typeof token !== 'string' || token.trim().length === 0) return null;
 
-  legacyTokenCache = { expiresAt: now + DINGTALK_LEGACY_TOKEN_CACHE_MS, token: token.trim() };
-  return legacyTokenCache.token;
+  const next: LegacyTokenCache = {
+    expiresAt: now + DINGTALK_LEGACY_TOKEN_CACHE_MS,
+    token: token.trim(),
+  };
+  legacyTokenCache.set(clientId, next);
+  return next.token;
 };
 
 const exchangeAuthCodeForUserId = async (
@@ -247,6 +272,7 @@ const exchangeAuthCodeForUserId = async (
       cache: 'no-store',
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+      redirect: 'error',
     });
   } catch (error) {
     log('exchangeAuthCodeForUserId network error: %O', error);
@@ -290,6 +316,13 @@ const sameSiteFrom = (value: unknown): 'lax' | 'none' | 'strict' => {
   return 'lax';
 };
 
+type CreateSessionCookieResult =
+  | { cookie: DingTalkSsoSessionCookie; ok: true }
+  | { httpStatus: 403 | 502; ok: false; reason: 'exchange_failed' };
+
+const httpStatusFromApiError = (error: { status?: number | string }): 403 | 502 =>
+  error.status === 'FORBIDDEN' || error.status === 403 ? 403 : 502;
+
 /**
  * Create a Better Auth session the same way sign-in does:
  * `internalAdapter.createSession` writes `auth_sessions` (+ Redis secondary
@@ -300,31 +333,52 @@ const sameSiteFrom = (value: unknown): 'lax' | 'none' | 'strict' => {
  * Cookie name comes from `ctx.authCookies.sessionToken.name`, which is
  * `__Secure-<AUTH_COOKIE_PREFIX || better-auth>.session_token` when secure
  * cookies are on (https / production).
+ *
+ * DingTalk 免登 is IdP-delegated like OAuth, so it skips the TOTP gate: we
+ * run `createSession` under `DINGTALK_SSO_TWO_FACTOR_SESSION_PATH`
+ * (`/callback/dingtalk`), which `isOAuthCallbackPath` allows.
  */
 const createSessionCookie = async (
   userId: string,
   extras?: { ipAddress?: string; userAgent?: string },
-): Promise<DingTalkSsoSessionCookie | null> => {
+): Promise<CreateSessionCookieResult> => {
   const { auth } = await import('@/auth');
   const ctx = (await auth.$context) as BetterAuthSsoContext;
-  const session = await ctx.internalAdapter.createSession(userId, false, {
-    ...(extras?.ipAddress ? { ipAddress: extras.ipAddress } : {}),
-    ...(extras?.userAgent ? { userAgent: extras.userAgent } : {}),
-  });
-  if (!session?.token) return null;
+  let session: { token?: string } | null | undefined;
+  try {
+    session = await runWithEndpointContext(
+      { context: ctx as never, path: DINGTALK_SSO_TWO_FACTOR_SESSION_PATH },
+      () =>
+        ctx.internalAdapter.createSession(userId, false, {
+          ...(extras?.ipAddress ? { ipAddress: extras.ipAddress } : {}),
+          ...(extras?.userAgent ? { userAgent: extras.userAgent } : {}),
+        }),
+    );
+  } catch (error) {
+    if (isAPIError(error)) {
+      log('createSession APIError status=%s code=%s', error.status, error.body?.code);
+      return { httpStatus: httpStatusFromApiError(error), ok: false, reason: 'exchange_failed' };
+    }
+    log('createSession failed: %O', error);
+    return { httpStatus: 502, ok: false, reason: 'exchange_failed' };
+  }
+  if (!session?.token) return { httpStatus: 502, ok: false, reason: 'exchange_failed' };
 
   const signed = await makeSignature(session.token, ctx.secret);
   const cookie = ctx.authCookies.sessionToken;
   return {
-    attributes: {
-      httpOnly: cookie.attributes.httpOnly ?? true,
-      maxAge: cookie.attributes.maxAge,
-      path: cookie.attributes.path ?? '/',
-      sameSite: sameSiteFrom(cookie.attributes.sameSite),
-      secure: Boolean(cookie.attributes.secure),
+    cookie: {
+      attributes: {
+        httpOnly: cookie.attributes.httpOnly ?? true,
+        maxAge: cookie.attributes.maxAge,
+        path: cookie.attributes.path ?? '/',
+        sameSite: sameSiteFrom(cookie.attributes.sameSite),
+        secure: Boolean(cookie.attributes.secure),
+      },
+      name: cookie.name,
+      value: `${session.token}.${signed}`,
     },
-    name: cookie.name,
-    value: `${session.token}.${signed}`,
+    ok: true,
   };
 };
 
@@ -372,12 +426,19 @@ export const exchangeDingTalkSso = async (input: {
     return { ok: false, reason: 'user_not_found' };
   }
 
-  const cookie = await createSessionCookie(user.id, {
+  // Same predicate as better-auth's admin plugin (`banned` + unexpired `banExpires`).
+  // Return `user_not_found` so a ban is not distinguishable from an unknown staffId.
+  if (isEffectivelyBanned(user)) {
+    log('sso user_not_found staffId=%s domain=%s', staffId, resolveDingTalkIdentityEmailDomain());
+    return { ok: false, reason: 'user_not_found' };
+  }
+
+  const created = await createSessionCookie(user.id, {
     ipAddress: ip === 'unknown' ? undefined : ip,
     userAgent: input.userAgent,
   });
-  if (!cookie) return { ok: false, reason: 'exchange_failed' };
+  if (!created.ok) return created;
 
   log('sso session created userId=%s', user.id);
-  return { cookie, ok: true, redirect: input.redirect };
+  return { cookie: created.cookie, ok: true, redirect: input.redirect };
 };

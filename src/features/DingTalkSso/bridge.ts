@@ -51,13 +51,23 @@ export interface DingTalkSsoDeps {
  * Only a same-origin *path* may be handed back to the browser: the value arrives from a query
  * string (and, after the exchange, from the server), so a `//evil.example` or `https://…` would
  * otherwise turn this bridge into an open redirect.
+ *
+ * Keep this in lock-step with server `isSafeDingTalkSsoRedirect`: decode first, reject `//`,
+ * backslash, CR/LF, and a scheme that only appears after decode (`/%2f%2fevil`).
  */
 export const sanitizeRedirect = (raw: string | null | undefined): string => {
   if (typeof raw !== 'string') return '/';
   const value = raw.trim();
-  if (!value.startsWith('/')) return '/';
-  // `//host` is protocol-relative and `/\host` is normalised to it by several browsers.
-  if (value.startsWith('//') || value.startsWith('/\\')) return '/';
+  if (value.length === 0 || value.length > 2048) return '/';
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return '/';
+  if (/[\0\r\n]/.test(value)) return '/';
+  try {
+    const decoded = decodeURIComponent(value);
+    if (decoded.startsWith('//') || decoded.includes('\\')) return '/';
+    if (/^[a-z][a-z0-9+.-]*:/i.test(decoded)) return '/';
+  } catch {
+    return '/';
+  }
   return value;
 };
 
@@ -179,8 +189,16 @@ export const runDingTalkSso = async ({
       headers: { 'accept': 'application/json', 'content-type': 'application/json' },
       method: 'POST',
     });
+    const result = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      reason?: string;
+      redirect?: string | null;
+    } | null;
+    // Server rejected the redirect itself — do not `location.replace` the original query value.
+    if (response.status === 400 && result?.reason === 'bad_redirect') {
+      return { redirect: '/', status: 'fallback' };
+    }
     if (!response.ok) return fallback;
-    const result = (await response.json()) as { ok?: boolean; redirect?: string | null };
     if (!result?.ok) return fallback;
     // The server echoes the target back; it is still re-checked here because this value is what
     // the browser is about to navigate to.
