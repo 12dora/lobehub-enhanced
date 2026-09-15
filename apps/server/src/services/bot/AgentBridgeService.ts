@@ -38,6 +38,20 @@ import {
 
 const log = debug('lobe-server:bot:agent-bridge');
 
+const INITIAL_TOPIC_TITLE_CHARS = 20;
+
+/** `钉钉 · ` + first 20 chars of the user text, used as execAgent `title` on create. */
+const buildInitialTopicTitle = (
+  prefix: string | undefined,
+  userText: string | undefined,
+): string | undefined => {
+  if (!prefix) return undefined;
+  const snippet = Array.from((userText ?? '').trim())
+    .slice(0, INITIAL_TOPIC_TITLE_CHARS)
+    .join('');
+  return `${prefix}${snippet}`;
+};
+
 /**
  * Convert hook-event JSON-safe attachments (`{ data?: base64, fetchUrl? }`)
  * into chat-sdk `Attachment` shape (`{ data?: Buffer, url? }`) so they can
@@ -969,7 +983,12 @@ export class AgentBridgeService {
     }
 
     const { files, warnings: fileWarnings } = await this.resolveFiles(userMessage, client);
-    const prompt = this.formatPrompt(userMessage, client);
+    const prompt = this.formatPrompt(userMessage, client, {
+      includeSpeakerTag: botContext?.platform !== 'dingtalk',
+    });
+    const initialTopicTitle = topicId
+      ? undefined
+      : buildInitialTopicTitle(topicTitlePrefix, userMessage.text);
 
     // Attach file warnings to botPlatformContext for injection via context engine
     if (fileWarnings?.length && botPlatformContext) {
@@ -1025,6 +1044,7 @@ export class AgentBridgeService {
         channelContext,
         client,
         files,
+        initialTopicTitle,
         onWaitingForHuman,
         progressMessage,
         prompt,
@@ -1050,6 +1070,7 @@ export class AgentBridgeService {
       files,
       firstReplyPrefix,
       gatewayConnectionId,
+      initialTopicTitle,
       onWaitingForHuman,
       progressMessage,
       prompt,
@@ -1079,6 +1100,7 @@ export class AgentBridgeService {
       channelContext?: DiscordChannelContext;
       client?: PlatformClient;
       files?: any;
+      initialTopicTitle?: string;
       onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       progressMessage?: SentMessage;
       prompt: string;
@@ -1102,6 +1124,7 @@ export class AgentBridgeService {
       channelContext,
       client,
       files,
+      initialTopicTitle,
       progressMessage,
       prompt,
       replyLocale,
@@ -1160,7 +1183,7 @@ export class AgentBridgeService {
           resume: Boolean(resumeToolResult),
           resumeToolResult,
           signal,
-          title: '',
+          title: topicId ? '' : (initialTopicTitle ?? ''),
           trigger,
           userInterventionConfig: { approvalMode: 'headless' },
         }),
@@ -1243,6 +1266,7 @@ export class AgentBridgeService {
       files?: any;
       firstReplyPrefix?: string;
       gatewayConnectionId?: string;
+      initialTopicTitle?: string;
       onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       progressMessage?: SentMessage;
       prompt: string;
@@ -1272,6 +1296,7 @@ export class AgentBridgeService {
       files,
       firstReplyPrefix,
       gatewayConnectionId,
+      initialTopicTitle,
       onWaitingForHuman,
       prompt,
       replyLocale,
@@ -1526,7 +1551,7 @@ export class AgentBridgeService {
                       topicModel
                         .findById(resolvedTopicId)
                         .then(async (topic) => {
-                          if (topic?.title) return;
+                          if (topic?.title && topic.title !== initialTopicTitle) return;
 
                           const systemAgent = new SystemAgentService(
                             this.db,
@@ -1624,7 +1649,7 @@ export class AgentBridgeService {
                       topicModel
                         .findById(resolvedTopicId)
                         .then(async (topic) => {
-                          if (topic?.title) return;
+                          if (topic?.title && topic.title !== initialTopicTitle) return;
 
                           const systemAgent = new SystemAgentService(
                             this.db,
@@ -1672,7 +1697,7 @@ export class AgentBridgeService {
           resume: Boolean(resumeToolResult),
           resumeToolResult,
           signal,
-          title: '',
+          title: topicId ? '' : (initialTopicTitle ?? ''),
           trigger,
           userInterventionConfig: { approvalMode: 'headless' },
         }),
@@ -1891,8 +1916,13 @@ export class AgentBridgeService {
    * Format user message into agent prompt.
    * Delegates to the standalone formatPrompt utility.
    */
-  private formatPrompt(message: Message, client?: PlatformClient): string {
+  private formatPrompt(
+    message: Message,
+    client?: PlatformClient,
+    options?: { includeSpeakerTag?: boolean },
+  ): string {
     return formatPromptUtil(message as any, {
+      includeSpeakerTag: options?.includeSpeakerTag,
       sanitizeUserInput: client?.sanitizeUserInput?.bind(client),
     });
   }

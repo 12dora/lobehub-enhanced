@@ -6,10 +6,13 @@ const mockFormatPrompt = vi.hoisted(() => vi.fn());
 const mockGetPlatform = vi.hoisted(() => vi.fn());
 const mockIsQueueAgentRuntimeEnabled = vi.hoisted(() => vi.fn());
 const mockTopicFindById = vi.hoisted(() => vi.fn());
+const mockTopicUpdate = vi.hoisted(() => vi.fn());
+const mockGenerateTopicTitle = vi.hoisted(() => vi.fn());
 
 vi.mock('@/database/models/topic', () => ({
   TopicModel: vi.fn().mockImplementation(() => ({
     findById: mockTopicFindById,
+    update: mockTopicUpdate,
   })),
 }));
 
@@ -41,7 +44,9 @@ vi.mock('@/server/services/queue/impls', () => ({
 }));
 
 vi.mock('@/server/services/systemAgent', () => ({
-  SystemAgentService: vi.fn(),
+  SystemAgentService: vi.fn().mockImplementation(() => ({
+    generateTopicTitle: mockGenerateTopicTitle,
+  })),
 }));
 
 vi.mock('@/server/services/bot/formatPrompt', () => ({
@@ -123,6 +128,8 @@ describe('AgentBridgeService', () => {
     mockGetUserSettings.mockResolvedValue({ general: { timezone: 'UTC' } });
     mockIsQueueAgentRuntimeEnabled.mockReturnValue(true);
     mockTopicFindById.mockResolvedValue(undefined);
+    mockTopicUpdate.mockResolvedValue(undefined);
+    mockGenerateTopicTitle.mockResolvedValue('周报');
     (AgentBridgeService as any).activeThreads.clear();
     (AgentBridgeService as any).activeOperations.clear();
   });
@@ -622,7 +629,7 @@ describe('AgentBridgeService', () => {
 
       await service.handleMention(thread, message, {
         agentId: 'agent-1',
-        botContext: { platformThreadId: THREAD_ID } as any,
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
         client,
         topicTitlePrefix: '钉钉 · ',
       });
@@ -630,6 +637,120 @@ describe('AgentBridgeService', () => {
       expect(completionWebhookBody()).toEqual(
         expect.objectContaining({ topicTitlePrefix: '钉钉 · ' }),
       );
+      expect(mockExecAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ title: '钉钉 · hello world' }),
+      );
+      expect(mockFormatPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ includeSpeakerTag: false }),
+      );
+    });
+
+    it('keeps the speaker tag and empty title on non-DingTalk platforms', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'discord', platformThreadId: THREAD_ID } as any,
+        client,
+      });
+
+      expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ title: '' }));
+      expect(mockFormatPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ includeSpeakerTag: true }),
+      );
+    });
+
+    it('does not override title when continuing an existing topic', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
+        client,
+        topicStaleThresholdMs: Number.POSITIVE_INFINITY,
+        topicTitlePrefix: '钉钉 · ',
+      });
+
+      expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ title: '' }));
+    });
+
+    it('truncates the initial title to 20 characters of user text', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = {
+        ...createMessage(),
+        text: '这是一段超过二十个字符的钉钉用户消息内容用来截断',
+      };
+      const client = createClient();
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
+        client,
+        topicTitlePrefix: '钉钉 · ',
+      });
+
+      expect(mockExecAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ title: '钉钉 · 这是一段超过二十个字符的钉钉用户消息内容' }),
+      );
+    });
+
+    it('replaces a DingTalk placeholder title with a prefixed summary', async () => {
+      mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+      mockTopicFindById.mockResolvedValue({ title: '钉钉 · hello world' });
+      mockGenerateTopicTitle.mockResolvedValue('周报');
+      mockExecAgent.mockImplementation(
+        async (opts: {
+          hooks?: Array<{ handler?: (event: unknown) => Promise<void>; id?: string }>;
+        }) => {
+          const result = {
+            assistantMessageId: 'assistant-msg-1',
+            createdAt: new Date().toISOString(),
+            operationId: 'op-1',
+            success: true,
+            topicId: 'topic-new',
+          };
+          setTimeout(() => {
+            const completion = opts.hooks?.find((hook) => hook.id === 'bot-completion');
+            void completion?.handler?.({
+              lastAssistantContent: '好的',
+              reason: 'completed',
+            });
+          }, 0);
+          return result;
+        },
+      );
+
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: vi.fn().mockResolvedValue(undefined),
+        onError: vi.fn(),
+        onPartial: vi.fn(),
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
+        client,
+        replySink,
+        topicTitlePrefix: '钉钉 · ',
+      });
+
+      await vi.waitFor(() => {
+        expect(mockTopicUpdate).toHaveBeenCalledWith('topic-new', { title: '钉钉 · 周报' });
+      });
     });
   });
 

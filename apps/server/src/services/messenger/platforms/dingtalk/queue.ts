@@ -38,7 +38,7 @@ const busyKey = (threadId: string): string => `${DINGTALK_BUSY_KEY_PREFIX}${thre
 /** This process currently owns the busy flag (Redis or memory). */
 const processOwned = new Set<string>();
 
-/** threadId → expiry epoch ms. Used when Redis is unset or SET throws. */
+/** threadId → expiry epoch ms. Used when Redis is unset. SET throw is `'unavailable'`. */
 const memoryBusyExpiry = new Map<string, number>();
 
 const memoryBusyTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -210,11 +210,15 @@ export const popDingTalkQueuedMessage = async (
   try {
     const raw = await redis.lpop(key);
     if (!raw) return { status: 'empty' };
-    if ((await redis.llen(key)) > 0) {
-      await redis.expire(key, DINGTALK_QUEUE_TTL_SECONDS);
-    }
     const item = parseQueuedPayload(raw);
     if (!item) return { status: 'invalid' };
+    try {
+      if ((await redis.llen(key)) > 0) {
+        await redis.expire(key, DINGTALK_QUEUE_TTL_SECONDS);
+      }
+    } catch (error) {
+      log('popDingTalkQueuedMessage: ttl refresh failed: %O', error);
+    }
     return { item, status: 'item' };
   } catch (error) {
     log('popDingTalkQueuedMessage failed: %O', error);
@@ -226,7 +230,7 @@ export const popDingTalkQueuedMessage = async (
 export const unshiftDingTalkQueuedMessage = async (
   threadId: string,
   item: DingTalkQueuedMessage,
-): Promise<void> => {
+): Promise<boolean> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) {
     const list = memoryQueues.get(threadId) ?? [];
@@ -236,7 +240,7 @@ export const unshiftDingTalkQueuedMessage = async (
     }
     memoryQueues.set(threadId, list);
     armMemoryQueue(threadId);
-    return;
+    return true;
   }
   try {
     await redis.eval(
@@ -247,19 +251,21 @@ export const unshiftDingTalkQueuedMessage = async (
       String(DINGTALK_QUEUE_MAX_LENGTH),
       String(DINGTALK_QUEUE_TTL_SECONDS),
     );
+    return true;
   } catch (error) {
     log('unshiftDingTalkQueuedMessage failed: %O', error);
+    return false;
   }
 };
 
-export const peekDingTalkQueueLength = async (threadId: string): Promise<number> => {
+export const peekDingTalkQueueLength = async (threadId: string): Promise<number | null> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return memoryQueues.get(threadId)?.length ?? 0;
   try {
     return await redis.llen(queueKey(threadId));
   } catch (error) {
     log('peekDingTalkQueueLength failed: %O', error);
-    return 0;
+    return null;
   }
 };
 

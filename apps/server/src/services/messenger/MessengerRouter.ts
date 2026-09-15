@@ -115,11 +115,14 @@ import type {
 
 const log = debug('lobe-server:messenger:router');
 
-interface DingTalkLiveThread {
+interface MessengerDispatchThread {
   id: string;
+  isDM?: boolean;
   state?: Promise<{ topicId?: string } | undefined>;
   unsubscribe?: () => Promise<void>;
 }
+
+type DingTalkLiveThread = MessengerDispatchThread;
 
 const DINGTALK_LIVE_THREAD_TTL_MS = DINGTALK_BUSY_TTL_SECONDS * 1000;
 
@@ -137,17 +140,34 @@ const forgetDingTalkLiveThread = (threadId: string): void => {
   }
 };
 
-const rememberDingTalkLiveThread = (thread: DingTalkLiveThread): void => {
+const shouldRetainDingTalkLiveThread = async (threadId: string): Promise<boolean> => {
+  if (isDingTalkBusyOwnedByThisProcess(threadId)) return true;
+  const queued = await peekDingTalkQueueLength(threadId);
+  return queued !== 0;
+};
+
+const armDingTalkLiveThreadTimer = (thread: DingTalkLiveThread): void => {
   const threadId = String(thread.id);
-  dingtalkLiveThreads.set(threadId, thread);
   const existing = dingtalkLiveThreadTimers.get(threadId);
   if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
-    dingtalkLiveThreads.delete(threadId);
-    dingtalkLiveThreadTimers.delete(threadId);
+    void (async () => {
+      if (await shouldRetainDingTalkLiveThread(threadId)) {
+        const live = dingtalkLiveThreads.get(threadId);
+        if (live) armDingTalkLiveThreadTimer(live);
+        return;
+      }
+      forgetDingTalkLiveThread(threadId);
+    })();
   }, DINGTALK_LIVE_THREAD_TTL_MS);
   timer.unref?.();
   dingtalkLiveThreadTimers.set(threadId, timer);
+};
+
+const rememberDingTalkLiveThread = (thread: DingTalkLiveThread): void => {
+  const threadId = String(thread.id);
+  dingtalkLiveThreads.set(threadId, thread);
+  armDingTalkLiveThreadTimer(thread);
 
   if (!dingtalkLiveThreadUnsubWrapped.has(thread) && typeof thread.unsubscribe === 'function') {
     const original = thread.unsubscribe.bind(thread);
@@ -155,7 +175,9 @@ const rememberDingTalkLiveThread = (thread: DingTalkLiveThread): void => {
       try {
         await original();
       } finally {
-        forgetDingTalkLiveThread(threadId);
+        if (!(await shouldRetainDingTalkLiveThread(threadId))) {
+          forgetDingTalkLiveThread(threadId);
+        }
       }
     };
     dingtalkLiveThreadUnsubWrapped.add(thread);
@@ -163,9 +185,20 @@ const rememberDingTalkLiveThread = (thread: DingTalkLiveThread): void => {
 };
 
 const forgetDingTalkLiveThreadIfIdle = async (threadId: string): Promise<void> => {
-  if (await isDingTalkThreadBusy(threadId)) return;
+  if (await shouldRetainDingTalkLiveThread(threadId)) return;
   forgetDingTalkLiveThread(threadId);
 };
+
+/** Test-only: drop live-thread map/timers between cases. */
+export const resetDingTalkLiveThreadsForTests = (): void => {
+  for (const timer of dingtalkLiveThreadTimers.values()) clearTimeout(timer);
+  dingtalkLiveThreadTimers.clear();
+  dingtalkLiveThreads.clear();
+};
+
+/** Test-only: whether drain still has the Chat-SDK thread for this id. */
+export const hasDingTalkLiveThreadForTests = (threadId: string): boolean =>
+  dingtalkLiveThreads.has(threadId);
 
 /**
  * Sentinel scope token for the Personal scope (whose real `workspaceId` is
@@ -530,7 +563,11 @@ export class MessengerRouter {
           const liveThread = dingtalkLiveThreads.get(threadId);
           if (liveThread) rememberDingTalkLiveThread(liveThread);
           if (!drainLink?.activeAgentId || !liveThread) {
-            await unshiftDingTalkQueuedMessage(threadId, queued);
+            const restored = await unshiftDingTalkQueuedMessage(threadId, queued);
+            if (!restored) {
+              log('drain: unshift failed, keeping busy for %s', threadId);
+              return;
+            }
             await releaseDingTalkThreadBusy(threadId);
             return;
           }
@@ -573,7 +610,11 @@ export class MessengerRouter {
               topicId ? 'handleSubscribedMessage' : 'handleMention',
             );
           } catch (error) {
-            await unshiftDingTalkQueuedMessage(threadId, queued);
+            const restored = await unshiftDingTalkQueuedMessage(threadId, queued);
+            if (!restored) {
+              log('drain: unshift failed after dispatch throw, keeping busy for %s', threadId);
+              throw error;
+            }
             await releaseDingTalkThreadBusy(threadId);
             throw error;
           }
@@ -1273,7 +1314,7 @@ export class MessengerRouter {
             if (ctx.platform === 'dingtalk') {
               const owned = isDingTalkBusyOwnedByThisProcess(ctx.thread.id);
               const queuedCount = await peekDingTalkQueueLength(ctx.thread.id);
-              if (owned || queuedCount > 0) {
+              if (owned || queuedCount !== 0) {
                 AgentBridgeService.requestStop(ctx.thread.id);
                 log(
                   'command /stop: deferred stop while this process holds busy thread=%s',
@@ -2551,7 +2592,7 @@ export class MessengerRouter {
   private async enqueueDingTalkOverflow(
     binder: MessengerPlatformBinder,
     chatId: string,
-    thread: { id: string; state?: Promise<{ topicId?: string } | undefined> },
+    thread: MessengerDispatchThread,
     message: Message,
     senderId: string,
   ): Promise<void> {
@@ -2571,7 +2612,7 @@ export class MessengerRouter {
   private async claimOrEnqueueDingTalk(
     binder: MessengerPlatformBinder,
     chatId: string,
-    thread: { id: string; state?: Promise<{ topicId?: string } | undefined> },
+    thread: MessengerDispatchThread,
     message: Message,
     senderId: string,
   ): Promise<'acquired' | 'blocked'> {
@@ -2606,7 +2647,7 @@ export class MessengerRouter {
   }
 
   private async dispatchToAgent(
-    thread: any,
+    thread: MessengerDispatchThread,
     message: Message,
     client: PlatformClient,
     link: MessengerAccountLinkItem,
@@ -2711,7 +2752,11 @@ export class MessengerRouter {
       ...dingTalkBridgeOpts,
     };
 
-    await bridge[bridgeMethod](thread, message, bridgeOpts);
+    await bridge[bridgeMethod](
+      thread as Parameters<AgentBridgeService['handleMention']>[0],
+      message,
+      bridgeOpts,
+    );
 
     if (platform === 'dingtalk') {
       await this.stampDingTalkTopicMetadata(serverDB, link, thread);

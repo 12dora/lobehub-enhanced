@@ -21,14 +21,15 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
 const { getAgentRuntimeRedisClient } = await import('@/server/modules/AgentRuntime/redis');
 const {
   acquireDingTalkDrainLock,
+  dropStaleDingTalkQueues,
   isDingTalkBusyOwnedByThisProcess,
+  isDingTalkThreadBusy,
+  peekDingTalkQueueLength,
   popDingTalkQueuedMessage,
   pushDingTalkQueuedMessage,
-  dropStaleDingTalkQueues,
+  releaseDingTalkThreadBusy,
   resetDingTalkQueueMemoryForTests,
   tryAcquireDingTalkThreadBusy,
-  releaseDingTalkThreadBusy,
-  isDingTalkThreadBusy,
   unshiftDingTalkQueuedMessage,
 } = await import('./queue');
 
@@ -102,6 +103,22 @@ describe('DingTalk inbound queue', () => {
     await expect(popDingTalkQueuedMessage('dingtalk:cid')).resolves.toEqual({ status: 'invalid' });
   });
 
+  it('returns the item when LPOP succeeds even if LLEN/EXPIRE throws', async () => {
+    mockRedis.lpop.mockResolvedValueOnce(
+      JSON.stringify({ queuedAt: 1, senderStaffId: 'staff_1', text: 'kept' }),
+    );
+    mockRedis.llen.mockRejectedValueOnce(new Error('llen blip'));
+    await expect(popDingTalkQueuedMessage('dingtalk:cid')).resolves.toEqual({
+      item: { queuedAt: 1, senderStaffId: 'staff_1', text: 'kept' },
+      status: 'item',
+    });
+  });
+
+  it('returns null from peek when LLEN throws', async () => {
+    mockRedis.llen.mockRejectedValueOnce(new Error('llen blip'));
+    await expect(peekDingTalkQueueLength('dingtalk:cid')).resolves.toBeNull();
+  });
+
   it('drops queue keys that have no TTL on restart', async () => {
     mockRedis.scan.mockResolvedValueOnce(['0', ['messenger:dingtalk:queue:stale']]);
     mockRedis.ttl.mockResolvedValueOnce(-1);
@@ -155,17 +172,30 @@ describe('DingTalk per-thread busy flag', () => {
 
   it('LPUSH-es a popped item back onto the overflow list with LTRIM', async () => {
     mockRedis.eval.mockResolvedValueOnce(1);
-    await unshiftDingTalkQueuedMessage('dingtalk:cid', {
-      queuedAt: 1,
-      senderStaffId: 'staff_1',
-      text: 'again',
-    });
+    await expect(
+      unshiftDingTalkQueuedMessage('dingtalk:cid', {
+        queuedAt: 1,
+        senderStaffId: 'staff_1',
+        text: 'again',
+      }),
+    ).resolves.toBe(true);
     expect(mockRedis.eval).toHaveBeenCalledOnce();
     const script = String(mockRedis.eval.mock.calls[0][0]);
     expect(script).toContain('LPUSH');
     expect(script).toContain('LTRIM');
     expect(script).toContain('EXPIRE');
     expect(mockRedis.eval.mock.calls[0][4]).toBe('5');
+  });
+
+  it('returns false when Redis unshift throws', async () => {
+    mockRedis.eval.mockRejectedValueOnce(new Error('eval down'));
+    await expect(
+      unshiftDingTalkQueuedMessage('dingtalk:cid', {
+        queuedAt: 1,
+        senderStaffId: 'staff_1',
+        text: 'again',
+      }),
+    ).resolves.toBe(false);
   });
 });
 

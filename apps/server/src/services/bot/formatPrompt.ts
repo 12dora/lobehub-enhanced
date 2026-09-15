@@ -15,6 +15,12 @@ interface MessageLike {
 }
 
 interface FormatPromptOptions {
+  /**
+   * When false, persist the sanitized user text without a `<speaker>` tag.
+   * DingTalk DM/group topics are already per-asker, so the tag only clutters
+   * the web UI. Defaults to true (multi-user IM channels).
+   */
+  includeSpeakerTag?: boolean;
   /** Strip platform-specific bot mention artifacts from user input. */
   sanitizeUserInput?: (text: string) => string;
 }
@@ -38,7 +44,7 @@ export const formatReferencedMessage = (
  * Format user message into agent prompt:
  * 1. Strip platform-specific bot mentions via sanitizeUserInput
  * 2. Prepend referenced (quoted/replied) message if present
- * 3. Add speaker tag with user identity
+ * 3. Add speaker tag with user identity (unless includeSpeakerTag is false)
  */
 export const formatPrompt = (message: MessageLike, options?: FormatPromptOptions): string => {
   let text = message.text;
@@ -51,6 +57,10 @@ export const formatPrompt = (message: MessageLike, options?: FormatPromptOptions
   const referencedText = formatReferencedMessage(message.raw);
   if (referencedText) {
     text = `${referencedText}\n${text}`;
+  }
+
+  if (options?.includeSpeakerTag === false) {
+    return text;
   }
 
   const { userId, userName, fullName } = message.author;

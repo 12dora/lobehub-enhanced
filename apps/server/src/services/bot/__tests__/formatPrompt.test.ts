@@ -181,4 +181,28 @@ describe('formatPrompt', () => {
 
     expect(result).toContain('nickname="Test User"');
   });
+
+  it('should persist plain text when includeSpeakerTag is false', () => {
+    const result = formatPrompt(baseMessage, { includeSpeakerTag: false });
+
+    expect(result).toBe('hello world');
+    expect(result).not.toContain('<speaker');
+  });
+
+  it('should still prepend referenced messages when the speaker tag is omitted', () => {
+    const msg = {
+      ...baseMessage,
+      raw: {
+        referenced_message: {
+          author: { global_name: 'Alice', username: 'alice' },
+          content: 'quoted',
+        },
+      },
+      text: 'I agree',
+    };
+    const result = formatPrompt(msg, { includeSpeakerTag: false });
+
+    expect(result).toBe('<referenced_message sender="Alice">quoted</referenced_message>\nI agree');
+    expect(result).not.toContain('<speaker');
+  });
 });
