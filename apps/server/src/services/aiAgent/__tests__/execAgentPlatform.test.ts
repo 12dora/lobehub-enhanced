@@ -29,6 +29,7 @@ import { agents, chatGroups, chatGroupsAgents, users, workspaces } from '@/datab
 import { platformManagedResourcePolicies } from '@/database/schemas/platform';
 import type { LobeChatDatabase } from '@/database/type';
 import { resetPlatformAgentTakeoverCacheForTest } from '@/server/enterprise/services/agentCatalog';
+import type * as PlatformAiRuntimeBridge from '@/server/modules/ModelRuntime/platformAiRuntimeBridge';
 import type { AgentRuntimeService } from '@/server/services/agentRuntime';
 
 const {
@@ -97,6 +98,17 @@ vi.mock('@/server/enterprise/services/connectorCatalog/runtimeIntegration', () =
 vi.mock('@/server/enterprise/services/skillCatalog', () => ({
   resolvePinnedPlatformSkillRuntimeSnapshot: vi.fn(async () => ({ catalog: [], skills: [] })),
   resolvePlatformSkillRuntimeSnapshot: vi.fn(async () => null),
+}));
+vi.mock('@/server/modules/ModelRuntime/platformAiRuntimeBridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof PlatformAiRuntimeBridge>()),
+  resolvePlatformAiExecutionConfigAtRevision: vi.fn(async () => ({
+    allowedModels: [],
+    config: {},
+    keyVaults: {},
+    providerKey: 'internal-provider',
+    revision: 1,
+    runtimeProvider: 'openai',
+  })),
 }));
 vi.mock('@/database/models/message', () => ({
   MessageModel: class {

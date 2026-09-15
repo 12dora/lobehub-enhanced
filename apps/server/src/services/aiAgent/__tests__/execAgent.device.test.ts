@@ -65,6 +65,7 @@ vi.mock('@/server/services/agent', () => ({
       provider: 'openai',
       systemRole: 'You are a helpful assistant',
     }),
+    queryAvailableAgents: vi.fn().mockResolvedValue([]),
   })),
 }));
 
@@ -203,6 +204,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
             provider: 'openai',
             systemRole: 'You are a helpful assistant',
           }),
+          queryAvailableAgents: vi.fn().mockResolvedValue([]),
         }) as any,
     );
     service = new AiAgentService(mockDb, userId);
@@ -397,6 +399,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
               provider: 'openai',
               systemRole: 'You are a helpful assistant',
             }),
+            queryAvailableAgents: vi.fn().mockResolvedValue([]),
           }) as any,
       );
       service = new AiAgentService(mockDb, userId);
@@ -458,6 +461,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
               provider: 'openai',
               systemRole: 'You are a helpful assistant',
             }),
+            queryAvailableAgents: vi.fn().mockResolvedValue([]),
           }) as any,
       );
 
@@ -492,6 +496,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
               provider: 'openai',
               systemRole: 'You are a helpful assistant',
             }),
+            queryAvailableAgents: vi.fn().mockResolvedValue([]),
           }) as any,
       );
 
@@ -529,6 +534,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
               provider: 'openai',
               systemRole: 'You are a helpful assistant',
             }),
+            queryAvailableAgents: vi.fn().mockResolvedValue([]),
           }) as any,
       );
 
@@ -731,6 +737,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
               provider: 'openai',
               systemRole: 'You are a helpful assistant',
             }),
+            queryAvailableAgents: vi.fn().mockResolvedValue([]),
           }) as any,
       );
 
@@ -763,6 +770,7 @@ describe('AiAgentService.execAgent - device auto-activation', () => {
               provider: 'openai',
               systemRole: 'You are a helpful assistant',
             }),
+            queryAvailableAgents: vi.fn().mockResolvedValue([]),
           }) as any,
       );
       service = new AiAgentService(mockDb, userId);

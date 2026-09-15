@@ -47,6 +47,7 @@ vi.mock('@/server/services/agent', () => ({
       provider: 'openai',
       systemRole: 'You are a helpful assistant',
     }),
+    queryAvailableAgents: vi.fn().mockResolvedValue([]),
   })),
 }));
 

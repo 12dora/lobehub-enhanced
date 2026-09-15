@@ -1,6 +1,8 @@
 import type * as ModelBankModule from 'model-bank';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as PlatformAiRuntimeBridge from '@/server/modules/ModelRuntime/platformAiRuntimeBridge';
+
 import { AiAgentService } from '../index';
 
 const {
@@ -43,6 +45,18 @@ vi.mock('@/server/enterprise/services/skillCatalog', () => ({
   resolvePlatformSkillRuntimeSnapshot: vi.fn(async () => null),
 }));
 
+vi.mock('@/server/modules/ModelRuntime/platformAiRuntimeBridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof PlatformAiRuntimeBridge>()),
+  resolvePlatformAiExecutionConfigAtRevision: vi.fn(async () => ({
+    allowedModels: [],
+    config: {},
+    keyVaults: {},
+    providerKey: 'managed-provider',
+    revision: 1,
+    runtimeProvider: 'openai',
+  })),
+}));
+
 vi.mock('@/libs/trusted-client', () => ({
   generateTrustedClientToken: vi.fn().mockReturnValue(undefined),
   getTrustedClientTokenForSession: vi.fn().mockResolvedValue(undefined),
@@ -69,6 +83,7 @@ vi.mock('@/database/models/agent', () => ({
 vi.mock('@/server/services/agent', () => ({
   AgentService: vi.fn().mockImplementation(() => ({
     getAgentConfig: mockGetAgentConfig,
+    queryAvailableAgents: vi.fn().mockResolvedValue([]),
   })),
 }));
 

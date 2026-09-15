@@ -103,6 +103,7 @@ vi.mock('@/database/models/device', () => ({
 vi.mock('@/server/services/agent', () => ({
   AgentService: vi.fn().mockImplementation(() => ({
     getAgentConfig: vi.fn().mockResolvedValue(heteroAgentConfig),
+    queryAvailableAgents: vi.fn().mockResolvedValue([]),
   })),
 }));
 

@@ -54,7 +54,10 @@ vi.mock('@/database/models/agent', () => ({
 }));
 
 vi.mock('@/server/services/agent', () => ({
-  AgentService: vi.fn().mockImplementation(() => ({ getAgentConfig: mockGetAgentConfig })),
+  AgentService: vi.fn().mockImplementation(() => ({
+    getAgentConfig: mockGetAgentConfig,
+    queryAvailableAgents: vi.fn().mockResolvedValue([]),
+  })),
 }));
 
 vi.mock('@/database/models/plugin', () => ({

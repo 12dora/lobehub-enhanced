@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { sleep } from '@/utils/sleep';
@@ -23,17 +23,34 @@ const serverDB: LobeChatDatabase = await getTestDB();
 const userId = 'session-group-model-test-user-id';
 const knowledgeBaseModel = new KnowledgeBaseModel(serverDB, userId);
 
+const userIds = [userId, 'user2'] as const;
+const workspaceIds = [
+  'knowledge-base-ws',
+  'workspace-copy-rename-target',
+  'workspace-copy-target',
+  'workspace-rename-target',
+  'workspace-target',
+] as const;
+
 // `global_files.creator` is NOT NULL with `onDelete: set null`, so users cannot
 // be deleted while those rows still exist. Files also reference global_files
-// with `onDelete: no action`.
+// with `onDelete: no action`. Scope deletes to this file's ids so parallel
+// TEST_SERVER_DB=1 workers do not wipe other suites' fixtures.
 const resetDb = async () => {
-  await serverDB.delete(knowledgeBaseFiles);
-  await serverDB.delete(documents);
-  await serverDB.delete(files);
-  await serverDB.delete(globalFiles);
-  await serverDB.delete(knowledgeBases);
-  await serverDB.delete(workspaces);
-  await serverDB.delete(users);
+  await serverDB.delete(knowledgeBaseFiles).where(inArray(knowledgeBaseFiles.userId, [...userIds]));
+  await serverDB.delete(documents).where(inArray(documents.userId, [...userIds]));
+  await serverDB.delete(files).where(inArray(files.userId, [...userIds]));
+  await serverDB.delete(globalFiles).where(inArray(globalFiles.creator, [...userIds]));
+  await serverDB.delete(knowledgeBases).where(inArray(knowledgeBases.userId, [...userIds]));
+  await serverDB
+    .delete(workspaces)
+    .where(
+      or(
+        inArray(workspaces.id, [...workspaceIds]),
+        inArray(workspaces.primaryOwnerId, [...userIds]),
+      ),
+    );
+  await serverDB.delete(users).where(inArray(users.id, [...userIds]));
 };
 
 beforeEach(async () => {
