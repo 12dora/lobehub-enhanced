@@ -52,7 +52,7 @@ const percentDecode = (value: string): string => {
     try {
       next = decodeURIComponent(decoded);
     } catch {
-      invalidClientObjectKey();
+      return invalidClientObjectKey();
     }
 
     if (next === decoded) return decoded;

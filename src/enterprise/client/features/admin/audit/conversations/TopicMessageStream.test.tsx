@@ -56,14 +56,17 @@ vi.mock('@/components/FileIcon', () => ({
   default: ({ fileName }: { fileName: string }) => <span data-testid="file-icon">{fileName}</span>,
 }));
 
+type FeedItem = TopicEvidence['messages']['items'][number];
+
+/** Tests only set the fields the component reads; the rest of the DTO is irrelevant here. */
 const feed = (
-  items: TopicEvidence['messages']['items'],
+  partialItems: Array<Partial<FeedItem> & Pick<FeedItem, 'id'>>,
   patch: Partial<TopicEvidence['messages']> = {},
 ): TopicEvidence['messages'] => ({
-  hasData: items.length > 0,
+  hasData: partialItems.length > 0,
   hasError: false,
   isLoading: false,
-  items,
+  items: partialItems as FeedItem[],
   retry: vi.fn(),
   ...patch,
 });
