@@ -4,11 +4,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GET } from '../route';
 
-// Mock dependencies first
-const mockStreamEventManager = {
-  getStreamHistory: vi.fn(),
-  subscribeStreamEvents: vi.fn(),
-};
+const { mockFindById, mockCheckAuthUserId, mockStreamEventManager } = vi.hoisted(() => ({
+  mockCheckAuthUserId: { value: 'stream-user' as string | null },
+  mockFindById: vi.fn(),
+  mockStreamEventManager: {
+    getStreamHistory: vi.fn(),
+    subscribeStreamEvents: vi.fn(),
+  },
+}));
+
+vi.mock('@/app/(backend)/middleware/auth', () => ({
+  checkAuth:
+    (handler: (req: Request, ctx: { serverDB: object; userId: string }) => Promise<Response>) =>
+    async (req: Request) => {
+      if (!mockCheckAuthUserId.value) {
+        return Response.json({ errorType: 'Unauthorized' }, { status: 401 });
+      }
+      return handler(req, { serverDB: {}, userId: mockCheckAuthUserId.value });
+    },
+}));
+
+
+vi.mock('@/database/models/agentOperation', () => ({
+  AgentOperationModel: vi.fn(function AgentOperationModel() {
+    return { findOwnedById: mockFindById };
+  }),
+}));
 
 vi.mock('@/server/modules/AgentRuntime', () => ({
   createStreamEventManager: vi.fn(() => mockStreamEventManager),
@@ -18,7 +39,10 @@ describe('/api/agent/stream route', () => {
   const MOCK_TIMESTAMP = 1758203237000;
 
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
+    mockCheckAuthUserId.value = 'stream-user';
+    mockFindById.mockReset();
+    mockFindById.mockResolvedValue({ id: 'test-operation' });
     // Mock Date.now to return consistent timestamp
     vi.spyOn(Date, 'now').mockReturnValue(MOCK_TIMESTAMP);
   });
@@ -35,6 +59,30 @@ describe('/api/agent/stream route', () => {
       expect(response.status).toBe(400);
       const data = await response.json();
       expect(data.error).toBe('operationId parameter is required');
+    });
+
+    it('should return 401 when the caller is unauthenticated', async () => {
+      mockCheckAuthUserId.value = null;
+      const request = new NextRequest(
+        'https://test.com/api/agent/stream?operationId=test-operation',
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(401);
+      expect(mockFindById).not.toHaveBeenCalled();
+    });
+
+    it('should return 404 when the operation is unknown or not owned by the caller', async () => {
+      mockFindById.mockResolvedValueOnce(null);
+      const request = new NextRequest(
+        'https://test.com/api/agent/stream?operationId=foreign-operation',
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(404);
+      const data = await response.json();
+      expect(data.error).toBe('operation not found');
+      expect(mockFindById).toHaveBeenCalledWith('foreign-operation');
     });
 
     it('should return SSE stream with correct headers when operationId is provided', async () => {

@@ -407,6 +407,61 @@ describe('KnowledgeBaseModel', () => {
       expect(doc?.knowledgeBaseId).toBeNull();
     });
 
+    it("should silently skip another user's file ids when adding to the caller's knowledge base", async () => {
+      await serverDB.insert(globalFiles).values([
+        {
+          hashId: 'hash1',
+          url: 'https://example.com/document.pdf',
+          size: 1000,
+          fileType: 'application/pdf',
+          creator: userId,
+        },
+        {
+          hashId: 'hash2',
+          url: 'https://example.com/image.jpg',
+          size: 500,
+          fileType: 'image/jpeg',
+          creator: userId,
+        },
+        {
+          hashId: 'hash_victim',
+          url: 'https://example.com/secret.pdf',
+          size: 2000,
+          fileType: 'application/pdf',
+          creator: 'user2',
+        },
+      ]);
+      await serverDB.insert(files).values([
+        ...fileList,
+        {
+          id: 'file_victim',
+          name: 'secret.pdf',
+          url: 'https://example.com/secret.pdf',
+          fileHash: 'hash_victim',
+          size: 2000,
+          fileType: 'application/pdf',
+          userId: 'user2',
+        },
+      ]);
+
+      const { id: knowledgeBaseId } = await knowledgeBaseModel.create({ name: 'Caller KB' });
+
+      const result = await knowledgeBaseModel.addFilesToKnowledgeBase(knowledgeBaseId, [
+        'file1',
+        'file_victim',
+        'file2',
+      ]);
+
+      expect(result).toHaveLength(2);
+      expect(result.map((row) => row.fileId).sort()).toEqual(['file1', 'file2']);
+
+      const addedFiles = await serverDB.query.knowledgeBaseFiles.findMany({
+        where: eq(knowledgeBaseFiles.knowledgeBaseId, knowledgeBaseId),
+      });
+      expect(addedFiles).toHaveLength(2);
+      expect(addedFiles.map((row) => row.fileId).sort()).toEqual(['file1', 'file2']);
+    });
+
     it('should handle mixed document IDs and file IDs', async () => {
       await serverDB.insert(globalFiles).values([
         {

@@ -405,7 +405,25 @@ describe('verifyRouter', () => {
   });
 
   describe('getReportBundle', () => {
-    it('reads a standalone report without a logged-in user', async () => {
+    it('rejects an unauthenticated caller', async () => {
+      await expect(
+        createPublicCaller().getReportBundle({ verifyRunId: 'run-1' }),
+      ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+
+      expect(modelMocks.findRunById).not.toHaveBeenCalled();
+    });
+
+    it("rejects a run outside the caller's scope", async () => {
+      modelMocks.findRunById.mockResolvedValueOnce(undefined);
+
+      await expect(
+        createCaller().getReportBundle({ verifyRunId: 'other-user-run' }),
+      ).rejects.toThrow('Verification run not found');
+
+      expect(modelMocks.findRunById).toHaveBeenCalledWith('other-user-run');
+    });
+
+    it('reads a standalone report for the authenticated owner', async () => {
       const run = {
         goal: 'Ship a working page',
         id: 'run-1',
@@ -459,9 +477,10 @@ describe('verifyRouter', () => {
           .mockReturnValueOnce(selectRows([evidence])),
       };
       modelMocks.getServerDB.mockResolvedValue(serverDB);
+      modelMocks.findRunById.mockResolvedValue(run);
       modelMocks.getFullFileUrl.mockResolvedValue('https://cdn.example.com/verify/evidence.png');
 
-      const bundle = await createPublicCaller().getReportBundle({ verifyRunId: 'run-1' });
+      const bundle = await createCaller().getReportBundle({ verifyRunId: 'run-1' });
 
       expect(bundle).toMatchObject({
         report,
@@ -479,7 +498,7 @@ describe('verifyRouter', () => {
         ],
         run,
       });
-      expect(modelMocks.findRunById).not.toHaveBeenCalled();
+      expect(modelMocks.findRunById).toHaveBeenCalledWith('run-1');
     });
 
     it('keeps returning the bundle when file URL resolution is unavailable', async () => {
@@ -535,8 +554,9 @@ describe('verifyRouter', () => {
           .mockReturnValueOnce(selectRows([evidence])),
       };
       modelMocks.getServerDB.mockResolvedValue(serverDB);
+      modelMocks.findRunById.mockResolvedValue(run);
 
-      const bundle = await createPublicCaller().getReportBundle({ verifyRunId: 'run-1' });
+      const bundle = await createCaller().getReportBundle({ verifyRunId: 'run-1' });
 
       expect(bundle).toMatchObject({
         results: [

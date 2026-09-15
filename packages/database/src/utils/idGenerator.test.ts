@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { idGenerator } from './idGenerator';
+import { createSecureNanoId, idGenerator } from './idGenerator';
 
 describe('idGenerator', () => {
   it('should generate an ID with the correct prefix and length', () => {
@@ -35,5 +35,23 @@ describe('idGenerator', () => {
     expect(() => idGenerator('invalid' as any)).toThrowError(
       'Invalid namespace: invalid, please check your code.',
     );
+  });
+});
+
+describe('createSecureNanoId', () => {
+  it('generates a cryptographically unique id of at least 16 characters by default', () => {
+    const generate = createSecureNanoId();
+    const id = generate();
+
+    expect(id).toMatch(/^[\dA-Z]{21}$/i);
+    expect(id).toHaveLength(21);
+  });
+
+  it('honours an explicit size of at least 16', () => {
+    const generate = createSecureNanoId(16);
+    const id = generate();
+
+    expect(id).toMatch(/^[\dA-Z]{16}$/i);
+    expect(generate()).not.toBe(id);
   });
 });

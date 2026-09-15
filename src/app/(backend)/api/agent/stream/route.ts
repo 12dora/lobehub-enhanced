@@ -1,18 +1,28 @@
 import { createSSEHeaders, createSSEWriter } from '@lobechat/utils/server';
 import debug from 'debug';
-import { type NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
+import { checkAuth } from '@/app/(backend)/middleware/auth';
+import { AgentOperationModel } from '@/database/models/agentOperation';
 import { createStreamEventManager } from '@/server/modules/AgentRuntime';
 
 const log = debug('api-route:agent:stream');
 const timing = debug('lobe-server:agent-runtime:timing');
 
+const jsonError = (message: string, status: number) =>
+  NextResponse.json({ error: message }, { status });
+
 /**
  * Server-Sent Events (SSE) endpoint
- * Provides real-time Agent execution event stream for clients
+ * Provides real-time Agent execution event stream for clients.
+ *
+ * Auth matches other backend routes via `checkAuth` (Better Auth session
+ * cookies, `Oidc-Auth`, or `X-API-Key`). The SPA opens this with
+ * `fetchEventSource` on the same origin (cookies); the CLI sends
+ * `Oidc-Auth` / `X-API-Key`. JSON 401 is fine for both — neither uses a
+ * native EventSource that cannot read the status.
  */
-export async function GET(request: NextRequest) {
+export const GET = checkAuth(async (request, { userId, serverDB }) => {
   // Initialize stream event manager (uses InMemory singleton in local dev, Redis in production)
   const streamManager = createStreamEventManager();
 
@@ -22,12 +32,16 @@ export async function GET(request: NextRequest) {
   const includeHistory = searchParams.get('includeHistory') === 'true';
 
   if (!operationId) {
-    return NextResponse.json(
-      {
-        error: 'operationId parameter is required',
-      },
-      { status: 400 },
-    );
+    return jsonError('operationId parameter is required', 400);
+  }
+
+  // Only the user who started the operation may observe its stream. The row is
+  // recorded (`recordStart`) before execAgent returns the operationId, so it
+  // exists by the time a client subscribes. Workspace scoping is deliberately
+  // ignored: the SPA stream client sends no workspace header.
+  const operation = await new AgentOperationModel(serverDB, userId).findOwnedById(operationId);
+  if (!operation) {
+    return jsonError('operation not found', 404);
   }
 
   log(`Starting SSE connection for operation ${operationId} from eventId ${lastEventId}`);
@@ -210,4 +224,4 @@ export async function GET(request: NextRequest) {
   return new Response(stream, {
     headers: createSSEHeaders(),
   });
-}
+});

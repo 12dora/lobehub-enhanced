@@ -14,13 +14,8 @@ import { VerifyEvidenceModel } from '@/database/models/verifyEvidence';
 import { VerifyReportModel } from '@/database/models/verifyReport';
 import { VerifyRubricModel } from '@/database/models/verifyRubric';
 import { VerifyRunModel } from '@/database/models/verifyRun';
-import {
-  verifyCheckResults,
-  verifyEvidence,
-  verifyReports,
-  verifyRuns,
-} from '@/database/schemas/verify';
-import { publicProcedure, router } from '@/libs/trpc/lambda';
+import { verifyCheckResults, verifyEvidence, verifyReports } from '@/database/schemas/verify';
+import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { FileService } from '@/server/services/file';
 import {
@@ -173,6 +168,7 @@ const verifyProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) =
       criterionModel: new VerifyCriterionModel(ctx.serverDB, ctx.userId, workspaceId),
       evidenceModel: new VerifyEvidenceModel(ctx.serverDB, ctx.userId, workspaceId),
       executorService: new VerifyExecutorService(ctx.serverDB, ctx.userId, workspaceId),
+      fileModel: new FileModel(ctx.serverDB, ctx.userId, workspaceId),
       tracingModel: new LlmGenerationTracingModel(ctx.serverDB, ctx.userId, workspaceId),
       feedbackService: new VerifyFeedbackService(ctx.serverDB, ctx.userId, workspaceId),
       operationModel: new AgentOperationModel(ctx.serverDB, ctx.userId, workspaceId),
@@ -185,8 +181,6 @@ const verifyProcedure = wsCompatProcedure.use(serverDatabase).use(async (opts) =
     },
   });
 });
-
-const publicVerifyReportProcedure = publicProcedure.use(serverDatabase);
 
 const resolveVerifyRun = async (ctx: { runModel: VerifyRunModel }, verifyRunId: string) => {
   const run = await ctx.runModel.findById(verifyRunId);
@@ -848,85 +842,81 @@ export const verifyRouter = router({
 
   /**
    * One-shot payload for the standalone report viewer: the session, its report,
-   * and every check result with its evidence — addressed purely by verifyRunId
-   * (no operation / chat context required).
+   * and every check result with its evidence. Authed + workspace-scoped — there is
+   * no public share page for verify reports (SPA `/verify/:runId` uses lambdaClient
+   * under the signed-in session).
    */
-  getReportBundle: publicVerifyReportProcedure
-    .input(verifyRunIdInputSchema)
-    .query(async ({ ctx, input }) => {
-      const run = await ctx.serverDB.query.verifyRuns.findFirst({
-        where: eq(verifyRuns.id, input.verifyRunId),
-      });
-      if (!run) return null;
-      const [report, results] = await Promise.all([
-        ctx.serverDB.query.verifyReports.findFirst({
-          where: eq(verifyReports.verifyRunId, input.verifyRunId),
-        }),
-        ctx.serverDB
+  getReportBundle: verifyProcedure.input(verifyRunIdInputSchema).query(async ({ ctx, input }) => {
+    const run = await resolveVerifyRun(ctx, input.verifyRunId);
+    const [report, results] = await Promise.all([
+      ctx.serverDB.query.verifyReports.findFirst({
+        where: eq(verifyReports.verifyRunId, run.id),
+      }),
+      ctx.serverDB
+        .select()
+        .from(verifyCheckResults)
+        .where(eq(verifyCheckResults.verifyRunId, run.id))
+        .orderBy(asc(verifyCheckResults.checkItemIndex)),
+    ]);
+
+    // Resolve display metadata for each file-backed evidence artifact.
+    let fileService: FileService | null | undefined;
+    const getFileService = () => {
+      if (fileService !== undefined) return fileService;
+
+      try {
+        fileService = new FileService(ctx.serverDB, ctx.userId, ctx.workspaceId ?? undefined);
+      } catch (error) {
+        console.error('[verify:getReportBundle:resolveFileMeta]', error);
+        fileService = null;
+      }
+
+      return fileService;
+    };
+    const resolveFileMeta = async (fileId: string | null) => {
+      if (!fileId) return { fileName: null, fileUrl: null };
+
+      try {
+        const file = await ctx.fileModel.findById(fileId);
+        if (!file) return { fileName: null, fileUrl: null };
+        if (!file.url) return { fileName: file.name ?? null, fileUrl: null };
+
+        const service = getFileService();
+        if (!service) return { fileName: file.name ?? null, fileUrl: null };
+
+        try {
+          return {
+            fileName: file.name ?? null,
+            fileUrl: await service.getFullFileUrl(file.url),
+          };
+        } catch (error) {
+          console.error('[verify:getReportBundle:resolveFileMeta]', error);
+          return { fileName: file.name ?? null, fileUrl: null };
+        }
+      } catch (error) {
+        console.error('[verify:getReportBundle:resolveFileMeta]', error);
+        return {
+          fileName: null,
+          fileUrl: null,
+        };
+      }
+    };
+
+    const resultsWithEvidence = await Promise.all(
+      results.map(async (r) => {
+        const evidence = await ctx.serverDB
           .select()
-          .from(verifyCheckResults)
-          .where(eq(verifyCheckResults.verifyRunId, input.verifyRunId))
-          .orderBy(asc(verifyCheckResults.checkItemIndex)),
-      ]);
-
-      // Resolve display metadata for each file-backed evidence artifact.
-      let fileService: FileService | null | undefined;
-      const getFileService = () => {
-        if (fileService !== undefined) return fileService;
-
-        try {
-          fileService = new FileService(ctx.serverDB, run.userId, run.workspaceId ?? undefined);
-        } catch (error) {
-          console.error('[verify:getReportBundle:resolveFileMeta]', error);
-          fileService = null;
-        }
-
-        return fileService;
-      };
-      const resolveFileMeta = async (fileId: string | null) => {
-        if (!fileId) return { fileName: null, fileUrl: null };
-
-        try {
-          const file = await FileModel.getFileById(ctx.serverDB, fileId);
-          if (!file) return { fileName: null, fileUrl: null };
-          if (!file.url) return { fileName: file.name ?? null, fileUrl: null };
-
-          const service = getFileService();
-          if (!service) return { fileName: file.name ?? null, fileUrl: null };
-
-          try {
-            return {
-              fileName: file.name ?? null,
-              fileUrl: await service.getFullFileUrl(file.url),
-            };
-          } catch (error) {
-            console.error('[verify:getReportBundle:resolveFileMeta]', error);
-            return { fileName: file.name ?? null, fileUrl: null };
-          }
-        } catch (error) {
-          console.error('[verify:getReportBundle:resolveFileMeta]', error);
-          return {
-            fileName: null,
-            fileUrl: null,
-          };
-        }
-      };
-
-      const resultsWithEvidence = await Promise.all(
-        results.map(async (r) => {
-          const evidence = await ctx.serverDB
-            .select()
-            .from(verifyEvidence)
-            .where(eq(verifyEvidence.checkResultId, r.id))
-            .orderBy(asc(verifyEvidence.createdAt));
-          return {
-            ...r,
-            evidence: await Promise.all(
-              evidence.map(async (e) => ({ ...e, ...(await resolveFileMeta(e.fileId)) })),
-            ),
-          };
-        }),
-      );
-      return { report: report ?? null, results: resultsWithEvidence, run };
-    }),
+          .from(verifyEvidence)
+          .where(eq(verifyEvidence.checkResultId, r.id))
+          .orderBy(asc(verifyEvidence.createdAt));
+        return {
+          ...r,
+          evidence: await Promise.all(
+            evidence.map(async (e) => ({ ...e, ...(await resolveFileMeta(e.fileId)) })),
+          ),
+        };
+      }),
+    );
+    return { report: report ?? null, results: resultsWithEvidence, run };
+  }),
 });

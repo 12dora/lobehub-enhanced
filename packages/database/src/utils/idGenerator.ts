@@ -1,9 +1,14 @@
 // generate('1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', 16); //=> "4f90d13a42"
+import { customAlphabet as createSecureAlphabet } from 'nanoid';
 import { customAlphabet } from 'nanoid/non-secure';
 import { generate } from 'random-words';
 
-export const createNanoId = (size = 8) =>
-  customAlphabet('1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', size);
+const NANOID_ALPHABET = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+export const createNanoId = (size = 8) => customAlphabet(NANOID_ALPHABET, size);
+
+/** CSPRNG nanoid for capability tokens (share links). Default 21 ≈ 128 bits. */
+export const createSecureNanoId = (size = 21) => createSecureAlphabet(NANOID_ALPHABET, size);
 
 const prefixes = {
   agentCronJobs: 'cron',

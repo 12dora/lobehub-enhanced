@@ -81,15 +81,24 @@ export class KnowledgeBaseModel {
         );
     }
 
-    // Insert using resolved file IDs
+    // Insert using resolved file IDs the caller can see. Foreign ids are skipped.
     if (resolvedFileIds.length === 0) {
+      return [];
+    }
+
+    const ownedFiles = await new FileModel(this.db, this.userId, this.workspaceId).findByIds(
+      resolvedFileIds,
+    );
+    const ownedIdSet = new Set(ownedFiles.map((file) => file.id));
+    const ownedFileIds = resolvedFileIds.filter((fileId) => ownedIdSet.has(fileId));
+    if (ownedFileIds.length === 0) {
       return [];
     }
 
     return this.db
       .insert(knowledgeBaseFiles)
       .values(
-        resolvedFileIds.map((fileId) => ({
+        ownedFileIds.map((fileId) => ({
           fileId,
           knowledgeBaseId: id,
           userId: this.userId,

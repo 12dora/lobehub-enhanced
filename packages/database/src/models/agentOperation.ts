@@ -359,6 +359,21 @@ export class AgentOperationModel {
   }
 
   /**
+   * Ownership check that ignores workspace scoping: the user who started an
+   * operation may always observe it, whether it ran personally or inside a
+   * workspace. Used by the SSE stream route, whose browser client does not send
+   * a workspace header.
+   */
+  async findOwnedById(operationId: string) {
+    const [row] = await this.db
+      .select()
+      .from(agentOperations)
+      .where(and(eq(agentOperations.id, operationId), eq(agentOperations.userId, this.userId)))
+      .limit(1);
+    return row ?? null;
+  }
+
+  /**
    * Load the secret-free platform operation pin of the EXACT parent operation a resume continues, via
    * a SERVER-CONTROLLED anchor binding keyed by resume kind (M10 PR-049 · RR3-1/RR4-1). The link is
    * NEVER derived from a client-writable `message.parentId`:

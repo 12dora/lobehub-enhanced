@@ -12,7 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createInsertSchema } from 'drizzle-zod';
 
-import { createNanoId, idGenerator } from '../utils/idGenerator';
+import { createSecureNanoId, idGenerator } from '../utils/idGenerator';
 import { amountNumeric, createdAt, timestamps, timestamptz } from './_helpers';
 import { agents } from './agent';
 import { chatGroups } from './chatGroup';
@@ -216,7 +216,7 @@ export const topicShares = pgTable(
   'topic_shares',
   {
     id: text('id')
-      .$defaultFn(() => createNanoId(8)())
+      .$defaultFn(() => createSecureNanoId(21)())
       .primaryKey(),
 
     topicId: text('topic_id')
