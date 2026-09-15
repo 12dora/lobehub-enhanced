@@ -1,11 +1,6 @@
 import { createIoRedisState } from '@chat-adapter/state-ioredis';
-import {
-  Chat,
-  ConsoleLogger,
-  type Message,
-  type MessageContext,
-  type SlashCommandEvent,
-} from 'chat';
+import type { MessageContext, SlashCommandEvent } from 'chat';
+import { Chat, ConsoleLogger, Message, parseMarkdown } from 'chat';
 import debug from 'debug';
 
 import type { MessengerPlatform } from '@/config/messenger';
@@ -39,6 +34,7 @@ import { messengerPlatformRegistry } from './platforms';
 import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
 import { tryAutoLinkDingTalk } from './platforms/dingtalk/autoLink';
 import {
+  clearDingTalkReplySink,
   createDingTalkReplySink,
   parseDingTalkAskerCommand,
   sendDingTalkChoiceList,
@@ -50,6 +46,7 @@ import {
   parseDingTalkCommand,
 } from './platforms/dingtalk/commands';
 import {
+  DINGTALK_AGENTS_PICKER_PROMPT,
   DINGTALK_ASKER_ONLY_REPLY,
   DINGTALK_CHAT_DISABLED_REPLY,
   DINGTALK_HELP_TEXT,
@@ -59,25 +56,35 @@ import {
   DINGTALK_QUESTION_GONE_REPLY,
   DINGTALK_QUEUE_FULL_REPLY,
   DINGTALK_QUEUE_JOINED_REPLY,
+  DINGTALK_QUEUE_UNAVAILABLE_REPLY,
   DINGTALK_RESUME_RANGE_REPLY,
   DINGTALK_RESUME_USAGE_REPLY,
   DINGTALK_RESUMED_REPLY,
+  DINGTALK_STOP_FAILED_REPLY,
+  DINGTALK_STOP_NONE_REPLY,
+  DINGTALK_STOP_REQUESTED_REPLY,
   DINGTALK_TOPIC_TITLE_PREFIX,
   DINGTALK_UNKNOWN_COMMAND_REPLY,
+  DINGTALK_UNLINKED_COMMAND_REPLY,
   DINGTALK_UNSUPPORTED_MEDIA_REPLY,
+  formatDingTalkAgentSwitched,
 } from './platforms/dingtalk/const';
 import {
   clearDingTalkPendingQuestion,
   forwardDingTalkWaitingQuestion,
   loadDingTalkPendingQuestion,
   resolveQuestionAnswer,
+  sendDingTalkPendingQuestionCard,
 } from './platforms/dingtalk/questions';
 import {
   drainDingTalkQueue,
   dropStaleDingTalkQueues,
+  isDingTalkThreadBusy,
   popDingTalkQueuedMessage,
   pushDingTalkQueuedMessage,
+  releaseDingTalkThreadBusy,
   setDingTalkQueueDrainHandler,
+  tryAcquireDingTalkThreadBusy,
 } from './platforms/dingtalk/queue';
 import {
   claimDingTalkChatDisabledNotice,
@@ -451,17 +458,26 @@ export class MessengerRouter {
           state: Promise.resolve({ topicId: queued.topicId }),
           subscribe: async () => undefined,
         };
-        const syntheticMessage = {
+        const syntheticMessage = new Message({
+          attachments: [],
           author: {
+            fullName: queued.authorUserName || queued.senderStaffId,
             isBot: false,
+            isMe: false,
             userId: queued.senderStaffId,
-            userName: queued.authorUserName,
+            userName: queued.authorUserName || queued.senderStaffId,
           },
+          formatted: parseMarkdown(queued.text),
           id: `queued-${queued.queuedAt}`,
           isMention: true,
+          metadata: {
+            dateSent: new Date(queued.queuedAt),
+            edited: false,
+          },
           raw: queued.raw,
           text: queued.text,
-        } as Message;
+          threadId,
+        });
         await this.dispatchToAgent(
           syntheticThread,
           syntheticMessage,
@@ -511,7 +527,7 @@ export class MessengerRouter {
   private createChatBot(adapters: Record<string, any>, creds: InstallationCredentials): Chat<any> {
     const config: any = {
       adapters,
-      concurrency: 'queue',
+      concurrency: creds.platform === 'dingtalk' ? 'concurrent' : 'queue',
       // Per-install Chat SDK identity so the queue / state / debounce keys
       // never overlap across workspaces.
       userName: `messenger-bot-${creds.installationKey}`,
@@ -727,20 +743,44 @@ export class MessengerRouter {
 
           const pending = await loadDingTalkPendingQuestion(thread.id);
           if (pending) {
-            await this.resumeDingTalkQuestion({
-              binder,
-              bridgeMethod,
-              client,
-              link,
-              message,
-              pending,
-              platform,
-              thread,
-            });
+            const claim = await tryAcquireDingTalkThreadBusy(thread.id);
+            if (claim === 'busy') {
+              const queued = await pushDingTalkQueuedMessage(thread.id, {
+                authorUserName: message.author.userName,
+                raw: (message as { raw?: unknown }).raw,
+                senderStaffId: senderId,
+                text: inboundText,
+                topicId: (await thread.state)?.topicId,
+              });
+              if (queued === 'full') {
+                await binder.sendDmText(chatId, DINGTALK_QUEUE_FULL_REPLY);
+              } else if (queued === 'queued') {
+                await binder.sendDmText(chatId, DINGTALK_QUEUE_JOINED_REPLY);
+              } else {
+                await binder.sendDmText(chatId, DINGTALK_QUEUE_UNAVAILABLE_REPLY);
+              }
+              return;
+            }
+            try {
+              await this.resumeDingTalkQuestion({
+                binder,
+                bridgeMethod,
+                client,
+                link,
+                message,
+                pending,
+                platform,
+                thread,
+              });
+            } catch (error) {
+              await releaseDingTalkThreadBusy(thread.id);
+              throw error;
+            }
             return;
           }
 
-          if (AgentBridgeService.isThreadActive(thread.id)) {
+          const claim = await tryAcquireDingTalkThreadBusy(thread.id);
+          if (claim === 'busy') {
             const queued = await pushDingTalkQueuedMessage(thread.id, {
               authorUserName: message.author.userName,
               raw: (message as { raw?: unknown }).raw,
@@ -752,20 +792,29 @@ export class MessengerRouter {
               await binder.sendDmText(chatId, DINGTALK_QUEUE_FULL_REPLY);
             } else if (queued === 'queued') {
               await binder.sendDmText(chatId, DINGTALK_QUEUE_JOINED_REPLY);
+            } else {
+              await binder.sendDmText(chatId, DINGTALK_QUEUE_UNAVAILABLE_REPLY);
             }
             return;
           }
         }
 
-        await this.dispatchToAgent(
-          thread,
-          message,
-          client,
-          link,
-          link.activeAgentId,
-          platform,
-          bridgeMethod,
-        );
+        try {
+          await this.dispatchToAgent(
+            thread,
+            message,
+            client,
+            link,
+            link.activeAgentId,
+            platform,
+            bridgeMethod,
+          );
+        } catch (error) {
+          if (platform === 'dingtalk') {
+            await releaseDingTalkThreadBusy(thread.id);
+          }
+          throw error;
+        }
       } catch (error) {
         log('handle: handler error: %O', error);
         try {
@@ -1047,7 +1096,7 @@ export class MessengerRouter {
           if (!ctx.link) {
             await ctx.reply(
               ctx.platform === 'dingtalk'
-                ? DINGTALK_NO_ACTIVE_AGENT_REPLY
+                ? DINGTALK_UNLINKED_COMMAND_REPLY
                 : 'You need to /start to bind your account first.',
             );
             return;
@@ -1069,7 +1118,14 @@ export class MessengerRouter {
           } catch (error) {
             log('command /new: setState failed: %O', error);
           }
-          await ctx.reply('Started a new conversation. Your next message begins a fresh topic.');
+          if (ctx.platform === 'dingtalk') {
+            await clearDingTalkPendingQuestion(ctx.thread.id);
+          }
+          await ctx.reply(
+            ctx.platform === 'dingtalk'
+              ? DINGTALK_IDLE_NEW_TOPIC_NOTICE
+              : 'Started a new conversation. Your next message begins a fresh topic.',
+          );
         },
         name: 'new',
       },
@@ -1077,7 +1133,11 @@ export class MessengerRouter {
         description: 'Stop the current execution',
         handler: async (ctx) => {
           if (!ctx.link) {
-            await ctx.reply('You need to /start to bind your account first.');
+            await ctx.reply(
+              ctx.platform === 'dingtalk'
+                ? DINGTALK_UNLINKED_COMMAND_REPLY
+                : 'You need to /start to bind your account first.',
+            );
             return;
           }
           if (!ctx.thread) {
@@ -1088,8 +1148,14 @@ export class MessengerRouter {
             return;
           }
           const isActive = AgentBridgeService.isThreadActive(ctx.thread.id);
-          if (!isActive) {
-            await ctx.reply('No active execution to stop.');
+          const isBusy =
+            ctx.platform === 'dingtalk' ? await isDingTalkThreadBusy(ctx.thread.id) : false;
+          if (!isActive && !isBusy) {
+            await ctx.reply(
+              ctx.platform === 'dingtalk'
+                ? DINGTALK_STOP_NONE_REPLY
+                : 'No active execution to stop.',
+            );
             return;
           }
           const operationId = AgentBridgeService.getActiveOperationId(ctx.thread.id);
@@ -1101,14 +1167,22 @@ export class MessengerRouter {
               const result = await aiAgentService.interruptTask({ operationId });
               if (!result.success) {
                 log('command /stop: runtime interrupt rejected for op=%s', operationId);
-                await ctx.reply('Unable to stop the current execution.');
+                await ctx.reply(
+                  ctx.platform === 'dingtalk'
+                    ? DINGTALK_STOP_FAILED_REPLY
+                    : 'Unable to stop the current execution.',
+                );
                 return;
               }
               AgentBridgeService.clearActiveThread(ctx.thread.id);
               log('command /stop: interrupted op=%s', operationId);
             } catch (error) {
               log('command /stop: interruptTask failed: %O', error);
-              await ctx.reply('Unable to stop the current execution.');
+              await ctx.reply(
+                ctx.platform === 'dingtalk'
+                  ? DINGTALK_STOP_FAILED_REPLY
+                  : 'Unable to stop the current execution.',
+              );
               return;
             }
           } else {
@@ -1117,7 +1191,9 @@ export class MessengerRouter {
             AgentBridgeService.requestStop(ctx.thread.id);
             log('command /stop: queued deferred stop for thread=%s', ctx.thread.id);
           }
-          await ctx.reply('Stop requested.');
+          await ctx.reply(
+            ctx.platform === 'dingtalk' ? DINGTALK_STOP_REQUESTED_REPLY : 'Stop requested.',
+          );
         },
         name: 'stop',
       },
@@ -1326,11 +1402,15 @@ export class MessengerRouter {
    * with a tap-to-switch keyboard. Platforms without keyboard support fall
    * back to a numbered text list + `/agents <n>` syntax for switching.
    */
-  private async runAgentsCommand(ctx: MessengerCommandContext): Promise<void> {
+  private async runAgentsCommand(ctx: MessengerCommandContext, listPage = 1): Promise<void> {
     const { binder, chatId, link, serverDB } = ctx;
 
     if (!link) {
-      await ctx.reply('You need to /start to bind your account first.');
+      await ctx.reply(
+        ctx.platform === 'dingtalk'
+          ? DINGTALK_UNLINKED_COMMAND_REPLY
+          : 'You need to /start to bind your account first.',
+      );
       return;
     }
 
@@ -1354,13 +1434,38 @@ export class MessengerRouter {
       }
       const target = userAgents[index - 1];
       if (link.activeAgentId === target.id) {
-        await ctx.reply(`${target.title} is already the active agent.`);
+        await ctx.reply(
+          ctx.platform === 'dingtalk'
+            ? formatDingTalkAgentSwitched(target.title)
+            : `${target.title} is already the active agent.`,
+        );
         return;
       }
       await MessengerAccountLinkModel.setActiveAgentById(serverDB, link.id, target.id);
+      if (ctx.platform === 'dingtalk' && ctx.thread) {
+        await clearDingTalkPendingQuestion(ctx.thread.id);
+      }
       await ctx.reply(
-        `Switched active agent to: ${target.title}. Your next message will go there.`,
+        ctx.platform === 'dingtalk'
+          ? formatDingTalkAgentSwitched(target.title)
+          : `Switched active agent to: ${target.title}. Your next message will go there.`,
       );
+      return;
+    }
+
+    if (ctx.platform === 'dingtalk' && ctx.thread) {
+      await sendDingTalkChoiceList({
+        askerStaffId: ctx.authorUserId,
+        entries: userAgents.map((agent) => ({
+          command: `messenger:switch:${agent.id}`,
+          label: agent.id === link.activeAgentId ? `${agent.title}（当前）` : agent.title,
+        })),
+        page: listPage,
+        pageCommandPrefix: 'messenger:agents:page:',
+        text: DINGTALK_AGENTS_PICKER_PROMPT,
+        threadId: String(ctx.thread.id),
+        title: '选择助手',
+      });
       return;
     }
 
@@ -1405,13 +1510,16 @@ export class MessengerRouter {
       current: 0,
       pageSize: 5,
     });
-    return (result.items ?? []).map(
-      (topic: { id: string; title?: string | null; updatedAt: Date }) => ({
-        id: topic.id,
-        title: topic.title ?? '',
-        updatedAt: topic.updatedAt,
-      }),
-    );
+    const items = (result.items ?? []) as Array<{
+      id: string;
+      title?: string | null;
+      updatedAt: Date;
+    }>;
+    return items.map((topic) => ({
+      id: topic.id,
+      title: topic.title ?? '',
+      updatedAt: topic.updatedAt,
+    }));
   }
 
   private async runTopicsCommand(ctx: MessengerCommandContext): Promise<void> {
@@ -1484,6 +1592,9 @@ export class MessengerRouter {
       await ctx.thread.setState({ topicId: target.id });
     } catch (error) {
       log('command /resume: setState failed: %O', error);
+    }
+    if (ctx.platform === 'dingtalk') {
+      await clearDingTalkPendingQuestion(ctx.thread.id);
     }
     await ctx.reply(
       ctx.platform === 'dingtalk' ? DINGTALK_RESUMED_REPLY : `Resumed: ${target.title}`,
@@ -1561,6 +1672,7 @@ export class MessengerRouter {
       } catch (error) {
         log('handleDingTalkMessengerCommand: resume setState failed: %O', error);
       }
+      await clearDingTalkPendingQuestion(thread.id);
       await binder.sendDmText(thread.id, DINGTALK_RESUMED_REPLY);
       return;
     }
@@ -1583,6 +1695,45 @@ export class MessengerRouter {
         tenantId: creds.tenantId,
         thread,
       });
+      return;
+    }
+
+    const agentsPage = command.match(/^messenger:agents:page:(\d+)$/);
+    if (agentsPage && link) {
+      await this.runAgentsCommand(
+        {
+          args: '',
+          authorUserId: senderId,
+          authorUserName: message.author.userName,
+          binder,
+          chatId: thread.id,
+          isDM: thread.isDM !== false,
+          link,
+          message,
+          platform: 'dingtalk',
+          reply: (text) => binder.sendDmText(thread.id, text),
+          serverDB,
+          source: 'text',
+          tenantId: creds.tenantId,
+          thread,
+        },
+        Number.parseInt(agentsPage[1], 10) || 1,
+      );
+      return;
+    }
+
+    const questionPage = command.match(/^messenger:question:page:(\d+)$/);
+    if (questionPage) {
+      const pending = await loadDingTalkPendingQuestion(thread.id);
+      if (!pending) {
+        await binder.sendDmText(thread.id, DINGTALK_QUESTION_GONE_REPLY);
+        return;
+      }
+      await sendDingTalkPendingQuestionCard(
+        thread.id,
+        pending,
+        Number.parseInt(questionPage[1], 10) || 1,
+      );
       return;
     }
 
@@ -1720,6 +1871,9 @@ export class MessengerRouter {
         return;
       }
       const defaultAgent = await this.applyScopeSwitch(serverDB, link.id, link.userId, target);
+      if (ctx.platform === 'dingtalk' && ctx.thread) {
+        await clearDingTalkPendingQuestion(ctx.thread.id);
+      }
       const platformName = await this.resolvePlatformName();
       await ctx.reply(this.scopeSwitchedText(target.name, defaultAgent?.title, platformName));
       return;
@@ -1978,7 +2132,12 @@ export class MessengerRouter {
       creds.tenantId,
     );
     if (!link) {
-      await ack({ toast: 'Not linked. Send /start first.' });
+      await ack({
+        toast:
+          creds.platform === 'dingtalk'
+            ? DINGTALK_UNLINKED_COMMAND_REPLY
+            : 'Not linked. Send /start first.',
+      });
       return;
     }
 
@@ -1990,16 +2149,30 @@ export class MessengerRouter {
     }
 
     if (link.activeAgentId === targetAgentId) {
-      await ack({ toast: `${target.title} is already active.` });
+      await ack({
+        toast:
+          creds.platform === 'dingtalk'
+            ? formatDingTalkAgentSwitched(target.title)
+            : `${target.title} is already active.`,
+      });
       return;
     }
 
     await MessengerAccountLinkModel.setActiveAgentById(serverDB, link.id, targetAgentId);
+    if (creds.platform === 'dingtalk') {
+      await clearDingTalkPendingQuestion(action.chatId);
+    }
     await ack({
-      toast: `Switched to ${target.title}.`,
+      toast:
+        creds.platform === 'dingtalk'
+          ? formatDingTalkAgentSwitched(target.title)
+          : `Switched to ${target.title}.`,
       updatedPicker: {
         entries: this.toPickerEntries(userAgents, targetAgentId),
-        text: 'Pick an agent to receive your messages:',
+        text:
+          creds.platform === 'dingtalk'
+            ? DINGTALK_AGENTS_PICKER_PROMPT
+            : 'Pick an agent to receive your messages:',
       },
     });
   }
@@ -2042,6 +2215,9 @@ export class MessengerRouter {
     }
 
     const defaultAgent = await this.applyScopeSwitch(serverDB, link.id, link.userId, target);
+    if (creds.platform === 'dingtalk') {
+      await clearDingTalkPendingQuestion(action.chatId);
+    }
     const platformName = await this.resolvePlatformName();
     await ack({
       toast: this.scopeSwitchedText(target.name, defaultAgent?.title, platformName),
@@ -2156,6 +2332,8 @@ export class MessengerRouter {
       onRunSettled:
         platform === 'dingtalk'
           ? async (info: { reason?: string }) => {
+              clearDingTalkReplySink(thread.id);
+              await releaseDingTalkThreadBusy(thread.id);
               if (info.reason === 'waiting_for_human') return;
               await drainDingTalkQueue(thread.id);
             }
@@ -2164,6 +2342,8 @@ export class MessengerRouter {
         platform === 'dingtalk'
           ? async (event: AgentWaitingForHumanEvent) => {
               await forwardDingTalkWaitingQuestion(thread.id, event);
+              clearDingTalkReplySink(thread.id);
+              await releaseDingTalkThreadBusy(thread.id);
             }
           : undefined,
       replySink,

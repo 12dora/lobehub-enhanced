@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockRedis = {
   del: vi.fn(),
+  eval: vi.fn(),
+  exists: vi.fn(),
   expire: vi.fn(),
   llen: vi.fn(),
   lpop: vi.fn(),
   rpush: vi.fn(),
   scan: vi.fn(),
+  set: vi.fn(),
   ttl: vi.fn(),
 };
 
@@ -14,8 +17,14 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: vi.fn(() => mockRedis),
 }));
 
-const { popDingTalkQueuedMessage, pushDingTalkQueuedMessage, dropStaleDingTalkQueues } =
-  await import('./queue');
+const {
+  popDingTalkQueuedMessage,
+  pushDingTalkQueuedMessage,
+  dropStaleDingTalkQueues,
+  tryAcquireDingTalkThreadBusy,
+  releaseDingTalkThreadBusy,
+  isDingTalkThreadBusy,
+} = await import('./queue');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -26,27 +35,32 @@ beforeEach(() => {
   mockRedis.scan.mockResolvedValue(['0', []]);
   mockRedis.ttl.mockResolvedValue(60);
   mockRedis.del.mockResolvedValue(1);
+  mockRedis.eval.mockResolvedValue(1);
+  mockRedis.set.mockResolvedValue('OK');
+  mockRedis.exists.mockResolvedValue(0);
 });
 
 describe('DingTalk inbound queue', () => {
-  it('pushes a message and refreshes TTL', async () => {
+  it('pushes a message via atomic RPUSH + LTRIM + EXPIRE', async () => {
     const result = await pushDingTalkQueuedMessage('dingtalk:cid', {
       senderStaffId: 'staff_1',
       text: 'hello',
     });
     expect(result).toBe('queued');
-    expect(mockRedis.rpush).toHaveBeenCalledOnce();
-    expect(mockRedis.expire).toHaveBeenCalledWith('messenger:dingtalk:queue:dingtalk:cid', 3600);
+    expect(mockRedis.eval).toHaveBeenCalledOnce();
+    const script = String(mockRedis.eval.mock.calls[0][0]);
+    expect(script).toContain('RPUSH');
+    expect(script).toContain('LTRIM');
+    expect(script).toContain('EXPIRE');
   });
 
   it('rejects a sixth message as full', async () => {
-    mockRedis.llen.mockResolvedValueOnce(5);
+    mockRedis.eval.mockResolvedValueOnce(0);
     const result = await pushDingTalkQueuedMessage('dingtalk:cid', {
       senderStaffId: 'staff_1',
       text: 'overflow',
     });
     expect(result).toBe('full');
-    expect(mockRedis.rpush).not.toHaveBeenCalled();
   });
 
   it('pops the oldest message in order', async () => {
@@ -65,5 +79,30 @@ describe('DingTalk inbound queue', () => {
     const dropped = await dropStaleDingTalkQueues();
     expect(dropped).toBe(1);
     expect(mockRedis.del).toHaveBeenCalledWith('messenger:dingtalk:queue:stale');
+  });
+});
+
+describe('DingTalk per-thread busy flag', () => {
+  it('acquires with SET NX and TTL', async () => {
+    const result = await tryAcquireDingTalkThreadBusy('dingtalk:cid');
+    expect(result).toBe('acquired');
+    expect(mockRedis.set).toHaveBeenCalledWith(
+      'messenger:dingtalk:busy:dingtalk:cid',
+      '1',
+      'EX',
+      3600,
+      'NX',
+    );
+  });
+
+  it('returns busy when SET NX does not win', async () => {
+    mockRedis.set.mockResolvedValueOnce(null);
+    await expect(tryAcquireDingTalkThreadBusy('dingtalk:cid')).resolves.toBe('busy');
+  });
+
+  it('releases the flag in DEL', async () => {
+    await releaseDingTalkThreadBusy('dingtalk:cid');
+    expect(mockRedis.del).toHaveBeenCalledWith('messenger:dingtalk:busy:dingtalk:cid');
+    await expect(isDingTalkThreadBusy('dingtalk:cid')).resolves.toBe(false);
   });
 });

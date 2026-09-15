@@ -16,6 +16,7 @@ import type { AgentReplySink } from '@/server/services/bot/AgentBridgeService';
 import { sendDingTalkAttachments } from '@/server/services/bot/platforms/dingtalk/sendAttachments';
 
 import type { DingTalkOutboundAttachment } from './attachments';
+import { mapOutboundAttachments } from './attachments';
 import {
   DINGTALK_LIST_PAGE_SIZE,
   DINGTALK_MARKDOWN_TITLE_FALLBACK,
@@ -78,6 +79,7 @@ const resolveSendTarget = (threadId: string) => {
 };
 
 export const sendDingTalkMarkdown = async (threadId: string, text: string): Promise<void> => {
+  if (!text) return;
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
   const api = new DingTalkApiClient(config.clientId, config.clientSecret);
@@ -269,9 +271,10 @@ export const sendDingTalkChoiceList = async (params: {
 
 const sendOutboundAttachments = async (
   threadId: string,
-  attachments: DingTalkOutboundAttachment[],
+  attachments: DingTalkOutboundAttachment[] | undefined,
 ): Promise<void> => {
-  if (!attachments.length) return;
+  const outbound = mapOutboundAttachments(attachments);
+  if (!outbound.length) return;
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
   const api = new DingTalkApiClient(config.clientId, config.clientSecret);
@@ -285,7 +288,7 @@ const sendOutboundAttachments = async (
         sessionWebhook: isSessionWebhookLive(session) ? session?.sessionWebhook : undefined,
         userIds: !isGroup && staffId ? [staffId] : undefined,
       },
-      attachments,
+      outbound,
     );
   } catch (error) {
     log('sendOutboundAttachments failed: %O', error);

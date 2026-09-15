@@ -24,6 +24,12 @@ export const DINGTALK_ROBOT_MESSAGE_EVENT = 'im.bot.message';
 export const DINGTALK_ASKER_ONLY_REPLY = '仅提问人可操作';
 export const DINGTALK_QUEUE_JOINED_REPLY = '已加入队列';
 export const DINGTALK_QUEUE_FULL_REPLY = '队列已满，请稍后再试';
+export const DINGTALK_QUEUE_UNAVAILABLE_REPLY = '暂时无法排队，请稍后再试';
+export const DINGTALK_STOP_NONE_REPLY = '没有正在执行的任务';
+export const DINGTALK_STOP_REQUESTED_REPLY = '已请求停止';
+export const DINGTALK_STOP_FAILED_REPLY = '无法停止当前执行';
+export const DINGTALK_AGENTS_PICKER_PROMPT = '点选要切换的助手';
+export const DINGTALK_UNLINKED_COMMAND_REPLY = DINGTALK_UNKNOWN_USER_REPLY;
 export const DINGTALK_THINKING_REPLY = '正在思考…';
 export const DINGTALK_UNSUPPORTED_MEDIA_REPLY = '暂不支持语音和视频消息';
 export const DINGTALK_QUESTION_GONE_REPLY = '该问题已失效，将作为新消息处理。';
@@ -34,6 +40,8 @@ export const DINGTALK_RESUME_RANGE_REPLY = '序号超出范围。发送 /会话 
 export const DINGTALK_RESUMED_REPLY = '已切换到该会话。';
 export const DINGTALK_NO_ACTIVE_AGENT_REPLY = '未选择助手。发送 /助手 选择一个。';
 export const DINGTALK_MARKDOWN_TITLE_FALLBACK = '回复';
+
+export const formatDingTalkAgentSwitched = (title: string): string => `已切换到：${title}`;
 
 export const DINGTALK_HELP_TEXT = [
   '命令：',
@@ -49,6 +57,8 @@ export const DINGTALK_HELP_TEXT = [
 export const DINGTALK_QUEUE_KEY_PREFIX = 'messenger:dingtalk:queue:';
 export const DINGTALK_QUEUE_TTL_SECONDS = 60 * 60;
 export const DINGTALK_QUEUE_MAX_LENGTH = 5;
+export const DINGTALK_BUSY_KEY_PREFIX = 'messenger:dingtalk:busy:';
+export const DINGTALK_BUSY_TTL_SECONDS = DINGTALK_QUEUE_TTL_SECONDS;
 export const DINGTALK_PENDING_QUESTION_KEY_PREFIX = 'messenger:dingtalk:pending-question:';
 export const DINGTALK_PENDING_QUESTION_TTL_SECONDS = 24 * 60 * 60;
 export const DINGTALK_LIST_PAGE_SIZE = 5;

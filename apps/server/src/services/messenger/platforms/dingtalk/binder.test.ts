@@ -181,3 +181,24 @@ describe('MessengerDingTalkBinder.extractCallbackAction', () => {
     });
   });
 });
+
+describe('MessengerDingTalkBinder.sendAgentPicker', () => {
+  it('posts an ActionCard in-group via sendGroupMessage', async () => {
+    const binder = new MessengerDingTalkBinder();
+    await binder.sendAgentPicker('dingtalk:cid:staff_9', {
+      entries: [
+        { id: 'agt_main', isActive: true, title: 'Inbox' },
+        { id: 'agt_other', isActive: false, title: 'Other' },
+      ],
+      text: '点选要切换的助手',
+    });
+
+    expect(sendGroupMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msgKey: 'sampleActionCard2',
+        openConversationId: 'cid',
+        robotCode: 'robot_1',
+      }),
+    );
+  });
+});

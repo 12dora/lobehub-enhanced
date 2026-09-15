@@ -1,5 +1,4 @@
 import {
-  buildActionCardParam,
   decodeDingTalkThreadId,
   DingTalkApiClient,
   getDingTalkCard,
@@ -21,7 +20,7 @@ import type {
   MessengerPlatformBinder,
   UnlinkedMessageContext,
 } from '../../types';
-import { wrapDingTalkAskerCommand } from './cards';
+import { sendDingTalkChoiceList } from './cards';
 import { DINGTALK_MARKDOWN_TITLE_FALLBACK, DINGTALK_UNKNOWN_USER_REPLY } from './const';
 
 const log = debug('lobe-server:messenger:dingtalk');
@@ -141,35 +140,22 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     chatId: string,
     params: { action?: MessengerPickerAction; entries: AgentPickerEntry[]; text: string },
   ): Promise<void> {
-    const config = await getMessengerDingTalkConfig();
-    if (!config) return;
-
     const action = params.action ?? 'switch';
+    const threadId = chatId.startsWith('dingtalk:') ? chatId : `dingtalk:${chatId}`;
     const { decoded } = resolveRobotTarget(chatId);
-    const isGroup = Boolean(decoded.senderStaffId);
     const askerStaffId = decoded.senderStaffId || '';
-    const buttons = params.entries.map((entry) => ({
-      command: wrapDingTalkAskerCommand(
-        `${CALLBACK_PREFIX}${action}:${entry.id}`,
-        askerStaffId,
-        isGroup,
-      ),
-      label: entry.isActive ? `✓ ${entry.title}` : entry.title,
-    }));
-    const card = buildActionCardParam({
-      buttons,
-      text: params.text,
-      title: action === 'scope' ? '选择范围' : '选择助手',
-    });
-
     try {
-      await this.sendRobotCard(
-        chatId,
-        config.clientId,
-        config.clientSecret,
-        config.robotCode,
-        card,
-      );
+      await sendDingTalkChoiceList({
+        askerStaffId,
+        entries: params.entries.map((entry) => ({
+          command: `${CALLBACK_PREFIX}${action}:${entry.id}`,
+          label: entry.isActive ? `${entry.title}（当前）` : entry.title,
+        })),
+        pageCommandPrefix: action === 'scope' ? 'messenger:scope:page:' : 'messenger:agents:page:',
+        text: params.text,
+        threadId,
+        title: action === 'scope' ? '选择范围' : '选择助手',
+      });
     } catch (error) {
       log('sendAgentPicker: failed for chat=%s: %O', chatId, error);
     }
@@ -215,28 +201,5 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     if (ack.toast) {
       await this.sendDmText(action.chatId, ack.toast);
     }
-  }
-
-  private async sendRobotCard(
-    chatId: string,
-    clientId: string,
-    clientSecret: string,
-    robotCode: string,
-    card: { msgKey: string; msgParam: string },
-  ): Promise<void> {
-    const api = new DingTalkApiClient(clientId, clientSecret);
-    const { session, staffId } = resolveRobotTarget(chatId);
-
-    if (isSessionWebhookLive(session) && session?.sessionWebhook) {
-      // sessionWebhook speaks native robot JSON, not msgKey. ActionCard
-      // buttons stay on the oto API so dtmd URLs keep working.
-    }
-
-    await api.sendOtoMessage({
-      msgKey: card.msgKey,
-      msgParam: card.msgParam,
-      robotCode,
-      userIds: [staffId],
-    });
   }
 }

@@ -18,7 +18,10 @@ import {
 } from '@/server/services/messenger/platforms/dingtalk/cards';
 import { DINGTALK_TOPIC_TITLE_PREFIX } from '@/server/services/messenger/platforms/dingtalk/const';
 import { forwardDingTalkWaitingQuestion } from '@/server/services/messenger/platforms/dingtalk/questions';
-import { drainDingTalkQueue } from '@/server/services/messenger/platforms/dingtalk/queue';
+import {
+  drainDingTalkQueue,
+  releaseDingTalkThreadBusy,
+} from '@/server/services/messenger/platforms/dingtalk/queue';
 import { SystemAgentService } from '@/server/services/systemAgent';
 
 import { AgentBridgeService } from './AgentBridgeService';
@@ -198,9 +201,12 @@ export class BotCallbackService {
       // In queue mode, the bridge handler's finally block skips this cleanup
       // to keep the thread marked active while the agent runs on the job queue.
       AgentBridgeService.clearActiveThread(platformThreadId);
-      if (platform === 'dingtalk' && body.reason !== 'waiting_for_human') {
-        await drainDingTalkQueue(platformThreadId);
+      if (platform === 'dingtalk') {
         clearDingTalkReplySink(platformThreadId);
+        await releaseDingTalkThreadBusy(platformThreadId);
+        if (body.reason !== 'waiting_for_human') {
+          await drainDingTalkQueue(platformThreadId);
+        }
       }
       this.summarizeTopicTitle(
         { ...body, workspaceId: body.workspaceId ?? workspaceId ?? undefined },
@@ -432,7 +438,8 @@ export class BotCallbackService {
     if (platformThreadId.startsWith('dingtalk:') && reason === 'waiting_for_human') {
       const sink = getDingTalkReplySink(platformThreadId);
       try {
-        await sink?.onComplete?.(lastAssistantContent ?? '');
+        // Close the thinking card without repeating the question text.
+        await sink?.onComplete?.('');
       } catch (error) {
         log('handleCompletion: dingtalk sink finalize on waiting_for_human failed: %O', error);
       }

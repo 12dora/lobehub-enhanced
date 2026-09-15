@@ -151,6 +151,7 @@ vi.mock('@/server/services/messenger/platforms/dingtalk/cards', () => ({
 
 vi.mock('@/server/services/messenger/platforms/dingtalk/queue', () => ({
   drainDingTalkQueue: vi.fn(),
+  releaseDingTalkThreadBusy: vi.fn(),
 }));
 
 vi.mock('@/server/services/messenger/platforms/dingtalk/questions', () => ({
@@ -1301,7 +1302,7 @@ describe('BotCallbackService', () => {
       }),
     );
 
-    expect(sink.onComplete).toHaveBeenCalledWith('是否继续？');
+    expect(sink.onComplete).toHaveBeenCalledWith('');
     expect(forwardDingTalkWaitingQuestion).toHaveBeenCalledWith(
       'dingtalk:cid',
       expect.objectContaining({ lastAssistantContent: '是否继续？', operationId: 'op_dt' }),

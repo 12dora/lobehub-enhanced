@@ -40,6 +40,8 @@ vi.mock('@/server/services/bot/platforms/dingtalk/sendAttachments', () => ({
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const { DingTalkCardUnavailableError } = await import('@lobechat/chat-adapter-dingtalk');
+const { sendDingTalkAttachments } =
+  await import('@/server/services/bot/platforms/dingtalk/sendAttachments');
 const {
   createDingTalkReplySink,
   paginateEntries,
@@ -84,6 +86,20 @@ describe('DingTalk AI-card reply sink', () => {
     expect(create).toHaveBeenCalled();
     expect(replace).toHaveBeenCalledWith('thinking');
     expect(finalize).toHaveBeenCalledWith('执行失败');
+  });
+
+  it('filters outbound attachments through mapOutboundAttachments', async () => {
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await sink?.onComplete?.('done', {
+      attachments: [
+        { name: 'a.png', type: 'image' },
+        { name: 'c.mp3', type: 'audio' },
+      ],
+    });
+    expect(sendDingTalkAttachments).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      { name: 'a.png', type: 'image' },
+    ]);
   });
 });
 

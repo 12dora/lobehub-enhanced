@@ -18,6 +18,7 @@ vi.mock('./cards', () => ({
 const {
   clearDingTalkPendingQuestion,
   extractDingTalkQuestion,
+  forwardDingTalkWaitingQuestion,
   loadDingTalkPendingQuestion,
   resolveQuestionAnswer,
   storeDingTalkPendingQuestion,
@@ -113,5 +114,47 @@ describe('pending question store', () => {
     expect(resolveQuestionAnswer('2', pending)).toBe('no');
     expect(resolveQuestionAnswer('同意', pending)).toBe('yes');
     expect(resolveQuestionAnswer('custom', pending)).toBe('custom');
+  });
+});
+
+describe('forwardDingTalkWaitingQuestion', () => {
+  it('paginates options beyond 5 via pageCommandPrefix', async () => {
+    const { sendDingTalkChoiceList } = await import('./cards');
+    await forwardDingTalkWaitingQuestion('dingtalk:cid', {
+      finalState: {
+        pendingHumanToolMessages: [
+          { kind: 'toolResult', messageId: 'msg_1', toolCallId: 'call_1' },
+        ],
+        pendingToolsCalling: [
+          {
+            apiName: 'askUserQuestion',
+            arguments: JSON.stringify({
+              questions: [
+                {
+                  options: [
+                    { label: 'A', value: 'a' },
+                    { label: 'B', value: 'b' },
+                    { label: 'C', value: 'c' },
+                    { label: 'D', value: 'd' },
+                    { label: 'E', value: 'e' },
+                    { label: 'F', value: 'f' },
+                  ],
+                  question: '选一个',
+                },
+              ],
+            }),
+            id: 'call_1',
+            identifier: 'lobe-user-interaction',
+          },
+        ],
+      },
+      operationId: 'op_1',
+    });
+    expect(sendDingTalkChoiceList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageCommandPrefix: 'messenger:question:page:',
+        text: '选一个',
+      }),
+    );
   });
 });

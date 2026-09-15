@@ -1408,7 +1408,9 @@ export class AgentBridgeService {
 
                 if (reason === 'waiting_for_human') {
                   try {
-                    await replySink?.onComplete?.(event.lastAssistantContent ?? '');
+                    // Finalize the thinking card without repeating the question;
+                    // `onWaitingForHuman` is the only outbound for the prompt.
+                    await replySink?.onComplete?.('');
                     await onWaitingForHuman?.({
                       finalState: event.finalState,
                       lastAssistantContent: event.lastAssistantContent,

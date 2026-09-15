@@ -474,6 +474,54 @@ describe('AgentBridgeService', () => {
       expect(thread.post).not.toHaveBeenCalled();
     });
 
+    it('finalizes waiting_for_human without repeating the question text', async () => {
+      mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+      const onCompleteHook = vi.fn();
+      mockExecAgent.mockImplementation(
+        async (opts: {
+          hooks?: Array<{ handler?: (event: unknown) => Promise<void>; id?: string }>;
+        }) => {
+          const completion = opts.hooks?.find((hook) => hook.id === 'bot-completion');
+          await completion?.handler?.({
+            finalState: {},
+            lastAssistantContent: '是否继续？',
+            operationId: 'op-1',
+            reason: 'waiting_for_human',
+          });
+          return {
+            assistantMessageId: 'assistant-msg-1',
+            createdAt: new Date().toISOString(),
+            operationId: 'op-1',
+            topicId: 'topic-1',
+          };
+        },
+      );
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: onCompleteHook,
+        onError: vi.fn(),
+        onPartial: vi.fn(),
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+      const onWaitingForHuman = vi.fn();
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: 'dingtalk:cid' } as any,
+        client,
+        onWaitingForHuman,
+        replySink,
+      });
+
+      expect(onCompleteHook).toHaveBeenCalledWith('');
+      expect(onWaitingForHuman).toHaveBeenCalledWith(
+        expect.objectContaining({ lastAssistantContent: '是否继续？', operationId: 'op-1' }),
+      );
+    });
+
     it('forwards resumeToolResult to execAgent', async () => {
       const service = new AgentBridgeService(FAKE_DB, USER_ID);
       const thread = createThread({ topicId: 'topic-1' });

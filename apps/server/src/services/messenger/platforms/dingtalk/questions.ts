@@ -199,6 +199,15 @@ export const forwardDingTalkWaitingQuestion = async (
   const pending = extractDingTalkQuestion(event);
   if (!pending) return null;
   await storeDingTalkPendingQuestion(threadId, pending);
+  await sendDingTalkPendingQuestionCard(threadId, pending);
+  return pending;
+};
+
+export const sendDingTalkPendingQuestionCard = async (
+  threadId: string,
+  pending: DingTalkPendingQuestion,
+  page = 1,
+): Promise<void> => {
   const decoded = threadId.startsWith('dingtalk:') ? threadId.slice('dingtalk:'.length) : threadId;
   const askerStaffId = decoded.includes(':') ? decoded.slice(decoded.lastIndexOf(':') + 1) : '';
   if (pending.options?.length) {
@@ -208,12 +217,13 @@ export const forwardDingTalkWaitingQuestion = async (
         command: `messenger:answer:${option.value}`,
         label: option.label,
       })),
+      page,
+      pageCommandPrefix: 'messenger:question:page:',
       text: pending.prompt,
       threadId,
       title: '需要确认',
     });
-  } else {
-    await sendDingTalkMarkdown(threadId, pending.prompt);
+    return;
   }
-  return pending;
+  await sendDingTalkMarkdown(threadId, pending.prompt);
 };
