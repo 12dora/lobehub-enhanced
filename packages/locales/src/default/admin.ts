@@ -2733,6 +2733,7 @@ export default {
   'audit.logs.action.admin.audit.exports.cancel': 'Cancel export',
   'audit.logs.action.admin.audit.exports.create': 'Create export',
   'audit.logs.action.admin.audit.exports.download': 'Download export',
+  'audit.logs.action.admin.audit.files.open': 'Open conversation attachment',
   'audit.logs.action.admin.audit.exports.get': 'View export',
   'audit.logs.action.admin.audit.exports.list': 'List exports',
   'audit.logs.action.admin.audit.exports.worker': 'Export worker',
@@ -2878,6 +2879,7 @@ export default {
   'audit.logs.targetType.content_moderation_record': 'Content moderation record',
   'audit.logs.targetType.content_moderation_settings': 'Content moderation settings',
   'audit.logs.targetType.email_delivery': 'Email delivery',
+  'audit.logs.targetType.file': 'File',
   'audit.logs.targetType.identity_provider': 'Sign-in method',
   'audit.logs.targetType.identity_provider_test': 'Sign-in test',
   'audit.logs.targetType.identity_provider_validation': 'Sign-in method validation',
@@ -3107,12 +3109,12 @@ export default {
   'audit.retention.policy.updatedAt': 'Updated at',
   'audit.retention.policy.mode.disabled': 'Disabled',
   'audit.retention.policy.mode.metadata_only': 'Metadata only',
-  'audit.retention.policy.mode.content_allowed': 'Content allowed',
-  'audit.retention.policy.contentAllowedWarnTitle': 'Allow full message content?',
+  'audit.retention.policy.mode.content_allowed': 'Content and attachments allowed',
+  'audit.retention.policy.contentAllowedWarnTitle': 'Allow full message content and attachments?',
   'audit.retention.policy.contentAllowedWarn':
-    'Allowing content lets authorized auditors load full message bodies (credentials stay masked). This increases exposure of conversation content.',
+    'Allowing content lets authorized auditors load full message bodies and open attachments (credentials stay masked). This increases exposure of conversation content.',
   'audit.retention.policy.contentAllowedWarnUnmasked':
-    'Allowing content lets authorized auditors load full message bodies. Content redaction is off, so any credentials left in those messages (API keys, tokens, passwords) are readable in full.',
+    'Allowing content lets authorized auditors load full message bodies and open attachments. Content redaction is off, so any credentials left in those messages (API keys, tokens, passwords) are readable in full.',
   'audit.retention.policy.helpFor': 'About {{field}}',
   'audit.retention.policy.redactionProfileHint.strict':
     'Strict: masks credentials (API keys, tokens, passwords) in audit views.',

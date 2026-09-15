@@ -15,6 +15,7 @@ export const AUDIT_LOG_TARGET_TYPES = [
   'content_moderation_record',
   'content_moderation_settings',
   'email_delivery',
+  'file',
   'identity_provider',
   'identity_provider_test',
   'identity_provider_validation',

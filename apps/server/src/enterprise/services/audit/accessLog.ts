@@ -26,6 +26,7 @@ export type AuditAccessAction =
   | 'admin.audit.exports.get'
   | 'admin.audit.exports.list'
   | 'admin.audit.exports.worker'
+  | 'admin.audit.files.open'
   | 'admin.audit.get'
   | 'admin.audit.legalHolds.create'
   | 'admin.audit.legalHolds.get'
