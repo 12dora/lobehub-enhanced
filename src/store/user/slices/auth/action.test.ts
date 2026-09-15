@@ -24,9 +24,25 @@ const mockBetterAuthClient = vi.hoisted(() => ({
 
 vi.mock('@/libs/better-auth/auth-client', () => mockBetterAuthClient);
 
+const endSessionPayload = {
+  fields: {
+    id_token_hint: 'raw-id-token',
+    post_logout_redirect_uri: 'https://chat.example.test/signin',
+  },
+  method: 'POST',
+  url: 'https://auth.example.test/application/o/aihub/end-session/',
+};
+
+const jsonResponse = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    headers: { 'Content-Type': 'application/json' },
+    status,
+  });
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  document.querySelectorAll('form').forEach((form) => form.remove());
 
   // Reset store state
   useUserStore.setState({
@@ -51,6 +67,7 @@ describe('createAuthSlice', () => {
 
   describe('logout', () => {
     it('should call better-auth signOut', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({}));
       const { result } = renderHook(() => useUserStore());
 
       await act(async () => {
@@ -58,6 +75,86 @@ describe('createAuthSlice', () => {
       });
 
       expect(mockBetterAuthClient.signOut).toHaveBeenCalled();
+    });
+
+    it('fetches end-session before local revoke, then POSTs Authentik form fields', async () => {
+      const order: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/api/auth/oidc/end-session')) {
+          order.push('end-session');
+          return jsonResponse(endSessionPayload);
+        }
+        if (url.includes('/oidc/clear-session')) {
+          order.push('clear-session');
+          return jsonResponse({ ok: true });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      mockBetterAuthClient.signOut.mockImplementation(
+        async (options?: { fetchOptions?: { onSuccess?: () => void } }) => {
+          order.push('signOut');
+          options?.fetchOptions?.onSuccess?.();
+        },
+      );
+      const submit = vi.fn();
+      const originalSubmit = HTMLFormElement.prototype.submit;
+      HTMLFormElement.prototype.submit = submit;
+
+      const { result } = renderHook(() => useUserStore());
+      await act(async () => {
+        await result.current.logout();
+      });
+
+      expect(order).toEqual(['end-session', 'clear-session', 'signOut']);
+      expect(submit).toHaveBeenCalledOnce();
+      const form = document.querySelector('form');
+      expect(form?.getAttribute('action')).toBe(endSessionPayload.url);
+      expect(form?.getAttribute('method')).toBe('POST');
+      expect(
+        [...(form?.querySelectorAll('input') ?? [])].map((input) => [input.name, input.value]),
+      ).toEqual([
+        ['id_token_hint', 'raw-id-token'],
+        ['post_logout_redirect_uri', 'https://chat.example.test/signin'],
+      ]);
+      HTMLFormElement.prototype.submit = originalSubmit;
+      form?.remove();
+    });
+
+    it('falls back to /signin when end-session is unavailable', async () => {
+      const originalLocation = window.location;
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...originalLocation, href: '' },
+        writable: true,
+      });
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/api/auth/oidc/end-session')) {
+          return jsonResponse({ error: 'not_found' }, 404);
+        }
+        return jsonResponse({ ok: true });
+      });
+      mockBetterAuthClient.signOut.mockImplementation(
+        async (options?: { fetchOptions?: { onSuccess?: () => void } }) => {
+          options?.fetchOptions?.onSuccess?.();
+        },
+      );
+
+      const { result } = renderHook(() => useUserStore());
+      await act(async () => {
+        await result.current.logout();
+      });
+
+      expect(mockBetterAuthClient.signOut).toHaveBeenCalled();
+      expect(window.location.href).toBe('/signin');
+      expect(document.querySelector('form')).toBeNull();
+
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: originalLocation,
+        writable: true,
+      });
     });
   });
 

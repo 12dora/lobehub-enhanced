@@ -52,19 +52,19 @@ return {"email": email, "email_verified": True}
 
 路径:**应用程序 → 提供程序 → 创建 → OAuth2/OpenID Provider**
 
-| 配置项                     | 值                                                                                                                                                                                                                                                               |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 名称                       | `AIHub OIDC`                                                                                                                                                                                                                                                     |
-| 授权流程                   | `default-provider-authorization-implicit-consent`                                                                                                                                                                                                                |
-| 客户端类型                 | 机密 (confidential)                                                                                                                                                                                                                                              |
-| Client ID                  | `aihub`                                                                                                                                                                                                                                                          |
-| Client Secret              | 保留生成值，**立即抄录**(存放到部署机的密钥目录，权限 600)                                                                                                                                                                                                       |
-| **授权类型 (grant types)** | **必须勾选 `authorization_code` + `refresh_token`**。本 fork 新增字段，默认为空 = 拒绝所有授权请求，漏配的症状是登录跳回 `error=invalid_request`("The request is otherwise malformed")                                                                           |
-| 重定向 URI (严格)          | `http://localhost:3010/api/auth/oauth2/callback/authentik`<br>`http://localhost:3010/oauth/identity-provider/test/callback`<br>`https://chat.example.com/api/auth/oauth2/callback/authentik`<br>`https://chat.example.com/oauth/identity-provider/test/callback` |
-| 签名密钥                   | 选现有证书 (与 easytrade Provider 同一把即可)                                                                                                                                                                                                                    |
-| Scope 映射                 | 勾选：默认 `openid`、默认 `profile`、**AIHub email with DingTalk fallback**(勿选默认 email)、**AIHub DingTalk profile claims**                                                                                                                                   |
-| 主题模式 (sub)             | 基于用户 UUID (`user_uuid`)                                                                                                                                                                                                                                      |
-| 在 ID Token 中包含 claims  | 开                                                                                                                                                                                                                                                               |
+| 配置项                     | 值                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 名称                       | `AIHub OIDC`                                                                                                                                                                                                                                                                                                                                                    |
+| 授权流程                   | `default-provider-authorization-implicit-consent`                                                                                                                                                                                                                                                                                                               |
+| 客户端类型                 | 机密 (confidential)                                                                                                                                                                                                                                                                                                                                             |
+| Client ID                  | `aihub`                                                                                                                                                                                                                                                                                                                                                         |
+| Client Secret              | 保留生成值，**立即抄录**(存放到部署机的密钥目录，权限 600)                                                                                                                                                                                                                                                                                                      |
+| **授权类型 (grant types)** | **必须勾选 `authorization_code` + `refresh_token`**。本 fork 新增字段，默认为空 = 拒绝所有授权请求，漏配的症状是登录跳回 `error=invalid_request`("The request is otherwise malformed")                                                                                                                                                                          |
+| 重定向 URI (严格)          | **授权回调:** `http://localhost:3010/api/auth/oauth2/callback/authentik`<br>`http://localhost:3010/oauth/identity-provider/test/callback`<br>`https://chat.example.com/api/auth/oauth2/callback/authentik`<br>`https://chat.example.com/oauth/identity-provider/test/callback`<br>**登出回跳 (`redirect_uri_type: logout`):** `https://chat.jiefakj.com/signin` |
+| 签名密钥                   | 选现有证书 (与 easytrade Provider 同一把即可)                                                                                                                                                                                                                                                                                                                   |
+| Scope 映射                 | 勾选：默认 `openid`、默认 `profile`、**AIHub email with DingTalk fallback**(勿选默认 email)、**AIHub DingTalk profile claims**                                                                                                                                                                                                                                  |
+| 主题模式 (sub)             | 基于用户 UUID (`user_uuid`)                                                                                                                                                                                                                                                                                                                                     |
+| 在 ID Token 中包含 claims  | 开                                                                                                                                                                                                                                                                                                                                                              |
 
 ### 1.3 新建 Application
 
@@ -94,6 +94,30 @@ AIHub 提供 `POST /api/auth/oidc/backchannel-logout`，接收表单字段 `logo
 
 成功（包括没有匹配会话）返回 `200 {}`；失败返回 `400 {"error":"invalid_request","error_description":"..."}`，均带 `Cache-Control: no-store`。其他 HTTP 方法返回 405。验证时先登录 AIHub，再退出 Authentik，确认后续 AIHub 请求失去原会话，并检查 `oidc.backchannel_logout` 日志中的提供方、subject 和撤销数。
 
+### 2.2 RP 发起的 Authentik 登出（回到 `/signin`）
+
+AIHub 在用户点击退出时**先于** `signOut()` 调用 `GET /api/auth/oidc/end-session`（需仍有效的 Better Auth 会话 cookie）。该接口读取当前用户 Authentik 账号在 `accounts.id_token` 中保存的 ID Token（登录回调不再丢弃该字段），返回：
+
+```json
+{
+  "fields": {
+    "id_token_hint": "<raw jwt>",
+    "post_logout_redirect_uri": "https://chat.jiefakj.com/signin"
+  },
+  "method": "POST",
+  "url": "https://auth.jiefakj.com/application/o/aihub/end-session/"
+}
+```
+
+`post_logout_redirect_uri` 由 `APP_URL` + `/signin` 拼出。无会话返回 401；没有存储的 ID Token（本地账号、尚未重新登录的旧会话）返回 404，前端退回 `window.location.href = '/signin'`。响应带 `Cache-Control: no-store`，日志不得打印 token。
+
+前端随后 `POST /oidc/clear-session`、Better Auth `signOut()`，再以隐藏表单 **POST** 上述 `url`/`fields`（钉钉 claims 的 ID Token 过长，不可改 GET query）。Authentik 仅在同时满足以下条件时 302 回 AIHub 登录页：
+
+1. Provider 已注册 `redirect_uri_type: logout` 且 STRICT 匹配 `https://chat.jiefakj.com/signin`（见 1.2；`apps/aihub/configure_authentik.py` 会幂等写入）；
+2. 请求携带可验证的 `id_token_hint`（校验 `aud`/`iss`/ 签名，**不**校验 `exp`）。
+
+否则浏览器会停在 Authentik 自己的登出页，或落到默认应用（EasyAuth 门户）。不要在注册 URL 中带 `state`（Authentik 匹配成功后自行追加）。
+
 ## 3. 验证清单
 
 - [ ] 钉钉扫码 (或 Authentik 本地测试账号) 登录成功，首登自动建号；
@@ -101,6 +125,7 @@ AIHub 提供 `POST /api/auth/oidc/backchannel-logout`，接收表单字段 `logo
 - [ ] 管理面板 → 用户：列表「职位」列与详情概览显示职位 (空显示 —);
 - [ ] 二次登录：在钉钉 / Authentik 改头像或职位后重新登录，本地资料被刷新 (better-auth `overrideUserInfo`);
 - [ ] 新用户默认角色为 `platform_user`, 管理员在管理面板授予 admin 角色包。
+- [ ] 从 AIHub 退出后浏览器回到 `https://chat.jiefakj.com/signin`，而不是 Authentik 登出页或 EasyAuth 门户；再次「使用工作账号登录」需重新完成 Authentik 认证。
 
 ## 4. 故障兜底 (break-glass)
 

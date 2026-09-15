@@ -1,4 +1,5 @@
 import { type SSOProvider } from '@lobechat/types';
+import { isNonEmptyString, isRecord } from '@lobechat/utils/object';
 
 import { clearActiveScopeKey } from '@/libs/swr/useCacheScope';
 import { type StoreSetter } from '@/store/types';
@@ -19,7 +20,6 @@ const fetchAuthProvidersData = async (): Promise<AuthProvidersData> => {
     accounts
       .filter((account) => account.providerId !== 'credential')
       .map(async (account) => {
-        // In theory, the id_token could be decrypted from the accounts table, but I found that better-auth on GitHub does not save the id_token
         const info = await accountInfo({
           query: { accountId: account.accountId },
         });
@@ -31,6 +31,62 @@ const fetchAuthProvidersData = async (): Promise<AuthProvidersData> => {
       }),
   );
   return { hasPasswordAccount, providers };
+};
+
+interface OidcEndSessionForm {
+  fields: Record<string, string>;
+  url: string;
+}
+
+const isSafeHttpsUrl = (value: string): boolean => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+};
+
+const parseOidcEndSessionForm = (value: unknown): OidcEndSessionForm | null => {
+  if (!isRecord(value) || value.method !== 'POST' || !isNonEmptyString(value.url)) return null;
+  if (!isSafeHttpsUrl(value.url)) return null;
+  if (!isRecord(value.fields) || !isNonEmptyString(value.fields.id_token_hint)) return null;
+
+  const fields: Record<string, string> = { id_token_hint: value.fields.id_token_hint };
+  if (isNonEmptyString(value.fields.post_logout_redirect_uri)) {
+    fields.post_logout_redirect_uri = value.fields.post_logout_redirect_uri;
+  }
+  return { fields, url: value.url };
+};
+
+const fetchOidcEndSessionForm = async (): Promise<OidcEndSessionForm | null> => {
+  try {
+    const response = await fetch('/api/auth/oidc/end-session', {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      method: 'GET',
+    });
+    if (!response.ok) return null;
+    return parseOidcEndSessionForm(await response.json());
+  } catch {
+    return null;
+  }
+};
+
+const submitHiddenPostForm = (url: string, fields: Record<string, string>): void => {
+  const form = document.createElement('form');
+  form.action = url;
+  form.method = 'POST';
+  form.style.display = 'none';
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement('input');
+    input.name = name;
+    input.type = 'hidden';
+    input.value = value;
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
 };
 
 type Setter = StoreSetter<UserStore>;
@@ -61,6 +117,10 @@ export class UserAuthActionImpl {
   };
 
   logout = async (): Promise<void> => {
+    // Capture Authentik end-session fields while the Better Auth session cookie is
+    // still valid. Local sign-out follows; the browser then POSTs the form.
+    const endSession = await fetchOidcEndSessionForm();
+
     // Clear the OIDC Provider session for the current browser *before*
     // destroying the better-auth session. This prevents a stale OIDC session
     // from silently issuing tokens for the old account after the user signs
@@ -78,6 +138,10 @@ export class UserAuthActionImpl {
           // Drop the persisted active scope so the next boot doesn't hydrate the
           // signed-out user's cache (localStorage survives the reload below).
           clearActiveScopeKey();
+          if (endSession) {
+            submitHiddenPostForm(endSession.url, endSession.fields);
+            return;
+          }
           // Use window.location.href to trigger a full page reload
           // This ensures all client-side state (React, Zustand, cache) is cleared
           window.location.href = '/signin';

@@ -985,7 +985,11 @@ describe('platform identity provider trusted profile', () => {
     expect(harness.verificationStore()).not.toContain(firstNonce);
     expect(harness.verificationStore()).not.toContain(secondNonce);
     expect(harness.database.account).toHaveLength(2);
-    expect(harness.database.account?.every((account) => account.idToken === undefined)).toBe(true);
+    expect(
+      harness.database.account
+        ?.filter((account) => account.providerId !== 'credential')
+        .every((account) => typeof account.idToken === 'string' && account.idToken.length > 0),
+    ).toBe(true);
   });
 
   it.each([
@@ -1160,7 +1164,11 @@ describe('platform identity provider trusted profile', () => {
     expect(secondCallback.headers.get('location')).toBe('https://app.example.test/after-link');
     expect(harness.customGetToken).toHaveBeenCalledTimes(2);
     expect(harness.mapProfileToUser).toHaveBeenCalledTimes(2);
-    expect(harness.database.account?.every((account) => account.idToken === undefined)).toBe(true);
+    expect(
+      harness.database.account
+        ?.filter((account) => account.providerId !== 'credential')
+        .every((account) => typeof account.idToken === 'string' && account.idToken.length > 0),
+    ).toBe(true);
     expect(harness.verificationStore()).not.toContain(firstNonce);
     expect(harness.verificationStore()).not.toContain(secondNonce);
   });
@@ -1310,7 +1318,8 @@ describe('platform identity provider trusted profile', () => {
       name: 'Ada',
     });
     expect(result?.data).not.toHaveProperty('nonce');
-    expect(tokens.idToken).toBeUndefined();
+    expect(typeof tokens.idToken).toBe('string');
+    expect(tokens.idToken).toBeTruthy();
     expect(transport).toHaveBeenCalledTimes(2);
   });
 

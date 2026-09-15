@@ -396,7 +396,8 @@ export const buildPlatformIdentityProvider = (
         await observePlatformOidcLoginFailure();
         throw error;
       }
-      tokens.idToken = undefined;
+      // Keep the verified ID token so Better Auth persists accounts.id_token.
+      // RP-initiated Authentik logout needs it later as id_token_hint.
       return profile;
     },
     issuer: provider.issuer,
