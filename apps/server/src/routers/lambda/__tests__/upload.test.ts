@@ -11,6 +11,12 @@ vi.mock('@/server/modules/S3', () => ({
   createFileS3: (...args: unknown[]) => mocks.createFileS3(...args),
 }));
 
+const notFoundError = (name: 'NotFound' | 'NoSuchKey' = 'NotFound') =>
+  Object.assign(new Error(name), {
+    $metadata: { httpStatusCode: 404 },
+    name,
+  });
+
 describe('uploadRouter.createS3PreSignedUrl', () => {
   const createPreSignedUrl = vi.fn();
   const getFileMetadata = vi.fn();
@@ -19,7 +25,7 @@ describe('uploadRouter.createS3PreSignedUrl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createPreSignedUrl.mockResolvedValue('https://s3.example/presigned');
-    getFileMetadata.mockRejectedValue(new Error('NotFound'));
+    getFileMetadata.mockRejectedValue(notFoundError());
     mocks.createFileS3.mockResolvedValue({
       createPreSignedUrl,
       getFileMetadata,
@@ -35,12 +41,49 @@ describe('uploadRouter.createS3PreSignedUrl', () => {
     expect(createPreSignedUrl).toHaveBeenCalledWith('files/12345/abc.png');
   });
 
+  it('presigns when HeadObject reports a genuine 404 / NotFound', async () => {
+    getFileMetadata.mockRejectedValue(notFoundError('NoSuchKey'));
+
+    await expect(
+      caller.createS3PreSignedUrl({ pathname: 'files/generations/images/raw.jpg' }),
+    ).resolves.toBe('https://s3.example/presigned');
+
+    expect(createPreSignedUrl).toHaveBeenCalledWith('files/generations/images/raw.jpg');
+  });
+
   it('refuses to presign a key that already exists', async () => {
     getFileMetadata.mockResolvedValue({ contentLength: 12, contentType: 'image/png' });
 
     await expect(
       caller.createS3PreSignedUrl({ pathname: 'files/12345/abc.png' }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(createPreSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when HeadObject returns 403', async () => {
+    getFileMetadata.mockRejectedValue(
+      Object.assign(new Error('AccessDenied'), {
+        $metadata: { httpStatusCode: 403 },
+        name: 'AccessDenied',
+      }),
+    );
+
+    await expect(
+      caller.createS3PreSignedUrl({ pathname: 'files/12345/abc.png' }),
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+
+    expect(createPreSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when HeadObject times out', async () => {
+    getFileMetadata.mockRejectedValue(
+      Object.assign(new Error('Timeout'), { name: 'TimeoutError' }),
+    );
+
+    await expect(
+      caller.createS3PreSignedUrl({ pathname: 'files/12345/abc.png' }),
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
 
     expect(createPreSignedUrl).not.toHaveBeenCalled();
   });

@@ -1,21 +1,26 @@
 import { TRPCError } from '@trpc/server';
 
-import { getFileConfig } from '@/envs/file';
+import { fileEnv } from '@/envs/file';
 
-const DEFAULT_CLIENT_UPLOAD_PREFIX = 'files';
+export const DEFAULT_CLIENT_UPLOAD_PREFIX = 'files';
+
 /**
  * First path segments the web/CLI clients mint keys under besides the configured
  * file prefix (`src/services/upload.ts` callers). Everything else — sandbox
  * exports, generations, avatars, traces, audit exports — is server-owned.
  */
-const EXTRA_CLIENT_UPLOAD_PREFIXES = [
+export const EXTRA_CLIENT_UPLOAD_PREFIXES = [
   'import_config',
   'ragEval',
   'eval-datasets',
   'skills',
 ] as const;
+
 const MAX_CLIENT_OBJECT_KEY_LENGTH = 512;
-const MAX_PERCENT_DECODE_ROUNDS = 4;
+
+export interface AssertClientObjectKeyOptions {
+  prefixes: readonly string[];
+}
 
 const hasControlChars = (value: string): boolean => {
   for (const char of value) {
@@ -25,79 +30,71 @@ const hasControlChars = (value: string): boolean => {
   return false;
 };
 
-const invalidClientObjectKey = (): never => {
+function invalidClientObjectKey(): never {
   throw new TRPCError({
     code: 'BAD_REQUEST',
     message: 'Invalid object key',
   });
-};
+}
 
-const getClientUploadPrefix = (): string => {
-  // Re-read at call time so tests can stub NEXT_PUBLIC_S3_FILE_PATH.
-  const configured =
-    process.env.NEXT_PUBLIC_S3_FILE_PATH ||
-    getFileConfig().NEXT_PUBLIC_S3_FILE_PATH ||
-    DEFAULT_CLIENT_UPLOAD_PREFIX;
+const stripTrailingSlashes = (prefix: string): string =>
+  prefix.replace(/\/+$/, '') || DEFAULT_CLIENT_UPLOAD_PREFIX;
 
-  return configured.replace(/\/+$/, '') || DEFAULT_CLIENT_UPLOAD_PREFIX;
-};
+/**
+ * Prefixes accepted by `upload.createS3PreSignedUrl` and the OpenAPI upload
+ * directory allowlist. Always includes the default `files/` prefix (CLI and
+ * heterogeneous-agents hardcode it; SPA may have inlined a different value at
+ * build time) plus the configured `NEXT_PUBLIC_S3_FILE_PATH` and the extra
+ * client-minted directories.
+ */
+export const getWideClientUploadPrefixes = (): string[] => {
+  const configured = stripTrailingSlashes(
+    fileEnv.NEXT_PUBLIC_S3_FILE_PATH || DEFAULT_CLIENT_UPLOAD_PREFIX,
+  );
 
-const percentDecode = (value: string): string => {
-  let decoded = value;
-
-  for (let round = 0; round < MAX_PERCENT_DECODE_ROUNDS; round += 1) {
-    if (!decoded.includes('%')) return decoded;
-
-    let next: string;
-    try {
-      next = decodeURIComponent(decoded);
-    } catch {
-      return invalidClientObjectKey();
-    }
-
-    if (next === decoded) return decoded;
-    decoded = next;
-  }
-
-  return decoded;
+  return [...new Set([DEFAULT_CLIENT_UPLOAD_PREFIX, configured, ...EXTRA_CLIENT_UPLOAD_PREFIXES])];
 };
 
 /**
- * Normalize a client-supplied object-storage key and accept only keys that are
- * relative, confined to the client-upload prefixes, and free of traversal.
+ * Accept only keys that are relative, confined to `options.prefixes`, and free
+ * of traversal / encoding. Returns the original pathname (no normalization).
  */
-export const assertClientObjectKey = (pathname: string): string => {
-  if (typeof pathname !== 'string' || pathname.length === 0) invalidClientObjectKey();
+export const assertClientObjectKey = (
+  pathname: string,
+  options: AssertClientObjectKeyOptions,
+): string => {
+  if (pathname.length === 0) invalidClientObjectKey();
   if (pathname.length > MAX_CLIENT_OBJECT_KEY_LENGTH) invalidClientObjectKey();
-  if (pathname.includes('\\') || hasControlChars(pathname)) invalidClientObjectKey();
-
-  const normalized = percentDecode(pathname);
-  if (normalized.length === 0 || normalized.length > MAX_CLIENT_OBJECT_KEY_LENGTH) {
+  // Clients never percent-encode keys; a literal `%` is either a malformed
+  // filename or an encoding probe. Reject instead of decoding so the stored
+  // key matches what the client recorded.
+  if (pathname.includes('%') || pathname.includes('\\') || hasControlChars(pathname)) {
     invalidClientObjectKey();
   }
-  if (normalized.includes('\\') || hasControlChars(normalized)) invalidClientObjectKey();
-  if (normalized.startsWith('/')) invalidClientObjectKey();
+  if (pathname.startsWith('/')) invalidClientObjectKey();
 
-  const segments = normalized.split('/');
+  const segments = pathname.split('/');
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     invalidClientObjectKey();
   }
 
-  const prefixes = [getClientUploadPrefix(), ...EXTRA_CLIENT_UPLOAD_PREFIXES].map((p) => `${p}/`);
-  if (
-    !prefixes.some((prefix) => normalized.startsWith(prefix) && normalized.length > prefix.length)
-  ) {
+  const prefixes = options.prefixes.map((prefix) => `${stripTrailingSlashes(prefix)}/`);
+  if (!prefixes.some((prefix) => pathname.startsWith(prefix) && pathname.length > prefix.length)) {
     invalidClientObjectKey();
   }
 
-  return normalized;
+  return pathname;
 };
 
-export const isClientObjectKey = (pathname: string): boolean => {
-  try {
-    assertClientObjectKey(pathname);
-    return true;
-  } catch {
-    return false;
-  }
+/**
+ * Validate a caller-supplied upload directory. It must be a relative prefix
+ * that would produce keys under `options.prefixes`.
+ */
+export const assertClientObjectDirectory = (
+  directory: string,
+  options: AssertClientObjectKeyOptions,
+): string => {
+  if (directory.length === 0) invalidClientObjectKey();
+  assertClientObjectKey(`${directory}/x`, options);
+  return directory;
 };

@@ -69,12 +69,12 @@ describe('importerRouter', () => {
     it('should successfully import file data', async () => {
       const caller = importerRouter.createCaller(ctx);
 
-      const result = await caller.importByFile({ pathname: 'files/test.json' });
+      const result = await caller.importByFile({ pathname: 'import_config/test.json' });
 
       expect(result).toEqual(mockImportResult);
-      expect(mockGetFileContent).toHaveBeenCalledWith('files/test.json');
+      expect(mockGetFileContent).toHaveBeenCalledWith('import_config/test.json');
       expect(mockImportData).toHaveBeenCalledWith(JSON.parse(mockFileContent));
-      expect(mockDeleteFile).toHaveBeenCalledWith('files/test.json');
+      expect(mockDeleteFile).toHaveBeenCalledWith('import_config/test.json');
     });
 
     it('should handle PG data import', async () => {
@@ -82,7 +82,7 @@ describe('importerRouter', () => {
 
       const caller = importerRouter.createCaller(ctx);
 
-      const result = await caller.importByFile({ pathname: 'files/test.json' });
+      const result = await caller.importByFile({ pathname: 'import_config/test.json' });
 
       expect(result).toEqual(mockImportResult);
       expect(mockImportPgData).toHaveBeenCalledWith(mockPgData);
@@ -93,7 +93,9 @@ describe('importerRouter', () => {
 
       const caller = importerRouter.createCaller(ctx);
 
-      await expect(caller.importByFile({ pathname: 'files/test.json' })).rejects.toThrow(TRPCError);
+      await expect(caller.importByFile({ pathname: 'import_config/test.json' })).rejects.toThrow(
+        TRPCError,
+      );
       expect(mockDeleteFile).not.toHaveBeenCalled();
     });
 
@@ -102,7 +104,9 @@ describe('importerRouter', () => {
 
       const caller = importerRouter.createCaller(ctx);
 
-      await expect(caller.importByFile({ pathname: 'files/test.json' })).rejects.toThrow(TRPCError);
+      await expect(caller.importByFile({ pathname: 'import_config/test.json' })).rejects.toThrow(
+        TRPCError,
+      );
     });
 
     it('should reject a pathname outside the client upload prefix before reading or deleting', async () => {
@@ -120,7 +124,18 @@ describe('importerRouter', () => {
       const caller = importerRouter.createCaller(ctx);
 
       await expect(
-        caller.importByFile({ pathname: 'files/../secrets/data.json' }),
+        caller.importByFile({ pathname: 'import_config/../secrets/data.json' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mockGetFileContent).not.toHaveBeenCalled();
+      expect(mockDeleteFile).not.toHaveBeenCalled();
+    });
+
+    it('should reject a files/generations key leaked from another tenant', async () => {
+      const caller = importerRouter.createCaller(ctx);
+
+      await expect(
+        caller.importByFile({ pathname: 'files/generations/images/raw.jpg' }),
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
       expect(mockGetFileContent).not.toHaveBeenCalled();

@@ -24,6 +24,11 @@ import type { S3 } from '@/server/modules/S3';
 import { FileS3 } from '@/server/modules/S3';
 import { DocumentService } from '@/server/services/document';
 import { FileService as CoreFileService } from '@/server/services/file';
+import {
+  assertClientObjectDirectory,
+  DEFAULT_CLIENT_UPLOAD_PREFIX,
+  getWideClientUploadPrefixes,
+} from '@/server/services/file/objectKeyPolicy';
 import { isChunkingUnsupported } from '@/utils/isChunkingUnsupported';
 import { nanoid } from '@/utils/uuid';
 
@@ -1103,7 +1108,12 @@ export class FileUploadService extends BaseService {
   private generateFileMetadata(file: File, directory?: string): FileMetadata {
     const now = new Date();
     const datePath = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const dir = directory || 'uploads';
+    const dir = directory ?? DEFAULT_CLIENT_UPLOAD_PREFIX;
+    try {
+      assertClientObjectDirectory(dir, { prefixes: getWideClientUploadPrefixes() });
+    } catch {
+      throw this.createValidationError('Invalid upload directory');
+    }
     const filename = `${nanoid()}_${file.name}`;
     const path = `${dir}/${datePath}/${filename}`;
 

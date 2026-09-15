@@ -29,7 +29,7 @@ export const importerRouter = router({
   importByFile: workspaceImportProcedure
     .input(z.object({ pathname: z.string() }))
     .mutation(async ({ input, ctx }): Promise<ImportResultData> => {
-      const pathname = assertClientObjectKey(input.pathname);
+      const pathname = assertClientObjectKey(input.pathname, { prefixes: ['import_config'] });
       let data: ImporterEntryData | undefined;
 
       try {

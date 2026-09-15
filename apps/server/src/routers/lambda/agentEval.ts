@@ -294,7 +294,7 @@ export const agentEvalRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const pathname = assertClientObjectKey(input.pathname);
+      const pathname = assertClientObjectKey(input.pathname, { prefixes: ['eval-datasets'] });
       const format = input.format || 'auto';
       const resolvedFilename = input.filename || pathname;
       const isXlsx = format === 'xlsx' || resolvedFilename?.match(/\.xlsx?$/i);
@@ -343,7 +343,7 @@ export const agentEvalRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const pathname = assertClientObjectKey(input.pathname);
+      const pathname = assertClientObjectKey(input.pathname, { prefixes: ['eval-datasets'] });
       const format = input.format || 'auto';
       const resolvedFilename = input.filename || pathname;
       const isXlsx = format === 'xlsx' || resolvedFilename?.match(/\.xlsx?$/i);

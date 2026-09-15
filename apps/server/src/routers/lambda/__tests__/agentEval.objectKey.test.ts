@@ -45,7 +45,7 @@ describe('agentEvalRouter dataset file pathnames', () => {
     userId: 'user-1',
   };
 
-  const validPath = 'files/hour/dataset.json';
+  const validPath = 'eval-datasets/hour/dataset.json';
   const jsonPayload = JSON.stringify([{ input: 'hello', expected: 'world' }]);
 
   beforeEach(() => {
@@ -81,6 +81,17 @@ describe('agentEvalRouter dataset file pathnames', () => {
       expect(mocks.getFileContent).not.toHaveBeenCalled();
       expect(mocks.getFileByteArray).not.toHaveBeenCalled();
     });
+
+    it('rejects a files/generations key leaked from another tenant', async () => {
+      const caller = agentEvalRouter.createCaller(ctx);
+
+      await expect(
+        caller.parseDatasetFile({ pathname: 'files/generations/images/raw.jpg' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mocks.getFileContent).not.toHaveBeenCalled();
+      expect(mocks.getFileByteArray).not.toHaveBeenCalled();
+    });
   });
 
   describe('importDataset', () => {
@@ -108,7 +119,22 @@ describe('agentEvalRouter dataset file pathnames', () => {
         caller.importDataset({
           datasetId: 'ds-1',
           fieldMapping,
-          pathname: 'files/../secrets/data.json',
+          pathname: 'eval-datasets/../secrets/data.json',
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mocks.getFileContent).not.toHaveBeenCalled();
+      expect(mocks.getFileByteArray).not.toHaveBeenCalled();
+    });
+
+    it('rejects a files/generations key leaked from another tenant', async () => {
+      const caller = agentEvalRouter.createCaller(ctx);
+
+      await expect(
+        caller.importDataset({
+          datasetId: 'ds-1',
+          fieldMapping,
+          pathname: 'files/generations/images/raw.jpg',
         }),
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 

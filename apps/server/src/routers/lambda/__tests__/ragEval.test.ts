@@ -51,10 +51,10 @@ describe('ragEvalRouter.importDatasetRecords', () => {
 
     await caller.importDatasetRecords({
       datasetId: 'ds-1',
-      pathname: 'files/hour/dataset.jsonl',
+      pathname: 'ragEval/hour/dataset.jsonl',
     });
 
-    expect(mocks.getFileContent).toHaveBeenCalledWith('files/hour/dataset.jsonl');
+    expect(mocks.getFileContent).toHaveBeenCalledWith('ragEval/hour/dataset.jsonl');
     expect(mocks.batchCreate).toHaveBeenCalled();
   });
 
@@ -65,6 +65,19 @@ describe('ragEvalRouter.importDatasetRecords', () => {
       caller.importDatasetRecords({
         datasetId: 'ds-1',
         pathname: 'user/avatar/user_1/photo.png',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.getFileContent).not.toHaveBeenCalled();
+  });
+
+  it('rejects a files/generations key leaked from another tenant', async () => {
+    const caller = ragEvalRouter.createCaller(ctx);
+
+    await expect(
+      caller.importDatasetRecords({
+        datasetId: 'ds-1',
+        pathname: 'files/generations/images/raw.jpg',
       }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 

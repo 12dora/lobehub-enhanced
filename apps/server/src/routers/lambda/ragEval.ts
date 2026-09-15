@@ -145,7 +145,7 @@ export const ragEvalRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const pathname = assertClientObjectKey(input.pathname);
+      const pathname = assertClientObjectKey(input.pathname, { prefixes: ['ragEval'] });
       const dataStr = await ctx.fileService.getFileContent(pathname);
       const items = JSONL.parse<InsertEvalDatasetRecord>(dataStr);
 
