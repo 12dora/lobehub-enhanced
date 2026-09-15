@@ -9,9 +9,12 @@ import {
 import { IM_CONNECTOR_STREAM_STATUS_KEY } from '@/server/enterprise/services/imConnectors/status';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
+import type { DingTalkLastListKind } from './const';
 import {
   DINGTALK_CORP_ID_KEY,
   DINGTALK_COUNTER_TTL_SECONDS,
+  DINGTALK_LAST_LIST_KEY_PREFIX,
+  DINGTALK_LAST_LIST_TTL_SECONDS,
   DINGTALK_STREAM_STATUS_TTL_SECONDS,
 } from './const';
 
@@ -101,6 +104,71 @@ export const writeDingTalkStreamStatus = async (
   } catch (error) {
     log('writeDingTalkStreamStatus failed: %O', error);
   }
+};
+
+const LAST_LIST_KINDS = new Set<DingTalkLastListKind>(['agents', 'question', 'topics']);
+
+const lastListKey = (threadId: string): string => `${DINGTALK_LAST_LIST_KEY_PREFIX}${threadId}`;
+
+const lastListMemory = new Map<string, { expiresAt: number; kind: DingTalkLastListKind }>();
+
+const isLastListKind = (value: string | null | undefined): value is DingTalkLastListKind =>
+  value === 'agents' || value === 'question' || value === 'topics';
+
+const writeLastListMemory = (key: string, kind: DingTalkLastListKind): void => {
+  lastListMemory.set(key, {
+    expiresAt: Date.now() + DINGTALK_LAST_LIST_TTL_SECONDS * 1000,
+    kind,
+  });
+};
+
+const consumeLastListMemory = (key: string): DingTalkLastListKind | null => {
+  const stored = lastListMemory.get(key);
+  lastListMemory.delete(key);
+  if (!stored) return null;
+  if (stored.expiresAt <= Date.now()) return null;
+  return stored.kind;
+};
+
+export const setDingTalkLastList = async (
+  threadId: string,
+  kind: DingTalkLastListKind,
+): Promise<void> => {
+  if (!LAST_LIST_KINDS.has(kind) || !threadId) return;
+  const key = lastListKey(threadId);
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) {
+    writeLastListMemory(key, kind);
+    return;
+  }
+  try {
+    await redis.set(key, kind, 'EX', DINGTALK_LAST_LIST_TTL_SECONDS);
+  } catch (error) {
+    log('setDingTalkLastList failed: %O', error);
+    writeLastListMemory(key, kind);
+  }
+};
+
+/**
+ * Read-and-clear the last agents/topics/question list for this thread.
+ * Missing key or expired memory entry → `null` (a bare number then goes to the agent).
+ */
+export const consumeDingTalkLastList = async (
+  threadId: string,
+): Promise<DingTalkLastListKind | null> => {
+  if (!threadId) return null;
+  const key = lastListKey(threadId);
+  const redis = getAgentRuntimeRedisClient();
+  if (redis) {
+    try {
+      const value = await redis.get(key);
+      if (value) await redis.del(key);
+      if (isLastListKind(value)) return value;
+    } catch (error) {
+      log('consumeDingTalkLastList failed: %O', error);
+    }
+  }
+  return consumeLastListMemory(key);
 };
 
 /**

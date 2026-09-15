@@ -5,9 +5,15 @@ import {
   formatRelativeTimeZh,
   formatStatusText,
   formatTopicListText,
+  parseDingTalkBareNumber,
   parseDingTalkCommand,
 } from './commands';
-import { DINGTALK_HELP_TEXT } from './const';
+import {
+  DINGTALK_COMMAND_SHORTCUT_BUTTONS,
+  DINGTALK_HELP_TEXT,
+  DINGTALK_UNKNOWN_COMMAND_REPLY,
+  DINGTALK_WELCOME_TEXT,
+} from './const';
 
 describe('parseDingTalkCommand', () => {
   it('maps Chinese aliases and English names', () => {
@@ -25,15 +31,44 @@ describe('parseDingTalkCommand', () => {
     expect(parseDingTalkCommand('/help')).toEqual({ args: '', name: 'help' });
   });
 
-  it('keeps /帮助 copy grouped and without emoji or exclamation marks', () => {
+  it('accepts plain-word commands without a slash', () => {
+    expect(parseDingTalkCommand('帮助')).toEqual({ args: '', name: 'help' });
+    expect(parseDingTalkCommand('新会话')).toEqual({ args: '', name: 'new' });
+    expect(parseDingTalkCommand('最近会话')).toEqual({ args: '', name: 'topics' });
+    expect(parseDingTalkCommand('会话列表')).toEqual({ args: '', name: 'topics' });
+    expect(parseDingTalkCommand('切换助手')).toEqual({ args: '', name: 'agents' });
+    expect(parseDingTalkCommand('助手列表')).toEqual({ args: '', name: 'agents' });
+    expect(parseDingTalkCommand('当前')).toEqual({ args: '', name: 'status' });
+    expect(parseDingTalkCommand('当前状态')).toEqual({ args: '', name: 'status' });
+    expect(parseDingTalkCommand('停止')).toEqual({ args: '', name: 'stop' });
+  });
+
+  it('matches the whole trimmed message and ignores full-width punctuation', () => {
+    expect(parseDingTalkCommand('  帮助。')).toEqual({ args: '', name: 'help' });
+    expect(parseDingTalkCommand('“新会话”')).toEqual({ args: '', name: 'new' });
+    expect(parseDingTalkCommand('切换助手！')).toEqual({ args: '', name: 'agents' });
+    expect(parseDingTalkCommand('／帮助')).toEqual({ args: '', name: 'help' });
+    expect(parseDingTalkCommand('帮助我')).toBeNull();
+    expect(parseDingTalkCommand('助手')).toBeNull();
+    expect(parseDingTalkCommand('会话')).toBeNull();
+  });
+
+  it('keeps help copy in plain language without slashes, emoji, or exclamation marks', () => {
     expect(DINGTALK_HELP_TEXT).toContain('## 常用指令');
-    expect(DINGTALK_HELP_TEXT).toContain('会话');
-    expect(DINGTALK_HELP_TEXT).toContain('助手');
-    expect(DINGTALK_HELP_TEXT).toContain('其他');
-    expect(DINGTALK_HELP_TEXT).toContain('/助手 — 列出并切换助手');
-    expect(DINGTALK_HELP_TEXT.endsWith('群聊中需 @机器人')).toBe(true);
+    expect(DINGTALK_HELP_TEXT).toContain('点下面的按钮即可：查看助手、新会话、最近会话。');
+    expect(DINGTALK_HELP_TEXT).toContain('也可以直接发送“新会话”“切换助手”“帮助”。');
+    expect(DINGTALK_HELP_TEXT.endsWith('群聊中请 @机器人')).toBe(true);
+    expect(DINGTALK_HELP_TEXT).not.toContain('/');
+    expect(DINGTALK_WELCOME_TEXT).not.toContain('/');
+    expect(DINGTALK_UNKNOWN_COMMAND_REPLY).not.toContain('/');
     expect(DINGTALK_HELP_TEXT).not.toMatch(/[!！]/);
     expect(DINGTALK_HELP_TEXT).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
+    expect(DINGTALK_COMMAND_SHORTCUT_BUTTONS.map((button) => button.command)).toEqual([
+      '/助手',
+      '/新会话',
+      '/会话',
+      '/帮助',
+    ]);
   });
 
   it('returns the raw name for unknown slash commands', () => {
@@ -41,10 +76,22 @@ describe('parseDingTalkCommand', () => {
     expect(parseDingTalkCommand('/foo bar')).toEqual({ args: 'bar', name: 'foo' });
   });
 
-  it('returns null when the text is not a slash command', () => {
+  it('returns null when the text is not a slash or plain-word command', () => {
     expect(parseDingTalkCommand('hello')).toBeNull();
     expect(parseDingTalkCommand('')).toBeNull();
     expect(parseDingTalkCommand(undefined)).toBeNull();
+    expect(parseDingTalkCommand('2')).toBeNull();
+  });
+});
+
+describe('parseDingTalkBareNumber', () => {
+  it('parses a whole-message number after punctuation normalize', () => {
+    expect(parseDingTalkBareNumber('2')).toBe(2);
+    expect(parseDingTalkBareNumber(' ２。')).toBe(2);
+    expect(parseDingTalkBareNumber('12')).toBe(12);
+    expect(parseDingTalkBareNumber('0')).toBeNull();
+    expect(parseDingTalkBareNumber('帮助')).toBeNull();
+    expect(parseDingTalkBareNumber('2 再问')).toBeNull();
   });
 });
 

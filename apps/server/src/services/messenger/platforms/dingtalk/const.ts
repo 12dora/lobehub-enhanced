@@ -33,13 +33,13 @@ export const DINGTALK_UNLINKED_COMMAND_REPLY = DINGTALK_UNKNOWN_USER_REPLY;
 export const DINGTALK_THINKING_REPLY = '正在思考…';
 export const DINGTALK_UNSUPPORTED_MEDIA_REPLY = '暂不支持语音和视频消息';
 export const DINGTALK_QUESTION_GONE_REPLY = '该问题已失效，将作为新消息处理。';
-export const DINGTALK_UNKNOWN_COMMAND_REPLY = '未知命令';
+export const DINGTALK_UNKNOWN_COMMAND_REPLY = '未识别该指令。点下面的按钮，或发送“帮助”。';
 export const DINGTALK_NO_TOPICS_REPLY = '暂无会话记录。';
-export const DINGTALK_RESUME_USAGE_REPLY = '用法：/继续 N';
-export const DINGTALK_AGENTS_USAGE_REPLY = '用法：/切换 N';
-export const DINGTALK_RESUME_RANGE_REPLY = '序号超出范围。发送 /会话 查看最近会话。';
+export const DINGTALK_RESUME_USAGE_REPLY = '请发送列表中的序号';
+export const DINGTALK_AGENTS_USAGE_REPLY = '请发送列表中的序号';
+export const DINGTALK_RESUME_RANGE_REPLY = '序号超出范围。发送“最近会话”查看。';
 export const DINGTALK_RESUMED_REPLY = '已切换到该会话。';
-export const DINGTALK_NO_ACTIVE_AGENT_REPLY = '未选择助手。发送 /助手 选择一个。';
+export const DINGTALK_NO_ACTIVE_AGENT_REPLY = '未选择助手。发送“切换助手”选择一个。';
 export const DINGTALK_MARKDOWN_TITLE_FALLBACK = '回复';
 
 export const formatDingTalkAgentSwitched = (title: string): string => `已切换到：${title}`;
@@ -64,12 +64,13 @@ export const formatDingTalkViewInBrandingLabel = (displayName: string): string =
 
 export const formatDingTalkWelcomeTitle = (displayName: string): string => `已连接 ${displayName}`;
 
-export const DINGTALK_WELCOME_TEXT = ['已关联钉钉账号。', '可直接提问，或使用下方指令。'].join(
-  '\n',
-);
+export const DINGTALK_WELCOME_TEXT = [
+  '已关联钉钉账号。',
+  '点下面的按钮即可：查看助手、新会话、最近会话。也可以直接发送“帮助”。',
+].join('\n');
 
 export const DINGTALK_COMMAND_CARD_TITLE = '常用指令';
-export const DINGTALK_COMMAND_CARD_TEXT = '点选下方指令';
+export const DINGTALK_COMMAND_CARD_TEXT = '点下面的按钮即可';
 
 export const DINGTALK_COMMAND_SHORTCUT_BUTTONS: { command: string; label: string }[] = [
   { command: '/助手', label: '查看助手' },
@@ -81,22 +82,16 @@ export const DINGTALK_COMMAND_SHORTCUT_BUTTONS: { command: string; label: string
 export const DINGTALK_HELP_TEXT = [
   '## 常用指令',
   '',
-  '会话',
-  '/会话 — 查看最近 5 个会话',
-  '/继续 N — 继续第 N 个会话',
-  '/新会话 — 开始新会话',
+  '点下面的按钮即可：查看助手、新会话、最近会话。',
+  '也可以直接发送“新会话”“切换助手”“帮助”。',
   '',
-  '助手',
-  '/助手 — 列出并切换助手',
-  '/切换 N — 切换到第 N 个助手',
-  '/当前 — 查看当前状态',
-  '',
-  '其他',
-  '/停止 — 停止当前执行',
-  '/帮助 — 查看本说明',
-  '',
-  '群聊中需 @机器人',
+  '群聊中请 @机器人',
 ].join('\n');
+
+export type DingTalkLastListKind = 'agents' | 'question' | 'topics';
+
+export const DINGTALK_LAST_LIST_KEY_PREFIX = 'messenger:dingtalk:last-list:';
+export const DINGTALK_LAST_LIST_TTL_SECONDS = 600;
 
 export const DINGTALK_CORP_ID_KEY = 'messenger:dingtalk:corp-id';
 

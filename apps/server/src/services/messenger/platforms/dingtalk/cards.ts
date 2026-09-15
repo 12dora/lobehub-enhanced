@@ -19,6 +19,7 @@ import { sendDingTalkAttachments } from '@/server/services/bot/platforms/dingtal
 import type { DingTalkOutboundAttachment } from './attachments';
 import { mapOutboundAttachments } from './attachments';
 import { resolveDingTalkBrandingDisplayName } from './branding';
+import type { DingTalkLastListKind } from './const';
 import {
   DINGTALK_COMMAND_CARD_TEXT,
   DINGTALK_COMMAND_CARD_TITLE,
@@ -31,6 +32,7 @@ import {
   DINGTALK_WELCOME_TEXT,
   formatDingTalkWelcomeTitle,
 } from './const';
+import { setDingTalkLastList } from './redis';
 
 const log = debug('lobe-server:messenger:dingtalk:cards');
 
@@ -142,14 +144,32 @@ export const sendDingTalkMarkdown = async (threadId: string, text: string): Prom
   }
 };
 
+const lastListKindFromPagePrefix = (
+  pageCommandPrefix: string | undefined,
+): DingTalkLastListKind | null => {
+  if (pageCommandPrefix === 'messenger:agents:page:') return 'agents';
+  if (pageCommandPrefix === 'messenger:topics:page:') return 'topics';
+  if (pageCommandPrefix === 'messenger:question:page:') return 'question';
+  return null;
+};
+
+const rememberDingTalkChoiceList = async (
+  threadId: string,
+  pageCommandPrefix: string | undefined,
+): Promise<void> => {
+  const kind = lastListKindFromPagePrefix(pageCommandPrefix);
+  if (!kind) return;
+  await setDingTalkLastList(threadId, kind);
+};
+
 const sendActionCard = async (params: {
   buttons: DingTalkChoiceEntry[];
   text: string;
   threadId: string;
   title: string;
-}): Promise<void> => {
+}): Promise<boolean> => {
   const config = await getMessengerDingTalkConfig();
-  if (!config) return;
+  if (!config) return false;
   const api = new DingTalkApiClient(config.clientId, config.clientSecret);
   const { staffId, decoded, isGroup } = resolveSendTarget(params.threadId);
   const text =
@@ -171,7 +191,7 @@ const sendActionCard = async (params: {
         openConversationId: decoded.conversationId,
         robotCode: config.robotCode,
       });
-      return;
+      return true;
     }
     await api.sendOtoMessage({
       msgKey: card.msgKey,
@@ -179,12 +199,14 @@ const sendActionCard = async (params: {
       robotCode: config.robotCode,
       userIds: [staffId || decoded.conversationId],
     });
+    return true;
   } catch (error) {
     log('sendActionCard failed: %O', error);
     await sendDingTalkMarkdown(
       params.threadId,
       `${text}\n${params.buttons.map((b) => `• ${b.label}`).join('\n')}`,
     );
+    return true;
   }
 };
 
@@ -323,15 +345,21 @@ export const sendDingTalkChoiceList = async (params: {
       threadId: params.threadId,
       title: params.title,
     });
-    if (sent) return;
+    if (sent) {
+      await rememberDingTalkChoiceList(params.threadId, params.pageCommandPrefix);
+      return;
+    }
   }
 
-  await sendActionCard({
+  const actionSent = await sendActionCard({
     buttons,
     text,
     threadId: params.threadId,
     title: params.title,
   });
+  if (actionSent) {
+    await rememberDingTalkChoiceList(params.threadId, params.pageCommandPrefix);
+  }
 };
 
 const sendOutboundAttachments = async (

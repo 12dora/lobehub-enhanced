@@ -46,6 +46,7 @@ import {
   formatStatusText,
   formatTopicListText,
   isDingTalkSlashText,
+  parseDingTalkBareNumber,
   parseDingTalkCommand,
 } from './platforms/dingtalk/commands';
 import {
@@ -104,6 +105,7 @@ import {
 } from './platforms/dingtalk/queue';
 import {
   claimDingTalkChatDisabledNotice,
+  consumeDingTalkLastList,
   incrementDingTalkDailyCounter,
 } from './platforms/dingtalk/redis';
 import type {
@@ -756,46 +758,50 @@ export class MessengerRouter {
       }
 
       try {
+        const runTextCommand = async (command: (typeof this.commands)[number], args: string) => {
+          // Text-path command reply: in a DM `chat.postMessage` is fine
+          // (the conversation is private already). In a channel `@mention`
+          // we must NOT broadcast — `/new`, `/stop`, `/start` etc. all
+          // surface user-private state. Route the reply through
+          // `replyEphemeral` so only the invoker sees it. Anchor in the
+          // mention's thread (Slack `thread_ts`) so the response sits next
+          // to the trigger. Platforms without `replyEphemeral` (Telegram)
+          // fall back to the regular DM path.
+          const channelThreadTs = isChannelMention ? String(thread.id).split(':')[2] : undefined;
+          const reply =
+            isChannelMention && binder.replyEphemeral
+              ? (text: string) =>
+                  binder.replyEphemeral!({
+                    channelId: chatId,
+                    text,
+                    threadTs: channelThreadTs,
+                    userId: senderId,
+                  })
+              : (text: string) => binder.sendDmText(chatId, text);
+          await command.handler({
+            args,
+            authorUserId: senderId,
+            authorUserName: message.author.userName,
+            binder,
+            chatId,
+            isDM: !isChannelMention,
+            link,
+            message,
+            platform,
+            reply,
+            serverDB,
+            source: 'text',
+            tenantId,
+            thread,
+          });
+        };
+
         const parsed =
           platform === 'dingtalk' ? parseDingTalkCommand(message.text) : parseCommand(message.text);
         if (parsed) {
           const command = this.commands.find((c) => c.name === parsed.name);
           if (command) {
-            // Text-path command reply: in a DM `chat.postMessage` is fine
-            // (the conversation is private already). In a channel `@mention`
-            // we must NOT broadcast — `/new`, `/stop`, `/start` etc. all
-            // surface user-private state. Route the reply through
-            // `replyEphemeral` so only the invoker sees it. Anchor in the
-            // mention's thread (Slack `thread_ts`) so the response sits next
-            // to the trigger. Platforms without `replyEphemeral` (Telegram)
-            // fall back to the regular DM path.
-            const channelThreadTs = isChannelMention ? String(thread.id).split(':')[2] : undefined;
-            const reply =
-              isChannelMention && binder.replyEphemeral
-                ? (text: string) =>
-                    binder.replyEphemeral!({
-                      channelId: chatId,
-                      text,
-                      threadTs: channelThreadTs,
-                      userId: senderId,
-                    })
-                : (text: string) => binder.sendDmText(chatId, text);
-            await command.handler({
-              args: parsed.args,
-              authorUserId: senderId,
-              authorUserName: message.author.userName,
-              binder,
-              chatId,
-              isDM: !isChannelMention,
-              link,
-              message,
-              platform,
-              reply,
-              serverDB,
-              source: 'text',
-              tenantId,
-              thread,
-            });
+            await runTextCommand(command, parsed.args);
             return;
           }
           if (platform === 'dingtalk' && isDingTalkSlashText(message.text)) {
@@ -804,6 +810,22 @@ export class MessengerRouter {
           }
           // Unknown slash text — pass through to the agent so legitimate
           // "/foo" prompts the user typed still reach them.
+        }
+
+        if (platform === 'dingtalk') {
+          const listIndex = parseDingTalkBareNumber(message.text);
+          if (listIndex !== null) {
+            const listKind = await consumeDingTalkLastList(chatId);
+            const mappedName =
+              listKind === 'agents' ? 'agents' : listKind === 'topics' ? 'resume' : undefined;
+            if (mappedName) {
+              const command = this.commands.find((c) => c.name === mappedName);
+              if (command) {
+                await runTextCommand(command, String(listIndex));
+                return;
+              }
+            }
+          }
         }
 
         // Unbound sender → trigger link flow. For a channel mention pass

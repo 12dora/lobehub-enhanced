@@ -7,6 +7,7 @@ const sendOtoMessage = vi.fn();
 const sendGroupMessage = vi.fn();
 const sendBySessionWebhook = vi.fn();
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
+const mockSetDingTalkLastList = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
@@ -15,6 +16,10 @@ vi.mock('@/config/messenger', () => ({
 vi.mock('./branding', () => ({
   resolveDingTalkBrandingDisplayName: (...args: unknown[]) =>
     mockResolveDingTalkBrandingDisplayName(...args),
+}));
+
+vi.mock('./redis', () => ({
+  setDingTalkLastList: (...args: unknown[]) => mockSetDingTalkLastList(...args),
 }));
 
 vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
@@ -238,10 +243,16 @@ describe('DingTalk onboarding cards', () => {
       DINGTALK_COMMAND_CARD_TITLE,
     );
     expect(DINGTALK_HELP_TEXT).toContain('## 常用指令');
-    expect(DINGTALK_HELP_TEXT).toContain('/助手 — 列出并切换助手');
-    expect(DINGTALK_HELP_TEXT).toContain('/会话 — 查看最近 5 个会话');
-    expect(DINGTALK_HELP_TEXT).toContain('群聊中需 @机器人');
+    expect(DINGTALK_HELP_TEXT).not.toContain('/');
+    expect(DINGTALK_HELP_TEXT).toContain('点下面的按钮即可：查看助手、新会话、最近会话。');
+    expect(DINGTALK_HELP_TEXT).toContain('群聊中请 @机器人');
     expect(DINGTALK_HELP_TEXT).not.toMatch(/[!！]/);
+    expect(DINGTALK_COMMAND_SHORTCUT_BUTTONS.map((button) => button.command)).toEqual([
+      '/助手',
+      '/新会话',
+      '/会话',
+      '/帮助',
+    ]);
   });
 
   it('sends 未知命令 then the shortcut card, via the group API when in a group', async () => {
@@ -270,5 +281,50 @@ describe('DingTalk onboarding cards', () => {
       DINGTALK_COMMAND_CARD_TITLE,
     );
     expect(cardParam.at).toEqual({ atUserIds: ['staff_9'] });
+  });
+
+  it('records last-list for agents/topics/question pickers and skips scope lists', async () => {
+    await sendDingTalkChoiceList({
+      askerStaffId: 'staff_1',
+      entries: [{ command: 'messenger:switch:agt_1', label: 'Inbox' }],
+      pageCommandPrefix: 'messenger:agents:page:',
+      text: '点选要切换的助手',
+      threadId: 'dingtalk:cid',
+      title: '选择助手',
+    });
+    expect(mockSetDingTalkLastList).toHaveBeenCalledWith('dingtalk:cid', 'agents');
+
+    mockSetDingTalkLastList.mockClear();
+    await sendDingTalkChoiceList({
+      askerStaffId: 'staff_1',
+      entries: [{ command: 'messenger:resume:t1', label: '周报' }],
+      pageCommandPrefix: 'messenger:topics:page:',
+      text: '最近会话',
+      threadId: 'dingtalk:cid',
+      title: '最近会话',
+    });
+    expect(mockSetDingTalkLastList).toHaveBeenCalledWith('dingtalk:cid', 'topics');
+
+    mockSetDingTalkLastList.mockClear();
+    await sendDingTalkChoiceList({
+      askerStaffId: 'staff_1',
+      entries: [{ command: 'messenger:answer:yes', label: '是' }],
+      pageCommandPrefix: 'messenger:question:page:',
+      text: '确认',
+      threadId: 'dingtalk:cid',
+      title: '需要确认',
+    });
+    expect(mockSetDingTalkLastList).toHaveBeenCalledWith('dingtalk:cid', 'question');
+
+    mockSetDingTalkLastList.mockClear();
+    await sendDingTalkChoiceList({
+      askerStaffId: 'staff_1',
+      entries: [{ command: 'messenger:scope:personal', label: '个人' }],
+      pageCommandPrefix: 'messenger:scope:page:',
+      text: '点选要切换的范围',
+      threadId: 'dingtalk:cid',
+      title: '选择范围',
+    });
+    expect(mockSetDingTalkLastList).not.toHaveBeenCalled();
   });
 });
