@@ -284,6 +284,47 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
     ]);
   });
 
+  it('falls back to per-id lookups when the batch prefetch fails', async () => {
+    fileModelMocks.getFilesByIds.mockRejectedValueOnce(new Error('db down'));
+    fileModelMocks.getFileById.mockResolvedValue({
+      fileType: 'image/png',
+      size: 12,
+      url: 'files/cat.png',
+    } as never);
+
+    const messages = [imageMessage(OWN_FILE_URL)];
+    const hooks = createOwnOriginAttachmentRewriteHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeChat?.({ messages, model: 'gpt-4o' } as never);
+
+    expect(fileModelMocks.getFilesByIds).toHaveBeenCalledTimes(1);
+    expect(fileModelMocks.getFileById).toHaveBeenCalledWith({}, 'file-1');
+    expect(messages[0].content).toEqual([
+      { image_url: { url: 'https://presigned.example.com/files/cat.png' }, type: 'image_url' },
+    ]);
+  });
+
+  it('does not feed foreign-host /f/ ids into the batch prefetch', async () => {
+    const messages = [imageMessage('https://evil.example/f/file-victim')];
+    const hooks = createOwnOriginAttachmentRewriteHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeChat?.({ messages, model: 'gpt-4o' } as never);
+
+    expect(fileModelMocks.getFilesByIds).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
+    expect(messages[0].content).toEqual([
+      { image_url: { url: 'https://evil.example/f/file-victim' }, type: 'image_url' },
+    ]);
+  });
+
   it('leaves foreign and unknown ids as-is', async () => {
     fileModelMocks.getFileById.mockResolvedValue(undefined);
 

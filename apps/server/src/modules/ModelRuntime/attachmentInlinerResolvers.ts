@@ -268,6 +268,8 @@ class FileServiceResolvers {
     const ids: string[] = [];
     for (const url of urls) {
       if (typeof url !== 'string') continue;
+      // Only own-deployment `/f/<id>` links may reach the unscoped batch lookup.
+      if (!isResolvableAppFileUrl(url, this.origins)) continue;
       const fileId = extractFileProxyId(url);
       if (fileId) ids.push(fileId);
     }

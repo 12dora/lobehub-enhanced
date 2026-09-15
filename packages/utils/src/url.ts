@@ -403,6 +403,11 @@ export function isOwnDeploymentFileUrl(url: string, origins?: OwnDeploymentOrigi
 
 /**
  * Prefer the internal app origin when fetching a public APP_URL `/f/` link.
+ *
+ * Note: `/f/:id` requires a browser session, so a server-side fetch of the
+ * rewritten URL is still rejected. Server code must hand machine consumers
+ * presigned object URLs (see `FileService.getMachineReadableUrl`); this helper
+ * only keeps such leftovers on the internal network.
  */
 export function resolveOwnDeploymentFetchUrl(url: string, origins?: OwnDeploymentOrigins): string {
   const rewrite = origins?.rewrite;

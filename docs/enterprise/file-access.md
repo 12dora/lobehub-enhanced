@@ -21,6 +21,7 @@
 - 内联运行时（ChatGPT/ChatGPT Web/Cursor/Grok/SuperGrok）：先尝试内联字节，失败或超限时改为预签名地址。
 - 其他所有运行时：`beforeChat` / `beforeCreateImage` / `beforeCreateVideo` 仅做地址改写（image/file/video/audio 部件与 `imageUrl`/`imageUrls`/`endImageUrl` 参数）。
 - 机器路径的授权复用 `resolveFileAccess`，但只接受「所有者/工作区成员」两种理由，不信任请求头里的工作区 ID。
+- 注意：改写后的预签名地址（默认 2 小时；若配置 `S3_SET_ACL=1` + `S3_PUBLIC_DOMAIN` 则是永久公开地址）会以文本形式出现在 `<files_info>` 提示词中，模型可能原样复述到回复与追踪记录里。
 
 ## 对象键与存储桶
 
