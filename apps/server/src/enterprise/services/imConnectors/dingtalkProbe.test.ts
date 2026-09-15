@@ -31,7 +31,7 @@ describe('probeDingTalkCredentials', () => {
         method: 'POST',
       }),
     );
-    const [, init] = fetchImpl.mock.calls[0]!;
+    const init = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit | undefined]>)[0]?.[1];
     expect(JSON.parse(String(init?.body))).toEqual({ appKey: 'app-key', appSecret: 'app-secret' });
     expect(result).toMatchObject({
       errorCode: null,

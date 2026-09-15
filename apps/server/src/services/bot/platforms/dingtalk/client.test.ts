@@ -71,7 +71,6 @@ describe('DingTalkClientFactory', () => {
       { clientSecret: 'sec' },
       {},
       'app_key',
-      'dingtalk',
     );
     expect(mockGetAccessToken).toHaveBeenCalled();
     expect(result.valid).toBe(true);

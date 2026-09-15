@@ -148,7 +148,7 @@ describe('ImConnectorsAdminService', () => {
         settings: expect.objectContaining({ robotCode: 'ding-robot' }),
       }),
     );
-    expect(SystemBotProviderModel.update.mock.calls[0]?.[2]).not.toHaveProperty('credentials');
+    expect(vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2]).not.toHaveProperty('credentials');
     expect(SystemBotProviderModel.upsertByPlatform).not.toHaveBeenCalled();
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
   });

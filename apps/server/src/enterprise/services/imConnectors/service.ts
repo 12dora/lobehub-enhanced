@@ -187,12 +187,13 @@ export class ImConnectorsAdminService {
     const { input } = params;
     const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
     const replacing = input.clientSecret.action === 'replace';
+    const replacementSecret = input.clientSecret.action === 'replace' ? input.clientSecret.value : undefined;
     const settings = settingsFromUpsert(input);
 
     await this.db.transaction(async (tx) => {
       const existing = await SystemBotProviderModel.findByPlatform(tx, input.platform, gateKeeper);
       const storedSecret = pickClientSecret(existing?.credentials);
-      const nextSecret = replacing ? input.clientSecret.value : storedSecret;
+      const nextSecret = replacing ? replacementSecret : storedSecret;
 
       if (!replacing && !storedSecret) {
         throw new InfraSettingsSecretRequiredError('clientSecret');

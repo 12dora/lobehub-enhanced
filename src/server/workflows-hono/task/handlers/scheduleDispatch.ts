@@ -49,7 +49,7 @@ export const selectDueScheduledTasks = (
     const matches = isExecutionTime({
       cronPattern: task.schedulePattern,
       currentTime: now,
-      lastExecutedAt: task.lastHeartbeatAt ?? null,
+      lastExecutedAt: task.lastHeartbeatAt ? new Date(task.lastHeartbeatAt) : null,
       timezone: task.scheduleTimezone,
     });
     if (!matches) continue;

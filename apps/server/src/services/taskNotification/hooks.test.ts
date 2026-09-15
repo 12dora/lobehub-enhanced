@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import type { LobeChatDatabase } from '@/database/type';
 
@@ -46,7 +46,7 @@ const base = {
 };
 
 describe('notifyAfterTopicComplete', () => {
-  let notifySpy: ReturnType<typeof vi.spyOn>;
+  let notifySpy: MockInstance<TaskNotificationService['notify']>;
 
   beforeEach(() => {
     vi.clearAllMocks();
