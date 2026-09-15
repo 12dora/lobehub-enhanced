@@ -1392,7 +1392,7 @@ export class AiAgentService {
       let assistantName: string | undefined;
       if (agentSlug === BUILTIN_AGENT_SLUGS.inbox) {
         try {
-          assistantName = (await loadResolvedInboxIdentity(this.db, this.userId)).title;
+          assistantName = (await loadResolvedInboxIdentity(this.db, this.userId)).title ?? undefined;
         } catch (error) {
           log('execAgent: failed to load inbox identity for runtime systemRole: %O', error);
         }

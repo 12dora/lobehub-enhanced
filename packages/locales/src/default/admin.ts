@@ -2331,6 +2331,7 @@ export default {
   'systemGeneral.imConnectors.fields.clientId': 'Client ID',
   'systemGeneral.imConnectors.fields.clientSecret': 'Client Secret',
   'systemGeneral.imConnectors.fields.corpId': 'CorpId',
+  'systemGeneral.imConnectors.fields.agentId': 'AgentId',
   'systemGeneral.imConnectors.fields.robotCode': 'RobotCode',
   'systemGeneral.imConnectors.fields.aiCardTemplateId': 'AI card template ID',
   'systemGeneral.imConnectors.fields.selectCardTemplateId': 'Select card template ID',
@@ -2344,6 +2345,8 @@ export default {
     'From the robot page of the app; it is usually the same as the Client ID.',
   'systemGeneral.imConnectors.hints.corpId':
     'DingTalk developer console home page → Enterprise information → CorpId. Leave it empty to pick it up from the first message.',
+  'systemGeneral.imConnectors.hints.agentId':
+    'DingTalk developer console → App → Basic information → AgentId. Used by the workbench micro-app single sign-on deep link.',
   'systemGeneral.imConnectors.hints.cardTemplates':
     'Falls back to Markdown messages when left empty.',
   'systemGeneral.imConnectors.hints.chatEnabled': 'Answer direct messages and group mentions.',
@@ -2357,6 +2360,7 @@ export default {
   'systemGeneral.imConnectors.status.error': 'Connection error',
   'systemGeneral.imConnectors.status.unknown': 'Unknown',
   'systemGeneral.imConnectors.status.lastEventAt': 'Last event {{time}}',
+  'systemGeneral.imConnectors.status.lastFrameAt': 'Last frame {{time}}',
   'systemGeneral.imConnectors.stats.linkedUsers': 'Linked employees {{value}}',
   'systemGeneral.imConnectors.stats.messages7d': 'Messages in 7 days {{value}}',
   'systemGeneral.imConnectors.stats.pushes7d': 'Pushes in 7 days {{value}}',

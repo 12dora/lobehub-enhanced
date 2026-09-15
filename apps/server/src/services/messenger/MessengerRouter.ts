@@ -758,7 +758,7 @@ export class MessengerRouter {
       }
 
       try {
-        const runTextCommand = async (command: (typeof this.commands)[number], args: string) => {
+        const runTextCommand = async (command: MessengerCommand, args: string) => {
           // Text-path command reply: in a DM `chat.postMessage` is fine
           // (the conversation is private already). In a channel `@mention`
           // we must NOT broadcast — `/new`, `/stop`, `/start` etc. all

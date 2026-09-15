@@ -10,6 +10,8 @@ export const IM_CONNECTOR_IDLE_HOURS_MAX = 720;
 export const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
 const TEXT_MAX = 200;
 const SECRET_MAX = 500;
+/** The AgentId is a short numeric id; the contract caps it at 64. */
+const AGENT_ID_MAX = 64;
 
 /**
  * Draft state for a secret the server never returns.
@@ -25,6 +27,8 @@ export interface ImConnectorSecretDraft {
 }
 
 export interface DingTalkConnectorDraft {
+  /** Optional: when empty the push/card buttons fall back to the plain https SSO URL. */
+  agentId: string;
   aiCardTemplateId: string;
   chatEnabled: boolean;
   clientId: string;
@@ -42,6 +46,7 @@ export interface DingTalkConnectorDraft {
 
 export type DingTalkConnectorFieldErrors = Partial<
   Record<
+    | 'agentId'
     | 'clientId'
     | 'clientSecret'
     | 'corpId'
@@ -54,6 +59,7 @@ export type DingTalkConnectorFieldErrors = Partial<
 >;
 
 export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDraft => ({
+  agentId: view.agentId ?? '',
   aiCardTemplateId: view.aiCardTemplateId ?? '',
   chatEnabled: view.chatEnabled,
   clientId: view.clientId ?? '',
@@ -79,6 +85,7 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
  */
 export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string =>
   JSON.stringify([
+    draft.agentId.trim(),
     draft.aiCardTemplateId.trim(),
     draft.chatEnabled,
     draft.clientId.trim(),
@@ -135,6 +142,7 @@ export const validateDingTalkDraft = (
   else if (secret.length > SECRET_MAX) errors.clientSecret = 'tooLong';
 
   if (draft.corpId.trim().length > TEXT_MAX) errors.corpId = 'tooLong';
+  if (draft.agentId.trim().length > AGENT_ID_MAX) errors.agentId = 'tooLong';
 
   if (draft.aiCardTemplateId.trim().length > TEXT_MAX) errors.aiCardTemplateId = 'tooLong';
   if (draft.selectCardTemplateId.trim().length > TEXT_MAX) errors.selectCardTemplateId = 'tooLong';
@@ -161,6 +169,7 @@ const optionalText = (value: string): string | null => {
 export const toDingTalkUpsertInput = (
   draft: DingTalkConnectorDraft,
 ): AdminImConnectorUpsertInput => ({
+  agentId: optionalText(draft.agentId),
   aiCardTemplateId: optionalText(draft.aiCardTemplateId),
   chatEnabled: draft.chatEnabled,
   clientId: draft.clientId.trim(),

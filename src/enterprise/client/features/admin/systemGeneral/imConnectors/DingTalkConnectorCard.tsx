@@ -94,6 +94,15 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
                 })}
               </Text>
             ) : null}
+            {/* The worker's own liveness: a frame can arrive (heartbeat, ack) long after the last
+                message did, so an idle-but-healthy stream is distinguishable from a stalled one. */}
+            {view.status.lastFrameAt ? (
+              <Text className={styles.code} type="secondary">
+                {t('systemGeneral.imConnectors.status.lastFrameAt', {
+                  time: formatConnectorTime(view.status.lastFrameAt),
+                })}
+              </Text>
+            ) : null}
             <div className={styles.switchRow}>
               <label className={formStyles.label} htmlFor={enableSwitchId}>
                 {t('systemGeneral.imConnectors.fields.enabled')}
@@ -169,6 +178,21 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
                     disabled={locked}
                     value={draft.corpId}
                     onChange={(event) => editor.patch({ corpId: event.target.value })}
+                  />
+                )}
+              </InfraField>
+              <InfraField
+                error={errors.agentId}
+                hint={t('systemGeneral.imConnectors.hints.agentId')}
+                label={t('systemGeneral.imConnectors.fields.agentId')}
+              >
+                {(field) => (
+                  <Input
+                    {...field.control}
+                    autoComplete="off"
+                    disabled={locked}
+                    value={draft.agentId}
+                    onChange={(event) => editor.patch({ agentId: event.target.value })}
                   />
                 )}
               </InfraField>

@@ -12,6 +12,7 @@ import {
 } from './draft';
 
 const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorView => ({
+  agentId: null,
   aiCardTemplateId: null,
   chatEnabled: true,
   clientId: 'ding-app-key',
@@ -45,6 +46,11 @@ describe('DingTalk connector draft', () => {
     expect(draft.clientSecret).toEqual({ fingerprint: 'a1b2c3', stored: true, value: '' });
     expect(draft.aiCardTemplateId).toBe('');
     expect(draft.idleNewTopicHours).toBe(24);
+  });
+
+  it('seeds the optional AgentId, empty when the row never carried one', () => {
+    expect(toDingTalkDraft(view()).agentId).toBe('');
+    expect(toDingTalkDraft(view({ agentId: '0_123456' })).agentId).toBe('0_123456');
   });
 
   it('accepts a complete configuration', () => {
@@ -96,6 +102,9 @@ describe('DingTalk connector draft', () => {
     expect(
       validateDingTalkDraft({ ...seed, aiCardTemplateId: 'x'.repeat(201) }).aiCardTemplateId,
     ).toBe('tooLong');
+    // The AgentId has its own, shorter bound (64) in the contract.
+    expect(validateDingTalkDraft({ ...seed, agentId: 'x'.repeat(65) }).agentId).toBe('tooLong');
+    expect(validateDingTalkDraft({ ...seed, agentId: 'x'.repeat(64) }).agentId).toBeUndefined();
   });
 
   it('keeps the stored secret when nothing was typed', () => {
@@ -124,6 +133,22 @@ describe('DingTalk connector draft', () => {
 
     expect(input.aiCardTemplateId).toBeNull();
     expect(input.selectCardTemplateId).toBe('sel-1');
+  });
+
+  it('sends the trimmed AgentId, and null once the field is cleared', () => {
+    const seed = toDingTalkDraft(view({ agentId: '0_123456' }));
+
+    expect(toDingTalkUpsertInput({ ...seed, agentId: '  0_654321  ' }).agentId).toBe('0_654321');
+    expect(toDingTalkUpsertInput({ ...seed, agentId: '   ' }).agentId).toBeNull();
+    expect(toDingTalkUpsertInput(toDingTalkDraft(view())).agentId).toBeNull();
+  });
+
+  it('counts the AgentId as part of the draft identity', () => {
+    const seed = toDingTalkDraft(view());
+
+    expect(fingerprintDingTalkDraft({ ...seed, agentId: '0_123456' })).not.toBe(
+      fingerprintDingTalkDraft(seed),
+    );
   });
 
   it('falls back to the default idle hours the contract defines', () => {

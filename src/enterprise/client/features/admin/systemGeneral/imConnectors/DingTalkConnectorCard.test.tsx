@@ -110,6 +110,7 @@ vi.mock('../../primitives/runAdminMutation', () => ({
 }));
 
 const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorView => ({
+  agentId: null,
   aiCardTemplateId: null,
   chatEnabled: true,
   clientId: 'ding-app-key',
@@ -452,6 +453,68 @@ describe('DingTalkConnectorCard', () => {
 
     await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
     expect(stub.upsert.mock.calls[0]![0].corpId).toBeNull();
+  });
+
+  it('sends the AgentId an admin typed, so the workbench deep link can be built', async () => {
+    const stub = service();
+    render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+    fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.agentId'), {
+      target: { value: '  0_123456  ' },
+    });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert.mock.calls[0]![0]).toMatchObject({ agentId: '0_123456' });
+  });
+
+  it('sends a null AgentId when the field is blanked, so the plain SSO URL is used again', async () => {
+    const stub = service();
+    render(
+      <DingTalkConnectorCard canOperate service={stub} view={view({ agentId: '0_123456' })} />,
+    );
+
+    expect(
+      (screen.getByLabelText('systemGeneral.imConnectors.fields.agentId') as HTMLInputElement)
+        .value,
+    ).toBe('0_123456');
+
+    fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.agentId'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert.mock.calls[0]![0].agentId).toBeNull();
+  });
+
+  // A frame (heartbeat/ack) is the worker's own liveness, so it is reported next to the last
+  // event: an idle-but-healthy stream reads differently from a stalled one.
+  it('reports the last stream frame beside the last event', () => {
+    render(
+      <DingTalkConnectorCard
+        canOperate
+        view={view({
+          status: {
+            connectedAt: '2026-09-15T00:00:00.000Z',
+            lastError: null,
+            lastErrorAt: null,
+            lastEventAt: '2026-09-15T01:00:00.000Z',
+            lastFrameAt: '2026-09-15T02:00:00.000Z',
+            state: 'connected',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/systemGeneral.imConnectors.status.lastEventAt/)).toBeTruthy();
+    expect(screen.getByText(/systemGeneral.imConnectors.status.lastFrameAt/)).toBeTruthy();
+  });
+
+  it('says nothing about frames when the worker never reported one', () => {
+    render(<DingTalkConnectorCard canOperate view={view()} />);
+
+    expect(screen.queryByText(/systemGeneral.imConnectors.status.lastFrameAt/)).toBeNull();
   });
 
   it('restores the server values when the edit is abandoned', () => {
