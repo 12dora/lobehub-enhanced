@@ -846,7 +846,12 @@ const createRuntimeAttachmentHooks = (
   userId?: string,
   workspaceId?: string,
 ): ModelRuntimeHooks => {
-  if (!OWN_ORIGIN_ATTACHMENT_INLINE_RUNTIMES.has(runtimeProvider)) {
+  // When the deployment forces base64 for vision inputs, every provider re-fetches
+  // image URLs server-side; a presigned object URL is then blocked whenever the
+  // storage endpoint resolves to a private address. Inline (read from storage)
+  // for all runtimes in that mode instead of rewriting to presigned URLs.
+  const forceBase64 = process.env.LLM_VISION_IMAGE_USE_BASE64 === '1';
+  if (!forceBase64 && !OWN_ORIGIN_ATTACHMENT_INLINE_RUNTIMES.has(runtimeProvider)) {
     return createOwnOriginAttachmentRewriteHooks({
       ownOrigins: resolveOwnDeploymentOrigins,
       userId,

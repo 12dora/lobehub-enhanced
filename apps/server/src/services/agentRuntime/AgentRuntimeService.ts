@@ -2488,10 +2488,17 @@ export class AgentRuntimeService {
   }
 
   private async queryMessagesFromDB(state: AgentState) {
-    let postProcessUrl: ((path: string | null) => Promise<string>) | undefined;
+    let postProcessUrl:
+      ((path: string | null, file: { id?: string | null }) => Promise<string>) | undefined;
     try {
       const fileService = new FileService(this.serverDB, this.userId);
-      postProcessUrl = (path: string | null) => fileService.getFullFileUrl(path);
+      // Emit the stable `/f/<id>` proxy URL like the other message query paths so the
+      // ModelRuntime attachment hooks recognise own files: inline runtimes read the
+      // bytes from storage (no HTTP hop), the rest get a presigned URL. A raw presigned
+      // URL here would be re-fetched by the provider layer when base64 is forced and
+      // is SSRF-blocked when the storage endpoint resolves to a private address.
+      postProcessUrl = (path: string | null, file: { id?: string | null }) =>
+        fileService.getFileAccessUrl({ id: file.id, url: path });
     } catch {
       postProcessUrl = undefined;
     }

@@ -2135,6 +2135,33 @@ describe('own-origin attachment inline hook wiring', () => {
     expect(inlineSpy).not.toHaveBeenCalled();
   });
 
+  it('uses the inline hook for every runtime when LLM_VISION_IMAGE_USE_BASE64=1', () => {
+    const previous = process.env.LLM_VISION_IMAGE_USE_BASE64;
+    process.env.LLM_VISION_IMAGE_USE_BASE64 = '1';
+    try {
+      const spy = vi
+        .spyOn(ModelRuntime, 'initializeWithProvider')
+        .mockReturnValue({} as unknown as ModelRuntime);
+      const inlineSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentInlineHooks');
+      const rewriteSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentRewriteHooks');
+
+      initModelRuntimeWithUserPayload(
+        ModelProvider.OpenAI,
+        { apiKey: 'user-openai-key' },
+        { userId: 'user-1', workspaceId: 'ws-1' },
+      );
+
+      expect(spy.mock.calls[0]?.[2]?.beforeChat).toEqual(expect.any(Function));
+      expect(inlineSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', workspaceId: 'ws-1' }),
+      );
+      expect(rewriteSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.LLM_VISION_IMAGE_USE_BASE64;
+      else process.env.LLM_VISION_IMAGE_USE_BASE64 = previous;
+    }
+  });
+
   it('passes a 6 MiB image cap for Cursor and the default for other inline runtimes', () => {
     const createSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentInlineHooks');
     vi.spyOn(ModelRuntime, 'initializeWithProvider').mockReturnValue({} as unknown as ModelRuntime);
