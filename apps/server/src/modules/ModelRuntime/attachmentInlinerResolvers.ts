@@ -256,6 +256,84 @@ class FileServiceResolvers {
       return null;
     }
   }
+
+  /**
+   * One unscoped `getFilesByIds` for every candidate id not already in the memo,
+   * then `resolveFileAccess` per row. Subsequent `lookupFile` hits the memo.
+   * A failed batch is dropped from the memo so `lookupFile` can fall back to
+   * per-id `getFileById`.
+   */
+  async prefetchFromUrls(urls: readonly string[]): Promise<void> {
+    if (!this.input.userId) return;
+    const ids: string[] = [];
+    for (const url of urls) {
+      if (typeof url !== 'string') continue;
+      const fileId = extractFileProxyId(url);
+      if (fileId) ids.push(fileId);
+    }
+    await this.prefetchFiles(ids);
+  }
+
+  private async prefetchFiles(ids: readonly string[]): Promise<void> {
+    if (!this.input.userId) return;
+    const unique = [...new Set(ids)].filter((id) => !this.fileLookup.has(id));
+    if (unique.length === 0) return;
+
+    const pending = (async () => {
+      const { db } = await this.load();
+      const rows = await FileModel.getFilesByIds(db, unique);
+      if (!Array.isArray(rows)) {
+        throw new TypeError('FileModel.getFilesByIds did not return an array');
+      }
+      const byId = new Map(rows.map((file) => [file.id, file]));
+      const authorized = new Map<string, FileItem | undefined>();
+
+      await Promise.all(
+        unique.map(async (id) => {
+          const file = byId.get(id);
+          if (!file) {
+            authorized.set(id, undefined);
+            return;
+          }
+          const access = await resolveFileAccess({
+            db,
+            file,
+            viewerUserId: this.input.userId!,
+          });
+          if (!access.allowed || (access.reason !== 'owner' && access.reason !== 'workspace')) {
+            log(
+              'machine-path /f/ denied id=%s reason=%s',
+              id,
+              access.allowed ? access.reason : 'denied',
+            );
+            authorized.set(id, undefined);
+            return;
+          }
+          this.authorizedFileIds.add(id);
+          authorized.set(id, file);
+        }),
+      );
+
+      return authorized;
+    })();
+
+    for (const id of unique) {
+      this.fileLookup.set(
+        id,
+        pending.then(
+          (map) => map.get(id),
+          () => undefined,
+        ),
+      );
+    }
+
+    try {
+      await pending;
+    } catch (error) {
+      for (const id of unique) this.fileLookup.delete(id);
+      log('batch file lookup failed: %s', error instanceof Error ? error.message : error);
+    }
+  }
 }
 
 export const createFileServiceResolvers = (
@@ -266,6 +344,7 @@ export const createFileServiceResolvers = (
   loadArtifact: (key: string, fileId: string) => Promise<Uint8Array | null>;
   loadRender: (fileId: string) => Promise<FileRenderMetadata | undefined>;
   loadTextIndex: (fileId: string, key: string) => Promise<FileRenderTextIndex | undefined>;
+  prefetchFromUrls: (urls: readonly string[]) => Promise<void>;
   resolveByFileId: OwnOriginFileIdResolver;
   resolveByUrl: OwnOriginAttachmentResolver;
   resolvePreviewUrl: (url: string) => Promise<string | null>;
@@ -276,6 +355,7 @@ export const createFileServiceResolvers = (
     loadArtifact: (key, fileId) => resolvers.loadArtifact(key, fileId),
     loadRender: (fileId) => resolvers.loadRender(fileId),
     loadTextIndex: (fileId, key) => resolvers.loadTextIndex(fileId, key),
+    prefetchFromUrls: (urls) => resolvers.prefetchFromUrls(urls),
     resolveByFileId: (fileId, maxBytes) => resolvers.resolveByFileId(fileId, maxBytes),
     resolveByUrl: (url, maxBytes) => resolvers.resolveByUrl(url, maxBytes),
     resolvePreviewUrl: (url) => resolvers.resolvePreviewUrl(url),

@@ -41,23 +41,42 @@ const resolveMaybeLazy = async <T>(value: T | Promise<T> | (() => T | Promise<T>
 const isHttpCreateImageUrl = (url: unknown): url is string =>
   typeof url === 'string' && url.length > 0 && !isDataUri(url);
 
-const createImageParamsHaveHttpUrls = (params: {
+interface CreateMediaParams {
+  endImageUrl?: string;
   imageUrl?: string;
   imageUrls?: string[];
-}): boolean =>
+}
+
+const createMediaParamsHaveHttpUrls = (params: CreateMediaParams): boolean =>
   isHttpCreateImageUrl(params.imageUrl) ||
+  isHttpCreateImageUrl(params.endImageUrl) ||
   Boolean(params.imageUrls?.some((url) => isHttpCreateImageUrl(url)));
 
-const rewriteCreateImageParams = async (
-  params: { imageUrl?: string; imageUrls?: string[] },
+const rewriteCreateMediaParams = async (
+  params: CreateMediaParams,
   rewriteUrls: (urls: readonly string[]) => Promise<string[]>,
 ): Promise<void> => {
+  const singles: Array<'endImageUrl' | 'imageUrl'> = [];
+  const urls: string[] = [];
   if (isHttpCreateImageUrl(params.imageUrl)) {
-    const [next] = await rewriteUrls([params.imageUrl]);
-    params.imageUrl = next;
+    singles.push('imageUrl');
+    urls.push(params.imageUrl);
   }
-  if (params.imageUrls?.some((url) => isHttpCreateImageUrl(url))) {
-    params.imageUrls = await rewriteUrls(params.imageUrls);
+  if (isHttpCreateImageUrl(params.endImageUrl)) {
+    singles.push('endImageUrl');
+    urls.push(params.endImageUrl);
+  }
+  const rewriteImageUrls = Boolean(params.imageUrls?.some((url) => isHttpCreateImageUrl(url)));
+  if (rewriteImageUrls && params.imageUrls) urls.push(...params.imageUrls);
+  if (urls.length === 0) return;
+
+  const rewritten = await rewriteUrls(urls);
+  let offset = 0;
+  for (const key of singles) {
+    params[key] = rewritten[offset++];
+  }
+  if (rewriteImageUrls) {
+    params.imageUrls = rewritten.slice(offset);
   }
 };
 
@@ -98,6 +117,7 @@ export const createOwnOriginAttachmentInlineHooks = (
           loadRender: resolvers.loadRender,
           loadTextIndex: resolvers.loadTextIndex,
           maxDocsPerRequest: limits.maxDocsPerRequest,
+          prefetchFromUrls: resolvers.prefetchFromUrls,
           resolveByFileId: resolvers.resolveByFileId,
           resolvePreviewUrl: resolvers.resolvePreviewUrl,
           tools,
@@ -111,22 +131,44 @@ export const createOwnOriginAttachmentInlineHooks = (
     },
     beforeCreateImage: async (payload) => {
       try {
-        if (!createImageParamsHaveHttpUrls(payload.params)) return;
+        if (!createMediaParamsHaveHttpUrls(payload.params)) return;
 
         const origins = await resolveMaybeLazy(input.ownOrigins);
         const resolvers = createFileServiceResolvers(input, origins);
-        await rewriteCreateImageParams(payload.params, (urls) =>
+        await rewriteCreateMediaParams(payload.params, (urls) =>
           inlineOwnOriginImageUrls(
             urls,
             resolvers.resolveByUrl,
             origins,
             imageMaxBytes,
             resolvers.resolvePreviewUrl,
+            resolvers.prefetchFromUrls,
           ),
         );
       } catch (error) {
         log(
           'own-origin imageUrls inline failed: %s',
+          error instanceof Error ? error.message : error,
+        );
+      }
+    },
+    beforeCreateVideo: async (payload) => {
+      try {
+        if (!createMediaParamsHaveHttpUrls(payload.params)) return;
+
+        const origins = await resolveMaybeLazy(input.ownOrigins);
+        const resolvers = createFileServiceResolvers(input, origins);
+        await rewriteCreateMediaParams(payload.params, (urls) =>
+          rewriteOwnOriginUrls(
+            urls,
+            origins,
+            resolvers.resolvePreviewUrl,
+            resolvers.prefetchFromUrls,
+          ),
+        );
+      } catch (error) {
+        log(
+          'own-origin createVideo rewrite failed: %s',
           error instanceof Error ? error.message : error,
         );
       }
@@ -157,6 +199,7 @@ export const createOwnOriginAttachmentRewriteHooks = (
           payload.messages,
           origins,
           resolvers.resolvePreviewUrl,
+          resolvers.prefetchFromUrls,
         );
       } catch (error) {
         log(
@@ -171,16 +214,46 @@ export const createOwnOriginAttachmentRewriteHooks = (
           log('skip rewrite (no userId)');
           return;
         }
-        if (!createImageParamsHaveHttpUrls(payload.params)) return;
+        if (!createMediaParamsHaveHttpUrls(payload.params)) return;
 
         const origins = await resolveMaybeLazy(input.ownOrigins);
         const resolvers = createFileServiceResolvers(input, origins);
-        await rewriteCreateImageParams(payload.params, (urls) =>
-          rewriteOwnOriginUrls(urls, origins, resolvers.resolvePreviewUrl),
+        await rewriteCreateMediaParams(payload.params, (urls) =>
+          rewriteOwnOriginUrls(
+            urls,
+            origins,
+            resolvers.resolvePreviewUrl,
+            resolvers.prefetchFromUrls,
+          ),
         );
       } catch (error) {
         log(
           'own-origin imageUrls rewrite failed: %s',
+          error instanceof Error ? error.message : error,
+        );
+      }
+    },
+    beforeCreateVideo: async (payload) => {
+      try {
+        if (!input.userId) {
+          log('skip rewrite (no userId)');
+          return;
+        }
+        if (!createMediaParamsHaveHttpUrls(payload.params)) return;
+
+        const origins = await resolveMaybeLazy(input.ownOrigins);
+        const resolvers = createFileServiceResolvers(input, origins);
+        await rewriteCreateMediaParams(payload.params, (urls) =>
+          rewriteOwnOriginUrls(
+            urls,
+            origins,
+            resolvers.resolvePreviewUrl,
+            resolvers.prefetchFromUrls,
+          ),
+        );
+      } catch (error) {
+        log(
+          'own-origin createVideo rewrite failed: %s',
           error instanceof Error ? error.message : error,
         );
       }

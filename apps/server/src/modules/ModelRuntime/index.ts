@@ -972,7 +972,8 @@ export const initModelRuntimeWithUserPayload = (
    * ChatGPT / Grok / Cursor / SuperGrok / ChatGPT Web inline small own-origin
    * attachments (then presign leftovers). Every other runtime only rewrites
    * `/f/<id>` to a machine-readable object URL — providers cannot present a
-   * browser cookie to GET /f/:id.
+   * browser cookie to GET /f/:id. Both factories expose beforeChat,
+   * beforeCreateImage, and beforeCreateVideo.
    */
   const composedHooks = mergeModelRuntimeHooks(
     createRuntimeAttachmentHooks(

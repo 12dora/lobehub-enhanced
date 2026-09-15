@@ -41,7 +41,9 @@ import {
   applyInlinedUrl,
   collectFileUrlFileIds,
   collectOwnOriginAttachmentUrls,
+  collectPreviewOnlyOwnOriginUrls,
   countImageUrlParts,
+  isAudioUrlPart,
   isImageUrlPart,
   isVideoUrlPart,
   resolvePreviewUrlsForFailures,
@@ -133,10 +135,15 @@ const createPipelineContext = async (
     fileMaxBytes,
     imageMaxBytes,
   });
+  const previewOnlyUrls = collectPreviewOnlyOwnOriginUrls(messages, ownOrigins);
+  await options?.prefetchFromUrls?.([...new Set([...maxBytesByUrl.keys(), ...previewOnlyUrls])]);
   const resolvedByUrl =
     maxBytesByUrl.size === 0
       ? new Map<string, OwnOriginAttachmentBytes | null>()
       : await resolveUniqueUrls(maxBytesByUrl, resolver);
+  for (const url of previewOnlyUrls) {
+    if (!resolvedByUrl.has(url)) resolvedByUrl.set(url, null);
+  }
   const previewUrlByUrl = await resolvePreviewUrlsForFailures(
     resolvedByUrl,
     options?.resolvePreviewUrl,
@@ -249,8 +256,12 @@ const applyInlinedParts = async (context: PipelineContext, role: 'assistant' | '
     const next: UserMessageContentPart[] = [];
 
     for (const part of message.content) {
-      if (isImageUrlPart(part) || isVideoUrlPart(part)) {
-        const url = isImageUrlPart(part) ? part.image_url.url : part.video_url.url;
+      if (isImageUrlPart(part) || isVideoUrlPart(part) || isAudioUrlPart(part)) {
+        const url = isImageUrlPart(part)
+          ? part.image_url.url
+          : isVideoUrlPart(part)
+            ? part.video_url.url
+            : part.audio_url.url;
         if (context.resolvedByUrl.has(url)) {
           setAttachmentPartUrl(
             part,

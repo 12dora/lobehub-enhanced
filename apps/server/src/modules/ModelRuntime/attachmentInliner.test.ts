@@ -26,6 +26,7 @@ const fileModelMocks = vi.hoisted(() => ({
   constructorCalls: [] as unknown[][],
   findById: vi.fn(),
   getFileById: vi.fn(),
+  getFilesByIds: vi.fn(),
 }));
 
 const fileAccessMocks = vi.hoisted(() => ({
@@ -69,6 +70,7 @@ vi.mock('@/server/services/file/fileAccess', () => ({
 vi.mock('@/database/models/file', () => ({
   FileModel: class FileModel {
     static getFileById = (...args: unknown[]) => fileModelMocks.getFileById(...args);
+    static getFilesByIds = (...args: unknown[]) => fileModelMocks.getFilesByIds(...args);
     findById = fileModelMocks.findById;
     constructor(...args: unknown[]) {
       fileModelMocks.constructorCalls.push(args);
@@ -162,8 +164,9 @@ describe('inlineOwnOriginAttachments', () => {
     expect(resolver).toHaveBeenCalledWith(OWN_FILE_URL, DEFAULT_IMAGE_INLINE_MAX_BYTES);
   });
 
-  it('replaces an own-origin video_url with a data URI', async () => {
+  it('does not byte-inline video_url and presigns it instead', async () => {
     const resolver = vi.fn(async () => ({ bytes: PNG_BYTES, mimeType: 'video/mp4' }));
+    const resolvePreviewUrl = vi.fn(async () => PREVIEW_URL);
     const messages: OpenAIChatMessage[] = [
       {
         content: [{ type: 'video_url', video_url: { url: OWN_FILE_URL } }],
@@ -171,14 +174,27 @@ describe('inlineOwnOriginAttachments', () => {
       },
     ];
 
-    await inlineOwnOriginAttachments(messages, resolver, ownOrigins);
+    await inlineOwnOriginAttachments(messages, resolver, ownOrigins, { resolvePreviewUrl });
 
-    expect(messages[0].content).toEqual([
+    expect(resolver).not.toHaveBeenCalled();
+    expect(resolvePreviewUrl).toHaveBeenCalledWith(OWN_FILE_URL);
+    expect(messages[0].content).toEqual([{ type: 'video_url', video_url: { url: PREVIEW_URL } }]);
+  });
+
+  it('does not byte-inline audio_url and presigns it instead', async () => {
+    const resolver = vi.fn(async () => ({ bytes: PNG_BYTES, mimeType: 'audio/mpeg' }));
+    const resolvePreviewUrl = vi.fn(async () => PREVIEW_URL);
+    const messages: OpenAIChatMessage[] = [
       {
-        type: 'video_url',
-        video_url: { url: `data:video/mp4;base64,${Buffer.from(PNG_BYTES).toString('base64')}` },
+        content: [{ audio_url: { url: OWN_FILE_URL }, type: 'audio_url' }],
+        role: 'user',
       },
-    ]);
+    ];
+
+    await inlineOwnOriginAttachments(messages, resolver, ownOrigins, { resolvePreviewUrl });
+
+    expect(resolver).not.toHaveBeenCalled();
+    expect(messages[0].content).toEqual([{ audio_url: { url: PREVIEW_URL }, type: 'audio_url' }]);
   });
 
   it('leaves a foreign image_url untouched', async () => {
@@ -1136,6 +1152,15 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     );
     fileModelMocks.getFileById.mockReset();
     fileModelMocks.getFileById.mockResolvedValue(undefined);
+    fileModelMocks.getFilesByIds.mockReset();
+    fileModelMocks.getFilesByIds.mockImplementation(async (db: unknown, ids: string[]) => {
+      const rows: unknown[] = [];
+      for (const id of ids) {
+        const row = await fileModelMocks.getFileById(db, id);
+        if (row) rows.push({ ...(row as object), id });
+      }
+      return rows;
+    });
     fileModelMocks.findById.mockReset();
     fileAccessMocks.resolveFileAccess.mockReset();
     fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
@@ -1335,6 +1360,35 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     expect(fileServiceMocks.getFileByteArray).toHaveBeenCalledWith('files/cat.png');
   });
 
+  it('rewrites beforeCreateVideo params to presigned URLs without byte-inlining', async () => {
+    fileModelMocks.getFileById.mockImplementation(async (_db: unknown, id: string) => ({
+      fileType: 'image/png',
+      size: PNG_BYTES.byteLength,
+      url: `files/${id}.png`,
+    }));
+
+    const startUrl = 'http://localhost:3010/f/file-start';
+    const endUrl = 'http://localhost:3010/f/file-end';
+    const params = {
+      endImageUrl: endUrl,
+      imageUrl: startUrl,
+      imageUrls: [OWN_FILE_URL],
+      prompt: 'animate',
+    };
+    const hooks = createOwnOriginAttachmentInlineHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeCreateVideo?.({ model: 'veo', params } as never);
+
+    expect(params.imageUrl).toBe('https://presigned.example.com/files/file-start.png');
+    expect(params.imageUrls).toEqual(['https://presigned.example.com/files/file-1.png']);
+    expect(params.endImageUrl).toBe('https://presigned.example.com/files/file-end.png');
+    expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
+  });
+
   it("resolves the owner's personal file while the request carries a workspace id", async () => {
     fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
@@ -1441,6 +1495,15 @@ describe('document render feed + viewDocumentPages markers', () => {
     pdfPageImagesMocks.renderPdfPagesToPng.mockReset();
     pdfPageImagesMocks.renderPdfPagesToPng.mockResolvedValue([]);
     fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
+    fileModelMocks.getFilesByIds.mockReset();
+    fileModelMocks.getFilesByIds.mockImplementation(async (db: unknown, ids: string[]) => {
+      const rows: unknown[] = [];
+      for (const id of ids) {
+        const row = await fileModelMocks.getFileById(db, id);
+        if (row) rows.push({ ...(row as object), id });
+      }
+      return rows;
+    });
   });
   afterEach(() => {
     vi.restoreAllMocks();

@@ -1567,6 +1567,54 @@ describe('FileModel', () => {
     });
   });
 
+  describe('static getFilesByIds', () => {
+    it('should return matching files regardless of owner', async () => {
+      const otherUserId = 'other-unscoped-file-user';
+      await serverDB.insert(users).values({ id: otherUserId });
+      await serverDB.insert(files).values([
+        {
+          fileType: 'text/plain',
+          id: 'unscoped-own',
+          name: 'own.txt',
+          size: 100,
+          url: 'url-own',
+          userId,
+        },
+        {
+          fileType: 'text/plain',
+          id: 'unscoped-other',
+          name: 'other.txt',
+          size: 200,
+          url: 'url-other',
+          userId: otherUserId,
+        },
+      ]);
+
+      const result = await FileModel.getFilesByIds(serverDB, ['unscoped-own', 'unscoped-other']);
+      expect(result.map((file) => file.id).sort()).toEqual(['unscoped-other', 'unscoped-own']);
+    });
+
+    it('should return an empty array for an empty id list', async () => {
+      const result = await FileModel.getFilesByIds(serverDB, []);
+      expect(result).toEqual([]);
+    });
+
+    it('should omit unknown ids', async () => {
+      await serverDB.insert(files).values({
+        fileType: 'text/plain',
+        id: 'unscoped-known',
+        name: 'known.txt',
+        size: 100,
+        url: 'url',
+        userId,
+      });
+
+      const result = await FileModel.getFilesByIds(serverDB, ['unscoped-known', 'missing-id']);
+      expect(result).toHaveLength(1);
+      expect(result[0]?.id).toBe('unscoped-known');
+    });
+  });
+
   describe('findByIds', () => {
     it('should find multiple files by ids', async () => {
       await serverDB.insert(files).values([

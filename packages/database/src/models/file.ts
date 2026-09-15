@@ -66,6 +66,18 @@ export class FileModel {
     });
   }
 
+  /**
+   * Unscoped batch lookup by id. Unlike {@link FileModel.findByIds} this does
+   * not apply ownership / workspace filters — callers must authorize each row
+   * (the attachment inliner uses `resolveFileAccess`).
+   */
+  static async getFilesByIds(db: LobeChatDatabase, ids: string[]): Promise<FileItem[]> {
+    if (ids.length === 0) return [];
+    return db.query.files.findMany({
+      where: inArray(files.id, ids),
+    });
+  }
+
   create = async (
     params: Omit<NewFile, 'id' | 'userId'> & {
       id?: string;

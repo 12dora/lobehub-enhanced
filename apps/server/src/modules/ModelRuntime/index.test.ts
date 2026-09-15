@@ -2159,6 +2159,36 @@ describe('own-origin attachment inline hook wiring', () => {
     expect(createSpy.mock.calls[0]?.[0]?.imageMaxBytes).toBeUndefined();
     expect(createSpy.mock.calls[0]?.[0]?.imageMaxCount).toBeUndefined();
   });
+
+  it('passes composed rewrite hooks to the VertexAI ModelRuntime constructor', () => {
+    const credentials = {
+      client_email: 'vertex@test-project.iam.gserviceaccount.com',
+      private_key: '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n',
+      project_id: 'test-project',
+      type: 'service_account',
+    };
+    const rewriteSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentRewriteHooks');
+    const inlineSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentInlineHooks');
+    const initProviderSpy = vi.spyOn(ModelRuntime, 'initializeWithProvider');
+    const initSpy = vi.spyOn(LobeVertexAI, 'initFromVertexAI').mockReturnValue({} as never);
+
+    const runtime = initModelRuntimeWithUserPayload(
+      ModelProvider.VertexAI,
+      { apiKey: JSON.stringify(credentials) },
+      { userId: 'user-1', workspaceId: 'ws-1' },
+    );
+
+    expect(initSpy).toHaveBeenCalled();
+    expect(initProviderSpy).not.toHaveBeenCalled();
+    expect(rewriteSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', workspaceId: 'ws-1' }),
+    );
+    expect(inlineSpy).not.toHaveBeenCalled();
+    expect(runtime).toBeInstanceOf(ModelRuntime);
+    expect(runtime['_hooks']?.beforeChat).toEqual(expect.any(Function));
+    expect(runtime['_hooks']?.beforeCreateImage).toEqual(expect.any(Function));
+    expect(runtime['_hooks']?.beforeCreateVideo).toEqual(expect.any(Function));
+  });
 });
 
 describe('buildPayloadFromKeyVaults Cursor contract', () => {

@@ -65,6 +65,12 @@ export interface InlineOwnOriginAttachmentsOptions {
   /** `text/index.json` body for relevance-ranked page selection. */
   loadTextIndex?: (fileId: string, key: string) => Promise<FileRenderTextIndex | undefined>;
   maxDocsPerRequest?: number;
+  /**
+   * Batch-load `files` rows for every `/f/<id>` URL in this hook call before
+   * per-URL resolve. Keeps the per-id memo; missing ids still fall back to
+   * `lookupFile`.
+   */
+  prefetchFromUrls?: (urls: readonly string[]) => Promise<void>;
   /** Resolves a `files` row by id (FileModel + FileService). Used for `<files_info>` PDFs. */
   resolveByFileId?: OwnOriginFileIdResolver;
   /**
