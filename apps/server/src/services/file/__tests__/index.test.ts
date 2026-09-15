@@ -40,7 +40,8 @@ const implModuleMocks = vi.hoisted(() => {
 });
 
 vi.mock('../impls', () => ({
-  createFileServiceModule: (...args: unknown[]) => implModuleMocks.createFileServiceModule(...args),
+  createFileServiceModule: (...args: unknown[]) =>
+    (implModuleMocks.createFileServiceModule as (...a: unknown[]) => unknown)(...args),
 }));
 
 vi.mock('../ownDeploymentOrigins', () => ({
@@ -646,7 +647,7 @@ describe('FileService', () => {
         ok: true,
         status: 200,
         statusText: 'OK',
-      } as Response);
+      } as unknown as Response);
 
       await service.uploadFromUrl('https://cdn.foreign.com/f/x', 'files/copy.png');
 
