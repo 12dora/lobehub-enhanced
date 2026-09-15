@@ -47,6 +47,11 @@ export interface CreateOwnOriginAttachmentInlineHooksInput {
   workspaceId?: string;
 }
 
+export type CreateOwnOriginAttachmentRewriteHooksInput = Pick<
+  CreateOwnOriginAttachmentInlineHooksInput,
+  'db' | 'ownOrigins' | 'userId' | 'workspaceId'
+>;
+
 export interface InlineOwnOriginAttachmentsOptions {
   /** Ownership check for tool-result file ids (scoped FileModel lookup). */
   authorizeFile?: (fileId: string) => Promise<boolean>;

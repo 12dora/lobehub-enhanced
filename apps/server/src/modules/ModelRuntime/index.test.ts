@@ -2102,21 +2102,37 @@ describe('own-origin attachment inline hook wiring', () => {
     vi.restoreAllMocks();
   });
 
-  it('merges the inline hook for grok and not for openai', () => {
+  it('merges the inline hook for grok and the rewrite hook for openai', () => {
     const spy = vi
       .spyOn(ModelRuntime, 'initializeWithProvider')
       .mockReturnValue({} as unknown as ModelRuntime);
+    const inlineSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentInlineHooks');
+    const rewriteSpy = vi.spyOn(attachmentInliner, 'createOwnOriginAttachmentRewriteHooks');
 
     initModelRuntimeWithUserPayload(
       ModelProvider.Grok,
       { apiKey: 'oauth-token-value', runtimeProvider: ModelProvider.Grok },
-      { browserProfile: DEFAULT_BROWSER_DEVICE_PROFILE },
+      { browserProfile: DEFAULT_BROWSER_DEVICE_PROFILE, userId: 'user-1', workspaceId: 'ws-1' },
     );
     expect(spy.mock.calls[0]?.[2]?.beforeChat).toEqual(expect.any(Function));
+    expect(inlineSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', workspaceId: 'ws-1' }),
+    );
+    expect(rewriteSpy).not.toHaveBeenCalled();
 
     spy.mockClear();
-    initModelRuntimeWithUserPayload(ModelProvider.OpenAI, { apiKey: 'user-openai-key' });
-    expect(spy.mock.calls[0]?.[2]?.beforeChat).toBeUndefined();
+    inlineSpy.mockClear();
+    rewriteSpy.mockClear();
+    initModelRuntimeWithUserPayload(
+      ModelProvider.OpenAI,
+      { apiKey: 'user-openai-key' },
+      { userId: 'user-1', workspaceId: 'ws-1' },
+    );
+    expect(spy.mock.calls[0]?.[2]?.beforeChat).toEqual(expect.any(Function));
+    expect(rewriteSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', workspaceId: 'ws-1' }),
+    );
+    expect(inlineSpy).not.toHaveBeenCalled();
   });
 
   it('passes a 6 MiB image cap for Cursor and the default for other inline runtimes', () => {

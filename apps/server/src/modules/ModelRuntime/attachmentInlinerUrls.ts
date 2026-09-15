@@ -17,14 +17,46 @@ const FILE_PROXY_PATH = /^\/f\/([^/]+)$/;
 const ATTACHMENT_MESSAGE_ROLES = new Set(['assistant', 'user']);
 const filesInfoBlockRe = () => /<files_info>([\s\S]*?)<\/files_info>/g;
 
+export type AttachmentUrlKind = 'file' | 'image' | 'video';
+
 export const isImageUrlPart = (
   part: UserMessageContentPart,
 ): part is Extract<UserMessageContentPart, { type: 'image_url' }> =>
   part.type === 'image_url' && typeof part.image_url?.url === 'string';
 
+export const isVideoUrlPart = (
+  part: UserMessageContentPart,
+): part is Extract<UserMessageContentPart, { type: 'video_url' }> =>
+  part.type === 'video_url' && typeof part.video_url?.url === 'string';
+
 export const countImageUrlParts = (message: OpenAIChatMessage | undefined): number => {
   if (!message || !Array.isArray(message.content)) return 0;
   return message.content.filter(isImageUrlPart).length;
+};
+
+export const setAttachmentPartUrl = (part: UserMessageContentPart, url: string): void => {
+  if (isImageUrlPart(part)) part.image_url.url = url;
+  else if (isFileUrlPart(part)) part.file_url.url = url;
+  else if (isVideoUrlPart(part)) part.video_url.url = url;
+};
+
+/**
+ * Walk user/assistant structured parts that carry an HTTP(S) or data URL
+ * (`image_url`, `file_url`, `video_url`). Shared by inline and rewrite-only modes.
+ */
+export const visitAttachmentPartUrls = (
+  messages: OpenAIChatMessage[],
+  visitor: (part: UserMessageContentPart, url: string, kind: AttachmentUrlKind) => void,
+): void => {
+  for (const message of messages) {
+    if (!ATTACHMENT_MESSAGE_ROLES.has(message.role) || !Array.isArray(message.content)) continue;
+
+    for (const part of message.content) {
+      if (isImageUrlPart(part)) visitor(part, part.image_url.url, 'image');
+      else if (isFileUrlPart(part)) visitor(part, part.file_url.url, 'file');
+      else if (isVideoUrlPart(part)) visitor(part, part.video_url.url, 'video');
+    }
+  }
 };
 
 export const isDataUri = (url: string): boolean => url.startsWith('data:');
@@ -112,6 +144,7 @@ export const hasAttachmentCandidates = (messages: OpenAIChatMessage[]): boolean 
       if (!ATTACHMENT_MESSAGE_ROLES.has(message.role)) continue;
       if (isImageUrlPart(part) && part.image_url.url && !isDataUri(part.image_url.url)) return true;
       if (isFileUrlPart(part) && !isDataUri(part.file_url.url)) return true;
+      if (isVideoUrlPart(part) && part.video_url.url && !isDataUri(part.video_url.url)) return true;
     }
   }
 
@@ -125,22 +158,29 @@ export const collectOwnOriginAttachmentUrls = (
 ): Map<string, number> => {
   const maxBytesByUrl = new Map<string, number>();
 
-  const add = (url: string | undefined, maxBytes: number) => {
-    if (!url || isDataUri(url) || !isResolvableAppFileUrl(url, origins)) return;
+  const add = (url: string, maxBytes: number) => {
+    if (isDataUri(url) || !isResolvableAppFileUrl(url, origins)) return;
     const previous = maxBytesByUrl.get(url);
     maxBytesByUrl.set(url, previous === undefined ? maxBytes : Math.max(previous, maxBytes));
   };
 
-  for (const message of messages) {
-    if (!ATTACHMENT_MESSAGE_ROLES.has(message.role) || !Array.isArray(message.content)) continue;
-
-    for (const part of message.content) {
-      if (isImageUrlPart(part)) add(part.image_url.url, caps.imageMaxBytes);
-      else if (isFileUrlPart(part)) add(part.file_url.url, caps.fileMaxBytes);
-    }
-  }
+  visitAttachmentPartUrls(messages, (_part, url, kind) => {
+    add(url, kind === 'image' ? caps.imageMaxBytes : caps.fileMaxBytes);
+  });
 
   return maxBytesByUrl;
+};
+
+const collectOwnOriginUrlSet = (
+  urls: Iterable<string>,
+  origins: OwnDeploymentOrigins,
+): Set<string> => {
+  const unique = new Set<string>();
+  for (const url of urls) {
+    if (isDataUri(url) || !isResolvableAppFileUrl(url, origins)) continue;
+    unique.add(url);
+  }
+  return unique;
 };
 
 export const mapWithConcurrency = async <T, R>(
@@ -253,10 +293,7 @@ export const inlineOwnOriginImageUrls = async (
   if (maxBytesByUrl.size === 0) return [...urls];
 
   const resolvedByUrl = await resolveUniqueUrls(maxBytesByUrl, resolver);
-  const previewUrlByUrl = await resolvePreviewUrlsForFailures(
-    resolvedByUrl,
-    resolvePreviewUrl,
-  );
+  const previewUrlByUrl = await resolvePreviewUrlsForFailures(resolvedByUrl, resolvePreviewUrl);
 
   return urls.map((url) => {
     if (!resolvedByUrl.has(url)) return url;
@@ -269,22 +306,22 @@ export const inlineOwnOriginImageUrls = async (
   });
 };
 
-export const resolvePreviewUrlsForFailures = async (
-  resolvedByUrl: Map<string, OwnOriginAttachmentBytes | null>,
-  resolvePreviewUrl?: (url: string) => Promise<string | null>,
+export const resolvePreviewUrlMap = async (
+  urls: Iterable<string>,
+  resolvePreviewUrl: (url: string) => Promise<string | null>,
 ): Promise<Map<string, string>> => {
   const previewUrlByUrl = new Map<string, string>();
-  if (!resolvePreviewUrl) return previewUrlByUrl;
+  const list = [...urls];
+  if (list.length === 0) return previewUrlByUrl;
 
-  const failedUrls = [...resolvedByUrl.entries()]
-    .filter(([, resolved]) => !resolved)
-    .map(([url]) => url);
-  if (failedUrls.length === 0) return previewUrlByUrl;
-
-  await mapWithConcurrency(failedUrls, INLINE_RESOLVE_CONCURRENCY, async (url) => {
+  await mapWithConcurrency(list, INLINE_RESOLVE_CONCURRENCY, async (url) => {
     try {
       const preview = await resolvePreviewUrl(url);
-      if (preview) previewUrlByUrl.set(url, preview);
+      if (preview) {
+        previewUrlByUrl.set(url, preview);
+        return;
+      }
+      log('leave inaccessible own-origin url untouched host=%s', sanitizedUrlHost(url));
     } catch (error) {
       log(
         'failed to resolve preview url host=%s error=%s',
@@ -295,4 +332,58 @@ export const resolvePreviewUrlsForFailures = async (
   });
 
   return previewUrlByUrl;
+};
+
+export const resolvePreviewUrlsForFailures = async (
+  resolvedByUrl: Map<string, OwnOriginAttachmentBytes | null>,
+  resolvePreviewUrl?: (url: string) => Promise<string | null>,
+): Promise<Map<string, string>> => {
+  if (!resolvePreviewUrl) return new Map();
+
+  const failedUrls = [...resolvedByUrl.entries()]
+    .filter(([, resolved]) => !resolved)
+    .map(([url]) => url);
+  return resolvePreviewUrlMap(failedUrls, resolvePreviewUrl);
+};
+
+/**
+ * Rewrite-only: replace own-deployment `/f/<id>` URLs with machine-readable
+ * object URLs. No byte fetch, no size cap. Inaccessible ids stay as-is.
+ */
+export const rewriteOwnOriginAttachmentUrls = async (
+  messages: OpenAIChatMessage[],
+  origins: OwnDeploymentOrigins,
+  resolvePreviewUrl: (url: string) => Promise<string | null>,
+): Promise<void> => {
+  const urls = new Set<string>();
+  visitAttachmentPartUrls(messages, (_part, url) => {
+    if (isDataUri(url) || !isResolvableAppFileUrl(url, origins)) return;
+    urls.add(url);
+  });
+  if (urls.size === 0) return;
+
+  const rewrittenByUrl = await resolvePreviewUrlMap(urls, resolvePreviewUrl);
+  if (rewrittenByUrl.size === 0) return;
+
+  visitAttachmentPartUrls(messages, (part, url) => {
+    const next = rewrittenByUrl.get(url);
+    if (next) setAttachmentPartUrl(part, next);
+  });
+};
+
+/**
+ * Rewrite-only counterpart of {@link inlineOwnOriginImageUrls}: map own-origin
+ * `/f/<id>` entries to presigned/public object URLs. Does not mutate `urls`.
+ */
+export const rewriteOwnOriginUrls = async (
+  urls: readonly string[],
+  origins: OwnDeploymentOrigins,
+  resolvePreviewUrl: (url: string) => Promise<string | null>,
+): Promise<string[]> => {
+  const unique = collectOwnOriginUrlSet(urls, origins);
+  if (unique.size === 0) return [...urls];
+
+  const rewrittenByUrl = await resolvePreviewUrlMap(unique, resolvePreviewUrl);
+  if (rewrittenByUrl.size === 0) return [...urls];
+  return urls.map((url) => rewrittenByUrl.get(url) ?? url);
 };

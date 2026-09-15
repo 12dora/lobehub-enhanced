@@ -221,7 +221,10 @@ class FileServiceResolvers {
     if (!fileId) return null;
     try {
       const file = await this.lookupFile(fileId);
-      if (!file?.url) return null;
+      if (!file?.url) {
+        log('skip inaccessible file id=%s', fileId);
+        return null;
+      }
       const { fileService } = await this.load();
       const preview = await fileService.getMachineReadableUrl({ id: fileId, url: file.url });
       return preview || null;

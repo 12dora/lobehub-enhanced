@@ -43,8 +43,10 @@ import {
   collectOwnOriginAttachmentUrls,
   countImageUrlParts,
   isImageUrlPart,
+  isVideoUrlPart,
   resolvePreviewUrlsForFailures,
   resolveUniqueUrls,
+  setAttachmentPartUrl,
   stripOwnOriginUrlAttributesInFilesInfo,
 } from './attachmentInlinerUrls';
 import { collectAttachedDocumentFiles, collectUserText, selectDocumentFeed } from './documentFeed';
@@ -247,14 +249,17 @@ const applyInlinedParts = async (context: PipelineContext, role: 'assistant' | '
     const next: UserMessageContentPart[] = [];
 
     for (const part of message.content) {
-      if (isImageUrlPart(part)) {
-        const url = part.image_url.url;
+      if (isImageUrlPart(part) || isVideoUrlPart(part)) {
+        const url = isImageUrlPart(part) ? part.image_url.url : part.video_url.url;
         if (context.resolvedByUrl.has(url)) {
-          part.image_url.url = applyInlinedUrl(
-            url,
-            context.resolvedByUrl.get(url) ?? null,
-            context.imageMaxBytes,
-            context.previewUrlByUrl.get(url),
+          setAttachmentPartUrl(
+            part,
+            applyInlinedUrl(
+              url,
+              context.resolvedByUrl.get(url) ?? null,
+              isImageUrlPart(part) ? context.imageMaxBytes : context.fileMaxBytes,
+              context.previewUrlByUrl.get(url),
+            ),
           );
         }
         next.push(part);
@@ -270,11 +275,9 @@ const applyInlinedParts = async (context: PipelineContext, role: 'assistant' | '
         ? (context.resolvedByUrl.get(url) ?? null)
         : null;
       if (context.resolvedByUrl.has(url)) {
-        part.file_url.url = applyInlinedUrl(
-          url,
-          resolved,
-          context.fileMaxBytes,
-          context.previewUrlByUrl.get(url),
+        setAttachmentPartUrl(
+          part,
+          applyInlinedUrl(url, resolved, context.fileMaxBytes, context.previewUrlByUrl.get(url)),
         );
       }
       next.push(part);

@@ -148,6 +148,25 @@ describe('inlineOwnOriginAttachments', () => {
     expect(resolver).toHaveBeenCalledWith(OWN_FILE_URL, DEFAULT_IMAGE_INLINE_MAX_BYTES);
   });
 
+  it('replaces an own-origin video_url with a data URI', async () => {
+    const resolver = vi.fn(async () => ({ bytes: PNG_BYTES, mimeType: 'video/mp4' }));
+    const messages: OpenAIChatMessage[] = [
+      {
+        content: [{ type: 'video_url', video_url: { url: OWN_FILE_URL } }],
+        role: 'user',
+      },
+    ];
+
+    await inlineOwnOriginAttachments(messages, resolver, ownOrigins);
+
+    expect(messages[0].content).toEqual([
+      {
+        type: 'video_url',
+        video_url: { url: `data:video/mp4;base64,${Buffer.from(PNG_BYTES).toString('base64')}` },
+      },
+    ]);
+  });
+
   it('leaves a foreign image_url untouched', async () => {
     const resolver = vi.fn();
     const messages = [imageMessage(FOREIGN_URL)];

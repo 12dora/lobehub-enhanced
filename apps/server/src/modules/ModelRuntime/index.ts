@@ -69,7 +69,10 @@ import { ensureFreshOAuthToken } from '@/server/services/oauthDeviceFlow/refresh
 import { KeyVaultsGateKeeper } from '../KeyVaultsEncrypt';
 import apiKeyManager from './apiKeyManager';
 import { getAttachmentCapabilities } from './attachmentCapabilities';
-import { createOwnOriginAttachmentInlineHooks } from './attachmentInliner';
+import {
+  createOwnOriginAttachmentInlineHooks,
+  createOwnOriginAttachmentRewriteHooks,
+} from './attachmentInliner';
 import type { ModelRuntimeConversation } from './conversationIdentity';
 
 export * from './conversationIdentity';
@@ -838,6 +841,55 @@ const bindChatGPTWebRuntimeSession = ({
   }
 };
 
+const createRuntimeAttachmentHooks = (
+  runtimeProvider: string,
+  userId?: string,
+  workspaceId?: string,
+): ModelRuntimeHooks => {
+  if (!OWN_ORIGIN_ATTACHMENT_INLINE_RUNTIMES.has(runtimeProvider)) {
+    return createOwnOriginAttachmentRewriteHooks({
+      ownOrigins: resolveOwnDeploymentOrigins,
+      userId,
+      workspaceId,
+    });
+  }
+
+  const attachmentCaps = getAttachmentCapabilities(runtimeProvider);
+  let feedLimitsPromise: Promise<{ imageMaxCount: number; maxDocsPerRequest: number }> | undefined;
+  const resolveFeedLimits = async () => {
+    feedLimitsPromise ??= (async () => {
+      try {
+        const settings = await getEffectiveDocumentRenderSettings();
+        return {
+          imageMaxCount: Math.min(attachmentCaps.imageMaxCount, settings.maxImagesDefault),
+          maxDocsPerRequest: settings.maxDocsPerRequest,
+        };
+      } catch (error) {
+        console.error('document-render feed settings failed', error);
+        return {
+          imageMaxCount: attachmentCaps.imageMaxCount,
+          maxDocsPerRequest: DOCUMENT_RENDER_DEFAULTS.maxDocsPerRequest,
+        };
+      }
+    })();
+    return feedLimitsPromise;
+  };
+
+  return createOwnOriginAttachmentInlineHooks({
+    ...(attachmentCaps.imageMaxBytes !== DEFAULT_IMAGE_INLINE_MAX_BYTES
+      ? { imageMaxBytes: attachmentCaps.imageMaxBytes }
+      : {}),
+    ...(attachmentCaps.imageMaxCount !== DOCUMENT_RENDER_DEFAULTS.maxImagesDefault
+      ? { imageMaxCount: attachmentCaps.imageMaxCount }
+      : {}),
+    ownOrigins: resolveOwnDeploymentOrigins,
+    resolveFeedLimits,
+    tools: attachmentCaps.tools,
+    userId,
+    workspaceId,
+  });
+};
+
 export const initModelRuntimeWithUserPayload = (
   provider: string,
   payload: ClientSecretPayload,
@@ -916,6 +968,21 @@ export const initModelRuntimeWithUserPayload = (
   const wrap = <T extends object>(runtime: T): T =>
     hook ? hook.wrapRuntimeWithEgressScope(runtime, scope) : runtime;
 
+  /**
+   * ChatGPT / Grok / Cursor / SuperGrok / ChatGPT Web inline small own-origin
+   * attachments (then presign leftovers). Every other runtime only rewrites
+   * `/f/<id>` to a machine-readable object URL — providers cannot present a
+   * browser cookie to GET /f/:id.
+   */
+  const composedHooks = mergeModelRuntimeHooks(
+    createRuntimeAttachmentHooks(
+      runtimeProvider,
+      typeof restParams.userId === 'string' ? restParams.userId : undefined,
+      typeof restParams.workspaceId === 'string' ? restParams.workspaceId : undefined,
+    ),
+    hooks,
+  );
+
   if (runtimeProvider === ModelProvider.VertexAI) {
     const vertexOptions = buildVertexOptions(payload, restParams as never);
     const runtime = LobeVertexAI.initFromVertexAI({
@@ -923,46 +990,8 @@ export const initModelRuntimeWithUserPayload = (
       ...(customFetch ? { fetch: customFetch } : {}),
     });
 
-    return wrap(new ModelRuntime(runtime, hooks));
+    return wrap(new ModelRuntime(runtime, composedHooks));
   }
-
-  const attachmentCaps = getAttachmentCapabilities(runtimeProvider);
-  let feedLimitsPromise: Promise<{ imageMaxCount: number; maxDocsPerRequest: number }> | undefined;
-  const resolveFeedLimits = async () => {
-    feedLimitsPromise ??= (async () => {
-      try {
-        const settings = await getEffectiveDocumentRenderSettings();
-        return {
-          imageMaxCount: Math.min(attachmentCaps.imageMaxCount, settings.maxImagesDefault),
-          maxDocsPerRequest: settings.maxDocsPerRequest,
-        };
-      } catch (error) {
-        console.error('document-render feed settings failed', error);
-        return {
-          imageMaxCount: attachmentCaps.imageMaxCount,
-          maxDocsPerRequest: DOCUMENT_RENDER_DEFAULTS.maxDocsPerRequest,
-        };
-      }
-    })();
-    return feedLimitsPromise;
-  };
-  const attachmentInlineHooks = OWN_ORIGIN_ATTACHMENT_INLINE_RUNTIMES.has(runtimeProvider)
-    ? createOwnOriginAttachmentInlineHooks({
-        ...(attachmentCaps.imageMaxBytes !== DEFAULT_IMAGE_INLINE_MAX_BYTES
-          ? { imageMaxBytes: attachmentCaps.imageMaxBytes }
-          : {}),
-        ...(attachmentCaps.imageMaxCount !== DOCUMENT_RENDER_DEFAULTS.maxImagesDefault
-          ? { imageMaxCount: attachmentCaps.imageMaxCount }
-          : {}),
-        ownOrigins: resolveOwnDeploymentOrigins,
-        resolveFeedLimits,
-        tools: attachmentCaps.tools,
-        userId: typeof restParams.userId === 'string' ? restParams.userId : undefined,
-        workspaceId:
-          typeof restParams.workspaceId === 'string' ? restParams.workspaceId : undefined,
-      })
-    : undefined;
-  const composedHooks = mergeModelRuntimeHooks(attachmentInlineHooks, hooks);
 
   return wrap(
     ModelRuntime.initializeWithProvider(
