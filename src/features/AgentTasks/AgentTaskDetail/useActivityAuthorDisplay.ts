@@ -7,8 +7,9 @@ import { isInboxAgentId } from '../shared/isInboxAgent';
 import { useAgentDisplayMeta } from '../shared/useAgentDisplayMeta';
 
 /**
- * Belt-and-suspenders: inbox agent authors re-resolve through client branding
- * instead of trusting stale server `author.name` / `author.avatar`.
+ * The server already resolves inbox agent authors to the admin-configured identity
+ * (catalog → branding → default), so `author.name` / `author.avatar` always win.
+ * Client branding only fills the gaps for legacy rows that carry no author identity.
  */
 export const useActivityAuthorDisplay = (
   author?: TaskDetailActivityAuthor,
@@ -25,7 +26,7 @@ export const useActivityAuthorDisplay = (
 
   return {
     ...author,
-    avatar: inboxMeta?.avatar ?? author.avatar,
-    name: inboxMeta?.title ?? author.name,
+    avatar: author.avatar?.trim() ? author.avatar : inboxMeta?.avatar,
+    name: author.name?.trim() ? author.name : inboxMeta?.title,
   };
 };
