@@ -80,7 +80,7 @@ describe('DingTalkClientFactory', () => {
     mockGatewayState.value = 'connected';
     mockGatewayStart.mockResolvedValue(undefined);
     mockCreateDingTalkAdapter.mockReturnValue({ name: 'dingtalk' });
-    vi.mocked(DingTalkWSConnection).mockImplementation((options: any) => {
+    vi.mocked(DingTalkWSConnection).mockImplementation(((options: any) => {
       mockGatewayCtorOptions.last = options;
       return {
         close: mockGatewayClose,
@@ -89,7 +89,7 @@ describe('DingTalkClientFactory', () => {
           return mockGatewayState.value;
         },
       };
-    });
+    }) as never);
   });
 
   afterEach(() => {

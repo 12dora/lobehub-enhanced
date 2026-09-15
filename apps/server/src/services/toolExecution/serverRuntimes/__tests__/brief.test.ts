@@ -48,6 +48,7 @@ describe('briefRuntime.requestCheckpoint', () => {
       agentId: 'agt-1',
       operationId: 'op-1',
       serverDB: {} as any,
+      toolManifestMap: {},
       taskId: 'task-1',
       topicId: 'topic-1',
       userId: 'runner-1',

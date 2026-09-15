@@ -3853,7 +3853,7 @@ export class AiAgentService {
           taskManager: {
             contextPrompt: (await import('@lobechat/prompts')).buildTaskManagerDefaultsPrompt({
               defaultAssigneeAgentId: appContext.defaultTaskAssigneeAgentId,
-              defaultAssigneeDisplayName: inboxIdentity.title,
+              defaultAssigneeDisplayName: inboxIdentity.title ?? undefined,
             }),
           },
         },

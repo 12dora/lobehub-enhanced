@@ -188,7 +188,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
                         : t('task.reminder.channel.inboxDesc')}
                     </Text>
                     {isDingTalk && dingtalkStatus === 'error' && (
-                      <Button outdent size={'small'} type={'link'} onClick={retryDingTalk}>
+                      <Button size={'small'} type={'link'} onClick={retryDingTalk}>
                         {t('task.reminder.channel.dingtalkRetry')}
                       </Button>
                     )}
