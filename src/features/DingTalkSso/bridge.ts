@@ -6,8 +6,7 @@
  * component owns only the overall timeout and the final `location.replace`.
  */
 
-export const DINGTALK_JSAPI_SRC =
-  'https://g.alicdn.com/dingding/dingtalk-jsapi/3.0.34/dingtalk.open.js';
+export const DINGTALK_JSAPI_SRC = '/vendor/dingtalk/dingtalk.open.js';
 
 /** Past this the bridge stops waiting on DingTalk and hands the user to the normal login. */
 export const DINGTALK_SSO_TIMEOUT_MS = 8000;

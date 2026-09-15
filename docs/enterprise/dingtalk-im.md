@@ -38,3 +38,7 @@
 - 容器出网经 `HTTP(S)_PROXY`，`NODE_USE_ENV_PROXY=1` 使 Node 的 fetch 与 WebSocket 均经代理；`NO_PROXY` 需包含 `localhost,127.0.0.1`。
 - 单实例部署：Stream 连接与调度 worker 都在服务进程内，多副本时分别依赖钉钉的多连接分发与 Redis 锁。
 - 排查：`DEBUG=lobe-server:messenger:*,lobe-server:task-scheduling` 查看连接/转发/调度日志；Redis 键 `messenger:dingtalk:*`；`notification_deliveries` 表的 `failed_reason`。
+
+## 免登页 JSAPI
+
+`/dingtalk/sso` 页面加载的钉钉 JSAPI 为仓库自带副本 `public/vendor/dingtalk/dingtalk.open.js`（来源 `https://g.alicdn.com/dingding/dingtalk-jsapi/3.0.31/dingtalk.open.js`，2026-09-15 取得）。此前引用的 CDN 版本 3.0.34 不存在（404），导致手机端免登页在 `script_load_failed` 阶段回退到登录页；诊断上报见 `POST /api/auth/dingtalk/sso/diag`（容器日志 `[dingtalk-sso-diag]`）。升级 JSAPI 时替换该文件即可。
