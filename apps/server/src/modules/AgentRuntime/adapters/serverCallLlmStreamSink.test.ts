@@ -4,6 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeExecutorContext } from '../context';
 import { createServerCallLlmStreamSink } from './serverCallLlmStreamSink';
 
+const fileServiceCtor = vi.hoisted(() => vi.fn());
+
+vi.mock('@/server/services/file', () => ({
+  FileService: class FileService {
+    constructor(...args: unknown[]) {
+      fileServiceCtor(...args);
+    }
+    uploadBase64 = vi.fn();
+  },
+}));
+
 const createSink = () => {
   const events: AgentEvent[] = [];
   const publishStreamChunk = vi.fn(async () => 'event-1');
@@ -197,5 +208,27 @@ describe('ServerCallLlmStreamSink flush ordering', () => {
 
     await expect(sink.flushEndOfStream()).rejects.toThrow('reasoning failed');
     expect(publishedTypes(publishStreamChunk)).toEqual(['reasoning', 'text']);
+  });
+});
+
+describe('ServerCallLlmStreamSink image upload workspace', () => {
+  it('constructs FileService with the operation workspaceId', () => {
+    fileServiceCtor.mockClear();
+    const serverDB = {} as RuntimeExecutorContext['serverDB'];
+
+    createServerCallLlmStreamSink({
+      ctx: {
+        operationId: 'op-1',
+        serverDB,
+        stepIndex: 2,
+        streamManager: { publishStreamChunk: vi.fn() },
+        userId: 'user-1',
+        workspaceId: 'ws-1',
+      } as unknown as RuntimeExecutorContext,
+      events: [],
+      operationLogId: 'op-1:2',
+    });
+
+    expect(fileServiceCtor).toHaveBeenCalledWith(serverDB, 'user-1', 'ws-1');
   });
 });

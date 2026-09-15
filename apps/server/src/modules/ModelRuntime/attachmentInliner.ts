@@ -38,6 +38,29 @@ const log = debug('lobe-server:attachment-inliner');
 const resolveMaybeLazy = async <T>(value: T | Promise<T> | (() => T | Promise<T>)): Promise<T> =>
   typeof value === 'function' ? (value as () => T | Promise<T>)() : value;
 
+const isHttpCreateImageUrl = (url: unknown): url is string =>
+  typeof url === 'string' && url.length > 0 && !isDataUri(url);
+
+const createImageParamsHaveHttpUrls = (params: {
+  imageUrl?: string;
+  imageUrls?: string[];
+}): boolean =>
+  isHttpCreateImageUrl(params.imageUrl) ||
+  Boolean(params.imageUrls?.some((url) => isHttpCreateImageUrl(url)));
+
+const rewriteCreateImageParams = async (
+  params: { imageUrl?: string; imageUrls?: string[] },
+  rewriteUrls: (urls: readonly string[]) => Promise<string[]>,
+): Promise<void> => {
+  if (isHttpCreateImageUrl(params.imageUrl)) {
+    const [next] = await rewriteUrls([params.imageUrl]);
+    params.imageUrl = next;
+  }
+  if (params.imageUrls?.some((url) => isHttpCreateImageUrl(url))) {
+    params.imageUrls = await rewriteUrls(params.imageUrls);
+  }
+};
+
 export const createOwnOriginAttachmentInlineHooks = (
   input: CreateOwnOriginAttachmentInlineHooksInput,
 ): ModelRuntimeHooks => {
@@ -88,17 +111,18 @@ export const createOwnOriginAttachmentInlineHooks = (
     },
     beforeCreateImage: async (payload) => {
       try {
-        const urls = payload.params.imageUrls;
-        if (!urls?.some((url) => typeof url === 'string' && !isDataUri(url))) return;
+        if (!createImageParamsHaveHttpUrls(payload.params)) return;
 
         const origins = await resolveMaybeLazy(input.ownOrigins);
         const resolvers = createFileServiceResolvers(input, origins);
-        payload.params.imageUrls = await inlineOwnOriginImageUrls(
-          urls,
-          resolvers.resolveByUrl,
-          origins,
-          imageMaxBytes,
-          resolvers.resolvePreviewUrl,
+        await rewriteCreateImageParams(payload.params, (urls) =>
+          inlineOwnOriginImageUrls(
+            urls,
+            resolvers.resolveByUrl,
+            origins,
+            imageMaxBytes,
+            resolvers.resolvePreviewUrl,
+          ),
         );
       } catch (error) {
         log(
@@ -147,15 +171,12 @@ export const createOwnOriginAttachmentRewriteHooks = (
           log('skip rewrite (no userId)');
           return;
         }
-        const urls = payload.params.imageUrls;
-        if (!urls?.some((url) => typeof url === 'string' && !isDataUri(url))) return;
+        if (!createImageParamsHaveHttpUrls(payload.params)) return;
 
         const origins = await resolveMaybeLazy(input.ownOrigins);
         const resolvers = createFileServiceResolvers(input, origins);
-        payload.params.imageUrls = await rewriteOwnOriginUrls(
-          urls,
-          origins,
-          resolvers.resolvePreviewUrl,
+        await rewriteCreateImageParams(payload.params, (urls) =>
+          rewriteOwnOriginUrls(urls, origins, resolvers.resolvePreviewUrl),
         );
       } catch (error) {
         log(

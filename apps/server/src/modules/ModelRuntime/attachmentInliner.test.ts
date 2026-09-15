@@ -8,8 +8,6 @@ import {
 } from '@lobechat/utils/imageToBase64';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileModel } from '@/database/models/file';
-
 import {
   createOwnOriginAttachmentInlineHooks,
   inlineOwnOriginAttachments,
@@ -18,13 +16,20 @@ import {
 import { getDocumentFeedStats, resetDocumentFeedStatsForTest } from './documentFeedStats';
 
 const fileServiceMocks = vi.hoisted(() => ({
+  ctorCalls: [] as Array<{ userId: string; workspaceId?: string }>,
   getFileByteArray: vi.fn(),
   getFileContent: vi.fn(),
   getMachineReadableUrl: vi.fn(),
 }));
 
 const fileModelMocks = vi.hoisted(() => ({
+  constructorCalls: [] as unknown[][],
   findById: vi.fn(),
+  getFileById: vi.fn(),
+}));
+
+const fileAccessMocks = vi.hoisted(() => ({
+  resolveFileAccess: vi.fn(),
 }));
 
 const pdfPageImagesMocks = vi.hoisted(() => ({
@@ -48,17 +53,26 @@ vi.mock('./pdfPageImages', () => ({
 
 vi.mock('@/server/services/file', () => ({
   FileService: class FileService {
+    constructor(_db: unknown, userId: string, workspaceId?: string) {
+      fileServiceMocks.ctorCalls.push({ userId, workspaceId });
+    }
     getFileByteArray = fileServiceMocks.getFileByteArray;
     getFileContent = fileServiceMocks.getFileContent;
     getMachineReadableUrl = fileServiceMocks.getMachineReadableUrl;
   },
 }));
 
+vi.mock('@/server/services/file/fileAccess', () => ({
+  resolveFileAccess: (...args: unknown[]) => fileAccessMocks.resolveFileAccess(...args),
+}));
+
 vi.mock('@/database/models/file', () => ({
   FileModel: class FileModel {
-    static getFileById = async (_db: unknown, _id: string) => undefined;
+    static getFileById = (...args: unknown[]) => fileModelMocks.getFileById(...args);
     findById = fileModelMocks.findById;
-    constructor(_db?: unknown, _userId?: string, _workspaceId?: string) {}
+    constructor(...args: unknown[]) {
+      fileModelMocks.constructorCalls.push(args);
+    }
   },
 }));
 
@@ -1112,14 +1126,19 @@ describe('inlineOwnOriginImageUrls', () => {
 describe('createOwnOriginAttachmentInlineHooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fileServiceMocks.ctorCalls.length = 0;
+    fileModelMocks.constructorCalls.length = 0;
     fileServiceMocks.getFileByteArray.mockReset();
     fileServiceMocks.getMachineReadableUrl.mockReset();
     fileServiceMocks.getMachineReadableUrl.mockImplementation(
       async (file: { url?: string | null }) =>
         file.url ? `https://presigned.example.com/${file.url}` : '',
     );
+    fileModelMocks.getFileById.mockReset();
+    fileModelMocks.getFileById.mockResolvedValue(undefined);
     fileModelMocks.findById.mockReset();
-    fileModelMocks.findById.mockResolvedValue(undefined);
+    fileAccessMocks.resolveFileAccess.mockReset();
+    fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
   });
 
   afterEach(() => {
@@ -1127,7 +1146,6 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
   });
 
   it('does not look up files when userId is missing', async () => {
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
 
     const messages = [imageMessage(OWN_FILE_URL)];
@@ -1138,20 +1156,21 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(fileModelMocks.findById).not.toHaveBeenCalled();
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileServiceMocks.ctorCalls).toEqual([]);
+    expect(fileModelMocks.constructorCalls).toEqual([]);
+    expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
+    expect(fileAccessMocks.resolveFileAccess).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
     expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
   });
 
   it('skips an over-cap files-row without reading bytes and falls back to a preview URL', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: DEFAULT_IMAGE_INLINE_MAX_BYTES + 1,
       url: 'files/huge.png',
     } as never);
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
 
     const messages = [imageMessage(OWN_FILE_URL)];
@@ -1163,8 +1182,8 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-1');
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).toHaveBeenCalledWith({}, 'file-1');
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
     expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith({
       id: 'file-1',
@@ -1176,7 +1195,7 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
   });
 
   it('skips a Cursor-capped files-row without reading bytes and falls back to a preview URL', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: CURSOR_IMAGE_INLINE_MAX_BYTES + 1,
       url: 'files/cursor-huge.png',
@@ -1203,7 +1222,6 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
   });
 
   it('does not look up a raw S3 URL', async () => {
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     const messages = [imageMessage(S3_URL)];
     const hooks = createOwnOriginAttachmentInlineHooks({
       db: {} as never,
@@ -1213,18 +1231,18 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
     expect(fileModelMocks.findById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
   });
 
-  it('inlines a /f/<id> image through FileModel then getFileByteArray(file.url)', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+  it('inlines a /f/<id> image through getFileById then getFileByteArray(file.url)', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: PNG_BYTES.byteLength,
       url: 'files/cat.png',
+      userId: 'user-1',
     } as never);
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
 
     const messages = [imageMessage(OWN_FILE_URL)];
@@ -1232,19 +1250,24 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
       db: {} as never,
       ownOrigins,
       userId: 'user-1',
+      workspaceId: 'ws-1',
     });
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-1');
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileServiceMocks.ctorCalls).toEqual([{ userId: 'user-1', workspaceId: 'ws-1' }]);
+    expect(fileModelMocks.getFileById).toHaveBeenCalledWith({}, 'file-1');
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
+    expect(fileAccessMocks.resolveFileAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ viewerUserId: 'user-1' }),
+    );
     expect(fileServiceMocks.getFileByteArray).toHaveBeenCalledWith('files/cat.png');
     expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([{ image_url: { url: PNG_DATA_URI }, type: 'image_url' }]);
   });
 
   it('falls back to a preview URL when byte fetch fails', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: PNG_BYTES.byteLength,
       url: 'files/cat.png',
@@ -1269,8 +1292,8 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     ]);
   });
 
-  it('applies the same /f/<id> rules to beforeCreateImage', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+  it('applies the same /f/<id> rules to beforeCreateImage imageUrls', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: PNG_BYTES.byteLength,
       url: 'files/cat.png',
@@ -1290,9 +1313,79 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     expect(fileServiceMocks.getFileByteArray).toHaveBeenCalledTimes(1);
   });
 
+  it('inlines beforeCreateImage imageUrl (singular) the same way as imageUrls', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
+      fileType: 'image/png',
+      size: PNG_BYTES.byteLength,
+      url: 'files/cat.png',
+    } as never);
+    fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
+
+    const params = { imageUrl: OWN_FILE_URL, imageUrls: [] as string[], prompt: 'edit' };
+    const hooks = createOwnOriginAttachmentInlineHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeCreateImage?.({ model: 'test', params } as never);
+
+    expect(params.imageUrl).toBe(PNG_DATA_URI);
+    expect(params.imageUrls).toEqual([]);
+    expect(fileServiceMocks.getFileByteArray).toHaveBeenCalledWith('files/cat.png');
+  });
+
+  it("resolves the owner's personal file while the request carries a workspace id", async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
+      fileType: 'image/png',
+      size: PNG_BYTES.byteLength,
+      url: 'files/personal.png',
+      userId: 'user-1',
+      workspaceId: null,
+    } as never);
+    fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
+    fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
+
+    const messages = [imageMessage(OWN_FILE_URL)];
+    const hooks = createOwnOriginAttachmentInlineHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+    });
+
+    await hooks.beforeChat?.({ messages, model: 'test' } as never);
+
+    expect(messages[0].content).toEqual([{ image_url: { url: PNG_DATA_URI }, type: 'image_url' }]);
+  });
+
+  it('denies topic_share and auditor reasons on the machine path', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
+      fileType: 'image/png',
+      size: PNG_BYTES.byteLength,
+      url: 'files/cat.png',
+    } as never);
+    fileAccessMocks.resolveFileAccess.mockResolvedValue({
+      allowed: true,
+      reason: 'topic_share',
+    });
+    fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
+
+    const messages = [imageMessage(OWN_FILE_URL)];
+    const hooks = createOwnOriginAttachmentInlineHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeChat?.({ messages, model: 'test' } as never);
+
+    expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
+    expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
+  });
+
   it('does not attach images for a foreign files_info file id', async () => {
-    fileModelMocks.findById.mockResolvedValue(undefined);
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
+    fileModelMocks.getFileById.mockResolvedValue(undefined);
     pdfPageImagesMocks.renderPdfPagesToPng.mockResolvedValue(rasterPageWithTiles());
     fileServiceMocks.getFileByteArray.mockResolvedValue(PDF_BYTES);
 
@@ -1311,8 +1404,8 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(fileModelMocks.findById).toHaveBeenCalled();
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).toHaveBeenCalled();
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
     expect(pdfPageImagesMocks.renderPdfPagesToPng).not.toHaveBeenCalled();
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
     expect(messages[0].content).toBe(
@@ -1320,13 +1413,12 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
     );
   });
 
-  it('uses findById when userId is set and skips getFileById', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+  it('uses getFileById + resolveFileAccess when userId is set', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: PNG_BYTES.byteLength,
       url: 'files/cat.png',
     } as never);
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     fileServiceMocks.getFileByteArray.mockResolvedValue(PNG_BYTES);
 
     const messages = [imageMessage(OWN_FILE_URL)];
@@ -1338,8 +1430,8 @@ describe('createOwnOriginAttachmentInlineHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'test' } as never);
 
-    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-1');
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).toHaveBeenCalledWith({}, 'file-1');
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([{ image_url: { url: PNG_DATA_URI }, type: 'image_url' }]);
   });
 });
@@ -1348,6 +1440,7 @@ describe('document render feed + viewDocumentPages markers', () => {
   beforeEach(() => {
     pdfPageImagesMocks.renderPdfPagesToPng.mockReset();
     pdfPageImagesMocks.renderPdfPagesToPng.mockResolvedValue([]);
+    fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1617,7 +1710,7 @@ describe('document render feed + viewDocumentPages markers', () => {
 
   it('applies resolveFeedLimits to the shared per-request image budget', async () => {
     pdfPageImagesMocks.renderPdfPagesToPng.mockResolvedValue(rasterPageWithTiles());
-    fileModelMocks.findById.mockResolvedValue({
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'application/pdf',
       size: PDF_BYTES.byteLength,
       url: 'files/scan.pdf',
@@ -1706,7 +1799,7 @@ describe('document render feed + viewDocumentPages markers', () => {
     vi.setSystemTime(new Date('2026-08-22T00:00:00.000Z'));
     try {
       const updatedAt = new Date().toISOString();
-      fileModelMocks.findById.mockResolvedValue({
+      fileModelMocks.getFileById.mockResolvedValue({
         id: 'file-1',
         metadata: { render: { status: 'pending', tier: 'T2', updatedAt } },
         name: 'deck.pptx',
@@ -1734,7 +1827,7 @@ describe('document render feed + viewDocumentPages markers', () => {
   });
 
   it('does not fetch a text index whose key is outside the file prefix', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+    fileModelMocks.getFileById.mockResolvedValue({
       id: 'file-1',
       metadata: {
         render: {

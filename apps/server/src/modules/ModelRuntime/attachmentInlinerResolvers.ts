@@ -6,8 +6,10 @@ import debug from 'debug';
 
 import { getServerDB } from '@/database/core/db-adaptor';
 import { FileModel } from '@/database/models/file';
+import type { FileItem } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 import { FileService } from '@/server/services/file';
+import { resolveFileAccess } from '@/server/services/file/fileAccess';
 
 import { isArtifactKeyForFile } from './attachmentInlinerPdf';
 import type {
@@ -36,17 +38,13 @@ const resolveMaybeLazy = async <T>(value: T | Promise<T> | (() => T | Promise<T>
 
 interface LoadedFileServices {
   db: LobeChatDatabase;
-  fileModel?: FileModel;
-  fileService: FileService;
+  fileService?: FileService;
 }
 
 class FileServiceResolvers {
   private readonly authorizedFileIds = new Set<string>();
   private readonly byFileId = new Map<string, Promise<OwnOriginAttachmentBytes | null>>();
-  private readonly fileLookup = new Map<
-    string,
-    Promise<Awaited<ReturnType<FileModel['findById']>>>
-  >();
+  private readonly fileLookup = new Map<string, Promise<FileItem | undefined>>();
   private loaded?: Promise<LoadedFileServices>;
   private renderWaitDeadline?: number;
 
@@ -58,12 +56,10 @@ class FileServiceResolvers {
   private load(): Promise<LoadedFileServices> {
     this.loaded ??= (async () => {
       const db = await resolveMaybeLazy(this.input.db ?? getServerDB);
+      const { userId } = this.input;
       return {
         db,
-        fileModel: this.input.userId
-          ? new FileModel(db, this.input.userId, this.input.workspaceId)
-          : undefined,
-        fileService: new FileService(db, this.input.userId ?? '', this.input.workspaceId),
+        fileService: userId ? new FileService(db, userId, this.input.workspaceId) : undefined,
       };
     })();
     return this.loaded;
@@ -73,10 +69,27 @@ class FileServiceResolvers {
     const existing = this.fileLookup.get(fileId);
     if (existing) return existing;
     const pending = (async () => {
-      const { fileModel } = await this.load();
-      if (fileModel) return fileModel.findById(fileId);
-      log('skip file lookup id=%s (no userId)', fileId);
-      return undefined;
+      if (!this.input.userId) {
+        log('skip file lookup id=%s (no userId)', fileId);
+        return undefined;
+      }
+      const { db } = await this.load();
+      const file = await FileModel.getFileById(db, fileId);
+      if (!file) return undefined;
+      const access = await resolveFileAccess({
+        db,
+        file,
+        viewerUserId: this.input.userId,
+      });
+      if (!access.allowed || (access.reason !== 'owner' && access.reason !== 'workspace')) {
+        log(
+          'machine-path /f/ denied id=%s reason=%s',
+          fileId,
+          access.allowed ? access.reason : 'denied',
+        );
+        return undefined;
+      }
+      return file;
     })();
     this.fileLookup.set(fileId, pending);
     const file = await pending;
@@ -103,12 +116,13 @@ class FileServiceResolvers {
     maxBytes: number,
   ): Promise<OwnOriginAttachmentBytes | null> {
     try {
-      const { fileService } = await this.load();
       const file = await this.lookupFile(fileId);
       if (!file) {
         log('file not found id=%s', fileId);
         return null;
       }
+      const { fileService } = await this.load();
+      if (!fileService) return null;
       // Check the files-row size before reading so over-cap objects never enter memory.
       if (typeof file.size === 'number' && file.size > maxBytes) {
         log('skip over-cap file id=%s size=%d max=%d', fileId, file.size, maxBytes);
@@ -153,11 +167,11 @@ class FileServiceResolvers {
       let render = readFileRenderMetadata(file?.metadata);
       if (!file || !isFreshPendingRender(render)) return render;
       bumpDocumentFeedStat('pendingWaits');
-      const { fileModel } = await this.load();
+      const { db } = await this.load();
       this.renderWaitDeadline ??= Date.now() + RENDER_WAIT_BUDGET_MS;
       while (render && render.status === 'pending' && Date.now() < this.renderWaitDeadline) {
         await new Promise((resolve) => setTimeout(resolve, RENDER_WAIT_POLL_MS));
-        const current = fileModel ? await fileModel.findById(fileId) : undefined;
+        const current = await FileModel.getFileById(db, fileId);
         render = readFileRenderMetadata(current?.metadata) ?? render;
       }
       return render;
@@ -179,6 +193,7 @@ class FileServiceResolvers {
       }
       if (!(await this.authorizeFile(fileId))) return undefined;
       const { fileService } = await this.load();
+      if (!fileService) return undefined;
       const raw = await fileService.getFileContent(key);
       const parsed: unknown = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
@@ -202,6 +217,7 @@ class FileServiceResolvers {
         return null;
       }
       const { fileService } = await this.load();
+      if (!fileService) return null;
       const bytes = await fileService.getFileByteArray(key);
       if (!bytes?.byteLength) return null;
       return bytes;
@@ -226,6 +242,9 @@ class FileServiceResolvers {
         return null;
       }
       const { fileService } = await this.load();
+      if (!fileService) return null;
+      // With S3_SET_ACL=1 + S3_PUBLIC_DOMAIN this is a durable public URL, not
+      // a short-lived presigned link; otherwise it is a cached presigned URL.
       const preview = await fileService.getMachineReadableUrl({ id: fileId, url: file.url });
       return preview || null;
     } catch (error) {

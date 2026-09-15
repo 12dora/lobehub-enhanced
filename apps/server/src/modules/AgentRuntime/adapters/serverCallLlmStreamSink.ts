@@ -77,7 +77,9 @@ export class ServerCallLlmStreamSink {
     // satisfies its optional type — it is always present in this executor.
     // A missing-S3-config failure surfaces later at uploadBase64 (caught per
     // image in uploadPartImage), never at construction.
-    this.imageUploadService = ctx.userId ? new FileService(ctx.serverDB, ctx.userId) : undefined;
+    this.imageUploadService = ctx.userId
+      ? new FileService(ctx.serverDB, ctx.userId, ctx.workspaceId)
+      : undefined;
     this.streamManager = ctx.streamManager;
   }
 

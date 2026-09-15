@@ -8,6 +8,7 @@ import { initializeRedis, isRedisEnabled } from '@/libs/redis';
 import { getInfraSnapshot } from '@/server/enterprise/services/infraSettings/snapshot';
 import { createFileS3, FileS3 } from '@/server/modules/S3';
 
+import { resolveFileAccess } from '../fileAccess';
 import { buildPublicFileUrl, extractKeyFromS3Pathname, type S3PublicUrlConfig } from './s3Url';
 import type { FileServiceImpl, PreSignedUpload } from './type';
 
@@ -237,18 +238,35 @@ export class S3StaticFileImpl implements FileServiceImpl {
     return publicUrl;
   }
 
+  /**
+   * Resolve `/f/<id>` to an object key. Unscoped impls (branding, `/f/[id]/route.ts`)
+   * return the storage key only. Viewer-scoped impls load the row unscoped and
+   * accept only `owner` / `workspace` — never topic-share or auditor, and never
+   * the client-supplied `X-Workspace-Id`.
+   */
   private async lookupFileProxyStorageKey(fileId: string): Promise<string | null> {
-    if (this.userId) {
-      const file = await new FileModel(this.db, this.userId, this.workspaceId).findById(fileId);
-      if (!file) {
-        log('scoped /f/ lookup missed fileId=%s userId=%s', fileId, this.userId);
-        return null;
-      }
-      return file.url ?? null;
+    const file = await FileModel.getFileById(this.db, fileId);
+    if (!this.userId) return file?.url ?? null;
+    if (!file) {
+      log('unscoped /f/ lookup missed fileId=%s userId=%s', fileId, this.userId);
+      return null;
     }
 
-    const file = await FileModel.getFileById(this.db, fileId);
-    return file?.url ?? null;
+    const access = await resolveFileAccess({
+      db: this.db,
+      file,
+      viewerUserId: this.userId,
+    });
+    if (!access.allowed || (access.reason !== 'owner' && access.reason !== 'workspace')) {
+      log(
+        'machine-path /f/ denied fileId=%s userId=%s reason=%s',
+        fileId,
+        this.userId,
+        access.allowed ? access.reason : 'denied',
+      );
+      return null;
+    }
+    return file.url ?? null;
   }
 
   async getKeyFromFullUrl(url: string): Promise<string | null> {

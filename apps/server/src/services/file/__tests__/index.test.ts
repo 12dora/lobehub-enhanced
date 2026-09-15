@@ -18,24 +18,35 @@ vi.mock('@/envs/app', () => ({
   },
 }));
 
-vi.mock('../impls', () => ({
-  createFileServiceModule: () => ({
-    deleteFile: vi.fn(),
-    deleteFiles: vi.fn(),
-    getFileContent: vi.fn(),
-    getFileByteArray: vi.fn(),
-    getFileMetadata: vi.fn(),
+const implModuleMocks = vi.hoisted(() => {
+  const createImpl = () => ({
+    createCachedPreSignedUrlForPreview: vi.fn(),
     createPreSignedUpload: vi.fn(),
     createPreSignedUrl: vi.fn(),
     createPreSignedUrlForPreview: vi.fn(),
-    createCachedPreSignedUrlForPreview: vi.fn(),
-    uploadContent: vi.fn(),
+    deleteFile: vi.fn(),
+    deleteFiles: vi.fn(),
+    getFileByteArray: vi.fn(),
+    getFileContent: vi.fn(),
+    getFileMetadata: vi.fn(),
     getFullFileUrl: vi.fn(),
     getKeyFromFullUrl: vi.fn(),
-    uploadBuffer: vi.fn(),
-    uploadMedia: vi.fn(),
     listObjectKeysByPrefix: vi.fn(),
-  }),
+    uploadBuffer: vi.fn(),
+    uploadContent: vi.fn(),
+    uploadMedia: vi.fn(),
+  });
+  return { createFileServiceModule: vi.fn(createImpl) };
+});
+
+vi.mock('../impls', () => ({
+  createFileServiceModule: (...args: unknown[]) => implModuleMocks.createFileServiceModule(...args),
+}));
+
+vi.mock('../ownDeploymentOrigins', () => ({
+  resolveOwnDeploymentOrigins: vi.fn(async () => ({
+    rules: [{ origin: 'https://lobehub.com', path: { type: 'app-file' } }],
+  })),
 }));
 
 vi.mock('@/database/models/file');
@@ -83,12 +94,17 @@ describe('FileService', () => {
     consoleErrorSpy?.mockRestore();
   });
 
-  it('scopes FileModel to workspace when workspaceId is provided', () => {
+  it('passes viewer args to FileModel and createFileServiceModule', () => {
     vi.clearAllMocks();
 
     new FileService(mockDb, mockUserId, 'workspace-1');
 
     expect(FileModel).toHaveBeenCalledWith(mockDb, mockUserId, 'workspace-1');
+    expect(implModuleMocks.createFileServiceModule).toHaveBeenCalledWith(
+      mockDb,
+      mockUserId,
+      'workspace-1',
+    );
   });
 
   describe('downloadFileToLocal', () => {
@@ -591,16 +607,24 @@ describe('FileService', () => {
     it('should copy an own /f/ URL from storage instead of HTTP fetch', async () => {
       vi.mocked(service['impl'].getKeyFromFullUrl).mockResolvedValue('files/source.png');
       vi.mocked(service['impl'].getFileByteArray).mockResolvedValue(new Uint8Array([1, 2, 3]));
+      vi.mocked(FileModel.getFileById).mockResolvedValue({
+        fileType: 'application/pdf',
+        id: 'file-1',
+        url: 'files/source.png',
+      } as never);
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
-      const result = await service.uploadFromUrl(
-        'https://lobehub.com/f/file-1',
-        'files/copy.png',
-      );
+      const result = await service.uploadFromUrl('https://lobehub.com/f/file-1', 'files/copy.png');
 
-      expect(service['impl'].getKeyFromFullUrl).toHaveBeenCalledWith('https://lobehub.com/f/file-1');
+      expect(service['impl'].getKeyFromFullUrl).toHaveBeenCalledWith(
+        'https://lobehub.com/f/file-1',
+      );
       expect(service['impl'].getFileByteArray).toHaveBeenCalledWith('files/source.png');
       expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ fileType: 'application/pdf' }),
+        true,
+      );
       expect(result.url).toBe('https://lobehub.com/f/copied-id');
     });
 
@@ -611,6 +635,38 @@ describe('FileService', () => {
       await expect(
         service.uploadFromUrl('https://lobehub.com/f/secret', 'files/copy.png'),
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not treat a foreign-host /f/ path as own-deployment storage', async () => {
+      vi.mocked(service['impl'].getKeyFromFullUrl).mockResolvedValue('files/source.png');
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        arrayBuffer: async () => new Uint8Array([9, 8, 7]).buffer,
+        headers: { get: () => 'image/jpeg' },
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+
+      await service.uploadFromUrl('https://cdn.foreign.com/f/x', 'files/copy.png');
+
+      expect(service['impl'].getKeyFromFullUrl).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledWith('https://cdn.foreign.com/f/x');
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ fileType: 'image/jpeg' }),
+        true,
+      );
+    });
+
+    it('propagates a TypeError from storage instead of falling through to fetch', async () => {
+      vi.mocked(service['impl'].getKeyFromFullUrl).mockRejectedValue(
+        new TypeError('undici failed'),
+      );
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      await expect(
+        service.uploadFromUrl('https://lobehub.com/f/file-1', 'files/copy.png'),
+      ).rejects.toThrow(TypeError);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
   });

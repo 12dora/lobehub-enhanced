@@ -1,5 +1,10 @@
 import { type LobeChatDatabase } from '@lobechat/database';
-import { inferContentTypeFromImageUrl, nanoid, uuid } from '@lobechat/utils';
+import {
+  inferContentTypeFromImageUrl,
+  isOwnDeploymentFileUrl,
+  nanoid,
+  uuid,
+} from '@lobechat/utils';
 import { TRPCError } from '@trpc/server';
 import { sha256 } from 'js-sha256';
 
@@ -12,6 +17,7 @@ import { isDev } from '@/utils/env';
 
 import { createFileServiceModule } from './impls';
 import type { FileServiceImpl, PreSignedUpload } from './impls/type';
+import { resolveOwnDeploymentOrigins } from './ownDeploymentOrigins';
 
 export const getFileProxyUrl = (fileId: string): string => `${appEnv.APP_URL}/f/${fileId}`;
 
@@ -141,10 +147,7 @@ export class FileService {
    * URL for cookie-less machine consumers (LLM providers, server-side fetchers).
    * Always a public or short-lived presigned object URL — never `/f/<id>`.
    */
-  public async getMachineReadableUrl(
-    file: FileAccessUrlItem,
-    expiresIn?: number,
-  ): Promise<string> {
+  public async getMachineReadableUrl(file: FileAccessUrlItem, expiresIn?: number): Promise<string> {
     if (file.url) return this.getFullFileUrl(file.url, expiresIn);
 
     const fileId = file.fileId || file.id;
@@ -455,8 +458,16 @@ export class FileService {
   private async downloadUploadSource(
     externalUrl: string,
   ): Promise<{ buffer: Buffer; fileType: string }> {
+    let parsed: URL | undefined;
     try {
-      if (new URL(externalUrl).pathname.startsWith('/f/')) {
+      parsed = new URL(externalUrl);
+    } catch {
+      // Invalid URL — fall through to fetch, which will fail with a clear status.
+    }
+
+    if (parsed) {
+      const origins = await resolveOwnDeploymentOrigins();
+      if (isOwnDeploymentFileUrl(externalUrl, origins) && /^\/f\/[^/]+$/.test(parsed.pathname)) {
         const key = await this.getKeyFromFullUrl(externalUrl);
         if (!key) {
           throw new TRPCError({
@@ -464,15 +475,9 @@ export class FileService {
             message: 'Failed to download file from URL: file not found or not accessible',
           });
         }
+        const source = await FileModel.getFileById(this.db, parsed.pathname.slice(3));
         const bytes = await this.getFileByteArray(key);
-        return { buffer: Buffer.from(bytes), fileType: '' };
-      }
-    } catch (error) {
-      if (error instanceof TRPCError) throw error;
-      if (error instanceof TypeError) {
-        // Invalid URL — fall through to fetch, which will fail with a clear status.
-      } else {
-        throw error;
+        return { buffer: Buffer.from(bytes), fileType: source?.fileType ?? '' };
       }
     }
 

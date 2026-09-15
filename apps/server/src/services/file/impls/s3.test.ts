@@ -13,16 +13,27 @@ const redisMocks = vi.hoisted(() => ({
 }));
 
 const fileModelMocks = vi.hoisted(() => ({
+  constructorCalls: [] as unknown[][],
   findById: vi.fn(),
   getFileById: vi.fn(),
+}));
+
+const fileAccessMocks = vi.hoisted(() => ({
+  resolveFileAccess: vi.fn(),
 }));
 
 vi.mock('@/database/models/file', () => ({
   FileModel: class FileModel {
     static getFileById = (...args: unknown[]) => fileModelMocks.getFileById(...args);
     findById = fileModelMocks.findById;
-    constructor(_db?: unknown, _userId?: string, _workspaceId?: string) {}
+    constructor(...args: unknown[]) {
+      fileModelMocks.constructorCalls.push(args);
+    }
   },
+}));
+
+vi.mock('../fileAccess', () => ({
+  resolveFileAccess: (...args: unknown[]) => fileAccessMocks.resolveFileAccess(...args),
 }));
 
 const infraMocks = vi.hoisted(() => ({
@@ -126,6 +137,8 @@ describe('S3StaticFileImpl', () => {
     redisMocks.initializeRedis.mockResolvedValue(redisMocks.redis as any);
     redisMocks.redis.get.mockResolvedValue(null);
     redisMocks.redis.set.mockResolvedValue('OK');
+    fileModelMocks.constructorCalls.length = 0;
+    fileAccessMocks.resolveFileAccess.mockReset();
     fileService = new S3StaticFileImpl(mockDb);
   });
 
@@ -431,34 +444,136 @@ describe('S3StaticFileImpl', () => {
       expect(result).toBeNull();
     });
 
-    it('should resolve /f/ via scoped findById when a viewer userId is set', async () => {
-      const scoped = new S3StaticFileImpl(mockDb, 'user-a');
-      fileModelMocks.findById.mockResolvedValue({ url: 'owned/key.jpg' });
+    it('should resolve /f/ via getFileById + owner/workspace access when a viewer is set', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a', 'ws-1');
+      expect(scoped['userId']).toBe('user-a');
+      expect(scoped['workspaceId']).toBe('ws-1');
+      const file = {
+        id: 'abc123',
+        url: 'owned/key.jpg',
+        userId: 'user-a',
+        workspaceId: null,
+      };
+      fileModelMocks.getFileById.mockResolvedValue(file);
+      fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
 
       const result = await scoped.getKeyFromFullUrl('http://localhost:3010/f/abc123');
 
-      expect(fileModelMocks.findById).toHaveBeenCalledWith('abc123');
-      expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
+      expect(fileModelMocks.getFileById).toHaveBeenCalledWith(mockDb, 'abc123');
+      expect(fileModelMocks.findById).not.toHaveBeenCalled();
+      expect(fileModelMocks.constructorCalls).toEqual([]);
+      expect(fileAccessMocks.resolveFileAccess).toHaveBeenCalledWith({
+        db: mockDb,
+        file,
+        viewerUserId: 'user-a',
+      });
       expect(result).toBe('owned/key.jpg');
     });
 
-    it('should return null when the viewer does not own the /f/ file', async () => {
-      const scoped = new S3StaticFileImpl(mockDb, 'user-a');
-      fileModelMocks.findById.mockResolvedValue(undefined);
+    it("resolves the owner's personal (workspace_id NULL) file while the request carries a workspace id", async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a', 'ws-1');
+      fileModelMocks.getFileById.mockResolvedValue({
+        id: 'personal-1',
+        url: 'personal/key.jpg',
+        userId: 'user-a',
+        visibility: 'private',
+        workspaceId: null,
+      });
+      fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
+
+      await expect(scoped.getKeyFromFullUrl('http://localhost:3010/f/personal-1')).resolves.toBe(
+        'personal/key.jpg',
+      );
+      expect(fileAccessMocks.resolveFileAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ viewerUserId: 'user-a' }),
+      );
+    });
+
+    it('denies a foreign personal file even when the request names a workspace', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a', 'ws-1');
+      fileModelMocks.getFileById.mockResolvedValue({
+        id: 'other-user-file',
+        url: 'other/key.jpg',
+        userId: 'user-b',
+        workspaceId: null,
+      });
+      fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: false });
 
       const result = await scoped.getKeyFromFullUrl('http://localhost:3010/f/other-user-file');
 
       expect(result).toBeNull();
-      expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
+      expect(fileModelMocks.findById).not.toHaveBeenCalled();
     });
+
+    it('denies a workspace-public file when the viewer is not a member, even if the request header names that workspace', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a', 'victim-ws');
+      fileModelMocks.getFileById.mockResolvedValue({
+        id: 'ws-file',
+        url: 'ws/key.jpg',
+        userId: 'victim',
+        visibility: 'public',
+        workspaceId: 'victim-ws',
+      });
+      fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: false });
+
+      await expect(scoped.getKeyFromFullUrl('http://localhost:3010/f/ws-file')).resolves.toBeNull();
+    });
+
+    it('allows a workspace-public file when resolveFileAccess returns workspace', async () => {
+      const scoped = new S3StaticFileImpl(mockDb, 'user-a', 'other-ws');
+      fileModelMocks.getFileById.mockResolvedValue({
+        id: 'ws-file',
+        url: 'ws/public.jpg',
+        userId: 'owner-b',
+        visibility: 'public',
+        workspaceId: 'ws-1',
+      });
+      fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'workspace' });
+
+      await expect(scoped.getKeyFromFullUrl('http://localhost:3010/f/ws-file')).resolves.toBe(
+        'ws/public.jpg',
+      );
+    });
+
+    it.each(['topic_share', 'auditor'] as const)(
+      'denies machine-path access for reason=%s',
+      async (reason) => {
+        const scoped = new S3StaticFileImpl(mockDb, 'user-a');
+        fileModelMocks.getFileById.mockResolvedValue({
+          id: 'shared-file',
+          url: 'shared/key.jpg',
+          userId: 'owner-b',
+          workspaceId: null,
+        });
+        fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason });
+
+        await expect(
+          scoped.getKeyFromFullUrl('http://localhost:3010/f/shared-file'),
+        ).resolves.toBeNull();
+      },
+    );
 
     it('should not let a scoped viewer read another user object via getFullFileUrl', async () => {
       const scoped = new S3StaticFileImpl(mockDb, 'user-a');
-      fileModelMocks.findById.mockResolvedValue(undefined);
+      fileModelMocks.getFileById.mockResolvedValue({
+        id: 'other-user-file',
+        url: 'other/key.jpg',
+        userId: 'user-b',
+      });
+      fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: false });
 
-      await expect(scoped.getFullFileUrl('http://localhost:3010/f/other-user-file')).rejects.toThrow(
-        'Key not found from url',
-      );
+      await expect(
+        scoped.getFullFileUrl('http://localhost:3010/f/other-user-file'),
+      ).rejects.toThrow('Key not found from url');
+    });
+
+    it('does not call resolveFileAccess when the impl has no viewer', async () => {
+      fileModelMocks.getFileById.mockResolvedValue({ url: 'branding/key.jpg' });
+
+      const result = await fileService.getKeyFromFullUrl('http://localhost:3010/f/abc123');
+
+      expect(result).toBe('branding/key.jpg');
+      expect(fileAccessMocks.resolveFileAccess).not.toHaveBeenCalled();
     });
   });
 

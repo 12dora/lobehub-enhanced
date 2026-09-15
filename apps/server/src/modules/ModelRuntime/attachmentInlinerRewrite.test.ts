@@ -3,8 +3,6 @@ import type { OpenAIChatMessage } from '@lobechat/model-runtime';
 import { buildOwnDeploymentOrigins } from '@lobechat/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileModel } from '@/database/models/file';
-
 import {
   createOwnOriginAttachmentRewriteHooks,
   rewriteOwnOriginAttachmentUrls,
@@ -12,28 +10,41 @@ import {
 } from './attachmentInliner';
 
 const fileServiceMocks = vi.hoisted(() => ({
+  ctorCalls: [] as Array<{ userId: string; workspaceId?: string }>,
   getFileByteArray: vi.fn(),
   getMachineReadableUrl: vi.fn(),
 }));
 
 const fileModelMocks = vi.hoisted(() => ({
-  ctorCalls: [] as Array<{ userId?: string; workspaceId?: string }>,
+  constructorCalls: [] as unknown[][],
   findById: vi.fn(),
+  getFileById: vi.fn(),
+}));
+
+const fileAccessMocks = vi.hoisted(() => ({
+  resolveFileAccess: vi.fn(),
 }));
 
 vi.mock('@/server/services/file', () => ({
   FileService: class FileService {
+    constructor(_db: unknown, userId: string, workspaceId?: string) {
+      fileServiceMocks.ctorCalls.push({ userId, workspaceId });
+    }
     getFileByteArray = fileServiceMocks.getFileByteArray;
     getMachineReadableUrl = fileServiceMocks.getMachineReadableUrl;
   },
 }));
 
+vi.mock('@/server/services/file/fileAccess', () => ({
+  resolveFileAccess: (...args: unknown[]) => fileAccessMocks.resolveFileAccess(...args),
+}));
+
 vi.mock('@/database/models/file', () => ({
   FileModel: class FileModel {
-    static getFileById = async (_db: unknown, _id: string) => undefined;
+    static getFileById = (...args: unknown[]) => fileModelMocks.getFileById(...args);
     findById = fileModelMocks.findById;
-    constructor(_db?: unknown, userId?: string, workspaceId?: string) {
-      fileModelMocks.ctorCalls.push({ userId, workspaceId });
+    constructor(...args: unknown[]) {
+      fileModelMocks.constructorCalls.push(args);
     }
   },
 }));
@@ -154,15 +165,19 @@ describe('rewriteOwnOriginUrls', () => {
 describe('createOwnOriginAttachmentRewriteHooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    fileModelMocks.ctorCalls.length = 0;
+    fileServiceMocks.ctorCalls.length = 0;
+    fileModelMocks.constructorCalls.length = 0;
     fileServiceMocks.getFileByteArray.mockReset();
     fileServiceMocks.getMachineReadableUrl.mockReset();
     fileServiceMocks.getMachineReadableUrl.mockImplementation(
       async (file: { url?: string | null }) =>
         file.url ? `https://presigned.example.com/${file.url}` : '',
     );
+    fileModelMocks.getFileById.mockReset();
+    fileModelMocks.getFileById.mockResolvedValue(undefined);
     fileModelMocks.findById.mockReset();
-    fileModelMocks.findById.mockResolvedValue(undefined);
+    fileAccessMocks.resolveFileAccess.mockReset();
+    fileAccessMocks.resolveFileAccess.mockResolvedValue({ allowed: true, reason: 'owner' });
   });
 
   afterEach(() => {
@@ -170,7 +185,7 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
   });
 
   it('rewrites an OpenAI-compatible own-origin /f/<id> image URL to a presigned URL', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: 12,
       url: 'files/cat.png',
@@ -186,8 +201,13 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'gpt-4o' } as never);
 
-    expect(fileModelMocks.ctorCalls).toEqual([{ userId: 'user-1', workspaceId: 'ws-1' }]);
-    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-1');
+    expect(fileServiceMocks.ctorCalls).toEqual([{ userId: 'user-1', workspaceId: 'ws-1' }]);
+    expect(fileModelMocks.constructorCalls).toEqual([]);
+    expect(fileModelMocks.getFileById).toHaveBeenCalledWith({}, 'file-1');
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
+    expect(fileAccessMocks.resolveFileAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ viewerUserId: 'user-1' }),
+    );
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
     expect(fileServiceMocks.getMachineReadableUrl).toHaveBeenCalledWith({
       id: 'file-1',
@@ -199,8 +219,7 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
   });
 
   it('leaves foreign and unknown ids as-is', async () => {
-    fileModelMocks.findById.mockResolvedValue(undefined);
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
+    fileModelMocks.getFileById.mockResolvedValue(undefined);
 
     const messages = [imageMessage(FOREIGN_ID_URL)];
     const hooks = createOwnOriginAttachmentRewriteHooks({
@@ -211,8 +230,8 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'gpt-4o' } as never);
 
-    expect(fileModelMocks.findById).toHaveBeenCalledWith('file-foreign');
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).toHaveBeenCalledWith({}, 'file-foreign');
+    expect(fileModelMocks.findById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([
       { image_url: { url: FOREIGN_ID_URL }, type: 'image_url' },
@@ -220,7 +239,6 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
   });
 
   it('leaves non-own-origin URLs untouched', async () => {
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     const messages = [imageMessage(FOREIGN_HOST_URL), imageMessage(S3_URL)];
     const hooks = createOwnOriginAttachmentRewriteHooks({
       db: {} as never,
@@ -231,7 +249,7 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
     await hooks.beforeChat?.({ messages, model: 'gpt-4o' } as never);
 
     expect(fileModelMocks.findById).not.toHaveBeenCalled();
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([
       { image_url: { url: FOREIGN_HOST_URL }, type: 'image_url' },
@@ -240,7 +258,6 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
   });
 
   it('does not rewrite and does not look up files when userId is missing', async () => {
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     const messages = [imageMessage(OWN_FILE_URL)];
     const hooks = createOwnOriginAttachmentRewriteHooks({
       db: {} as never,
@@ -249,15 +266,16 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
 
     await hooks.beforeChat?.({ messages, model: 'gpt-4o' } as never);
 
-    expect(fileModelMocks.ctorCalls).toEqual([]);
+    expect(fileServiceMocks.ctorCalls).toEqual([]);
+    expect(fileModelMocks.constructorCalls).toEqual([]);
     expect(fileModelMocks.findById).not.toHaveBeenCalled();
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
     expect(fileServiceMocks.getMachineReadableUrl).not.toHaveBeenCalled();
     expect(messages[0].content).toEqual([{ image_url: { url: OWN_FILE_URL }, type: 'image_url' }]);
   });
 
   it('presigns over-size files (no inline cap) and rewrites video_url', async () => {
-    fileModelMocks.findById.mockImplementation(async (id: string) => {
+    fileModelMocks.getFileById.mockImplementation(async (_db: unknown, id: string) => {
       if (id === 'file-1')
         return { fileType: 'image/png', size: 80 * 1024 * 1024, url: 'files/huge.png' };
       if (id === 'file-video')
@@ -292,8 +310,8 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
     ]);
   });
 
-  it('applies the same rewrite to beforeCreateImage', async () => {
-    fileModelMocks.findById.mockResolvedValue({
+  it('applies the same rewrite to beforeCreateImage imageUrls', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
       fileType: 'image/png',
       size: 12,
       url: 'files/cat.png',
@@ -312,8 +330,27 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
     expect(fileServiceMocks.getFileByteArray).not.toHaveBeenCalled();
   });
 
+  it('rewrites beforeCreateImage imageUrl (singular) the same way as imageUrls', async () => {
+    fileModelMocks.getFileById.mockResolvedValue({
+      fileType: 'image/png',
+      size: 12,
+      url: 'files/cat.png',
+    } as never);
+
+    const params = { imageUrl: OWN_FILE_URL, imageUrls: [] as string[], prompt: 'edit' };
+    const hooks = createOwnOriginAttachmentRewriteHooks({
+      db: {} as never,
+      ownOrigins,
+      userId: 'user-1',
+    });
+
+    await hooks.beforeCreateImage?.({ model: 'dall-e-3', params } as never);
+
+    expect(params.imageUrl).toBe('https://presigned.example.com/files/cat.png');
+    expect(params.imageUrls).toEqual([]);
+  });
+
   it('does not look up files in beforeCreateImage when userId is missing', async () => {
-    const getFileById = vi.spyOn(FileModel, 'getFileById');
     const params = { imageUrls: [OWN_FILE_URL], prompt: 'edit' };
     const hooks = createOwnOriginAttachmentRewriteHooks({
       db: {} as never,
@@ -322,8 +359,8 @@ describe('createOwnOriginAttachmentRewriteHooks', () => {
 
     await hooks.beforeCreateImage?.({ model: 'dall-e-3', params } as never);
 
-    expect(fileModelMocks.ctorCalls).toEqual([]);
-    expect(getFileById).not.toHaveBeenCalled();
+    expect(fileServiceMocks.ctorCalls).toEqual([]);
+    expect(fileModelMocks.getFileById).not.toHaveBeenCalled();
     expect(params.imageUrls).toEqual([OWN_FILE_URL]);
   });
 });
