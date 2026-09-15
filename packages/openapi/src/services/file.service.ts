@@ -60,10 +60,6 @@ import type {
   MoveKnowledgeBaseFilesResponse,
 } from '../types/knowledge-base.type';
 
-/**
- * File upload service class
- * Handles file upload and management functionality in server mode
- */
 const sanitizeUploadFileName = (name: string): string => {
   // eslint-disable-next-line no-control-regex
   const cleaned = name.replaceAll(/[%\\/\u0000-\u001F\u007F]/g, '_').trim();
@@ -71,6 +67,10 @@ const sanitizeUploadFileName = (name: string): string => {
   return cleaned;
 };
 
+/**
+ * File upload service class
+ * Handles file upload and management functionality in server mode
+ */
 export class FileUploadService extends BaseService {
   private fileModel: FileModel;
   private documentModel: DocumentModel;
