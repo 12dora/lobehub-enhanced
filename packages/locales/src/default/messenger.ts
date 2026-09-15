@@ -106,7 +106,7 @@ export default {
     'Open the bot on Discord and send any message to finish linking your account.',
   'messenger.discord.userPending.name': 'Not linked yet',
   'messenger.dingtalk.agent.hint':
-    'Messages from DingTalk are routed to this agent. You can switch at any time by sending /助手 in the chat.',
+    'DingTalk messages are answered by this agent. You can switch at any time by sending /助手 in the chat.',
   'messenger.dingtalk.agent.label': 'Default agent',
   'messenger.dingtalk.capabilities.chatDisabled': 'Chat has been turned off by your administrator.',
   'messenger.dingtalk.capabilities.pushDisabled':
@@ -127,6 +127,7 @@ export default {
   'messenger.dingtalk.commands.topics': 'List recent conversations',
   'messenger.dingtalk.commands.use': 'Switch to agent N',
   'messenger.dingtalk.status.accountLabel': 'DingTalk account',
+  'messenger.dingtalk.status.chatUnavailable': 'Chat is unavailable',
   'messenger.dingtalk.status.instructions':
     'Find the robot “{{botName}}” in DingTalk and send it any message to complete the binding automatically.',
   'messenger.dingtalk.status.linkedAt': 'Linked at {{time}}',

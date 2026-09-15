@@ -11,6 +11,8 @@ import { PlatformAvatar } from '../constants';
 
 interface DingTalkLinkBodyProps {
   botUsername?: string | null;
+  /** Admin turned the chat half off — the bind instruction cannot work. */
+  chatDisabled?: boolean;
   /** Brand-name label (e.g. `"钉钉"`) sourced from the registry. */
   name: string;
 }
@@ -20,7 +22,7 @@ interface DingTalkLinkBodyProps {
  * first time the employee messages the robot. This body therefore only repeats
  * the "send any message to the robot" instruction shown on the detail page.
  */
-const DingTalkLinkBody = memo<DingTalkLinkBodyProps>(({ botUsername, name }) => {
+const DingTalkLinkBody = memo<DingTalkLinkBodyProps>(({ botUsername, chatDisabled, name }) => {
   const { t } = useTranslation('messenger');
   const { name: appName } = useBranding();
   const robotName = botUsername?.trim() || appName;
@@ -30,10 +32,14 @@ const DingTalkLinkBody = memo<DingTalkLinkBodyProps>(({ botUsername, name }) => 
       <PlatformAvatar platform="dingtalk" size={64} />
       <Flexbox align="center" gap={6}>
         <Text strong fontSize={18}>
-          {t('messenger.linkModal.continueIn', { platform: name })}
+          {chatDisabled
+            ? t('messenger.dingtalk.status.chatUnavailable')
+            : t('messenger.linkModal.continueIn', { platform: name })}
         </Text>
         <Text align="center" type="secondary">
-          {t('messenger.dingtalk.status.instructions', { botName: robotName })}
+          {chatDisabled
+            ? t('messenger.dingtalk.capabilities.chatDisabled')
+            : t('messenger.dingtalk.status.instructions', { botName: robotName })}
         </Text>
       </Flexbox>
     </>

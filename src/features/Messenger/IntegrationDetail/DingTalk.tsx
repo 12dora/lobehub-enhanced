@@ -5,14 +5,14 @@ import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import dayjs from 'dayjs';
 import { UserIcon } from 'lucide-react';
-import { Fragment, memo, useState } from 'react';
+import { Fragment, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import AsyncError from '@/components/AsyncError';
 import { useBranding } from '@/enterprise/client/providers/RuntimeBrandingProvider';
 import { usePermission } from '@/hooks/usePermission';
 
-import AgentSelect from '../AgentSelect';
+import AgentScopeSelect from '../AgentScopeSelect';
 import { DINGTALK_COMMANDS, type MessengerPlatformCapabilities } from '../constants';
 import {
   ConnectionRow,
@@ -88,11 +88,6 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
     platform: 'dingtalk',
   });
 
-  // Optimistic selection: persisting the active agent round-trips to the
-  // server and refetches the links, so without this the dropdown would only
-  // reflect the new pick once both finish.
-  const [pendingAgentId, setPendingAgentId] = useState<string | null | undefined>();
-
   if (data.error && data.isInitialLoading)
     return <AsyncError error={data.error} variant={'block'} onRetry={data.mutate} />;
   if (data.isInitialLoading) return <IntegrationDetailSkeleton withNestedContent />;
@@ -100,7 +95,10 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
   const link = data.links[0];
   const linkedAt = formatLinkedAt(link?.createdAt);
   const robotName = botUsername?.trim() || appName;
-  const activeAgentId = pendingAgentId === undefined ? link?.activeAgentId : pendingAgentId;
+  // An admin can switch the chat half off independently of push. When it is
+  // off, telling the user to message the robot would be advice that cannot
+  // work, so the unlinked card carries the notice instead of the instruction.
+  const chatDisabled = capabilities?.chat === false;
 
   return (
     <Flexbox gap={20}>
@@ -130,22 +128,11 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
                 </Text>
               )}
               <Flexbox gap={6}>
-                <Text fontSize={12} type="secondary">
-                  {t('messenger.dingtalk.agent.label')}
-                </Text>
-                <AgentSelect
+                <AgentScopeSelect
+                  agentLabel={t('messenger.dingtalk.agent.label')}
                   disabled={!canEdit}
-                  placeholder={t('messenger.activeAgentPlaceholder')}
-                  value={activeAgentId ?? undefined}
-                  workspaceId={link.workspaceId}
-                  onChange={async (agentId) => {
-                    if (!canEdit) return;
-                    const next = (agentId ?? null) as string | null;
-                    setPendingAgentId(next);
-                    const ok = await handleSetActive('', next);
-                    // Roll back to the persisted value if the update failed.
-                    if (!ok) setPendingAgentId(undefined);
-                  }}
+                  link={link}
+                  onSetActive={(agentId) => handleSetActive('', agentId)}
                 />
                 <Text fontSize={12} type="secondary">
                   {t('messenger.dingtalk.agent.hint')}
@@ -156,15 +143,21 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
         ) : (
           <Block className={sharedStyles.card}>
             <Flexbox gap={6}>
-              <Text strong>{t('messenger.dingtalk.status.notStarted')}</Text>
+              <Text strong>
+                {chatDisabled
+                  ? t('messenger.dingtalk.status.chatUnavailable')
+                  : t('messenger.dingtalk.status.notStarted')}
+              </Text>
               <Text fontSize={13} type="secondary">
-                {t('messenger.dingtalk.status.instructions', { botName: robotName })}
+                {chatDisabled
+                  ? t('messenger.dingtalk.capabilities.chatDisabled')
+                  : t('messenger.dingtalk.status.instructions', { botName: robotName })}
               </Text>
             </Flexbox>
           </Block>
         )}
 
-        {capabilities?.chat === false && (
+        {chatDisabled && link && (
           <Text fontSize={12} type="secondary">
             {t('messenger.dingtalk.capabilities.chatDisabled')}
           </Text>

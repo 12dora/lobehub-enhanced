@@ -7,7 +7,7 @@ export const SUPPORTED_MESSENGER_PLATFORMS = [
   { id: 'telegram', name: 'Telegram' },
   { id: 'slack', name: 'Slack' },
   { id: 'discord', name: 'Discord' },
-  { id: 'dingtalk', name: '钉钉' },
+  { id: 'dingtalk', name: 'DingTalk' },
 ] as const satisfies readonly { id: MessengerPlatform; name: string }[];
 
 /**
