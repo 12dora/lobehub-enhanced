@@ -9,6 +9,7 @@ const UNKNOWN_STATUS: ImConnectorStatus = {
   lastError: null,
   lastErrorAt: null,
   lastEventAt: null,
+  lastFrameAt: null,
   state: 'unknown',
 };
 
@@ -66,6 +67,7 @@ const readLiveStatus = async (
     lastError: asNullableString(record.lastError),
     lastErrorAt: asNullableString(record.lastErrorAt),
     lastEventAt: asNullableString(record.lastEventAt),
+    lastFrameAt: asNullableString(record.lastFrameAt),
     state,
   });
   return candidate.success ? candidate.data : UNKNOWN_STATUS;

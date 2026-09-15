@@ -9,7 +9,17 @@ import type {
   DingTalkRobotMessage,
   DingTalkStreamState,
 } from './types';
-import { DINGTALK_GATEWAY_URL, TOPIC_CARD, TOPIC_ROBOT } from './types';
+import {
+  DINGTALK_GATEWAY_OPEN_TIMEOUT_MS,
+  DINGTALK_GATEWAY_URL,
+  DINGTALK_SOCKET_OPEN_TIMEOUT_MS,
+  DINGTALK_STREAM_FRAME_SILENCE_MS,
+  DINGTALK_STREAM_WATCHDOG_INTERVAL_MS,
+  DINGTALK_STREAM_WS_PING_INTERVAL_MS,
+  DINGTALK_STREAM_WS_PONG_TIMEOUT_MS,
+  TOPIC_CARD,
+  TOPIC_ROBOT,
+} from './types';
 
 export interface DingTalkStreamFrame {
   data: string;
@@ -29,6 +39,10 @@ export interface DingTalkStreamOptions {
   clientSecret: string;
   /** @internal test hook */
   fetchImpl?: typeof fetch;
+  /** @internal test hook — default 180_000 */
+  frameSilenceTimeoutMs?: number;
+  /** @internal test hook — default 15_000 */
+  gatewayOpenTimeoutMs?: number;
   logger?: { warn?: (...args: unknown[]) => void };
   onCardCallback?: (payload: DingTalkCardCallback, ack: DingTalkAck) => void | Promise<void>;
   onRobotMessage?: (payload: DingTalkRobotMessage, ack: DingTalkAck) => void | Promise<void>;
@@ -37,9 +51,17 @@ export interface DingTalkStreamOptions {
   reconnectBaseIntervalMs?: number;
   /** @internal test hook — default 60_000 */
   reconnectMaxIntervalMs?: number;
+  /** @internal test hook — default 15_000 */
+  socketOpenTimeoutMs?: number;
   ua?: string;
+  /** @internal test hook — default 30_000 */
+  watchdogIntervalMs?: number;
   /** @internal test hook */
   WebSocketImpl?: typeof WebSocket;
+  /** @internal test hook — default 30_000 */
+  wsPingIntervalMs?: number;
+  /** @internal test hook — default 10_000 */
+  wsPongTimeoutMs?: number;
 }
 
 const RECONNECT_BASE_MS = 1000;
@@ -63,6 +85,12 @@ const parseJson = (value: string): unknown => {
   }
 };
 
+const isAbortError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const name = 'name' in error ? String(error.name) : '';
+  return name === 'AbortError' || name === 'TimeoutError';
+};
+
 /**
  * DingTalk Stream Mode client. Ports the official `dingtalk-stream` protocol
  * (open-gateway → WebSocket + SYSTEM/CALLBACK frames) onto the `ws` package
@@ -70,6 +98,11 @@ const parseJson = (value: string): unknown => {
  *
  * CALLBACK frames are acked immediately (DingTalk retries after 60s if the
  * client is silent) and only then handed to `onRobotMessage` / `onCardCallback`.
+ *
+ * Liveness: any application frame updates `lastFrameAt`. A watchdog terminates
+ * a silent socket after 3 minutes (configurable). Protocol-level `ws` ping
+ * every 30s terminates if `pong` does not arrive within 10s. Gateway and
+ * WebSocket open are bounded at 15s so a hung attempt can never block forever.
  */
 export class DingTalkStreamConnection {
   private readonly options: DingTalkStreamOptions;
@@ -78,12 +111,19 @@ export class DingTalkStreamConnection {
 
   private socket?: WebSocket;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private watchdogTimer?: ReturnType<typeof setInterval>;
+  private wsPingTimer?: ReturnType<typeof setInterval>;
+  private pongTimer?: ReturnType<typeof setTimeout>;
   private reconnectAttempts = 0;
   private userDisconnect = false;
   private connecting = false;
   /** True after the first successful socket open — background reconnect is allowed only then. */
   private hasOpened = false;
   private currentState: DingTalkStreamState = 'disconnected';
+  private connectAbort?: AbortController;
+  private lastFrameAtMs: number | null = null;
+  private socketDead = false;
+  private awaitingPong = false;
 
   constructor(options: DingTalkStreamOptions) {
     this.options = options;
@@ -95,48 +135,61 @@ export class DingTalkStreamConnection {
     return this.currentState;
   }
 
+  /** Epoch ms of the last application frame (or socket open). `null` before the first open. */
+  get lastFrameAt(): number | null {
+    return this.lastFrameAtMs;
+  }
+
   async connect(): Promise<void> {
     if (this.connecting) return;
     this.userDisconnect = false;
     this.connecting = true;
+    this.connectAbort = new AbortController();
     this.setState('connecting');
 
+    let shouldReconnect = false;
     try {
       this.cleanupSocket();
       const dwUrl = await this.openGateway();
-      if (this.userDisconnect) {
+      if (this.userDisconnect || this.connectAbort.signal.aborted) {
         this.setState('disconnected');
         throw new Error('DingTalk stream disconnected before socket open');
       }
       await this.openSocket(dwUrl);
     } catch (error) {
+      this.stopLiveness();
       this.cleanupSocket();
       const err = error instanceof Error ? error : new Error(String(error));
-      this.setState('error', err);
-      this.connecting = false;
-      if (!this.userDisconnect && this.hasOpened) {
-        this.scheduleReconnect();
+      if (this.userDisconnect) {
+        this.setState('disconnected');
+      } else {
+        this.setState('error', err);
+        shouldReconnect = this.hasOpened;
       }
       throw err;
     } finally {
       this.connecting = false;
+      if (shouldReconnect) this.scheduleReconnect();
     }
   }
 
   disconnect(): void {
     this.userDisconnect = true;
+    this.connectAbort?.abort();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
     this.reconnectAttempts = 0;
     this.hasOpened = false;
+    this.stopLiveness();
     this.cleanupSocket();
     this.setState('disconnected');
   }
 
   /** @internal used by tests to inject a frame without a live socket */
   handleFrame(raw: string | DingTalkStreamFrame): void {
+    this.touchFrame();
     const msg: DingTalkStreamFrame =
       typeof raw === 'string' ? (JSON.parse(raw) as DingTalkStreamFrame) : raw;
     switch (msg.type) {
@@ -159,32 +212,65 @@ export class DingTalkStreamConnection {
     this.options.onStateChange?.(state, error);
   }
 
+  private touchFrame(): void {
+    this.lastFrameAtMs = Date.now();
+  }
+
+  private warn(...args: unknown[]): void {
+    if (this.options.logger?.warn) {
+      this.options.logger.warn(...args);
+    } else {
+      console.warn(...args);
+    }
+  }
+
   private async openGateway(): Promise<string> {
-    const response = await this.fetchFn(DINGTALK_GATEWAY_URL, {
-      body: JSON.stringify({
-        clientId: this.options.clientId,
-        clientSecret: this.options.clientSecret,
-        localIp: getLocalIp(),
-        subscriptions: [
-          { topic: TOPIC_ROBOT, type: 'CALLBACK' },
-          { topic: TOPIC_CARD, type: 'CALLBACK' },
-        ],
-        ua: this.options.ua ?? '',
-      }),
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      method: 'POST',
-    });
+    const timeoutMs = this.options.gatewayOpenTimeoutMs ?? DINGTALK_GATEWAY_OPEN_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onUserAbort = () => controller.abort();
+    this.connectAbort?.signal.addEventListener('abort', onUserAbort);
+    if (this.connectAbort?.signal.aborted) controller.abort();
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`DingTalk gateway open failed: ${response.status} ${text}`);
-    }
+    try {
+      const response = await this.fetchFn(DINGTALK_GATEWAY_URL, {
+        body: JSON.stringify({
+          clientId: this.options.clientId,
+          clientSecret: this.options.clientSecret,
+          localIp: getLocalIp(),
+          subscriptions: [
+            { topic: TOPIC_ROBOT, type: 'CALLBACK' },
+            { topic: TOPIC_CARD, type: 'CALLBACK' },
+          ],
+          ua: this.options.ua ?? '',
+        }),
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        method: 'POST',
+        signal: controller.signal,
+      });
 
-    const data = (await response.json()) as { endpoint?: string; ticket?: string };
-    if (!data.endpoint || !data.ticket) {
-      throw new Error('DingTalk gateway open failed: missing endpoint or ticket');
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`DingTalk gateway open failed: ${response.status} ${text}`);
+      }
+
+      const data = (await response.json()) as { endpoint?: string; ticket?: string };
+      if (!data.endpoint || !data.ticket) {
+        throw new Error('DingTalk gateway open failed: missing endpoint or ticket');
+      }
+      return `${data.endpoint}?ticket=${encodeURIComponent(data.ticket)}`;
+    } catch (error) {
+      if (this.userDisconnect || this.connectAbort?.signal.aborted) {
+        throw new Error('DingTalk stream disconnected before socket open', { cause: error });
+      }
+      if (controller.signal.aborted || isAbortError(error)) {
+        throw new Error('DingTalk gateway open timed out', { cause: error });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      this.connectAbort?.signal.removeEventListener('abort', onUserAbort);
     }
-    return `${data.endpoint}?ticket=${encodeURIComponent(data.ticket)}`;
   }
 
   private openSocket(url: string): Promise<void> {
@@ -194,6 +280,8 @@ export class DingTalkStreamConnection {
         clientOptions.agent = new https.Agent({ proxyEnv: process.env });
       }
 
+      this.socketDead = false;
+
       try {
         this.socket = new this.WS(url, clientOptions);
       } catch (error) {
@@ -202,40 +290,71 @@ export class DingTalkStreamConnection {
       }
 
       let settled = false;
+      const timeoutMs = this.options.socketOpenTimeoutMs ?? DINGTALK_SOCKET_OPEN_TIMEOUT_MS;
+      const openTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.cleanupSocket();
+        reject(new Error('DingTalk stream socket open timed out'));
+      }, timeoutMs);
+
+      const settleOpen = () => {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(openTimer);
+        this.connectAbort?.signal.removeEventListener('abort', onAbort);
+        return true;
+      };
+
+      const onAbort = () => {
+        if (!settleOpen()) return;
+        this.cleanupSocket();
+        reject(new Error('DingTalk stream disconnected before socket open'));
+      };
+      this.connectAbort?.signal.addEventListener('abort', onAbort);
+      if (this.connectAbort?.signal.aborted) {
+        onAbort();
+        return;
+      }
 
       this.socket.on('open', () => {
+        if (!settleOpen()) return;
         this.reconnectAttempts = 0;
         this.hasOpened = true;
+        this.socketDead = false;
+        this.touchFrame();
+        this.startLiveness();
         this.setState('connected');
-        settled = true;
         resolve();
       });
 
       this.socket.on('message', (data) => {
+        this.touchFrame();
         const text = typeof data === 'string' ? data : data.toString();
         try {
           this.handleFrame(text);
         } catch (error) {
-          if (this.options.logger?.warn) {
-            this.options.logger.warn('DingTalk stream malformed frame', error);
-          } else {
-            console.warn('DingTalk stream malformed frame', error);
-          }
+          this.warn('DingTalk stream malformed frame', error);
+        }
+      });
+
+      this.socket.on('pong', () => {
+        this.awaitingPong = false;
+        if (this.pongTimer) {
+          clearTimeout(this.pongTimer);
+          this.pongTimer = undefined;
         }
       });
 
       this.socket.on('close', () => {
         if (!settled) {
           settled = true;
+          clearTimeout(openTimer);
+          this.connectAbort?.signal.removeEventListener('abort', onAbort);
           reject(new Error('DingTalk stream socket closed before open'));
           return;
         }
-        if (this.currentState !== 'disconnected') {
-          this.setState('disconnected');
-        }
-        if (this.hasOpened && !this.userDisconnect) {
-          this.scheduleReconnect();
-        }
+        this.markSocketDead(new Error('DingTalk stream socket closed'));
       });
 
       this.socket.on('error', (err) => {
@@ -243,8 +362,12 @@ export class DingTalkStreamConnection {
         this.socket?.terminate();
         if (!settled) {
           settled = true;
+          clearTimeout(openTimer);
+          this.connectAbort?.signal.removeEventListener('abort', onAbort);
           reject(error);
+          return;
         }
+        this.markSocketDead(error);
       });
     });
   }
@@ -263,8 +386,7 @@ export class DingTalkStreamConnection {
         break;
       }
       case 'disconnect': {
-        this.cleanupSocket();
-        if (!this.userDisconnect) this.scheduleReconnect();
+        this.markSocketDead(new Error('DingTalk stream server disconnect'));
         break;
       }
       default: {
@@ -305,6 +427,85 @@ export class DingTalkStreamConnection {
         message: 'OK',
       }),
     );
+  }
+
+  private startLiveness(): void {
+    this.stopLiveness();
+    const watchdogMs = this.options.watchdogIntervalMs ?? DINGTALK_STREAM_WATCHDOG_INTERVAL_MS;
+    const silenceMs = this.options.frameSilenceTimeoutMs ?? DINGTALK_STREAM_FRAME_SILENCE_MS;
+    this.watchdogTimer = setInterval(() => {
+      if (this.lastFrameAtMs == null) return;
+      const silence = Date.now() - this.lastFrameAtMs;
+      if (silence >= silenceMs) {
+        this.warn('DingTalk stream watchdog: no frame for', silence, 'ms');
+        this.markSocketDead(new Error('DingTalk stream watchdog: no frame'));
+      }
+    }, watchdogMs);
+
+    const pingMs = this.options.wsPingIntervalMs ?? DINGTALK_STREAM_WS_PING_INTERVAL_MS;
+    const pongMs = this.options.wsPongTimeoutMs ?? DINGTALK_STREAM_WS_PONG_TIMEOUT_MS;
+    this.wsPingTimer = setInterval(() => {
+      this.sendWsPing(pongMs);
+    }, pingMs);
+  }
+
+  private sendWsPing(pongTimeoutMs: number): void {
+    const socket = this.socket;
+    if (!socket) return;
+    const OPEN = this.WS.OPEN ?? 1;
+    if (socket.readyState !== OPEN) return;
+    if (typeof socket.ping !== 'function') return;
+
+    this.awaitingPong = true;
+    if (this.pongTimer) clearTimeout(this.pongTimer);
+    this.pongTimer = setTimeout(() => {
+      if (!this.awaitingPong) return;
+      this.warn('DingTalk stream pong timeout');
+      this.markSocketDead(new Error('DingTalk stream pong timeout'));
+    }, pongTimeoutMs);
+
+    try {
+      socket.ping();
+    } catch (error) {
+      this.awaitingPong = false;
+      if (this.pongTimer) {
+        clearTimeout(this.pongTimer);
+        this.pongTimer = undefined;
+      }
+      this.warn('DingTalk stream ping failed', error);
+    }
+  }
+
+  private stopLiveness(): void {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = undefined;
+    }
+    if (this.wsPingTimer) {
+      clearInterval(this.wsPingTimer);
+      this.wsPingTimer = undefined;
+    }
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer);
+      this.pongTimer = undefined;
+    }
+    this.awaitingPong = false;
+  }
+
+  /**
+   * Socket died (close / error / watchdog / pong timeout / server disconnect).
+   * State becomes `error` immediately — never stays `connected`. Background
+   * reconnect is scheduled when the socket had opened at least once.
+   */
+  private markSocketDead(error: Error): void {
+    if (this.userDisconnect || this.socketDead) return;
+    this.socketDead = true;
+    this.stopLiveness();
+    this.setState('error', error);
+    this.cleanupSocket();
+    if (this.hasOpened && !this.connecting) {
+      this.scheduleReconnect();
+    }
   }
 
   private scheduleReconnect(): void {

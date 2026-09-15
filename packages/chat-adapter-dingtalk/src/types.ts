@@ -173,6 +173,19 @@ export const DINGTALK_OAPI_BASE = 'https://oapi.dingtalk.com';
 export const DINGTALK_GATEWAY_URL = 'https://api.dingtalk.com/v1.0/gateway/connections/open';
 export const TOPIC_ROBOT = '/v1.0/im/bot/messages/get';
 export const TOPIC_CARD = '/v1.0/card/instances/callback';
+
+/** `POST /v1.0/gateway/connections/open` AbortController timeout. */
+export const DINGTALK_GATEWAY_OPEN_TIMEOUT_MS = 15_000;
+/** WebSocket constructor → `open` (or `error`/`close`) timeout. */
+export const DINGTALK_SOCKET_OPEN_TIMEOUT_MS = 15_000;
+/** How often the frame-silence watchdog runs. */
+export const DINGTALK_STREAM_WATCHDOG_INTERVAL_MS = 30_000;
+/** Terminate + reconnect when no DingTalk frame arrives for this long. */
+export const DINGTALK_STREAM_FRAME_SILENCE_MS = 180_000;
+/** `ws` protocol-level ping interval. */
+export const DINGTALK_STREAM_WS_PING_INTERVAL_MS = 30_000;
+/** Terminate when a protocol ping is not answered with `pong`. */
+export const DINGTALK_STREAM_WS_PONG_TIMEOUT_MS = 10_000;
 export const MARKDOWN_MAX_BYTES = 18 * 1024;
 export const DINGTALK_NOT_ASKER_REPLY = '仅提问人可操作';
 export const DINGTALK_MARKDOWN_TITLE_FALLBACK = '回复';

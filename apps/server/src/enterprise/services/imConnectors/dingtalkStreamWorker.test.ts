@@ -18,6 +18,7 @@ vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
       return {
         connect: mockConnect,
         disconnect: mockDisconnect,
+        lastFrameAt: 1_715_000_000_000,
       };
     }),
   };
@@ -94,7 +95,7 @@ describe('DingTalkStreamWorker', () => {
 
     expect(mockConnect).toHaveBeenCalledTimes(1);
     expect(writeDingTalkStreamStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ state: 'connecting' }),
+      expect.objectContaining({ lastFrameAt: null, state: 'connecting' }),
     );
   });
 
@@ -117,7 +118,7 @@ describe('DingTalkStreamWorker', () => {
     expect(mockConnect).toHaveBeenCalledTimes(2);
   });
 
-  it('serializes overlapping ticks so connect is not started twice', async () => {
+  it('skips a tick while the previous is still running and does not queue', async () => {
     let release!: () => void;
     mockConnect.mockImplementationOnce(
       () =>
@@ -130,11 +131,42 @@ describe('DingTalkStreamWorker', () => {
     await vi.waitFor(() => expect(mockConnect).toHaveBeenCalledTimes(1));
 
     const second = worker.tickForTest();
+    await second;
     expect(mockConnect).toHaveBeenCalledTimes(1);
 
     release();
-    await Promise.all([first, second]);
+    await first;
     expect(mockConnect).toHaveBeenCalledTimes(1);
+    expect(worker.connectionForTest).not.toBeNull();
+  });
+
+  it('aborts an in-flight connect when config changes and reconnects', async () => {
+    let rejectConnect!: (error: Error) => void;
+    mockConnect.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectConnect = reject;
+        }),
+    );
+    mockDisconnect.mockImplementationOnce(() => {
+      rejectConnect(new Error('DingTalk stream disconnected before socket open'));
+    });
+
+    const worker = new DingTalkStreamWorker();
+    const first = worker.tickForTest();
+    await vi.waitFor(() => expect(mockConnect).toHaveBeenCalledTimes(1));
+
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...VALID_CONFIG,
+      chatEnabled: true,
+      clientSecret: 'rotated',
+    } as any);
+
+    const second = worker.tickForTest();
+    await Promise.all([first, second]);
+
+    expect(mockDisconnect).toHaveBeenCalled();
+    expect(mockConnect).toHaveBeenCalledTimes(2);
     expect(worker.connectionForTest).not.toBeNull();
   });
 

@@ -11,7 +11,8 @@ import {
 } from '@lobechat/chat-adapter-dingtalk';
 import debug from 'debug';
 
-import { getMessengerDingTalkConfig, type MessengerDingTalkConfig } from '@/config/messenger';
+import type { MessengerDingTalkConfig } from '@/config/messenger';
+import { getMessengerDingTalkConfig } from '@/config/messenger';
 import {
   DINGTALK_CARD_CALLBACK_EVENT,
   DINGTALK_ROBOT_MESSAGE_EVENT,
@@ -66,8 +67,10 @@ export class DingTalkStreamWorker {
   private fingerprintLog = 'disabled';
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = true;
-  /** Serializes ticks so overlapping interval/test calls cannot connect twice. */
-  private tickLock: Promise<void> = Promise.resolve();
+  /** True while `runTick` is awaited. Overlapping interval ticks skip; they do not queue. */
+  private tickRunning = false;
+  /** Bumped to invalidate an in-flight tick when a later tick aborts it. */
+  private tickEpoch = 0;
 
   private connectedAt: string | null = null;
   private lastError: string | null = null;
@@ -88,6 +91,7 @@ export class DingTalkStreamWorker {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.tickEpoch += 1;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -109,21 +113,43 @@ export class DingTalkStreamWorker {
   }
 
   private async tick(): Promise<void> {
-    let release!: () => void;
-    const previous = this.tickLock;
-    this.tickLock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    if (this.stopped) return;
+
+    const config = await getMessengerDingTalkConfig();
+    const enabled = Boolean(config?.chatEnabled);
+    const nextConfig = enabled ? config : null;
+    const next = configFingerprint(nextConfig);
+    const nextLog = configFingerprintLog(nextConfig);
+    const configChanged = next !== this.fingerprint;
+
+    if (this.tickRunning) {
+      if (!configChanged) {
+        log('tick skipped: previous still running');
+        return;
+      }
+      log(
+        'config changed (%s → %s) during in-flight tick, aborting connect',
+        this.fingerprintLog,
+        nextLog,
+      );
+      this.tickEpoch += 1;
+      this.disconnect();
+    }
+
+    const epoch = ++this.tickEpoch;
+    this.tickRunning = true;
     try {
-      await previous;
       if (this.stopped) return;
       await this.runTick();
     } finally {
-      release();
+      if (epoch === this.tickEpoch) {
+        this.tickRunning = false;
+      }
     }
   }
 
   private async runTick(): Promise<void> {
+    const epoch = this.tickEpoch;
     const config = await getMessengerDingTalkConfig();
     const enabled = Boolean(config?.chatEnabled);
     const nextConfig = enabled ? config : null;
@@ -135,8 +161,9 @@ export class DingTalkStreamWorker {
       this.disconnect();
       this.fingerprint = next;
       this.fingerprintLog = nextLog;
+      if (epoch !== this.tickEpoch) return;
       if (enabled && config) {
-        await this.connect(config);
+        await this.connect(config, epoch);
       } else {
         this.statusState = 'disabled';
         this.connectedAt = null;
@@ -148,19 +175,21 @@ export class DingTalkStreamWorker {
     // A failed first connect disposes the connection (see `connect`); retry on every tick
     // until the stream opens once, after which the connection reconnects by itself.
     if (enabled && config && !this.connection) {
-      await this.connect(config);
+      await this.connect(config, epoch);
       return;
     }
 
+    if (epoch !== this.tickEpoch) return;
     await this.flushStatus();
   }
 
-  private async connect(config: MessengerDingTalkConfig): Promise<void> {
+  private async connect(config: MessengerDingTalkConfig, epoch: number): Promise<void> {
     this.statusState = 'connecting';
     await this.flushStatus();
+    if (epoch !== this.tickEpoch) return;
 
     const webhookUrl = resolveWebhookUrl();
-    this.connection = new DingTalkStreamConnection({
+    const connection = new DingTalkStreamConnection({
       clientId: config.clientId,
       clientSecret: config.clientSecret,
       onCardCallback: async (payload, ack) => {
@@ -188,10 +217,14 @@ export class DingTalkStreamWorker {
         void this.flushStatus();
       },
     });
+    this.connection = connection;
 
     try {
-      await this.connection.connect();
+      await connection.connect();
+      if (epoch !== this.tickEpoch || this.connection !== connection) return;
+      await this.flushStatus();
     } catch (error) {
+      if (epoch !== this.tickEpoch || this.connection !== connection) return;
       this.statusState = 'error';
       this.lastError = error instanceof Error ? error.message : String(error);
       this.lastErrorAt = new Date().toISOString();
@@ -245,14 +278,21 @@ export class DingTalkStreamWorker {
     }
   }
 
+  private readLastFrameAtIso(): string | null {
+    const ts = this.connection?.lastFrameAt;
+    if (ts == null) return null;
+    return new Date(ts).toISOString();
+  }
+
   private async flushStatus(): Promise<void> {
     await writeDingTalkStreamStatus({
       connectedAt: this.connectedAt,
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
       lastEventAt: this.lastEventAt,
+      lastFrameAt: this.readLastFrameAtIso(),
       state: this.statusState,
-    });
+    } as Parameters<typeof writeDingTalkStreamStatus>[0]);
   }
 }
 

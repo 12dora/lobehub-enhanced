@@ -14,6 +14,7 @@ describe('readImConnectorStatus', () => {
       lastError: null,
       lastErrorAt: null,
       lastEventAt: null,
+      lastFrameAt: null,
       state: 'unknown',
     });
     expect(redis.get).toHaveBeenCalledWith(IM_CONNECTOR_STREAM_STATUS_KEY('dingtalk'));
@@ -70,6 +71,31 @@ describe('readImConnectorStatus', () => {
       lastError: null,
       lastErrorAt: null,
       lastEventAt: '2026-09-15T00:00:01.000Z',
+      lastFrameAt: null,
+      state: 'connected',
+    });
+  });
+
+  it('reads lastFrameAt from a live heartbeat', async () => {
+    const redis = {
+      get: vi.fn(async () =>
+        JSON.stringify({
+          connectedAt: '2026-09-15T00:00:00.000Z',
+          lastError: null,
+          lastErrorAt: null,
+          lastEventAt: '2026-09-15T00:00:01.000Z',
+          lastFrameAt: '2026-09-15T00:00:01.500Z',
+          pid: 99,
+          state: 'connected',
+          updatedAt: '2026-09-15T00:00:02.000Z',
+        }),
+      ),
+    };
+
+    await expect(
+      readImConnectorStatus({ platform: 'dingtalk', redis, rowDisabled: false }),
+    ).resolves.toMatchObject({
+      lastFrameAt: '2026-09-15T00:00:01.500Z',
       state: 'connected',
     });
   });
