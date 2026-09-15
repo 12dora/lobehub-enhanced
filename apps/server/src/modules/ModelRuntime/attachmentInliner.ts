@@ -41,10 +41,11 @@ const resolveMaybeLazy = async <T>(value: T | Promise<T> | (() => T | Promise<T>
 const isHttpCreateImageUrl = (url: unknown): url is string =>
   typeof url === 'string' && url.length > 0 && !isDataUri(url);
 
+/** Structural view of RuntimeImageGenParams / RuntimeVideoGenParams (fields are nullable there). */
 interface CreateMediaParams {
-  endImageUrl?: string;
-  imageUrl?: string;
-  imageUrls?: string[];
+  endImageUrl?: string | null;
+  imageUrl?: string | null;
+  imageUrls?: string[] | null;
 }
 
 const createMediaParamsHaveHttpUrls = (params: CreateMediaParams): boolean =>
