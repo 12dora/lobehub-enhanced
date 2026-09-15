@@ -50,7 +50,7 @@ export const shouldLogoutAfterSessionProbe = (result: SessionProbeResult): boole
 export interface HandleNonAdminLambda401Params {
   /** Store field is optional until auth finishes loading. */
   isSignedIn: boolean | undefined;
-  logout: () => Promise<void> | void;
+  logout: () => Promise<boolean | void> | void;
   redirectToLogin: () => void;
 }
 

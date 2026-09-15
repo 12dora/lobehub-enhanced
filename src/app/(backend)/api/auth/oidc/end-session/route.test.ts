@@ -126,6 +126,7 @@ describe('GET /api/auth/oidc/end-session', () => {
     mocks.getSession.mockResolvedValue(null);
     const response = await GET(request());
     expect(response.status).toBe(401);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({ error: 'unauthorized' });
   });
 
@@ -133,7 +134,19 @@ describe('GET /api/auth/oidc/end-session', () => {
     await serverDB.update(account).set({ idToken: null }).where(eq(account.id, 'account-a'));
     const response = await GET(request());
     expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({ error: 'not_found' });
+  });
+
+  it('returns 404 when the session user does not own the stored ID token', async () => {
+    await serverDB.insert(users).values({ id: 'user-b' });
+    mocks.getSession.mockResolvedValue({ user: { id: 'user-b' } });
+    const response = await GET(request());
+    expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = await response.json();
+    expect(body).toEqual({ error: 'not_found' });
+    expect(JSON.stringify(body)).not.toContain(idToken);
   });
 
   it('returns 404 for a local credential account', async () => {
@@ -183,6 +196,20 @@ describe('GET /api/auth/oidc/end-session', () => {
     expect(await response.json()).toMatchObject({
       fields: { id_token_hint: idToken },
       url: `${issuer}end-session/`,
+    });
+  });
+
+  it('normalizes an env Authentik issuer that lacks a trailing slash', async () => {
+    mocks.snapshot.mockReturnValue({ databaseProviders: [], providerIds: ['authentik'] });
+    Object.assign(mocks.env, {
+      AUTH_AUTHENTIK_ID: 'aihub',
+      AUTH_AUTHENTIK_ISSUER: 'https://auth.example.test/application/o/aihub',
+      AUTH_AUTHENTIK_SECRET: 'secret',
+    });
+    const response = await GET(request());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      url: 'https://auth.example.test/application/o/aihub/end-session/',
     });
   });
 });

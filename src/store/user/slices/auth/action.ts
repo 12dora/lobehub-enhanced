@@ -1,3 +1,4 @@
+import { isDesktop } from '@lobechat/const';
 import { type SSOProvider } from '@lobechat/types';
 import { isNonEmptyString, isRecord } from '@lobechat/utils/object';
 
@@ -62,6 +63,7 @@ const parseOidcEndSessionForm = (value: unknown): OidcEndSessionForm | null => {
 const fetchOidcEndSessionForm = async (): Promise<OidcEndSessionForm | null> => {
   try {
     const response = await fetch('/api/auth/oidc/end-session', {
+      cache: 'no-store',
       credentials: 'include',
       headers: { Accept: 'application/json' },
       method: 'GET',
@@ -116,10 +118,10 @@ export class UserAuthActionImpl {
     }
   };
 
-  logout = async (): Promise<void> => {
-    // Capture Authentik end-session fields while the Better Auth session cookie is
-    // still valid. Local sign-out follows; the browser then POSTs the form.
-    const endSession = await fetchOidcEndSessionForm();
+  logout = async (): Promise<boolean> => {
+    // Electron keeps the old in-app destination (desktop onboarding). Skip the
+    // Authentik RP form so sign-out cannot yank the window to the issuer.
+    const endSession = isDesktop ? null : await fetchOidcEndSessionForm();
 
     // Clear the OIDC Provider session for the current browser *before*
     // destroying the better-auth session. This prevents a stale OIDC session
@@ -131,6 +133,7 @@ export class UserAuthActionImpl {
       // Best-effort: don't block sign-out if the cleanup request fails
     }
 
+    let redirected = false;
     const { signOut } = await import('@/libs/better-auth/auth-client');
     await signOut({
       fetchOptions: {
@@ -140,14 +143,17 @@ export class UserAuthActionImpl {
           clearActiveScopeKey();
           if (endSession) {
             submitHiddenPostForm(endSession.url, endSession.fields);
+            redirected = true;
             return;
           }
+          if (isDesktop) return;
           // Use window.location.href to trigger a full page reload
           // This ensures all client-side state (React, Zustand, cache) is cleared
           window.location.href = '/signin';
         },
       },
     });
+    return redirected;
   };
 
   openLogin = async (): Promise<void> => {

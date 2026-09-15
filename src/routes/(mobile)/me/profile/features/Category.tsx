@@ -35,9 +35,9 @@ const Category = memo(() => {
       icon: LogOut,
       key: 'logout',
       label: t('signout', { ns: 'auth' }),
-      onClick: () => {
-        signOut();
-        navigate('/signin');
+      onClick: async () => {
+        const redirected = await signOut();
+        if (!redirected) navigate('/signin');
       },
     },
   ].filter(Boolean) as CellProps[];

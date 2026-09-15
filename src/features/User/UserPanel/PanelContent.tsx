@@ -38,13 +38,15 @@ const PanelContent: FC<{ closePopover: () => void }> = ({ closePopover }) => {
       } catch (error) {
         console.error(error);
       } finally {
-        signOut();
-        navigateToDesktopOnboarding(DesktopOnboardingScreen.Login);
+        const redirected = await signOut();
+        if (!redirected) {
+          navigateToDesktopOnboarding(DesktopOnboardingScreen.Login);
+        }
       }
       return;
     }
 
-    signOut();
+    await signOut();
     closePopover();
   };
 
