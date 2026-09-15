@@ -27,7 +27,7 @@ import {
   fetchDingTalkUserProfile,
   pickDingTalkCorpNameFromProfile,
   resolveStaticIdentityProviderMetadata,
-  toDingTalkClaims,
+  toDingTalkLoginClaims,
 } from './kinds';
 import { IdentityProviderSecretStore } from './secretStore';
 import { IdentityProviderTestAttemptStore } from './testAttemptStore';
@@ -76,7 +76,12 @@ export const resolveDingTalkClaims = async (input: {
     errorCode: 'OIDC_TEST_DINGTALK_PROFILE_REJECTED',
     outbound: input.outbound,
   });
-  const claims = toDingTalkClaims(profile, {
+  // Same projection as production login (`getUserInfo` → `toDingTalkLoginClaims`) so the
+  // admin claim preview shows the canonical identity email for an internal member, not the
+  // fail-closed synthetic address. This flow still writes no user/account rows.
+  const claims = await toDingTalkLoginClaims(profile, {
+    clientId: input.clientId,
+    clientSecret: input.clientSecret,
     errorCode: 'OIDC_TEST_CLAIM_VALIDATION_FAILED',
     providerKey: input.providerKey,
   });

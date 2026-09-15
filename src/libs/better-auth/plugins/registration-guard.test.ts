@@ -349,6 +349,24 @@ describe('registrationGuard plugin', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('rejects magic-link for an existing reserved canonical DingTalk identity email', async () => {
+    mockGet.mockResolvedValue(settings({ openRegistration: true }));
+    mockFindUserByEmail.mockResolvedValue({
+      user: { email: 'staff-1@dingtalk.jiefakj.com', id: 'u1' },
+    });
+    const { handler } = getBeforeHook();
+    await expectApiError(
+      () =>
+        handler({
+          body: { email: 'staff-1@dingtalk.jiefakj.com' },
+          context: { internalAdapter: { findUserByEmail: mockFindUserByEmail } },
+          path: '/sign-in/magic-link',
+        } as never),
+      'EMAIL_NOT_ALLOWED',
+    );
+    expect(mockFindUserByEmail).not.toHaveBeenCalled();
+  });
+
   it('rejects first-time magic-link when registration is closed', async () => {
     mockGet.mockResolvedValue(settings({ openRegistration: false }));
     mockFindUserByEmail.mockResolvedValue(null);

@@ -318,11 +318,26 @@ export const SYNTHETIC_IDENTITY_EMAIL_ROOT_DOMAIN = 'dingtalk.sso';
  * Canonical DingTalk identity-email domain (Authentik, robot/免登 JIT, and direct DingTalk
  * login after a successful unionId → corp userId lookup).
  *
- * Documented default only: the messenger helper may override the runtime domain via env
- * `DINGTALK_IDENTITY_EMAIL_DOMAIN`. The registration guard always reserves this default
- * **and** the runtime override so a local sign-up cannot claim a corp user's address.
+ * Single compile-time default. Runtime host is `resolveDingTalkIdentityEmailDomain()`
+ * (`DINGTALK_IDENTITY_EMAIL_DOMAIN` env, else this constant). Login claims, linking,
+ * and the registration guard all read that resolver so the reserved host cannot drift
+ * from the address the adapter mints.
  */
 export const DINGTALK_IDENTITY_EMAIL_DOMAIN = 'dingtalk.jiefakj.com';
+
+/** Runtime identity-email host: env override, else {@link DINGTALK_IDENTITY_EMAIL_DOMAIN}. */
+export const resolveDingTalkIdentityEmailDomain = (): string => {
+  const override =
+    typeof process === 'undefined' ? undefined : process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+  return override?.trim() || DINGTALK_IDENTITY_EMAIL_DOMAIN;
+};
+
+/**
+ * Canonical DingTalk identity address `<staffId>@<domain>`.
+ * Local-part is lowercased so Authentik / JIT / direct login cannot case-split.
+ */
+export const buildDingTalkIdentityEmail = (staffId: string): string =>
+  `${staffId.trim().toLowerCase()}@${resolveDingTalkIdentityEmailDomain()}`;
 
 export const buildDingTalkSyntheticEmail = (providerKey: string, subject: string): string =>
   `${subject}@${providerKey}.${SYNTHETIC_IDENTITY_EMAIL_ROOT_DOMAIN}`;

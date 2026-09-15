@@ -3,6 +3,7 @@ import {
   DINGTALK_IDENTITY_EMAIL_DOMAIN,
   isReservedDingTalkCanonicalIdentityEmail,
   isReservedSyntheticIdentityEmail,
+  resolveDingTalkIdentityEmailDomain,
 } from '@lobechat/types';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { type BetterAuthPlugin } from 'better-auth/types';
@@ -80,19 +81,15 @@ export const loadRegistrationSettings = async (): Promise<PlatformAuthSettings> 
 };
 
 /**
- * Enforce open-registration + domain allowlist for a candidate self-service email.
- * Throws APIError with a stable code on denial.
- */
-/**
  * Canonical DingTalk identity-email hosts the registration guard must reserve.
  * Always includes the documented default; also includes the runtime env override
  * so a local sign-up cannot claim a corp user after `DINGTALK_IDENTITY_EMAIL_DOMAIN` is set.
  */
 export const reservedDingTalkCanonicalIdentityDomains = (): string[] => {
   const domains = [DINGTALK_IDENTITY_EMAIL_DOMAIN];
-  const override = process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN?.trim();
-  if (override && override.toLowerCase() !== DINGTALK_IDENTITY_EMAIL_DOMAIN.toLowerCase()) {
-    domains.push(override);
+  const runtime = resolveDingTalkIdentityEmailDomain();
+  if (runtime.toLowerCase() !== DINGTALK_IDENTITY_EMAIL_DOMAIN.toLowerCase()) {
+    domains.push(runtime);
   }
   return domains;
 };
@@ -122,6 +119,10 @@ export const assertNonReservedIdentityEmail = (email: string): void => {
   });
 };
 
+/**
+ * Enforce open-registration + domain allowlist for a candidate self-service email.
+ * Throws APIError with a stable code on denial.
+ */
 export const enforceRegistrationPolicy = (email: string, settings: PlatformAuthSettings): void => {
   assertNonReservedIdentityEmail(email);
 

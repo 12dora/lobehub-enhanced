@@ -29,7 +29,10 @@ import {
   type PinnedTransportResponse,
   SafeOutboundHttpClient,
 } from '@/server/enterprise/security/outboundHttp';
-import { buildDingTalkDiscoveryMetadata } from '@/server/enterprise/services/identityProvider/kinds';
+import {
+  buildDingTalkDiscoveryMetadata,
+  resetDingTalkIdpLegacyTokenCacheForTest,
+} from '@/server/enterprise/services/identityProvider/kinds';
 
 import {
   buildPlatformIdentityProvider,
@@ -111,20 +114,25 @@ const createHarness = (options?: {
   email?: string;
   lookup?: { contactType?: number; fail?: boolean; userid?: string };
 }) => {
+  const lookup = {
+    contactType: options?.lookup?.contactType,
+    fail: options?.lookup?.fail ?? false,
+    userid: options?.lookup?.userid,
+  };
   const database: MemoryDB = { account: [], session: [], user: [], verification: [] };
   // Any escape to the real network is a test failure, not a silent live call.
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = new URL(String(input));
     if (url.pathname === '/gettoken') {
-      if (options?.lookup?.fail) return jsonFetchResponse({ errcode: 40014, errmsg: 'invalid' });
+      if (lookup.fail) return jsonFetchResponse({ errcode: 40014, errmsg: 'invalid' });
       return jsonFetchResponse({ access_token: 'legacy-token', errcode: 0 });
     }
     if (url.pathname.endsWith('/topapi/user/getbyunionid')) {
       return jsonFetchResponse({
         errcode: 0,
         result: {
-          contact_type: options?.lookup?.contactType ?? 0,
-          userid: options?.lookup?.userid ?? 'staff-1',
+          contact_type: lookup.contactType ?? 0,
+          userid: lookup.userid ?? 'staff-1',
         },
       });
     }
@@ -247,7 +255,7 @@ const createHarness = (options?: {
     };
   };
 
-  return { auth, callback, callbackThroughShim, database, signUpLocal, start, transport };
+  return { auth, callback, callbackThroughShim, database, lookup, signUpLocal, start, transport };
 };
 
 const isSuccessfulLogin = (response: Response) =>
@@ -255,6 +263,7 @@ const isSuccessfulLogin = (response: Response) =>
 
 beforeEach(() => {
   delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+  resetDingTalkIdpLegacyTokenCacheForTest();
 });
 
 afterEach(() => {
@@ -411,5 +420,27 @@ describe('DingTalk login through the Better Auth genericOAuth handler', () => {
     expect(
       harness.database.account.find((account) => account.providerId === 'dingtalk'),
     ).toMatchObject({ accountId: 'union-1', userId: existingUserId });
+  });
+
+  it('does not rewrite a converged user email when a later corp userId lookup fails', async () => {
+    const harness = createHarness();
+    const first = await harness.start();
+    expect(isSuccessfulLogin(await harness.callback(first))).toBe(true);
+    expect(harness.database.user).toHaveLength(1);
+    expect(harness.database.user[0]!.email).toBe(`staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`);
+    const userId = harness.database.user[0]!.id;
+    const emailVerified = harness.database.user[0]!.emailVerified;
+
+    harness.lookup.fail = true;
+    resetDingTalkIdpLegacyTokenCacheForTest();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const second = await harness.start();
+    expect(isSuccessfulLogin(await harness.callback(second))).toBe(true);
+    errorSpy.mockRestore();
+
+    expect(harness.database.user).toHaveLength(1);
+    expect(harness.database.user[0]!.id).toBe(userId);
+    expect(harness.database.user[0]!.email).toBe(`staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`);
+    expect(harness.database.user[0]!.emailVerified).toBe(emailVerified);
   });
 });

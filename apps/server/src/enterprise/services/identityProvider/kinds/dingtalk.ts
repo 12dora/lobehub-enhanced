@@ -1,4 +1,5 @@
 import {
+  buildDingTalkIdentityEmail,
   buildDingTalkSyntheticEmail,
   DINGTALK_IDENTITY_PROVIDER_ISSUER,
   isDingTalkCorpAllowed,
@@ -6,13 +7,9 @@ import {
   isReservedDingTalkCanonicalIdentityEmail,
   type PlatformIdentityProviderAllowedCorp,
   type PlatformOidcDiscoveryMetadata,
+  resolveDingTalkIdentityEmailDomain,
 } from '@lobechat/types';
 import { z } from 'zod';
-
-import {
-  buildDingTalkIdentityEmail,
-  resolveDingTalkIdentityEmailDomain,
-} from '@/server/services/messenger/platforms/dingtalk/identityEmail';
 
 import type { SafeOutboundHttpClient } from '../../../security/outboundHttp';
 
@@ -474,26 +471,69 @@ export const parseDingTalkCorpUserId = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > 128 || /[\s@]/.test(trimmed)) return undefined;
-  return trimmed;
+  return trimmed.toLowerCase();
 };
 
 const isDingTalkOapiFailure = (errcode: unknown): boolean =>
   typeof errcode === 'number' && errcode !== 0;
 
+const lookupErrorClass = (error: unknown): string =>
+  error instanceof Error ? error.constructor.name : 'unknown';
+
+const OVERSIZED_LOOKUP_BODY = 'PLATFORM_DINGTALK_RESPONSE_TOO_LARGE';
+
+const isLookupBodyError = (error: unknown): boolean =>
+  error instanceof z.ZodError ||
+  error instanceof SyntaxError ||
+  (error instanceof Error && error.message === OVERSIZED_LOOKUP_BODY);
+
 const logCorpUserIdLookupUnavailable = (input: {
+  errorClass?: string;
   reason: DingTalkCorpUserIdLookupReason;
   status?: number;
 }): void => {
   console.error('[dingtalk] corp userId lookup unavailable', {
     reason: input.reason,
+    ...(input.errorClass === undefined ? {} : { errorClass: input.errorClass }),
     ...(input.status === undefined ? {} : { status: input.status }),
   });
+};
+
+const readCappedJsonBody = async (response: Response): Promise<unknown> => {
+  const lengthHeader = response.headers.get('content-length');
+  if (lengthHeader) {
+    const length = Number(lengthHeader);
+    if (Number.isFinite(length) && length > RESPONSE_MAX_BYTES) {
+      throw new Error(OVERSIZED_LOOKUP_BODY);
+    }
+  }
+  const text = await response.text();
+  if (text.length > RESPONSE_MAX_BYTES) throw new Error(OVERSIZED_LOOKUP_BODY);
+  return JSON.parse(text);
+};
+
+/** Refresh 5 min early relative to the typical 7200 s legacy token lifetime. */
+const LEGACY_APP_TOKEN_CACHE_MS = 55 * 60 * 1000;
+
+interface CachedLegacyAppToken {
+  expiresAt: number;
+  token: string;
+}
+
+const legacyAppTokenCache = new Map<string, CachedLegacyAppToken>();
+
+export const resetDingTalkIdpLegacyTokenCacheForTest = (): void => {
+  legacyAppTokenCache.clear();
 };
 
 const fetchDingTalkLegacyAppToken = async (input: {
   clientId: string;
   clientSecret: string;
 }): Promise<string | undefined> => {
+  const now = Date.now();
+  const cached = legacyAppTokenCache.get(input.clientId);
+  if (cached && cached.expiresAt > now) return cached.token;
+
   const url = new URL(DINGTALK_LEGACY_TOKEN_ENDPOINT);
   url.searchParams.set('appkey', input.clientId);
   url.searchParams.set('appsecret', input.clientSecret);
@@ -504,19 +544,25 @@ const fetchDingTalkLegacyAppToken = async (input: {
       cache: 'no-store',
       method: 'GET',
       redirect: 'error',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
       return undefined;
     }
-    const parsed = legacyTokenResponseSchema.parse(await response.json());
+    const parsed = legacyTokenResponseSchema.parse(await readCappedJsonBody(response));
     if (isDingTalkOapiFailure(parsed.errcode) || !parsed.access_token?.trim()) {
       logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
       return undefined;
     }
-    return parsed.access_token.trim();
-  } catch {
-    logCorpUserIdLookupUnavailable({ reason: 'network' });
+    const token = parsed.access_token.trim();
+    legacyAppTokenCache.set(input.clientId, { expiresAt: now + LEGACY_APP_TOKEN_CACHE_MS, token });
+    return token;
+  } catch (error) {
+    logCorpUserIdLookupUnavailable({
+      errorClass: lookupErrorClass(error),
+      reason: isLookupBodyError(error) ? 'app_token_rejected' : 'network',
+    });
     return undefined;
   }
 };
@@ -524,9 +570,9 @@ const fetchDingTalkLegacyAppToken = async (input: {
 /**
  * Resolve a DingTalk unionId to the corp userId (staffId) using the app's legacy token.
  *
- * Fail-closed: any API/network/shape failure, or an external contact (`contact_type !== 0`),
- * returns `undefined` so the caller keeps today's synthetic `*.dingtalk.sso` address and
- * does not enable implicit linking.
+ * Fail-closed: any API/network/shape failure, or a contact that is not explicitly internal
+ * (`contact_type` must be `0`), returns `undefined` so the caller keeps today's synthetic
+ * `*.dingtalk.sso` address and does not enable implicit linking.
  */
 export const resolveDingTalkCorpUserId = async (input: {
   clientId: string;
@@ -546,18 +592,20 @@ export const resolveDingTalkCorpUserId = async (input: {
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
       method: 'POST',
       redirect: 'error',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       logCorpUserIdLookupUnavailable({ reason: 'userid_absent', status: response.status });
       return undefined;
     }
-    const parsed = getByUnionIdResponseSchema.parse(await response.json());
+    const parsed = getByUnionIdResponseSchema.parse(await readCappedJsonBody(response));
     if (isDingTalkOapiFailure(parsed.errcode)) {
       logCorpUserIdLookupUnavailable({ reason: 'userid_absent', status: response.status });
       return undefined;
     }
     const contactType = parsed.result?.contact_type;
-    if (contactType !== undefined && contactType !== 0) {
+    // Explicit `0` only: a missing `contact_type` is treated as non-internal (fail-closed).
+    if (contactType !== 0) {
       logCorpUserIdLookupUnavailable({ reason: 'external_contact', status: response.status });
       return undefined;
     }
@@ -567,8 +615,11 @@ export const resolveDingTalkCorpUserId = async (input: {
       return undefined;
     }
     return userid;
-  } catch {
-    logCorpUserIdLookupUnavailable({ reason: 'network' });
+  } catch (error) {
+    logCorpUserIdLookupUnavailable({
+      errorClass: lookupErrorClass(error),
+      reason: isLookupBodyError(error) ? 'userid_absent' : 'network',
+    });
     return undefined;
   }
 };
@@ -634,8 +685,11 @@ export const toDingTalkClaims = (
 
 /**
  * Login-time claim projection: after `contact/users/me`, resolve unionId → corp userId and
- * mint the canonical identity email. Fail-closed lookup keeps today's synthetic address
- * and disables linking.
+ * mint the canonical identity email.
+ *
+ * Fail-closed lookup (`emailVerified: false`) must not rewrite an already-linked DingTalk
+ * account: pass that user's current email as `existingEmail`. Only mint the synthetic
+ * `*.dingtalk.sso` address when no DingTalk account exists for this unionId.
  */
 export const toDingTalkLoginClaims = async (
   profile: DingTalkUserProfile,
@@ -643,6 +697,7 @@ export const toDingTalkLoginClaims = async (
     clientId: string;
     clientSecret: string;
     errorCode?: string;
+    existingEmail?: string;
     providerKey: string;
   },
 ): Promise<DingTalkClaims> => {
@@ -654,8 +709,25 @@ export const toDingTalkLoginClaims = async (
         unionId,
       })
     : undefined;
+  if (corpUserId) {
+    return toDingTalkClaims(profile, {
+      corpUserId,
+      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+      providerKey: input.providerKey,
+    });
+  }
+  const existingEmail = input.existingEmail?.trim();
+  if (existingEmail && unionId) {
+    return {
+      ...profile,
+      email: existingEmail.toLowerCase(),
+      emailVerified: false,
+      id: unionId,
+      nick: profile.nick?.trim() || unionId,
+      sub: unionId,
+    };
+  }
   return toDingTalkClaims(profile, {
-    ...(corpUserId ? { corpUserId } : {}),
     ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
     providerKey: input.providerKey,
   });

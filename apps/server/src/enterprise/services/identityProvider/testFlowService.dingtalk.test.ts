@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { DINGTALK_IDENTITY_PROVIDER_ISSUER } from '@lobechat/types';
-import { describe, expect, it, vi } from 'vitest';
+import { DINGTALK_IDENTITY_EMAIL_DOMAIN, DINGTALK_IDENTITY_PROVIDER_ISSUER } from '@lobechat/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type PinnedTransport,
@@ -9,10 +9,13 @@ import {
 } from '../../security/outboundHttp';
 import {
   DINGTALK_APP_TOKEN_ENDPOINT,
+  DINGTALK_GET_BY_UNIONID_ENDPOINT,
+  DINGTALK_LEGACY_TOKEN_ENDPOINT,
   DINGTALK_ORG_AUTH_INFO_ENDPOINT,
   DINGTALK_ORG_READ_SCOPE,
   DINGTALK_TOKEN_ENDPOINT,
   DINGTALK_USERINFO_ENDPOINT,
+  resetDingTalkIdpLegacyTokenCacheForTest,
 } from './kinds/dingtalk';
 import { resolveDingTalkClaims } from './testFlowService';
 
@@ -71,10 +74,46 @@ const transportFor = (input: {
     );
   });
 
+const jsonFetchResponse = (body: unknown): Response =>
+  new Response(JSON.stringify(body), {
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  });
+
+const mockCorpUserIdLookup = () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.origin + url.pathname === DINGTALK_LEGACY_TOKEN_ENDPOINT) {
+      return jsonFetchResponse({ access_token: 'legacy-token', errcode: 0 });
+    }
+    if (url.origin + url.pathname === DINGTALK_GET_BY_UNIONID_ENDPOINT) {
+      expect(JSON.parse(String(init?.body))).toEqual({ unionid: 'u-1' });
+      return jsonFetchResponse({
+        errcode: 0,
+        result: { contact_type: 0, userid: 'staff-1' },
+      });
+    }
+    throw new Error(`Unexpected native fetch: ${url}`);
+  });
+};
+
 describe('resolveDingTalkClaims organisation name', () => {
+  beforeEach(() => {
+    resetDingTalkIdpLegacyTokenCacheForTest();
+    mockCorpUserIdLookup();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('includes the org-lookup name when DingTalk returns one', async () => {
     const outbound = setup(transportFor({ org: response({ corpName: '  示例科技有限公司 ' }) }));
     await expect(resolve(outbound)).resolves.toMatchObject({
+      claims: {
+        email: `staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`,
+        emailVerified: true,
+      },
       dingtalk: { corpId: 'ding42', corpName: '示例科技有限公司', nick: 'Ada' },
     });
   });

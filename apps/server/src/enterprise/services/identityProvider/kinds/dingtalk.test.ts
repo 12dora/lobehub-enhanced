@@ -35,6 +35,7 @@ import {
   fetchDingTalkUserProfile,
   isDingTalkCanonicalLinkingEmail,
   parseDingTalkCorpUserId,
+  resetDingTalkIdpLegacyTokenCacheForTest,
   resolveDingTalkCorpUserId,
   toDingTalkClaims,
   toDingTalkLoginClaims,
@@ -64,6 +65,7 @@ const setup = (transport: PinnedTransport) =>
 
 beforeEach(() => {
   delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+  resetDingTalkIdpLegacyTokenCacheForTest();
 });
 
 afterEach(() => {
@@ -442,6 +444,12 @@ describe('DingTalk claim projection', () => {
     expect(result.email).toBe(`staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`);
     expect(result.emailVerified).toBe(true);
     expect(result.corpUserId).toBe('staff-1');
+    expect(
+      toDingTalkClaims(
+        { nick: '张三', unionId: 'u-1' },
+        { corpUserId: 'STAFF-1', providerKey: 'dingtalk' },
+      ).email,
+    ).toBe(`staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`);
     expect(result.id).toBe('u-1');
     expect(result.sub).toBe('u-1');
     expect(isDingTalkCanonicalLinkingEmail(result.email)).toBe(true);
@@ -520,9 +528,10 @@ describe('canonical DingTalk identity email', () => {
     expect(isDingTalkCanonicalLinkingEmail('u-1@dingtalk.dingtalk.sso')).toBe(false);
   });
 
-  it('rejects unusable corp userIds', () => {
+  it('rejects unusable corp userIds and lowercases the local-part', () => {
     expect(parseDingTalkCorpUserId('staff-1')).toBe('staff-1');
     expect(parseDingTalkCorpUserId('  staff-1  ')).toBe('staff-1');
+    expect(parseDingTalkCorpUserId('STAFF-1')).toBe('staff-1');
     expect(parseDingTalkCorpUserId('a@b')).toBeUndefined();
     expect(parseDingTalkCorpUserId('staff 1')).toBeUndefined();
     expect(parseDingTalkCorpUserId('')).toBeUndefined();
@@ -551,6 +560,7 @@ describe('DingTalk unionId → corp userId lookup', () => {
       const url = new URL(String(input));
       if (url.origin + url.pathname === DINGTALK_LEGACY_TOKEN_ENDPOINT) {
         expect(init?.method ?? 'GET').toBe('GET');
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
         expect(url.searchParams.get('appkey')).toBe('app-key');
         expect(url.searchParams.get('appsecret')).toBe('app-secret');
         return jsonFetchResponse(
@@ -560,6 +570,7 @@ describe('DingTalk unionId → corp userId lookup', () => {
       }
       if (url.origin + url.pathname === DINGTALK_GET_BY_UNIONID_ENDPOINT) {
         expect(init?.method).toBe('POST');
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
         expect(url.searchParams.get('access_token')).toBe('legacy-token');
         expect(JSON.parse(String(init?.body))).toEqual({ unionid: 'u-1' });
         return jsonFetchResponse(
@@ -586,10 +597,56 @@ describe('DingTalk unionId → corp userId lookup', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     mockLegacyLookup({ contactType: 1 });
     await expect(resolveDingTalkCorpUserId(creds)).resolves.toBeUndefined();
+    resetDingTalkIdpLegacyTokenCacheForTest();
     mockLegacyLookup({ token: { errcode: 40014 }, tokenStatus: 200 });
     await expect(resolveDingTalkCorpUserId(creds)).resolves.toBeUndefined();
+    resetDingTalkIdpLegacyTokenCacheForTest();
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNRESET'));
     await expect(resolveDingTalkCorpUserId(creds)).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[dingtalk] corp userId lookup unavailable',
+      expect.objectContaining({ errorClass: 'Error', reason: 'network' }),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('fails closed when contact_type is omitted even if userid is present', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockLegacyLookup({ useridBody: { errcode: 0, result: { userid: 'staff-1' } } });
+    await expect(resolveDingTalkCorpUserId(creds)).resolves.toBeUndefined();
+    errorSpy.mockRestore();
+  });
+
+  it('reuses a cached legacy app token across lookups', async () => {
+    let tokenCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.origin + url.pathname === DINGTALK_LEGACY_TOKEN_ENDPOINT) {
+        tokenCalls += 1;
+        return jsonFetchResponse({ access_token: 'legacy-token', errcode: 0 });
+      }
+      if (url.origin + url.pathname === DINGTALK_GET_BY_UNIONID_ENDPOINT) {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return jsonFetchResponse({
+          errcode: 0,
+          result: { contact_type: 0, userid: 'staff-1' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    await expect(resolveDingTalkCorpUserId(creds)).resolves.toBe('staff-1');
+    await expect(resolveDingTalkCorpUserId(creds)).resolves.toBe('staff-1');
+    expect(tokenCalls).toBe(1);
+  });
+
+  it('rejects an oversized lookup body', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockLegacyLookup({ token: { access_token: 't'.repeat(70_000), errcode: 0 } });
+    await expect(resolveDingTalkCorpUserId(creds)).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[dingtalk] corp userId lookup unavailable',
+      expect.objectContaining({ errorClass: 'Error', reason: 'app_token_rejected' }),
+    );
     errorSpy.mockRestore();
   });
 
@@ -618,6 +675,27 @@ describe('DingTalk unionId → corp userId lookup', () => {
       ),
     ).resolves.toMatchObject({
       email: 'u-1@dingtalk.dingtalk.sso',
+      emailVerified: false,
+      id: 'u-1',
+    });
+    errorSpy.mockRestore();
+  });
+
+  it('keeps an existing DingTalk account email when lookup fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockLegacyLookup({ useridBody: { errcode: 60121 }, useridStatus: 200 });
+    await expect(
+      toDingTalkLoginClaims(
+        { nick: '张三', unionId: 'u-1' },
+        {
+          clientId: 'app-key',
+          clientSecret: 'app-secret',
+          existingEmail: `STAFF-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`,
+          providerKey: 'dingtalk',
+        },
+      ),
+    ).resolves.toMatchObject({
+      email: `staff-1@${DINGTALK_IDENTITY_EMAIL_DOMAIN}`,
       emailVerified: false,
       id: 'u-1',
     });

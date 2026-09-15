@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
+import { getCurrentAuthContext } from '@better-auth/core/context';
 import { buildDingTalkLoginCallbackUrl } from '@lobechat/types';
 import { getOAuthState } from 'better-auth/api';
 import type { GenericOAuthConfig } from 'better-auth/plugins';
@@ -59,6 +60,29 @@ const mapDingTalkProfileToUser = (
   const unionId = typeof claims.unionId === 'string' ? claims.unionId.trim() : '';
   if (!unionId || mapped.id !== unionId) throw new Error('PLATFORM_DINGTALK_SUBJECT_INVALID');
   return mapped;
+};
+
+/**
+ * Current email for an already-linked `(providerKey, unionId)` account.
+ * Used so a later `getbyunionid` flake cannot rewrite a converged row via `overrideUserInfo`.
+ * Missing request context (direct adapter tests) returns undefined — mint synthetic.
+ */
+const readExistingDingTalkAccountEmail = async (
+  providerKey: string,
+  unionId: string | undefined,
+): Promise<string | undefined> => {
+  const accountId = unionId?.trim();
+  if (!accountId) return undefined;
+  try {
+    const { context } = await getCurrentAuthContext();
+    const account = await context.internalAdapter.findAccountByProviderId(accountId, providerKey);
+    if (!account) return undefined;
+    const user = await context.internalAdapter.findUserById(account.userId);
+    const email = user?.email?.trim();
+    return email || undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 export const buildPlatformDingTalkProvider = (
@@ -188,9 +212,16 @@ export const buildPlatformDingTalkProvider = (
         // when unionId resolved to a corp userId and the email is the canonical identity
         // address. better-auth `handleOAuthUserInfo` then allows implicit linking via
         // `userInfo.emailVerified` without putting `dingtalk` in `trustedProviders`.
+        // On lookup failure, pass the existing account's email so `overrideUserInfo`
+        // cannot rewrite a converged canonical row to `*.dingtalk.sso`.
+        const existingEmail = await readExistingDingTalkAccountEmail(
+          provider.providerKey,
+          profile.unionId,
+        );
         claims = await toDingTalkLoginClaims(profile, {
           clientId: provider.clientId,
           clientSecret: provider.clientSecret,
+          ...(existingEmail ? { existingEmail } : {}),
           providerKey: provider.providerKey,
         });
       } catch (error) {

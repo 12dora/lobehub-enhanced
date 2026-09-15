@@ -11,7 +11,10 @@ import {
   type PinnedTransportResponse,
   SafeOutboundHttpClient,
 } from '@/server/enterprise/security/outboundHttp';
-import { buildDingTalkDiscoveryMetadata } from '@/server/enterprise/services/identityProvider/kinds';
+import {
+  buildDingTalkDiscoveryMetadata,
+  resetDingTalkIdpLegacyTokenCacheForTest,
+} from '@/server/enterprise/services/identityProvider/kinds';
 
 import {
   buildPlatformIdentityProvider,
@@ -143,6 +146,7 @@ const setup = (options?: {
 describe('DingTalk platform identity provider adapter', () => {
   beforeEach(() => {
     delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
+    resetDingTalkIdpLegacyTokenCacheForTest();
   });
 
   afterEach(() => {
