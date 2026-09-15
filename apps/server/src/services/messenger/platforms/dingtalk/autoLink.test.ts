@@ -10,6 +10,10 @@ vi.mock('./provision', () => ({
   ensureDingTalkUser: (...args: unknown[]) => mockEnsureDingTalkUser(...args),
 }));
 
+vi.mock('./branding', () => ({
+  resolveDingTalkBrandingDisplayName: vi.fn(async () => 'AI 平台'),
+}));
+
 vi.mock('@/database/models/agent', () => ({
   AgentModel: vi.fn().mockImplementation(() => ({
     getBuiltinAgent: mockGetBuiltinAgent,
@@ -23,7 +27,8 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
 }));
 
 const { tryAutoLinkDingTalk } = await import('./autoLink');
-const { DINGTALK_UNKNOWN_USER_REPLY } = await import('./const');
+const { resolveDingTalkBrandingDisplayName } = await import('./branding');
+const { DINGTALK_UNKNOWN_USER_REPLY, formatDingTalkUnknownUserReply } = await import('./const');
 
 const serverDB = {} as any;
 const binder = { sendDmText } as any;
@@ -141,5 +146,59 @@ describe('tryAutoLinkDingTalk', () => {
       expect.any(Error),
     );
     error.mockRestore();
+  });
+
+  it('refuses to link an effectively banned user without leaking ban', async () => {
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
+      banExpires: null,
+      banned: true,
+      email: 'staff_1@dingtalk.jiefakj.com',
+      id: 'user_1',
+    });
+
+    const link = await tryAutoLinkDingTalk({
+      binder,
+      chatId: 'cid_1',
+      senderStaffId: 'staff_1',
+      serverDB,
+    });
+
+    expect(link).toBeNull();
+    expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
+    expect(mockUpsertForPlatform).not.toHaveBeenCalled();
+  });
+
+  it('links when a temporary ban has expired', async () => {
+    mockEnsureDingTalkUser.mockResolvedValueOnce({
+      banExpires: new Date(Date.now() - 1000),
+      banned: true,
+      email: 'staff_1@dingtalk.jiefakj.com',
+      id: 'user_1',
+    });
+
+    const link = await tryAutoLinkDingTalk({
+      binder,
+      chatId: 'cid_1',
+      senderStaffId: 'staff_1',
+      serverDB,
+    });
+
+    expect(link?.platformUserId).toBe('staff_1');
+    expect(mockUpsertForPlatform).toHaveBeenCalled();
+    expect(sendDmText).not.toHaveBeenCalled();
+  });
+
+  it('uses the published branding display name in the unknown-user reply', async () => {
+    vi.mocked(resolveDingTalkBrandingDisplayName).mockResolvedValueOnce('某某平台');
+    mockEnsureDingTalkUser.mockResolvedValueOnce(null);
+
+    await tryAutoLinkDingTalk({
+      binder,
+      chatId: 'cid_1',
+      senderStaffId: 'unknown_staff',
+      serverDB,
+    });
+
+    expect(sendDmText).toHaveBeenCalledWith('cid_1', formatDingTalkUnknownUserReply('某某平台'));
   });
 });

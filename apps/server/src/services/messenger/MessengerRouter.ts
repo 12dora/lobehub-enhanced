@@ -724,6 +724,15 @@ export class MessengerRouter {
 
       if (platform === 'dingtalk') {
         await incrementDingTalkDailyCounter('messages');
+
+        const dingConfig = await getMessengerDingTalkConfig();
+        if (!dingConfig?.chatEnabled) {
+          if (await claimDingTalkChatDisabledNotice(senderId)) {
+            await binder.sendDmText(chatId, DINGTALK_CHAT_DISABLED_REPLY);
+          }
+          return;
+        }
+
         let justLinked = false;
         if (!link) {
           link =
@@ -738,14 +747,6 @@ export class MessengerRouter {
           // through to the verify-im link-token flow.
           if (!link) return;
           justLinked = true;
-        }
-
-        const dingConfig = await getMessengerDingTalkConfig();
-        if (!dingConfig?.chatEnabled) {
-          if (await claimDingTalkChatDisabledNotice(senderId)) {
-            await binder.sendDmText(chatId, DINGTALK_CHAT_DISABLED_REPLY);
-          }
-          return;
         }
 
         if (justLinked) {

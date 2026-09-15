@@ -8,9 +8,25 @@ export const DINGTALK_IDENTITY_EMAIL_DOMAIN = 'dingtalk.jiefakj.com';
 export const resolveDingTalkIdentityEmailDomain = (): string =>
   process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN?.trim() || DINGTALK_IDENTITY_EMAIL_DOMAIN;
 
+/**
+ * DingTalk corp userid / staffId — the identity-email local-part.
+ * Equivalent to `^[A-Za-z0-9._-]{1,64}$` (`\w` is `[A-Za-z0-9_]`).
+ */
+export const DINGTALK_STAFF_ID_PATTERN = /^[\w.-]{1,64}$/;
+
+export const isValidDingTalkStaffId = (staffId: string): boolean =>
+  DINGTALK_STAFF_ID_PATTERN.test(staffId);
+
 export const DINGTALK_INSTALLATION_KEY = 'dingtalk:singleton';
 
-export const DINGTALK_UNKNOWN_USER_REPLY = '请先使用钉钉账号登录 AIHub 网页端一次，再回来对话。';
+export const DINGTALK_BRANDING_FALLBACK = 'AI 平台';
+
+export const formatDingTalkUnknownUserReply = (displayName: string): string =>
+  `请先使用钉钉账号登录 ${displayName} 网页端一次，再回来对话。`;
+
+export const DINGTALK_UNKNOWN_USER_REPLY = formatDingTalkUnknownUserReply(
+  DINGTALK_BRANDING_FALLBACK,
+);
 
 export const DINGTALK_CHAT_DISABLED_REPLY = '对话能力已由管理员关闭。';
 
@@ -56,8 +72,6 @@ export const DINGTALK_UNKNOWN_ACTION_REPLY = '未知操作';
 export const DINGTALK_SCOPE_NOT_FOUND_REPLY = '未找到该范围';
 export const DINGTALK_SCOPE_PICKER_PROMPT = '点选要切换的范围';
 export const DINGTALK_PERSONAL_SCOPE_LABEL = '个人';
-
-export const DINGTALK_BRANDING_FALLBACK = 'AI 平台';
 
 export const formatDingTalkViewInBrandingLabel = (displayName: string): string =>
   `在${displayName}中查看`;

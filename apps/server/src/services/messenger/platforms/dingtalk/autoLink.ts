@@ -4,16 +4,19 @@ import { AgentModel } from '@/database/models/agent';
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
 import type { MessengerAccountLinkItem } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
+import { isEffectivelyBanned } from '@/database/utils/userBan';
 
 import type { MessengerPlatformBinder } from '../../types';
-import { DINGTALK_UNKNOWN_USER_REPLY } from './const';
+import { resolveDingTalkBrandingDisplayName } from './branding';
+import { formatDingTalkUnknownUserReply } from './const';
 import { ensureDingTalkUser } from './provision';
 
 const log = debug('lobe-server:messenger:dingtalk:auto-link');
 
 const replyUnknownUser = async (params: TryAutoLinkDingTalkParams): Promise<void> => {
   try {
-    await params.binder.sendDmText(params.chatId, DINGTALK_UNKNOWN_USER_REPLY);
+    const displayName = await resolveDingTalkBrandingDisplayName();
+    await params.binder.sendDmText(params.chatId, formatDingTalkUnknownUserReply(displayName));
   } catch (error) {
     console.error('tryAutoLinkDingTalk: failed to send unknown-user reply', error);
   }
@@ -56,6 +59,14 @@ export const tryAutoLinkDingTalk = async (
   });
   if (!user) {
     log('tryAutoLinkDingTalk: provision failed staffId=%s', staffId);
+    await replyUnknownUser(params);
+    return null;
+  }
+
+  // Same predicate as DingTalk 免登 / better-auth admin (`banned` + unexpired
+  // `banExpires`). Reuse the unknown-user sentence so a ban is not leaked.
+  if (isEffectivelyBanned(user)) {
+    log('tryAutoLinkDingTalk: banned staffId=%s', staffId);
     await replyUnknownUser(params);
     return null;
   }

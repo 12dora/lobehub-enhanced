@@ -6,8 +6,8 @@ const mockFindFirst = vi.fn();
 const mockCreateUser = vi.fn();
 const mockGetMessengerDingTalkConfig = vi.fn();
 const mockRedisSet = vi.fn();
-const mockRedisDel = vi.fn();
 const mockRedisEval = vi.fn();
+const mockGetAgentRuntimeRedisClient = vi.fn();
 
 vi.mock('@/database/models/user', () => ({
   UserModel: { findByEmail: (...args: unknown[]) => mockFindByEmail(...args) },
@@ -22,11 +22,7 @@ vi.mock('@/config/messenger', () => ({
 }));
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
-  getAgentRuntimeRedisClient: vi.fn(() => ({
-    del: mockRedisDel,
-    eval: mockRedisEval,
-    set: mockRedisSet,
-  })),
+  getAgentRuntimeRedisClient: (...args: unknown[]) => mockGetAgentRuntimeRedisClient(...args),
 }));
 
 vi.mock('@/auth', () => ({
@@ -39,12 +35,19 @@ vi.mock('@/auth', () => ({
 
 const {
   DINGTALK_LEGACY_TOKEN_URL,
+  DINGTALK_PROVISION_LOCK_TTL_SECONDS,
   DINGTALK_PROVISION_RATE_KEY,
   DINGTALK_PROVISION_RATE_LIMIT_MAX,
   DINGTALK_USER_GET_URL,
   ensureDingTalkUser,
+  RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT,
   resetDingTalkProvisionStateForTest,
 } = await import('./provision');
+
+const redisClient = () => ({
+  eval: mockRedisEval,
+  set: mockRedisSet,
+});
 
 const serverDB = { query: { users: { findFirst: mockFindFirst } } } as any;
 
@@ -66,11 +69,11 @@ const EXISTING_USER = { email: 'staff_1@dingtalk.jiefakj.com', id: 'user_1' };
 beforeEach(() => {
   resetDingTalkProvisionStateForTest();
   vi.clearAllMocks();
+  mockGetAgentRuntimeRedisClient.mockImplementation(redisClient);
   mockFindByEmail.mockResolvedValue(undefined);
   mockFindFirst.mockResolvedValue(undefined);
   mockGetMessengerDingTalkConfig.mockResolvedValue(VALID_CONFIG);
   mockRedisSet.mockResolvedValue('OK');
-  mockRedisDel.mockResolvedValue(1);
   mockRedisEval.mockResolvedValue(1);
   mockCreateUser.mockImplementation(async (user: { email: string; name: string }) => {
     const created = { email: user.email, id: 'user_new', name: user.name };
@@ -91,6 +94,7 @@ beforeEach(() => {
             avatar: 'https://static.dingtalk.com/avatar.png',
             name: '张三',
             title: '工程师',
+            userid: 'staff_1',
           },
         });
       }
@@ -100,6 +104,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   delete process.env.DINGTALK_IDENTITY_EMAIL_DOMAIN;
 });
@@ -139,7 +144,7 @@ describe('ensureDingTalkUser', () => {
     expect(user?.id).toBe('user_new');
     expect(mockCreateUser).toHaveBeenCalledWith({
       email: 'staff_1@dingtalk.jiefakj.com',
-      emailVerified: false,
+      emailVerified: true,
       image: 'https://static.dingtalk.com/avatar.png',
       name: '张三',
     });
@@ -167,7 +172,7 @@ describe('ensureDingTalkUser', () => {
         if (url.startsWith(DINGTALK_LEGACY_TOKEN_URL)) {
           return jsonResponse({ access_token: 'legacy-token', errcode: 0 });
         }
-        return jsonResponse({ errcode: 0, result: { name: '  ' } });
+        return jsonResponse({ errcode: 0, result: { name: '  ', userid: 'staff_1' } });
       }),
     );
 
@@ -191,7 +196,7 @@ describe('ensureDingTalkUser', () => {
         }
         return jsonResponse({
           errcode: 0,
-          result: { avatar: 'http://insecure.example/a.png', name: '张三' },
+          result: { avatar: 'http://insecure.example/a.png', name: '张三', userid: 'staff_1' },
         });
       }),
     );
@@ -199,12 +204,13 @@ describe('ensureDingTalkUser', () => {
     await ensureDingTalkUser(serverDB, { staffId: 'staff_1' });
     expect(mockCreateUser).toHaveBeenCalledWith({
       email: 'staff_1@dingtalk.jiefakj.com',
-      emailVerified: false,
+      emailVerified: true,
       name: '张三',
     });
   });
 
   it('returns null when the DingTalk contact API fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL) => {
@@ -218,19 +224,50 @@ describe('ensureDingTalkUser', () => {
 
     await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
     expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[dingtalk-provision] contact fetch failed staffId=staff_1'),
+    );
+    warn.mockRestore();
+  });
+
+  it('returns null when the contact userid does not match the requested staffId', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.startsWith(DINGTALK_LEGACY_TOKEN_URL)) {
+          return jsonResponse({ access_token: 'legacy-token', errcode: 0 });
+        }
+        return jsonResponse({
+          errcode: 0,
+          result: { name: '张三', userid: 'someone_else' },
+        });
+      }),
+    );
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
+    expect(mockCreateUser).not.toHaveBeenCalled();
   });
 
   it('creates only once under lock contention', async () => {
-    const held = new Set<string>();
-    mockRedisSet.mockImplementation(async (key: string) => {
+    const held = new Map<string, string>();
+    mockRedisSet.mockImplementation(async (key: string, value: string) => {
       if (held.has(key)) return null;
-      held.add(key);
+      held.set(key, value);
       return 'OK';
     });
-    mockRedisDel.mockImplementation(async (key: string) => {
-      held.delete(key);
-      return 1;
-    });
+    mockRedisEval.mockImplementation(
+      async (script: string, _n: number, key: string, arg: string) => {
+        if (script === RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT) {
+          if (held.get(key) === arg) {
+            held.delete(key);
+            return 1;
+          }
+          return 0;
+        }
+        return 1;
+      },
+    );
 
     let created: { email: string; id: string } | undefined;
     mockFindByEmail.mockImplementation(async () => created);
@@ -249,8 +286,32 @@ describe('ensureDingTalkUser', () => {
     expect(mockCreateUser).toHaveBeenCalledTimes(1);
   });
 
+  it('releases the lock with a token compare-and-delete', async () => {
+    await ensureDingTalkUser(serverDB, { staffId: 'staff_1' });
+
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      'messenger:dingtalk:provision:staff_1',
+      expect.stringMatching(/^[0-9a-f-]{36}$/i),
+      'EX',
+      DINGTALK_PROVISION_LOCK_TTL_SECONDS,
+      'NX',
+    );
+    const token = mockRedisSet.mock.calls[0]![1] as string;
+    expect(mockRedisEval).toHaveBeenCalledWith(
+      RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT,
+      1,
+      'messenger:dingtalk:provision:staff_1',
+      token,
+    );
+    expect(RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT).toContain("redis.call('get'");
+    expect(RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT).toContain("redis.call('del'");
+  });
+
   it('returns null when the global provision rate is exceeded', async () => {
-    mockRedisEval.mockResolvedValue(DINGTALK_PROVISION_RATE_LIMIT_MAX + 1);
+    mockRedisEval.mockImplementation(async (script: string) => {
+      if (script === RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT) return 1;
+      return DINGTALK_PROVISION_RATE_LIMIT_MAX + 1;
+    });
 
     await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
     expect(mockCreateUser).not.toHaveBeenCalled();
@@ -267,5 +328,84 @@ describe('ensureDingTalkUser', () => {
     await expect(ensureDingTalkUser(serverDB, { staffId: '   ' })).resolves.toBeNull();
     expect(mockFindByEmail).not.toHaveBeenCalled();
     expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a staffId outside the DingTalk userid charset', async () => {
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'a@b' })).resolves.toBeNull();
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'has space' })).resolves.toBeNull();
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'x'.repeat(65) })).resolves.toBeNull();
+    expect(mockFindByEmail).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('still returns an existing user when Redis is down', async () => {
+    mockFindByEmail.mockResolvedValue(EXISTING_USER);
+    mockGetAgentRuntimeRedisClient.mockReturnValue(null);
+    mockRedisSet.mockRejectedValue(new Error('redis down'));
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toEqual(
+      EXISTING_USER,
+    );
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on Redis lock errors instead of creating', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockRedisSet.mockRejectedValue(new Error('redis down'));
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[dingtalk-provision] redis lock failed staffId=staff_1'),
+    );
+    warn.mockRestore();
+  });
+
+  it('fails closed when Redis is unavailable for create', async () => {
+    mockGetAgentRuntimeRedisClient.mockReturnValue(null);
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the rate-limit Redis eval throws', async () => {
+    mockRedisEval.mockImplementation(async (script: string) => {
+      if (script === RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT) return 1;
+      throw new Error('eval failed');
+    });
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the post-create re-read misses instead of stubbing a UserItem', async () => {
+    mockCreateUser.mockImplementation(async (user: { email: string }) => ({
+      email: user.email,
+      id: 'user_new',
+    }));
+    mockFindByEmail.mockResolvedValue(undefined);
+    mockFindFirst.mockResolvedValue(undefined);
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
+    expect(mockCreateUser).toHaveBeenCalled();
+  });
+
+  it('waiters wait up to the lock TTL then fail closed', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockRedisSet.mockResolvedValue(null);
+
+    const pending = ensureDingTalkUser(serverDB, { staffId: 'staff_1' });
+    await vi.advanceTimersByTimeAsync(DINGTALK_PROVISION_LOCK_TTL_SECONDS * 1000);
+
+    await expect(pending).resolves.toBeNull();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[dingtalk-provision] lock timeout staffId=staff_1'),
+    );
+    warn.mockRestore();
   });
 });

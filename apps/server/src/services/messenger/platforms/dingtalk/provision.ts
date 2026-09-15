@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import debug from 'debug';
 import { sql } from 'drizzle-orm';
 
@@ -8,7 +10,7 @@ import { users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
-import { buildDingTalkIdentityEmail } from './const';
+import { buildDingTalkIdentityEmail, isValidDingTalkStaffId } from './const';
 
 const log = debug('lobe-server:messenger:dingtalk:provision');
 
@@ -16,7 +18,7 @@ export const DINGTALK_LEGACY_TOKEN_URL = 'https://oapi.dingtalk.com/gettoken';
 export const DINGTALK_USER_GET_URL = 'https://oapi.dingtalk.com/topapi/v2/user/get';
 export const DINGTALK_PROVISION_LOCK_TTL_SECONDS = 30;
 export const DINGTALK_PROVISION_LOCK_WAIT_MS = 50;
-export const DINGTALK_PROVISION_LOCK_RETRIES = 8;
+export const DINGTALK_PROVISION_LOCK_WAIT_MAX_MS = 2000;
 export const DINGTALK_PROVISION_RATE_LIMIT_MAX = 30;
 export const DINGTALK_PROVISION_RATE_WINDOW_MS = 60_000;
 export const DINGTALK_PROVISION_RATE_KEY = 'messenger:dingtalk:provision-rate';
@@ -28,29 +30,19 @@ if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
 return count
 `;
 
+/** Compare-and-delete: only the token holder can drop the key. */
+export const RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
 interface LegacyTokenCache {
   expiresAt: number;
   token: string;
 }
 
-interface MemoryLock {
-  expiresAt: number;
-}
-
-interface RateLimitEntry {
-  count: number;
-  windowStartedAt: number;
-}
-
 const legacyTokenCache = new Map<string, LegacyTokenCache>();
-const memoryLocks = new Map<string, MemoryLock>();
-const memoryRate: RateLimitEntry = { count: 0, windowStartedAt: 0 };
 
 export const resetDingTalkProvisionStateForTest = (): void => {
   legacyTokenCache.clear();
-  memoryLocks.clear();
-  memoryRate.count = 0;
-  memoryRate.windowStartedAt = 0;
 };
 
 export interface EnsureDingTalkUserInput {
@@ -68,6 +60,9 @@ interface BetterAuthProvisionContext {
     }) => Promise<{ email?: string; id: string } | null | undefined>;
   };
 }
+
+type ProvisionLockAcquire =
+  { status: 'acquired'; token: string } | { status: 'held' } | { status: 'unavailable' };
 
 const jsonRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -89,6 +84,10 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+const warnProvision = (reason: string, staffId: string): void => {
+  console.warn(`[dingtalk-provision] ${reason} staffId=${staffId}`);
+};
 
 const findUserByDingTalkEmail = async (
   db: LobeChatDatabase,
@@ -203,80 +202,71 @@ const fetchDingTalkContact = async (staffId: string): Promise<DingTalkContact | 
     return null;
   }
 
+  const resultUserId = emptyToNull(typeof result.userid === 'string' ? result.userid : null);
+  if (resultUserId !== staffId) {
+    log('fetchDingTalkContact userid mismatch');
+    return null;
+  }
+
   return {
     avatar: typeof result.avatar === 'string' ? result.avatar : undefined,
     name: emptyToNull(typeof result.name === 'string' ? result.name : null),
   };
 };
 
-const acquireMemoryLock = (staffId: string, now: number): boolean => {
-  const key = provisionLockKey(staffId);
-  const existing = memoryLocks.get(key);
-  if (existing && existing.expiresAt > now) return false;
-  memoryLocks.set(key, { expiresAt: now + DINGTALK_PROVISION_LOCK_TTL_SECONDS * 1000 });
-  return true;
-};
-
-const releaseMemoryLock = (staffId: string): void => {
-  memoryLocks.delete(provisionLockKey(staffId));
-};
-
-const acquireProvisionLock = async (staffId: string): Promise<boolean> => {
+const acquireProvisionLock = async (staffId: string): Promise<ProvisionLockAcquire> => {
   const redis = getAgentRuntimeRedisClient();
-  if (redis) {
-    try {
-      const result = await redis.set(
-        provisionLockKey(staffId),
-        '1',
-        'EX',
-        DINGTALK_PROVISION_LOCK_TTL_SECONDS,
-        'NX',
-      );
-      return result === 'OK';
-    } catch (error) {
-      log('acquireProvisionLock redis failed, using memory: %O', error);
-    }
+  if (!redis) {
+    warnProvision('redis unavailable', staffId);
+    return { status: 'unavailable' };
   }
-  return acquireMemoryLock(staffId, Date.now());
+
+  const token = randomUUID();
+  try {
+    const result = await redis.set(
+      provisionLockKey(staffId),
+      token,
+      'EX',
+      DINGTALK_PROVISION_LOCK_TTL_SECONDS,
+      'NX',
+    );
+    return result === 'OK' ? { status: 'acquired', token } : { status: 'held' };
+  } catch (error) {
+    log('acquireProvisionLock redis failed: %O', error);
+    warnProvision('redis lock failed', staffId);
+    return { status: 'unavailable' };
+  }
 };
 
-const releaseProvisionLock = async (staffId: string): Promise<void> => {
+const releaseProvisionLock = async (staffId: string, token: string): Promise<void> => {
   const redis = getAgentRuntimeRedisClient();
-  if (redis) {
-    try {
-      await redis.del(provisionLockKey(staffId));
-    } catch (error) {
-      log('releaseProvisionLock redis failed: %O', error);
-    }
+  if (!redis) return;
+  try {
+    await redis.eval(RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT, 1, provisionLockKey(staffId), token);
+  } catch (error) {
+    log('releaseProvisionLock redis failed: %O', error);
   }
-  releaseMemoryLock(staffId);
 };
 
-const consumeMemoryRate = (now: number): boolean => {
-  if (now - memoryRate.windowStartedAt >= DINGTALK_PROVISION_RATE_WINDOW_MS) {
-    memoryRate.count = 0;
-    memoryRate.windowStartedAt = now;
-  }
-  memoryRate.count += 1;
-  return memoryRate.count <= DINGTALK_PROVISION_RATE_LIMIT_MAX;
-};
-
-const consumeProvisionRate = async (): Promise<boolean> => {
+const consumeProvisionRate = async (staffId: string): Promise<'limited' | 'ok' | 'unavailable'> => {
   const redis = getAgentRuntimeRedisClient();
-  if (redis) {
-    try {
-      const count = await redis.eval(
-        RATE_LIMIT_SCRIPT,
-        1,
-        DINGTALK_PROVISION_RATE_KEY,
-        String(DINGTALK_PROVISION_RATE_WINDOW_MS),
-      );
-      return Number(count) <= DINGTALK_PROVISION_RATE_LIMIT_MAX;
-    } catch (error) {
-      log('consumeProvisionRate redis failed, using memory: %O', error);
-    }
+  if (!redis) {
+    warnProvision('redis unavailable', staffId);
+    return 'unavailable';
   }
-  return consumeMemoryRate(Date.now());
+  try {
+    const count = await redis.eval(
+      RATE_LIMIT_SCRIPT,
+      1,
+      DINGTALK_PROVISION_RATE_KEY,
+      String(DINGTALK_PROVISION_RATE_WINDOW_MS),
+    );
+    return Number(count) <= DINGTALK_PROVISION_RATE_LIMIT_MAX ? 'ok' : 'limited';
+  } catch (error) {
+    log('consumeProvisionRate redis failed: %O', error);
+    warnProvision('redis rate-limit failed', staffId);
+    return 'unavailable';
+  }
 };
 
 const createAuthUser = async (input: {
@@ -289,7 +279,12 @@ const createAuthUser = async (input: {
   try {
     const created = await ctx.internalAdapter.createUser({
       email: input.email,
-      emailVerified: false,
+      // DingTalk-asserted staffId identity key, not a mailbox. better-auth
+      // `handleOAuthUserInfo` (`link-account.mjs`) defaults
+      // `requireLocalEmailVerified` to true, so a later Authentik login cannot
+      // implicitly link onto an unverified local row even though Authentik is a
+      // trusted provider. Do not set `requireLocalEmailVerified: false` globally.
+      emailVerified: true,
       name: input.name,
       ...(input.image ? { image: input.image } : {}),
     });
@@ -308,13 +303,17 @@ const provisionLockedUser = async (
   const existing = await findUserByDingTalkEmail(db, input.staffId);
   if (existing) return existing;
 
-  if (!(await consumeProvisionRate())) {
-    log('provision rate limited staffId=%s', input.staffId);
+  const rate = await consumeProvisionRate(input.staffId);
+  if (rate !== 'ok') {
+    if (rate === 'limited') warnProvision('rate limited', input.staffId);
     return null;
   }
 
   const contact = await fetchDingTalkContact(input.staffId);
-  if (!contact) return null;
+  if (!contact) {
+    warnProvision('contact fetch failed', input.staffId);
+    return null;
+  }
 
   const name = emptyToNull(contact.name) ?? emptyToNull(input.senderNick) ?? input.staffId;
   const email = buildDingTalkIdentityEmail(input.staffId);
@@ -322,13 +321,17 @@ const provisionLockedUser = async (
 
   const created = await createAuthUser({ email, image, name });
   if (!created) {
+    warnProvision('createUser failed', input.staffId);
     return (await findUserByDingTalkEmail(db, input.staffId)) ?? null;
   }
 
   console.info('[dingtalk-provision] created user %s staffId=%s', created.id, input.staffId);
-  return (
-    (await findUserByDingTalkEmail(db, input.staffId)) ?? ({ email, id: created.id } as UserItem)
-  );
+  const persisted = await findUserByDingTalkEmail(db, input.staffId);
+  if (!persisted) {
+    warnProvision('created user missing on re-read', input.staffId);
+    return null;
+  }
+  return persisted;
 };
 
 /**
@@ -344,26 +347,36 @@ export const ensureDingTalkUser = async (
   input: EnsureDingTalkUserInput,
 ): Promise<UserItem | null> => {
   const staffId = input.staffId.trim();
-  if (!staffId) return null;
+  if (!isValidDingTalkStaffId(staffId)) return null;
 
   const existing = await findUserByDingTalkEmail(db, staffId);
   if (existing) return existing;
 
-  for (let attempt = 0; attempt <= DINGTALK_PROVISION_LOCK_RETRIES; attempt += 1) {
-    const acquired = await acquireProvisionLock(staffId);
-    if (acquired) {
+  const deadline = Date.now() + DINGTALK_PROVISION_LOCK_TTL_SECONDS * 1000;
+  let waitMs = DINGTALK_PROVISION_LOCK_WAIT_MS;
+
+  while (true) {
+    const lock = await acquireProvisionLock(staffId);
+    if (lock.status === 'unavailable') {
+      return (await findUserByDingTalkEmail(db, staffId)) ?? null;
+    }
+    if (lock.status === 'acquired') {
       try {
         return await provisionLockedUser(db, { senderNick: input.senderNick, staffId });
       } finally {
-        await releaseProvisionLock(staffId);
+        await releaseProvisionLock(staffId, lock.token);
       }
     }
 
-    await sleep(DINGTALK_PROVISION_LOCK_WAIT_MS);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+
+    await sleep(Math.min(waitMs, remaining));
     const raced = await findUserByDingTalkEmail(db, staffId);
     if (raced) return raced;
+    waitMs = Math.min(waitMs * 2, DINGTALK_PROVISION_LOCK_WAIT_MAX_MS);
   }
 
-  log('ensureDingTalkUser lock contention staffId=%s', staffId);
-  return findUserByDingTalkEmail(db, staffId).then((user) => user ?? null);
+  warnProvision('lock timeout', staffId);
+  return (await findUserByDingTalkEmail(db, staffId)) ?? null;
 };

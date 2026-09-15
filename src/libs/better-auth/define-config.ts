@@ -178,11 +178,13 @@ export function defineConfig(
   );
   /**
    * Visible ≠ trusted-for-linking. A provider in `accountLinking.trustedProviders` may
-   * implicitly attach its identity to an existing account that merely shares an email address
-   * (better-auth `handleOAuthUserInfo`: `!isTrustedProvider && !userInfo.emailVerified` is the
-   * only guard). Kinds that cannot assert a verified email — DingTalk usually returns none and
-   * we synthesize one — must therefore stay out of that list: a DingTalk login always creates
-   * or reuses its own account and can never take over a pre-existing one.
+   * implicitly attach its identity to an existing account that merely shares an email address.
+   * That is not the only guard: better-auth `handleOAuthUserInfo` (`link-account.mjs`) also
+   * rejects the link when `requireLocalEmailVerified` (default true) and the local user is
+   * unverified — even for a trusted provider. Do not flip that flag globally. Kinds that cannot
+   * assert a verified email — DingTalk usually returns none and we synthesize one — must stay
+   * out of `trustedProviders`: a DingTalk login always creates or reuses its own account and
+   * can never take over a pre-existing one.
    */
   const untrustedForLinkingProviderKeys = new Set(
     activeDatabaseProviders
