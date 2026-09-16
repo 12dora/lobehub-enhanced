@@ -2,6 +2,8 @@ import type { BuiltinServerRuntimeOutput, BuiltinToolResult } from '@lobechat/ty
 import { BaseExecutor } from '@lobechat/types';
 import debug from 'debug';
 
+import { reminderService } from '@/services/reminder';
+
 import type { IReminderService } from '../../ExecutionRuntime';
 import { ReminderExecutionRuntime } from '../../ExecutionRuntime';
 import { ReminderIdentifier } from '../../manifest';
@@ -57,10 +59,8 @@ const requireResult = <T>(value: T | undefined, message: string): T => {
 };
 
 const loadReminderService = async (): Promise<IReminderService> => {
-  // R2 owns src/services/reminder.ts (searchDirectory / create / listCreated /
-  // listReceived / cancel). Loaded lazily so this module can register before
-  // that file exists.
-  const { reminderService } = await import('@/services/reminder');
+  // Static app import like the task tool: the desktop (vite/rolldown) bundle cannot
+  // resolve a dynamic `@/` import from inside a workspace package.
   return {
     cancel: (id) => reminderService.cancel(id),
     create: async (input) => {
