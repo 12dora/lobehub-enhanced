@@ -5,6 +5,7 @@ import { getTestDB } from '@/database/core/getTestDB';
 import type { LobeChatDatabase } from '@/database/type';
 import { createCallerFactory } from '@/libs/trpc/lambda';
 
+import { ImConnectorPlatformUserAlreadyBoundError } from '../../services/imConnectors/bindings';
 import { createAdminAuthorizationFixture } from '../../testing/adminAuthorizationFixture';
 import { adminRouter } from '../admin';
 
@@ -15,8 +16,11 @@ const fixture = createAdminAuthorizationFixture({ namespace: 'im-connectors' });
 const serviceMocks = vi.hoisted(() => ({
   get: vi.fn(),
   list: vi.fn(),
+  listBindings: vi.fn(),
+  removeBinding: vi.fn(),
   test: vi.fn(),
   upsert: vi.fn(),
+  upsertBinding: vi.fn(),
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({ getServerDB: vi.fn(async () => db) }));
@@ -25,8 +29,11 @@ vi.mock('../../services/imConnectors/service', () => ({
   ImConnectorsAdminService: class {
     get = serviceMocks.get;
     list = serviceMocks.list;
+    listBindings = serviceMocks.listBindings;
+    removeBinding = serviceMocks.removeBinding;
     test = serviceMocks.test;
     upsert = serviceMocks.upsert;
+    upsertBinding = serviceMocks.upsertBinding;
   },
 }));
 
@@ -55,6 +62,16 @@ const sampleView = {
   updatedAt: null,
 };
 
+const sampleBinding = {
+  createdAt: '2026-09-16T00:00:00.000Z',
+  platformUserId: 'staff_1',
+  platformUsername: 'Alice',
+  source: 'manual' as const,
+  userEmail: 'admin@jiefakj.com',
+  userId: 'user_admin',
+  userName: 'Break Glass',
+};
+
 beforeAll(async () => {
   vi.stubEnv('ENABLE_PLATFORM_ADMIN', '1');
   await fixture.setup(db);
@@ -76,6 +93,9 @@ beforeEach(() => {
     robotName: null,
   });
   serviceMocks.upsert.mockReset().mockResolvedValue({ ...sampleView, configured: true });
+  serviceMocks.listBindings.mockReset().mockResolvedValue({ items: [sampleBinding] });
+  serviceMocks.upsertBinding.mockReset().mockResolvedValue(sampleBinding);
+  serviceMocks.removeBinding.mockReset().mockResolvedValue({ success: true });
 });
 
 const callerFor = async (principal: 'auditor' | 'normal' | 'superAdmin') => {
@@ -117,9 +137,32 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(denied.bindings.list({ platform: 'dingtalk' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(
+      denied.bindings.upsert({
+        platform: 'dingtalk',
+        platformUserId: 'staff_1',
+        userId: 'user_admin',
+      }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(
+      denied.bindings.remove({ platform: 'dingtalk', userId: 'user_admin' }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
     expect(serviceMocks.list).not.toHaveBeenCalled();
     expect(serviceMocks.upsert).not.toHaveBeenCalled();
     expect(serviceMocks.test).not.toHaveBeenCalled();
+    expect(serviceMocks.listBindings).not.toHaveBeenCalled();
+    expect(serviceMocks.upsertBinding).not.toHaveBeenCalled();
+    expect(serviceMocks.removeBinding).not.toHaveBeenCalled();
   });
 
   it('allows SYSTEM_READ list/get but not SYSTEM_OPERATE upsert/test', async () => {
@@ -149,8 +192,29 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(reader.bindings.list({ platform: 'dingtalk' })).resolves.toEqual({
+      items: [sampleBinding],
+    });
+    await expect(
+      reader.bindings.upsert({
+        platform: 'dingtalk',
+        platformUserId: 'staff_1',
+        userId: 'user_admin',
+      }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(
+      reader.bindings.remove({ platform: 'dingtalk', userId: 'user_admin' }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
     expect(serviceMocks.upsert).not.toHaveBeenCalled();
     expect(serviceMocks.test).not.toHaveBeenCalled();
+    expect(serviceMocks.upsertBinding).not.toHaveBeenCalled();
+    expect(serviceMocks.removeBinding).not.toHaveBeenCalled();
   });
 
   it('allows SYSTEM_OPERATE upsert and test for a super admin', async () => {
@@ -176,5 +240,60 @@ describe('admin.imConnectors permission gating', () => {
     await expect(operator.test({ platform: 'dingtalk' })).resolves.toMatchObject({ ok: true });
     expect(serviceMocks.upsert).toHaveBeenCalled();
     expect(serviceMocks.test).toHaveBeenCalled();
+  });
+
+  it('allows SYSTEM_OPERATE binding upsert/remove for a super admin', async () => {
+    const operator = await callerFor('superAdmin');
+
+    await expect(operator.bindings.list({ platform: 'dingtalk' })).resolves.toEqual({
+      items: [sampleBinding],
+    });
+    await expect(
+      operator.bindings.upsert({
+        platform: 'dingtalk',
+        platformUserId: 'staff_1',
+        userId: 'user_admin',
+      }),
+    ).resolves.toEqual(sampleBinding);
+    await expect(
+      operator.bindings.remove({ platform: 'dingtalk', userId: 'user_admin' }),
+    ).resolves.toEqual({ success: true });
+    expect(serviceMocks.upsertBinding).toHaveBeenCalled();
+    expect(serviceMocks.removeBinding).toHaveBeenCalled();
+  });
+
+  it('rejects an overlong DingTalk userId before the service runs', async () => {
+    const operator = await callerFor('superAdmin');
+
+    await expect(
+      operator.bindings.upsert({
+        platform: 'dingtalk',
+        platformUserId: 'x'.repeat(65),
+        userId: 'user_admin',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(serviceMocks.upsertBinding).not.toHaveBeenCalled();
+  });
+
+  it('maps PLATFORM_USER_ALREADY_BOUND with the other user named in the error', async () => {
+    serviceMocks.upsertBinding.mockRejectedValueOnce(
+      new ImConnectorPlatformUserAlreadyBoundError({
+        email: 'alice@dingtalk.jiefakj.com',
+        id: 'user_alice',
+        name: 'Alice',
+      }),
+    );
+    const operator = await callerFor('superAdmin');
+
+    await expect(
+      operator.bindings.upsert({
+        platform: 'dingtalk',
+        platformUserId: 'staff_1',
+        userId: 'user_admin',
+      }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'PLATFORM_USER_ALREADY_BOUND',
+    });
   });
 });

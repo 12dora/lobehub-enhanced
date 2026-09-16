@@ -8,6 +8,12 @@ import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis'
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 
 import type {
+  AdminImConnectorBindingItem,
+  AdminImConnectorBindingsListInput,
+  AdminImConnectorBindingsListOutput,
+  AdminImConnectorBindingsRemoveInput,
+  AdminImConnectorBindingsRemoveOutput,
+  AdminImConnectorBindingsUpsertInput,
   AdminImConnectorTestInput,
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
@@ -23,7 +29,13 @@ import {
 import { AUDIT_ACTION } from '../audit/auditActionCatalog';
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
 import { PlatformAuditService } from '../platformAudit';
+import {
+  listImConnectorBindings,
+  removeImConnectorBinding,
+  upsertImConnectorBinding,
+} from './bindings';
 import { probeDingTalkCredentials } from './dingtalkProbe';
+import { lookupDingTalkStaff } from './dingtalkStaffLookup';
 import { getImConnectorStats } from './stats';
 import { readImConnectorStatus } from './status';
 
@@ -291,5 +303,106 @@ export class ImConnectorsAdminService {
     }
 
     return probeDingTalkCredentials({ clientId, clientSecret });
+  };
+
+  listBindings = (
+    input: AdminImConnectorBindingsListInput,
+  ): Promise<AdminImConnectorBindingsListOutput> => listImConnectorBindings(this.db, input);
+
+  upsertBinding = async (params: {
+    actorUserId: string;
+    input: AdminImConnectorBindingsUpsertInput;
+  }): Promise<AdminImConnectorBindingItem> => {
+    const { input } = params;
+    const typedUsername = emptyToNull(input.platformUsername);
+    const contact = typedUsername
+      ? null
+      : await this.lookupDingTalkStaff(input.platform, input.platformUserId);
+    const platformUsername = typedUsername ?? emptyToNull(contact?.name);
+
+    return this.db.transaction(async (tx) => {
+      const item = await upsertImConnectorBinding(tx, {
+        platform: input.platform,
+        platformUserId: input.platformUserId,
+        platformUsername,
+        userId: input.userId,
+      });
+
+      await new PlatformAuditService(tx).append({
+        action: AUDIT_ACTION.SYSTEM_IM_CONNECTOR_UPDATE,
+        actorUserId: params.actorUserId,
+        afterDiff: {
+          op: 'binding.upsert',
+          platform: input.platform,
+          platformUserId: item.platformUserId,
+          platformUsername: item.platformUsername,
+          source: item.source,
+          userEmail: item.userEmail,
+          userId: item.userId,
+          userName: item.userName,
+        },
+        reason: input.reason ?? null,
+        result: 'success',
+        targetId: input.platform,
+        targetType: IM_CONNECTOR_AUDIT_TARGET_TYPE,
+      });
+
+      return item;
+    });
+  };
+
+  removeBinding = async (params: {
+    actorUserId: string;
+    input: AdminImConnectorBindingsRemoveInput;
+  }): Promise<AdminImConnectorBindingsRemoveOutput> => {
+    const { input } = params;
+    await this.db.transaction(async (tx) => {
+      const { before } = await removeImConnectorBinding(tx, {
+        platform: input.platform,
+        userId: input.userId,
+      });
+
+      await new PlatformAuditService(tx).append({
+        action: AUDIT_ACTION.SYSTEM_IM_CONNECTOR_UPDATE,
+        actorUserId: params.actorUserId,
+        afterDiff: {
+          op: 'binding.remove',
+          platform: input.platform,
+          userId: input.userId,
+        },
+        beforeDiff: before
+          ? {
+              platformUserId: before.platformUserId,
+              platformUsername: before.platformUsername,
+              source: before.source,
+              userEmail: before.userEmail,
+              userName: before.userName,
+            }
+          : null,
+        reason: input.reason ?? null,
+        result: 'success',
+        targetId: input.platform,
+        targetType: IM_CONNECTOR_AUDIT_TARGET_TYPE,
+      });
+    });
+
+    return { success: true };
+  };
+
+  private lookupDingTalkStaff = async (platform: ImConnectorPlatform, staffId: string) => {
+    if (platform !== 'dingtalk') return null;
+    try {
+      const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
+      const row = await SystemBotProviderModel.findByPlatform(this.db, platform, gateKeeper);
+      const clientId = row?.applicationId?.trim() || null;
+      const clientSecret = pickClientSecret(row?.credentials);
+      if (!clientId || !clientSecret) return null;
+      return lookupDingTalkStaff({ clientId, clientSecret, staffId });
+    } catch (error) {
+      console.error('[admin.imConnectors.bindings.upsert] staff lookup failed', {
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+      return null;
+    }
   };
 }

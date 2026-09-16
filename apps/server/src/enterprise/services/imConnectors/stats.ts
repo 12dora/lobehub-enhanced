@@ -1,10 +1,9 @@
 import debug from 'debug';
-import { count, eq } from 'drizzle-orm';
 
-import { messengerAccountLinks } from '@/database/schemas';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
 
 import type { ImConnectorStats } from '../../contracts/adminImConnectors';
+import { countImConnectorLinkedUsers } from './bindings';
 
 const log = debug('lobe-server:admin:imConnectors');
 
@@ -63,17 +62,6 @@ const sumCounters = async (redis: ImConnectorRedisMget | null, keys: string[]): 
   }
 };
 
-const countLinkedUsers = async (
-  db: LobeChatDatabase | Transaction,
-  platform: string,
-): Promise<number> => {
-  const [row] = await db
-    .select({ value: count() })
-    .from(messengerAccountLinks)
-    .where(eq(messengerAccountLinks.platform, platform));
-  return Number(row?.value ?? 0);
-};
-
 export const getImConnectorStats = async (params: {
   db: LobeChatDatabase | Transaction;
   now?: Date;
@@ -86,7 +74,7 @@ export const getImConnectorStats = async (params: {
     params.now,
   );
   const [linkedUsers, messages7d, pushes7d] = await Promise.all([
-    countLinkedUsers(params.db, params.platform),
+    countImConnectorLinkedUsers(params.db, params.platform),
     sumCounters(
       params.redis,
       days.map((ymd) => IM_CONNECTOR_MESSAGES_COUNTER_KEY(params.platform, ymd)),

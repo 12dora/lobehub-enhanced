@@ -29,6 +29,22 @@
 2. 打开「启用」，按需开启「对话」「提醒推送」，设置会话策略，保存。保存动作进入操作日志（`system.im_connector.update`）。
 3. 30 s 内 Stream worker 建立连接，卡片状态显示「已连接」；「已绑定员工」与「近 7 日消息 / 推送」随使用增长。
 
+## 手工绑定
+
+任务提醒按 **任务所有者** 的 AIHub 账号解析钉钉 staffId。绑定来源有三种，推送解析顺序相同：
+
+1. `messenger_account_links` 行（`(userId, dingtalk)`），不论 `source` 是 `auto` 还是 `manual`
+2. 否则邮箱符合 `<staffId>@dingtalk.jiefakj.com` 约定
+3. 都没有则投递 `skipped`（`failed_reason=user_not_mapped`）
+
+本地账号（例如破窗管理员 `admin@jiefakj.com`）没有钉钉身份邮箱，也不会在机器人会话里自动建链。管理员可在 **管理端 → 通用设置 → IM 连接器 → 钉钉 → 已绑定员工** 为任意 AIHub 账号手工绑定（或解绑）钉钉企业用户：
+
+- `admin.imConnectors.bindings.list({ platform: 'dingtalk', q? })` — 列出已绑定用户（与卡片上的 `linkedUsers` 同源：`messenger_account_links`）
+- `admin.imConnectors.bindings.upsert({ platform, userId, platformUserId, platformUsername? })` — 创建或替换该账号的钉钉绑定；`source=manual`。若该钉钉用户已绑到另一个 AIHub 账号，返回 `PLATFORM_USER_ALREADY_BOUND`（错误详情含对方用户）
+- `admin.imConnectors.bindings.remove({ platform, userId })` — 解绑
+
+连接器已配置凭据时，保存会尝试调用钉钉 `topapi/v2/user/get` 补全显示名；查找失败不阻断写入。手工绑定与自动绑定一样会被 `resolveDingTalkStaffId` / `messenger.availablePlatforms.binding` 读到。
+
 ## 员工侧
 
 - 设置 → 聊天平台 → 钉钉：查看绑定状态、选择默认助手、查看指令用法。

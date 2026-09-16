@@ -65,6 +65,32 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
     'Replace the platform content-moderation configuration with CAS and a sanitized audit row.',
     { reason: noReason },
   ),
+  'admin.imConnectors.bindings.remove': regularMutation(
+    'admin.imConnectors.bindings.remove',
+    'medium',
+    'Remove the DingTalk account link for any AIHub user so task reminders stop pushing.',
+    {
+      audit: enforced(
+        'Service persists a sanitized platform audit outcome with action system.im_connector.update.',
+      ),
+      reason: optionalReasonInput,
+    },
+  ),
+  'admin.imConnectors.bindings.upsert': regularMutation(
+    'admin.imConnectors.bindings.upsert',
+    'medium',
+    'Bind or replace a DingTalk corp user on any AIHub account, including local break-glass admins.',
+    {
+      audit: enforced(
+        'Service persists a sanitized platform audit outcome with action system.im_connector.update.',
+      ),
+      outbound: conditional(
+        'Optional staff lookup uses DingTalk topapi/v2/user/get when the connector is configured.',
+        'The write proceeds even when the lookup is skipped or fails.',
+      ),
+      reason: optionalReasonInput,
+    },
+  ),
   'admin.imConnectors.test': regularMutation(
     'admin.imConnectors.test',
     'low',

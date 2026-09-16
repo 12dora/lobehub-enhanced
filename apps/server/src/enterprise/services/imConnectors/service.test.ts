@@ -12,6 +12,10 @@ import { fingerprintClientSecret, ImConnectorsAdminService } from './service';
 const invalidateMessengerConfigCache = vi.hoisted(() => vi.fn());
 const appendAudit = vi.hoisted(() => vi.fn());
 const probeDingTalkCredentials = vi.hoisted(() => vi.fn());
+const lookupDingTalkStaff = vi.hoisted(() => vi.fn());
+const upsertImConnectorBinding = vi.hoisted(() => vi.fn());
+const removeImConnectorBinding = vi.hoisted(() => vi.fn());
+const listImConnectorBindings = vi.hoisted(() => vi.fn());
 const getImConnectorStats = vi.hoisted(() =>
   vi.fn(async () => ({ linkedUsers: 2, messages7d: 7, pushes7d: 1 })),
 );
@@ -51,6 +55,16 @@ vi.mock('../platformAudit', () => ({
 
 vi.mock('./dingtalkProbe', () => ({
   probeDingTalkCredentials,
+}));
+
+vi.mock('./dingtalkStaffLookup', () => ({
+  lookupDingTalkStaff,
+}));
+
+vi.mock('./bindings', () => ({
+  listImConnectorBindings,
+  removeImConnectorBinding,
+  upsertImConnectorBinding,
 }));
 
 vi.mock('./stats', () => ({
@@ -116,6 +130,29 @@ describe('ImConnectorsAdminService', () => {
       ok: true,
       robotName: null,
     });
+    lookupDingTalkStaff.mockResolvedValue(null);
+    upsertImConnectorBinding.mockResolvedValue({
+      createdAt: '2026-09-16T00:00:00.000Z',
+      platformUserId: 'staff_1',
+      platformUsername: 'Admin',
+      source: 'manual',
+      userEmail: 'admin@jiefakj.com',
+      userId: 'user_admin',
+      userName: 'Break Glass',
+    });
+    removeImConnectorBinding.mockResolvedValue({
+      before: {
+        createdAt: '2026-09-16T00:00:00.000Z',
+        platformUserId: 'staff_1',
+        platformUsername: 'Admin',
+        source: 'manual',
+        userEmail: 'admin@jiefakj.com',
+        userId: 'user_admin',
+        userName: 'Break Glass',
+      },
+      success: true,
+    });
+    listImConnectorBindings.mockResolvedValue({ items: [] });
     vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue(existingRow as never);
     vi.spyOn(SystemBotProviderModel, 'update').mockResolvedValue(existingRow as never);
     vi.spyOn(SystemBotProviderModel, 'upsertByPlatform').mockResolvedValue(existingRow as never);
@@ -343,6 +380,99 @@ describe('ImConnectorsAdminService', () => {
     expect(appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         afterDiff: expect.objectContaining({ agentId: '4617854000' }),
+      }),
+    );
+  });
+
+  it('writes a binding.upsert audit row and never the connector secret', async () => {
+    const service = new ImConnectorsAdminService(createDb());
+
+    await service.upsertBinding({
+      actorUserId: 'operator-1',
+      input: {
+        platform: 'dingtalk',
+        platformUserId: 'staff_1',
+        platformUsername: 'Admin',
+        reason: 'bind break-glass admin',
+        userId: 'user_admin',
+      },
+    });
+
+    expect(upsertImConnectorBinding).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        platform: 'dingtalk',
+        platformUserId: 'staff_1',
+        platformUsername: 'Admin',
+        userId: 'user_admin',
+      }),
+    );
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'system.im_connector.update',
+        actorUserId: 'operator-1',
+        afterDiff: expect.objectContaining({
+          op: 'binding.upsert',
+          platform: 'dingtalk',
+          platformUserId: 'staff_1',
+          source: 'manual',
+          userId: 'user_admin',
+        }),
+        reason: 'bind break-glass admin',
+        result: 'success',
+        targetId: 'dingtalk',
+        targetType: 'im_connector',
+      }),
+    );
+    expect(JSON.stringify(appendAudit.mock.calls[0]?.[0])).not.toContain(SECRET);
+    expect(lookupDingTalkStaff).not.toHaveBeenCalled();
+  });
+
+  it('looks up DingTalk staff to fill platformUsername when the admin omitted it', async () => {
+    lookupDingTalkStaff.mockResolvedValueOnce({ name: 'Corp Alice' });
+    upsertImConnectorBinding.mockResolvedValueOnce({
+      createdAt: '2026-09-16T00:00:00.000Z',
+      platformUserId: 'staff_9',
+      platformUsername: 'Corp Alice',
+      source: 'manual',
+      userEmail: 'admin@jiefakj.com',
+      userId: 'user_admin',
+      userName: 'Break Glass',
+    });
+    const service = new ImConnectorsAdminService(createDb());
+
+    await service.upsertBinding({
+      actorUserId: 'operator-1',
+      input: { platform: 'dingtalk', platformUserId: 'staff_9', userId: 'user_admin' },
+    });
+
+    expect(lookupDingTalkStaff).toHaveBeenCalledWith({
+      clientId: 'ding-app-key',
+      clientSecret: SECRET,
+      staffId: 'staff_9',
+    });
+    expect(upsertImConnectorBinding).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ platformUsername: 'Corp Alice' }),
+    );
+  });
+
+  it('writes a binding.remove audit row', async () => {
+    const service = new ImConnectorsAdminService(createDb());
+
+    await expect(
+      service.removeBinding({
+        actorUserId: 'operator-1',
+        input: { platform: 'dingtalk', userId: 'user_admin' },
+      }),
+    ).resolves.toEqual({ success: true });
+
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'system.im_connector.update',
+        afterDiff: expect.objectContaining({ op: 'binding.remove', userId: 'user_admin' }),
+        beforeDiff: expect.objectContaining({ platformUserId: 'staff_1', source: 'manual' }),
+        targetType: 'im_connector',
       }),
     );
   });

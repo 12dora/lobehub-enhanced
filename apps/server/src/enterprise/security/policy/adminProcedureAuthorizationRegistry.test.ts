@@ -112,14 +112,16 @@ describe('admin procedure authorization registry', () => {
     // −1 query since: admin.audit.users.search removed (pickers use admin.users.search).
     // +2 queries / +2 mutations since: admin.imConnectors.{get,list,upsert,test}
     // (DingTalk IM connector admin surface).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(249);
+    // +1 query / +2 mutations since: admin.imConnectors.bindings.{list,upsert,remove}
+    // (admin-managed DingTalk account links for any AIHub user).
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(252);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
-    ).toHaveLength(111);
+    ).toHaveLength(112);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
-    ).toHaveLength(138);
-    expect(mutationPaths).toHaveLength(138);
+    ).toHaveLength(140);
+    expect(mutationPaths).toHaveLength(140);
     expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter((entry) => 'selfAccess' in entry)).toEqual(
       [{ kind: 'query', path: 'admin.auth.getMyAccess', selfAccess: true }],
     );

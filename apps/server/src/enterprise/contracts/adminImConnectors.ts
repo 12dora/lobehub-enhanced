@@ -188,3 +188,71 @@ export const adminImConnectorTestOutputSchema = z
   })
   .strict();
 export type AdminImConnectorTestOutput = z.infer<typeof adminImConnectorTestOutputSchema>;
+
+/** `auto` = inbound IM chat auto-link; `manual` = administrator bind in IM connectors. */
+export const imConnectorBindingSourceSchema = z.enum(['auto', 'manual']);
+export type ImConnectorBindingSource = z.infer<typeof imConnectorBindingSourceSchema>;
+
+export const DINGTALK_PLATFORM_USER_ID_MAX = 64;
+
+export const adminImConnectorBindingItemSchema = z
+  .object({
+    createdAt: z.string(),
+    platformUserId: z.string(),
+    platformUsername: z.string().nullable(),
+    source: imConnectorBindingSourceSchema,
+    userEmail: z.string().nullable(),
+    userId: z.string(),
+    userName: z.string().nullable(),
+  })
+  .strict();
+export type AdminImConnectorBindingItem = z.infer<typeof adminImConnectorBindingItemSchema>;
+
+export const adminImConnectorBindingsListInputSchema = z
+  .object({
+    platform: imConnectorPlatformSchema,
+    q: z.string().trim().max(200).optional(),
+  })
+  .strict();
+export type AdminImConnectorBindingsListInput = z.infer<
+  typeof adminImConnectorBindingsListInputSchema
+>;
+
+export const adminImConnectorBindingsListOutputSchema = z
+  .object({ items: z.array(adminImConnectorBindingItemSchema) })
+  .strict();
+export type AdminImConnectorBindingsListOutput = z.infer<
+  typeof adminImConnectorBindingsListOutputSchema
+>;
+
+export const adminImConnectorBindingsUpsertInputSchema = z
+  .object({
+    platform: imConnectorPlatformSchema,
+    platformUserId: z.string().trim().min(1).max(DINGTALK_PLATFORM_USER_ID_MAX),
+    platformUsername: z.string().trim().max(200).nullable().optional(),
+    reason: secretSafeAuditReasonSchema.optional(),
+    userId: z.string().trim().min(1),
+  })
+  .strict();
+export type AdminImConnectorBindingsUpsertInput = z.infer<
+  typeof adminImConnectorBindingsUpsertInputSchema
+>;
+export type AdminImConnectorBindingsUpsertOutput = AdminImConnectorBindingItem;
+
+export const adminImConnectorBindingsRemoveInputSchema = z
+  .object({
+    platform: imConnectorPlatformSchema,
+    reason: secretSafeAuditReasonSchema.optional(),
+    userId: z.string().trim().min(1),
+  })
+  .strict();
+export type AdminImConnectorBindingsRemoveInput = z.infer<
+  typeof adminImConnectorBindingsRemoveInputSchema
+>;
+
+export const adminImConnectorBindingsRemoveOutputSchema = z
+  .object({ success: z.literal(true) })
+  .strict();
+export type AdminImConnectorBindingsRemoveOutput = z.infer<
+  typeof adminImConnectorBindingsRemoveOutputSchema
+>;

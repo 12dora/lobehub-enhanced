@@ -50,6 +50,13 @@ export const messengerAccountLinks = pgTable(
     platformUsername: text('platform_username'),
 
     /**
+     * How the row was created. `auto` = inbound IM auto-link (chat with the
+     * bot); `manual` = an administrator bound this account in IM connectors.
+     * Push resolution treats both the same — it only needs `(userId, platform)`.
+     */
+    source: text('source').$type<'auto' | 'manual'>().notNull().default('auto'),
+
+    /**
      * Currently selected agent for this IM session. Nullable so a fresh link
      * can sit "agent-less" until the user picks one via /switch or the UI;
      * `set null` on agent delete so a deleted agent doesn't orphan the link.
