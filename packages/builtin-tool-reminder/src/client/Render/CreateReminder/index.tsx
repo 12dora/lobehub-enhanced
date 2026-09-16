@@ -6,28 +6,57 @@ import { cssVar } from 'antd-style';
 import { AlarmClockCheckIcon, TriangleAlertIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 
 import {
   DEFAULT_REMINDER_TIMEZONE,
   formatReminderTime,
-  formatRepeatSummary,
 } from '@/features/AgentTasks/ReminderList/formatters';
-import ReminderRecipients from '@/features/AgentTasks/ReminderList/ReminderRecipients';
 
 import type { CreateReminderParams, CreateReminderState } from '../../../types';
+import { formatReminderRecipientLabel } from '../../../types';
 import { ReminderCard, ReminderField } from '../shared';
 
 /**
  * `createReminder` result:
- * - success → a compact card with recipients, time, repeat, content and creator
- * - `needsConfirmation` → a notice listing the departments and their member
- *   counts, telling the user the reminder was NOT created yet
+ * - created → task identifier, recipients 「姓名 · 部门」, schedule, next fire
+ * - needs_clarification → candidate list 「姓名 · 部门」
+ * - needs_confirmation → department audience that must be confirmed first
  */
 export const CreateReminderRender = memo<
   BuiltinRenderProps<CreateReminderParams, CreateReminderState>
 >(({ pluginState }) => {
   const { t } = useTranslation('plugin');
-  const { t: tChat } = useTranslation('chat');
+
+  if (pluginState?.needsClarification) {
+    const ambiguous = pluginState.ambiguous ?? [];
+    const unknown = pluginState.unknown ?? [];
+
+    return (
+      <ReminderCard
+        icon={TriangleAlertIcon}
+        iconColor={cssVar.colorWarning}
+        title={t('builtins.lobe-reminder.render.clarify.title')}
+      >
+        {ambiguous.map((group) => (
+          <ReminderField key={group.query} label={group.query}>
+            {group.candidates.map((candidate) => (
+              <Text fontSize={13} key={candidate.staffId}>
+                {candidate.leafDeptName
+                  ? `${candidate.name} · ${candidate.leafDeptName}`
+                  : candidate.name}
+              </Text>
+            ))}
+          </ReminderField>
+        ))}
+        {unknown.map((name) => (
+          <Text fontSize={13} key={name}>
+            {t('builtins.lobe-reminder.render.clarify.unknown', { name })}
+          </Text>
+        ))}
+      </ReminderCard>
+    );
+  }
 
   if (pluginState?.needsConfirmation) {
     const audience = pluginState.audience ?? [];
@@ -57,32 +86,42 @@ export const CreateReminderRender = memo<
 
   if (!reminder) return null;
 
-  const repeatSummary = formatRepeatSummary(reminder.repeat ?? reminder.repeatRule, tChat);
+  const nextFire = formatReminderTime(reminder.nextFireAt, DEFAULT_REMINDER_TIMEZONE);
 
   return (
     <ReminderCard
       icon={AlarmClockCheckIcon}
       title={t('builtins.lobe-reminder.render.created.title')}
     >
+      {reminder.identifier && (
+        <ReminderField label={t('builtins.lobe-reminder.render.field.identifier')}>
+          <Link to={`/task/${reminder.identifier}`}>{reminder.identifier}</Link>
+        </ReminderField>
+      )}
       {!!reminder.recipients?.length && (
         <ReminderField label={t('builtins.lobe-reminder.render.field.recipients')}>
-          <ReminderRecipients recipients={reminder.recipients} />
+          {reminder.recipients.map((recipient) => (
+            <Text fontSize={13} key={`${recipient.kind}:${recipient.staffId ?? recipient.deptId}`}>
+              {formatReminderRecipientLabel(recipient)}
+            </Text>
+          ))}
         </ReminderField>
       )}
-      <ReminderField label={t('builtins.lobe-reminder.render.field.time')}>
-        {formatReminderTime(reminder.fireAt, DEFAULT_REMINDER_TIMEZONE)}
-      </ReminderField>
-      {!!repeatSummary && (
-        <ReminderField label={t('builtins.lobe-reminder.render.field.repeat')}>
-          {repeatSummary}
+      {!!reminder.scheduleSummary && (
+        <ReminderField label={t('builtins.lobe-reminder.render.field.schedule')}>
+          {reminder.scheduleSummary}
         </ReminderField>
       )}
-      <ReminderField label={t('builtins.lobe-reminder.render.field.content')}>
-        {reminder.content}
-      </ReminderField>
-      <ReminderField label={t('builtins.lobe-reminder.render.field.creator')}>
-        {reminder.creatorName}
-      </ReminderField>
+      {!!nextFire && (
+        <ReminderField label={t('builtins.lobe-reminder.render.field.nextFire')}>
+          {nextFire}
+        </ReminderField>
+      )}
+      {!!reminder.content && (
+        <ReminderField label={t('builtins.lobe-reminder.render.field.content')}>
+          {reminder.content}
+        </ReminderField>
+      )}
     </ReminderCard>
   );
 });

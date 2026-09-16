@@ -11,6 +11,10 @@ import SearchDirectoryRender from './SearchDirectory';
  * the payload shape; the components below take `BuiltinRenderProps`).
  */
 export interface ReminderRenderProps {
+  ambiguous?: Array<{
+    candidates: Array<{ leafDeptName: string; name: string; staffId: string }>;
+    query: string;
+  }>;
   audience?: Array<{ deptId: string; memberCount: number; name: string }>;
   hits?: {
     departments?: Array<{
@@ -26,27 +30,21 @@ export interface ReminderRenderProps {
       staffId: string;
     }>;
   };
+  needsClarification?: boolean;
   needsConfirmation?: boolean;
   reminder?: {
     content: string;
-    creatorName: string;
-    fireAt: Date | string;
-    id: string;
+    identifier: string;
+    nextFireAt?: Date | string | null;
     recipients?: Array<{
       deptName?: string;
       displayName: string;
       kind: 'department' | 'user';
       memberCount?: number | null;
     }>;
-    repeat?: {
-      freq: 'daily' | 'monthly' | 'weekly';
-      time: string;
-    } | null;
-    repeatRule?: {
-      freq: 'daily' | 'monthly' | 'weekly';
-      time: string;
-    } | null;
+    scheduleSummary?: string;
   };
+  unknown?: string[];
 }
 
 /**

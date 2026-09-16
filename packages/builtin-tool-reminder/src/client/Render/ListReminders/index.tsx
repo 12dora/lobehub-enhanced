@@ -6,6 +6,7 @@ import { cssVar } from 'antd-style';
 import { ListIcon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 
 import {
   DEFAULT_REMINDER_TIMEZONE,
@@ -67,10 +68,14 @@ export const ListRemindersRender = memo<
         <>
           {visible.map((row, index) => {
             const time = formatReminderTime(listReminderRowTime(row), DEFAULT_REMINDER_TIMEZONE);
+            const identifier = 'taskIdentifier' in row ? row.taskIdentifier : undefined;
+            const label = [time, row.content].filter(Boolean).join(' · ');
 
             return (
-              <Text fontSize={13} key={row.id ?? index}>
-                {[time, row.content].filter(Boolean).join(' · ')}
+              <Text fontSize={13} key={row.id ?? identifier ?? index}>
+                {identifier ? <Link to={`/task/${identifier}`}>{identifier}</Link> : null}
+                {identifier ? ' · ' : null}
+                {label}
               </Text>
             );
           })}

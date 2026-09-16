@@ -19,17 +19,20 @@ describe('ReminderManifest', () => {
     );
   });
 
-  it('requires resolved recipients, fireAt, and content on createReminder', () => {
+  it('requires name recipients, content, and schedule on createReminder', () => {
     const create = ReminderManifest.api.find(
       (item) => item.name === ReminderApiName.createReminder,
     );
 
-    expect(create?.parameters.required).toEqual(['recipients', 'fireAt', 'content']);
+    expect(create?.parameters.required).toEqual(['recipients', 'content', 'schedule']);
     expect(create?.parameters.additionalProperties).toBe(false);
-    expect(create?.parameters.properties.fireAt.type).toBe('string');
-    expect(create?.parameters.properties.recipients.items.properties.kind.enum).toEqual([
-      'user',
-      'department',
+    expect(create?.parameters.properties.recipients.items.type).toBe('string');
+    expect(create?.parameters.properties.schedule.required).toEqual(['kind', 'time']);
+    expect(create?.parameters.properties.schedule.properties.kind.enum).toEqual([
+      'daily',
+      'monthly',
+      'once',
+      'weekly',
     ]);
   });
 
@@ -39,6 +42,14 @@ describe('ReminderManifest', () => {
     );
 
     expect(search?.parameters.required).toEqual(['q']);
-    expect(search?.parameters.properties.kind.enum).toEqual(['user', 'department']);
+    expect(search?.parameters.properties.kind.enum).toEqual(['department', 'user']);
+  });
+
+  it('cancels by taskId', () => {
+    const cancel = ReminderManifest.api.find(
+      (item) => item.name === ReminderApiName.cancelReminder,
+    );
+
+    expect(cancel?.parameters.required).toEqual(['taskId']);
   });
 });

@@ -1,4 +1,5 @@
-import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import type { BuiltinServerRuntimeOutput, ReminderScheduleInput } from '@lobechat/types';
+import { isReminderTaskConfig } from '@lobechat/types';
 
 import type {
   CancelReminderParams,
@@ -7,22 +8,32 @@ import type {
   CreateReminderState,
   DirectoryDepartmentHit,
   DirectoryUserHit,
+  ListReminderCreatedRow,
   ListRemindersParams,
   ListRemindersState,
-  NeedsConfirmationAudience,
   ReceivedReminderView,
-  ReminderView,
   SearchDirectoryParams,
   SearchDirectoryState,
 } from '../types';
-import { isNeedsConfirmationResult } from '../types';
+import {
+  formatReminderRecipientLabel,
+  isCreatedReminderResult,
+  isNeedsClarificationResult,
+  isNeedsConfirmationResult,
+} from '../types';
+
+export interface CreateReminderRuntimeInput extends CreateReminderParams {
+  createdByAgentId?: string | null;
+  topicId?: string | null;
+}
 
 export interface IReminderService {
-  cancel: (id: string) => Promise<unknown>;
-  create: (
-    input: CreateReminderParams,
-  ) => Promise<ReminderView | { audience: NeedsConfirmationAudience[]; needsConfirmation: true }>;
-  listCreated: (opts?: { limit?: number; status?: string }) => Promise<ReminderView[]>;
+  cancel: (taskId: string) => Promise<unknown>;
+  create: (input: CreateReminderRuntimeInput) => Promise<unknown>;
+  listCreated: (opts?: {
+    includeFinished?: boolean;
+    limit?: number;
+  }) => Promise<ListReminderCreatedRow[]>;
   listReceived: (opts?: { limit?: number }) => Promise<ReceivedReminderView[]>;
   searchDirectory: (
     q: string,
@@ -37,47 +48,42 @@ export interface IReminderService {
 
 const WEEKDAY_LABELS = ['', '一', '二', '三', '四', '五', '六', '日'];
 
-const formatFireAt = (value: Date | string): string => {
+const compactJson = (value: unknown): string => JSON.stringify(value);
+
+const formatServerNow = (now: Date = new Date()): string => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+    minute: '2-digit',
+    month: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+  }).formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}+08:00`;
+};
+
+const formatFireAt = (value: Date | string | null | undefined): string => {
+  if (!value) return '';
   if (value instanceof Date) return value.toISOString();
-  return value;
+  return String(value);
 };
 
-const formatRepeat = (repeat: ReminderView['repeat']): string => {
-  if (!repeat) return '一次性';
-  if (repeat.freq === 'daily') return `每天 ${repeat.time}`;
-  if (repeat.freq === 'weekly') {
-    const days = (repeat.weekdays ?? [])
-      .map((day) => WEEKDAY_LABELS[day] ?? String(day))
-      .join('、');
-    return days ? `每周${days} ${repeat.time}` : `每周 ${repeat.time}`;
+const describeSchedule = (schedule: ReminderScheduleInput, summary?: string): string => {
+  if (summary) return summary;
+  const { date, kind, monthDays, time, weekdays } = schedule;
+  if (kind === 'once') return `${date ?? ''} ${time} 一次`.trim();
+  if (kind === 'daily') return `每天 ${time}`;
+  if (kind === 'weekly') {
+    const days = (weekdays ?? []).map((day) => WEEKDAY_LABELS[day] ?? String(day)).join('、');
+    return days ? `每周${days} ${time}` : `每周 ${time}`;
   }
-  if (repeat.freq === 'monthly') {
-    const days = (repeat.monthDays ?? []).join('、');
-    return days ? `每月 ${days} 日 ${repeat.time}` : `每月 ${repeat.time}`;
-  }
-  return repeat.freq;
+  const days = (monthDays ?? []).join('、');
+  return days ? `每月 ${days} 日 ${time}` : `每月 ${time}`;
 };
-
-const formatRecipient = (recipient: NonNullable<ReminderView['recipients']>[number]): string => {
-  if (recipient.kind === 'department') {
-    const count = typeof recipient.memberCount === 'number' ? ` · ${recipient.memberCount} 人` : '';
-    return `@${recipient.displayName}${count}`;
-  }
-  const dept = recipient.deptName ? ` · ${recipient.deptName}` : '';
-  return `@${recipient.displayName}${dept}`;
-};
-
-const toReminderView = (
-  row: ReminderView & { repeatRule?: ReminderView['repeat'] },
-): ReminderView => ({
-  content: row.content,
-  creatorName: row.creatorName,
-  fireAt: row.fireAt,
-  id: row.id,
-  recipients: row.recipients,
-  repeat: row.repeat ?? row.repeatRule ?? null,
-  status: row.status,
-});
 
 const hasAmbiguousUsers = (users: DirectoryUserHit[], flagged?: boolean): boolean => {
   if (flagged) return true;
@@ -117,9 +123,12 @@ const errorMessage = (error: unknown): string => {
   return 'Tool execution failed';
 };
 
+const withServerNow = (content: string, serverNow: string): string =>
+  content.includes('"serverNow"') ? content : `${content}\n${compactJson({ serverNow })}`;
+
 /**
- * Reminder execution runtime. Accepts ReminderService (or a test double) via
- * constructor injection — no React, no Zustand, no `@/services` imports.
+ * Reminder execution runtime. Accepts ReminderTaskService (or a test double)
+ * via constructor injection — no React, no Zustand, no `@/services` imports.
  */
 export class ReminderExecutionRuntime {
   constructor(private service: IReminderService) {}
@@ -130,6 +139,7 @@ export class ReminderExecutionRuntime {
       const users = result.users ?? [];
       const departments = result.departments ?? [];
       const ambiguous = hasAmbiguousUsers(users, result.ambiguous);
+      const serverNow = result.serverNow || formatServerNow();
       const payload = {
         ambiguous,
         departments: departments.map((dept) => ({
@@ -138,7 +148,7 @@ export class ReminderExecutionRuntime {
           name: dept.name,
           pathNames: dept.pathNames,
         })),
-        serverNow: result.serverNow,
+        serverNow,
         users: users.map((user) => ({
           active: user.active,
           deptPath: user.deptPath,
@@ -148,17 +158,17 @@ export class ReminderExecutionRuntime {
         })),
       };
       const instruction = ambiguous
-        ? '存在同名人员，请列出「姓名 · 最小部门」请用户选择后再调用 createReminder，不要猜测，也不要创建。'
-        : '请使用返回的 staffId / deptId 调用 createReminder，不要用姓名猜测。';
+        ? '存在同名人员，请列出「姓名 · 部门」请用户选择后再调用 createReminder，不要猜测。'
+        : '可使用 staffId / deptId（staff:<id>/dept:<id>）或姓名调用 createReminder。';
       const state: SearchDirectoryState = {
         ambiguous,
         departmentCount: departments.length,
         hits: { departments, users },
-        serverNow: result.serverNow,
+        serverNow,
         userCount: users.length,
       };
       return {
-        content: `${instruction}\n${JSON.stringify(payload, null, 2)}`,
+        content: `${instruction}\n${compactJson(payload)}`,
         state,
         success: true,
       };
@@ -171,42 +181,103 @@ export class ReminderExecutionRuntime {
     }
   }
 
-  async createReminder(args: CreateReminderParams): Promise<BuiltinServerRuntimeOutput> {
+  async createReminder(args: CreateReminderRuntimeInput): Promise<BuiltinServerRuntimeOutput> {
     try {
       const result = await this.service.create(args);
-      if (isNeedsConfirmationResult(result)) {
+      const serverNow = formatServerNow();
+
+      if (isNeedsClarificationResult(result)) {
         const state: CreateReminderState = {
-          audience: result.audience,
-          needsConfirmation: true,
+          ambiguous: result.ambiguous,
+          needsClarification: true,
+          serverNow,
+          status: 'needs_clarification',
           success: true,
+          unknown: result.unknown,
         };
         return {
-          content: [
-            '部门受众超过 30 人，需要用户确认后再创建。未创建提醒。',
-            '请向用户确认后，以 confirmLargeAudience=true 再次调用 createReminder。',
-            JSON.stringify({ audience: result.audience, needsConfirmation: true }, null, 2),
-          ].join('\n'),
+          content: withServerNow(
+            [
+              '收件人无法唯一解析，未创建提醒。请列出候选「姓名 · 部门」请用户选择后重试。',
+              compactJson({
+                ambiguous: result.ambiguous,
+                serverNow,
+                status: 'needs_clarification',
+                unknown: result.unknown,
+              }),
+            ].join('\n'),
+            serverNow,
+          ),
           state,
           success: true,
         };
       }
 
-      const reminder = toReminderView(result);
-      const recipients = (reminder.recipients ?? []).map(formatRecipient).join('、') || '（无）';
+      if (isNeedsConfirmationResult(result)) {
+        const state: CreateReminderState = {
+          audience: result.audience,
+          needsConfirmation: true,
+          serverNow,
+          status: 'needs_confirmation',
+          success: true,
+        };
+        return {
+          content: withServerNow(
+            [
+              '部门受众较大，需要用户确认后再创建。未创建提醒。',
+              '请向用户确认后，以 confirmLargeAudience=true 再次调用 createReminder。',
+              compactJson({
+                audience: result.audience,
+                serverNow,
+                status: 'needs_confirmation',
+              }),
+            ].join('\n'),
+            serverNow,
+          ),
+          state,
+          success: true,
+        };
+      }
+
+      if (!isCreatedReminderResult(result)) {
+        return {
+          content: `Unexpected createReminder result${compactJson({ serverNow })}`,
+          success: false,
+        };
+      }
+
+      const config = isReminderTaskConfig(result.task.config)
+        ? result.task.config.reminder
+        : undefined;
+      const recipients = result.reminder.recipients ?? [];
+      const scheduleSummary = describeSchedule(args.schedule, config?.scheduleSummary);
+      const nextFireAt = result.reminder.fireAt ?? undefined;
+      const recipientLabels = recipients.map(formatReminderRecipientLabel).join('、') || '（无）';
       const state: CreateReminderState = {
+        needsClarification: false,
         needsConfirmation: false,
-        reminder,
+        reminder: {
+          content: result.reminder.content,
+          identifier: result.task.identifier,
+          nextFireAt,
+          recipients,
+          reminderId: result.reminder.id,
+          scheduleSummary,
+          taskId: result.task.id,
+        },
+        serverNow,
+        status: 'created',
         success: true,
       };
       return {
         content: [
           '已创建定时提醒',
-          `- 收件人: ${recipients}`,
-          `- 时间: ${formatFireAt(reminder.fireAt)}`,
-          `- 周期: ${formatRepeat(reminder.repeat)}`,
-          `- 内容: ${reminder.content}`,
-          `- id: ${reminder.id}`,
-          `- 设置人: ${reminder.creatorName}`,
+          `- 收件人: ${recipientLabels}`,
+          `- 时间: ${formatFireAt(nextFireAt)}`,
+          `- 周期: ${scheduleSummary}`,
+          `- 内容: ${result.reminder.content}`,
+          `- 任务编号: ${result.task.identifier}`,
+          compactJson({ serverNow }),
         ].join('\n'),
         state,
         success: true,
@@ -217,9 +288,11 @@ export class ReminderExecutionRuntime {
       const content =
         code === 'REMINDER_TIME_PAST'
           ? `发送时间无效（REMINDER_TIME_PAST）：${message}`
-          : code === 'REMINDER_RECIPIENT_UNKNOWN'
-            ? `收件人无法解析（REMINDER_RECIPIENT_UNKNOWN）：${message}`
-            : message;
+          : code === 'REMINDER_CONTENT_EMPTY'
+            ? `提醒内容为空（REMINDER_CONTENT_EMPTY）：${message}`
+            : code === 'REMINDER_RECIPIENT_UNKNOWN'
+              ? `收件人无法解析（REMINDER_RECIPIENT_UNKNOWN）：${message}`
+              : message;
       return {
         content,
         error,
@@ -231,20 +304,52 @@ export class ReminderExecutionRuntime {
   async listReminders(args: ListRemindersParams = {}): Promise<BuiltinServerRuntimeOutput> {
     try {
       const scope = args.scope === 'received' ? 'received' : 'created';
+      const serverNow = formatServerNow();
       if (scope === 'received') {
         const items = await this.service.listReceived();
-        const state: ListRemindersState = { count: items.length, items, scope, success: true };
+        const state: ListRemindersState = {
+          count: items.length,
+          items,
+          scope,
+          serverNow,
+          success: true,
+        };
         return {
-          content: JSON.stringify({ items, scope }, null, 2),
+          content: compactJson({
+            items: items.map((item) => ({
+              content: item.content,
+              creatorName: item.creatorName,
+              firedAt: item.firedAt,
+            })),
+            scope,
+            serverNow,
+          }),
           state,
           success: true,
         };
       }
 
-      const items = (await this.service.listCreated()).map(toReminderView);
-      const state: ListRemindersState = { count: items.length, items, scope, success: true };
+      const items = await this.service.listCreated();
+      const state: ListRemindersState = {
+        count: items.length,
+        items,
+        scope,
+        serverNow,
+        success: true,
+      };
       return {
-        content: JSON.stringify({ items, scope }, null, 2),
+        content: compactJson({
+          items: items.map((item) => ({
+            content: item.content,
+            nextFireAt: item.nextFireAt,
+            recipients: (item.recipients ?? []).map(formatReminderRecipientLabel),
+            scheduleSummary: item.scheduleSummary,
+            status: item.status,
+            taskIdentifier: item.taskIdentifier,
+          })),
+          scope,
+          serverNow,
+        }),
         state,
         success: true,
       };
@@ -259,10 +364,11 @@ export class ReminderExecutionRuntime {
 
   async cancelReminder(args: CancelReminderParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      await this.service.cancel(args.id);
-      const state: CancelReminderState = { id: args.id, success: true };
+      await this.service.cancel(args.taskId);
+      const serverNow = formatServerNow();
+      const state: CancelReminderState = { serverNow, success: true, taskId: args.taskId };
       return {
-        content: `已取消提醒 ${args.id}`,
+        content: `已取消提醒 ${args.taskId}\n${compactJson({ serverNow, taskId: args.taskId })}`,
         state,
         success: true,
       };

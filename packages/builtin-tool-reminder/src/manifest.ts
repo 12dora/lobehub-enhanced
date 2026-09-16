@@ -5,55 +5,38 @@ import { ReminderApiName, ReminderIdentifier } from './types';
 
 export { ReminderIdentifier } from './types';
 
-const recipientItemSchema = {
+const scheduleSchema = {
   additionalProperties: false,
   properties: {
-    deptId: {
-      description: 'Department id from searchDirectory. Required when kind is department.',
+    date: {
+      description: 'YYYY-MM-DD in Asia/Shanghai. Required when kind is once.',
       type: 'string',
     },
     kind: {
-      description: 'Recipient kind. Use user for a person and department for a whole department.',
-      enum: ['user', 'department'],
-      type: 'string',
-    },
-    staffId: {
-      description: 'DingTalk staff id from searchDirectory. Required when kind is user.',
-      type: 'string',
-    },
-  },
-  required: ['kind'],
-  type: 'object',
-};
-
-const repeatRuleSchema = {
-  additionalProperties: false,
-  properties: {
-    freq: {
-      description: 'Repeat frequency.',
-      enum: ['daily', 'weekly', 'monthly'],
+      description: 'once = one-shot at date+time; daily/weekly/monthly for repeats.',
+      enum: ['daily', 'monthly', 'once', 'weekly'],
       type: 'string',
     },
     monthDays: {
-      description: 'Day-of-month numbers 1-31. Used when freq is monthly.',
+      description: 'Day-of-month numbers 1-31. Used when kind is monthly.',
       items: { type: 'number' },
       type: 'array',
     },
     time: {
-      description: 'Send time in HH:mm, Asia/Shanghai.',
+      description: 'Send time HH:mm in Asia/Shanghai.',
       type: 'string',
     },
     until: {
-      description: 'Inclusive end date YYYY-MM-DD. Omit to repeat indefinitely.',
+      description: 'Inclusive end date YYYY-MM-DD for repeating reminders.',
       type: 'string',
     },
     weekdays: {
-      description: 'Weekdays 1-7 (Monday=1). Used when freq is weekly.',
+      description: 'Weekdays 1-7 (Monday=1). Used when kind is weekly.',
       items: { type: 'number' },
       type: 'array',
     },
   },
-  required: ['freq', 'time'],
+  required: ['kind', 'time'],
   type: 'object',
 };
 
@@ -61,14 +44,45 @@ export const ReminderManifest: BuiltinToolManifest = {
   api: [
     {
       description:
-        'Search the DingTalk directory for people or departments. Always call this before createReminder. If several users share the same name, ambiguous is true — list "姓名 · 最小部门" and ask the user; do not guess. serverNow is the current Asia/Shanghai time.',
+        'Create a timed reminder in one call. Recipients are names, "姓名·部门", department names, or staff:<id>/dept:<id> from searchDirectory. Returns created, needs_clarification (list 「姓名 · 部门」 and retry), or needs_confirmation (ask, then retry with confirmLargeAudience=true). Times are Asia/Shanghai; serverNow is in every result.',
+      name: ReminderApiName.createReminder,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          confirmLargeAudience: {
+            description: 'Set true only after the user confirms a large department audience.',
+            type: 'boolean',
+          },
+          content: {
+            description: 'Reminder body shown to recipients (without mention tokens).',
+            type: 'string',
+          },
+          recipients: {
+            description:
+              'People or departments: name, "姓名·部门", department name, or staff:<id>/dept:<id>.',
+            items: { type: 'string' },
+            type: 'array',
+          },
+          schedule: {
+            description:
+              'once requires date+time; daily/weekly/monthly for 每天/每周/每月. Otherwise once at the next occurrence.',
+            ...scheduleSchema,
+          },
+        },
+        required: ['recipients', 'content', 'schedule'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        'Search the DingTalk directory for people or departments. Use only for disambiguation or browsing. If several users share a name, ambiguous is true — list "姓名 · 最小部门" and ask; do not guess. serverNow is the current Asia/Shanghai time.',
       name: ReminderApiName.searchDirectory,
       parameters: {
         additionalProperties: false,
         properties: {
           kind: {
             description: 'Optional filter. Omit to search both people and departments.',
-            enum: ['user', 'department'],
+            enum: ['department', 'user'],
             type: 'string',
           },
           q: {
@@ -82,43 +96,7 @@ export const ReminderManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Create a timed reminder for resolved directory ids. Recipients must come from searchDirectory (staffId / deptId), never raw names. fireAt is ISO 8601 with offset, interpreted in Asia/Shanghai. If a department subtree has more than 30 members, the tool returns needsConfirmation and does not create — ask the user, then retry with confirmLargeAudience=true.',
-      name: ReminderApiName.createReminder,
-      parameters: {
-        additionalProperties: false,
-        properties: {
-          confirmLargeAudience: {
-            description:
-              'Set true only after the user confirms a department audience larger than 30 people.',
-            type: 'boolean',
-          },
-          content: {
-            description: 'Reminder body shown to recipients.',
-            type: 'string',
-          },
-          fireAt: {
-            description:
-              'Next send time as ISO 8601 with offset, e.g. 2026-09-17T09:00:00+08:00. Default timezone Asia/Shanghai.',
-            type: 'string',
-          },
-          recipients: {
-            description: 'Resolved people and/or departments from searchDirectory.',
-            items: recipientItemSchema,
-            type: 'array',
-          },
-          repeat: {
-            description:
-              'Optional repeat rule. Omit for a one-shot reminder at fireAt. Use when the user says 每天 / 每周 / 每月.',
-            ...repeatRuleSchema,
-          },
-        },
-        required: ['recipients', 'fireAt', 'content'],
-        type: 'object',
-      },
-    },
-    {
-      description:
-        'List reminders. scope=created lists reminders I created; scope=received lists reminders delivered to me. Defaults to created.',
+        'List reminders. scope=created lists reminder tasks I created; scope=received lists reminders delivered to me. Defaults to created.',
       name: ReminderApiName.listReminders,
       parameters: {
         additionalProperties: false,
@@ -134,17 +112,18 @@ export const ReminderManifest: BuiltinToolManifest = {
       },
     },
     {
-      description: 'Cancel a reminder I created. Recipients will not be notified after cancel.',
+      description:
+        'Cancel a reminder task I created. Recipients will not be notified after cancel.',
       name: ReminderApiName.cancelReminder,
       parameters: {
         additionalProperties: false,
         properties: {
-          id: {
-            description: 'Reminder id returned by createReminder or listReminders.',
+          taskId: {
+            description: 'Task id returned by createReminder or listReminders.',
             type: 'string',
           },
         },
-        required: ['id'],
+        required: ['taskId'],
         type: 'object',
       },
     },

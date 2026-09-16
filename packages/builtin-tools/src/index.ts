@@ -79,6 +79,7 @@ export const alwaysOnToolIds = [
   SkillsManifest.identifier,
   SkillStoreManifest.identifier,
   DocumentPagesManifest.identifier,
+  ReminderManifest.identifier,
 ];
 
 /**

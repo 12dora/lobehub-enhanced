@@ -8,26 +8,30 @@ describe('reminder systemRole', () => {
     expect(ReminderManifest.systemRole).toBe(systemPrompt);
   });
 
-  it('requires directory search and forbids guessing same-name people', () => {
-    expect(systemPrompt).toContain('searchDirectory');
+  it('stays within the 900-character budget', () => {
+    expect(systemPrompt.length).toBeLessThanOrEqual(900);
+  });
+
+  it('creates in one call from names and asks on clarification/confirmation', () => {
     expect(systemPrompt).toContain('createReminder');
-    expect(systemPrompt).toContain('ambiguous');
-    expect(systemPrompt).toContain('姓名 · 最小部门');
-    expect(systemPrompt).toContain('不要猜');
+    expect(systemPrompt).toContain('一次调用');
+    expect(systemPrompt).toContain('姓名·部门');
+    expect(systemPrompt).toContain('needs_clarification');
+    expect(systemPrompt).toContain('姓名 · 部门');
+    expect(systemPrompt).toContain('needs_confirmation');
+    expect(systemPrompt).not.toContain('必须先调用 searchDirectory');
   });
 
   it('interprets times in Asia/Shanghai using serverNow', () => {
     expect(systemPrompt).toContain('Asia/Shanghai');
     expect(systemPrompt).toContain('serverNow');
-    expect(systemPrompt).toContain('提前');
   });
 
-  it('maps 每周/每天/每月 to repeat and relays department confirmation', () => {
-    expect(systemPrompt).toContain('每周');
+  it('maps 每天/每周/每月 to schedule kinds', () => {
     expect(systemPrompt).toContain('每天');
+    expect(systemPrompt).toContain('每周');
     expect(systemPrompt).toContain('每月');
-    expect(systemPrompt).toContain('needsConfirmation');
-    expect(systemPrompt).toContain('30');
+    expect(systemPrompt).toContain('once');
   });
 
   it('asks for a short structured confirmation after create', () => {
@@ -35,5 +39,6 @@ describe('reminder systemRole', () => {
     expect(systemPrompt).toContain('时间');
     expect(systemPrompt).toContain('周期');
     expect(systemPrompt).toContain('内容');
+    expect(systemPrompt).toContain('任务编号');
   });
 });

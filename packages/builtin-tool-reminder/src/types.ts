@@ -1,3 +1,5 @@
+import type { ReminderScheduleInput, ResolvedReminderRecipient } from '@lobechat/types';
+
 export const ReminderIdentifier = 'lobe-reminder';
 
 export const ReminderApiName = {
@@ -10,20 +12,6 @@ export const ReminderApiName = {
 export type ReminderApiNameType = (typeof ReminderApiName)[keyof typeof ReminderApiName];
 
 export type ReminderRecipientKind = 'department' | 'user';
-
-export interface ReminderRecipientInput {
-  deptId?: string;
-  kind: ReminderRecipientKind;
-  staffId?: string;
-}
-
-export interface ReminderRepeatRule {
-  freq: 'daily' | 'monthly' | 'weekly';
-  monthDays?: number[];
-  time: string;
-  until?: string;
-  weekdays?: number[];
-}
 
 export interface DirectoryUserHit {
   active?: boolean;
@@ -60,31 +48,20 @@ export interface SearchDirectoryState {
 export interface CreateReminderParams {
   confirmLargeAudience?: boolean;
   content: string;
-  fireAt: string;
-  recipients: ReminderRecipientInput[];
-  repeat?: ReminderRepeatRule;
+  recipients: string[];
+  schedule: ReminderScheduleInput;
 }
 
-export interface ReminderRecipientView {
-  deptId?: string | null;
-  deptName?: string;
-  deptPath?: string;
-  displayName: string;
-  kind: ReminderRecipientKind;
-  memberCount?: number | null;
-  staffId?: string | null;
+export interface ClarificationCandidate {
+  deptPath: string;
+  leafDeptName: string;
+  name: string;
+  staffId: string;
 }
 
-export interface ReminderView {
-  content: string;
-  creatorName: string;
-  fireAt: Date | string;
-  id: string;
-  recipients?: ReminderRecipientView[];
-  repeat?: ReminderRepeatRule | null;
-  /** Alias used by DB / tRPC rows; prefer `repeat`. */
-  repeatRule?: ReminderRepeatRule | null;
-  status?: string;
+export interface ClarificationAmbiguous {
+  candidates: ClarificationCandidate[];
+  query: string;
 }
 
 export interface NeedsConfirmationAudience {
@@ -93,17 +70,58 @@ export interface NeedsConfirmationAudience {
   name: string;
 }
 
-export interface NeedsConfirmationResult {
-  audience: NeedsConfirmationAudience[];
-  needsConfirmation: true;
+export interface CreatedReminderView {
+  content: string;
+  identifier: string;
+  nextFireAt?: Date | string | null;
+  recipients?: ResolvedReminderRecipient[];
+  reminderId?: string;
+  scheduleSummary?: string;
+  taskId?: string;
 }
 
 export interface CreateReminderState {
+  ambiguous?: ClarificationAmbiguous[];
   audience?: NeedsConfirmationAudience[];
+  needsClarification?: boolean;
   needsConfirmation?: boolean;
-  reminder?: ReminderView;
+  reminder?: CreatedReminderView;
+  serverNow?: string;
+  status?: 'created' | 'needs_clarification' | 'needs_confirmation';
   success: boolean;
+  unknown?: string[];
 }
+
+export interface CreateReminderCreatedResult {
+  reminder: {
+    content: string;
+    fireAt?: Date | string | null;
+    id: string;
+    recipients?: ResolvedReminderRecipient[];
+  };
+  status: 'created';
+  task: {
+    config?: unknown;
+    id: string;
+    identifier: string;
+  };
+}
+
+export interface CreateReminderClarificationResult {
+  ambiguous: ClarificationAmbiguous[];
+  status: 'needs_clarification';
+  unknown: string[];
+}
+
+export interface CreateReminderConfirmationResult {
+  audience: NeedsConfirmationAudience[];
+  status: 'needs_confirmation';
+}
+
+export type CreateReminderTaskResult =
+  | CreateReminderCreatedResult
+  | CreateReminderClarificationResult
+  | CreateReminderConfirmationResult;
 
 export interface ListRemindersParams {
   scope?: 'created' | 'received';
@@ -118,15 +136,20 @@ export interface ReceivedReminderView {
   status?: string;
 }
 
-/** Created-list rows always carry the next (or only) fire time. */
 export interface ListReminderCreatedRow {
   content?: string;
-  creatorName?: string;
-  fireAt: Date | string;
+  fireAt?: Date | string;
   id?: string;
+  lastFiredAt?: Date | string | null;
+  nextFireAt?: Date | string | null;
+  recipients?: ResolvedReminderRecipient[];
+  reminderId?: string;
+  scheduleSummary?: string;
+  status?: string;
+  taskId?: string;
+  taskIdentifier?: string;
 }
 
-/** Received-list rows always carry the delivery time. */
 export interface ListReminderReceivedRow {
   content?: string;
   creatorName?: string;
@@ -148,19 +171,25 @@ export const isListReminderReceivedRow = (value: unknown): value is ListReminder
 export const isListReminderCreatedRow = (value: unknown): value is ListReminderCreatedRow => {
   if (typeof value !== 'object' || value === null) return false;
   if ('firedAt' in value) return false;
-  return 'fireAt' in value && isDateLike(value.fireAt);
+  const row = value as { fireAt?: unknown; nextFireAt?: unknown; taskIdentifier?: unknown };
+  return (
+    isDateLike(row.nextFireAt) || isDateLike(row.fireAt) || typeof row.taskIdentifier === 'string'
+  );
 };
 
 export const isListReminderRow = (value: unknown): value is ListReminderRow =>
   isListReminderCreatedRow(value) || isListReminderReceivedRow(value);
 
-export const listReminderRowTime = (row: ListReminderRow): Date | string =>
-  isListReminderReceivedRow(row) ? row.firedAt : row.fireAt;
+export const listReminderRowTime = (row: ListReminderRow): Date | string => {
+  if (isListReminderReceivedRow(row)) return row.firedAt;
+  return row.nextFireAt ?? row.fireAt ?? '';
+};
 
 export interface ListRemindersCreatedState {
   count: number;
-  items?: ReminderView[];
+  items?: ListReminderCreatedRow[];
   scope: 'created';
+  serverNow?: string;
   success: boolean;
 }
 
@@ -168,21 +197,54 @@ export interface ListRemindersReceivedState {
   count: number;
   items?: ReceivedReminderView[];
   scope: 'received';
+  serverNow?: string;
   success: boolean;
 }
 
 export type ListRemindersState = ListRemindersCreatedState | ListRemindersReceivedState;
 
 export interface CancelReminderParams {
-  id: string;
+  taskId: string;
 }
 
 export interface CancelReminderState {
-  id: string;
+  serverNow?: string;
   success: boolean;
+  taskId: string;
 }
 
-export const isNeedsConfirmationResult = (value: unknown): value is NeedsConfirmationResult => {
+export const isNeedsConfirmationResult = (
+  value: unknown,
+): value is CreateReminderConfirmationResult => {
   if (!value || typeof value !== 'object') return false;
-  return (value as { needsConfirmation?: unknown }).needsConfirmation === true;
+  return (value as { status?: unknown }).status === 'needs_confirmation';
+};
+
+export const isNeedsClarificationResult = (
+  value: unknown,
+): value is CreateReminderClarificationResult => {
+  if (!value || typeof value !== 'object') return false;
+  return (value as { status?: unknown }).status === 'needs_clarification';
+};
+
+export const isCreatedReminderResult = (value: unknown): value is CreateReminderCreatedResult => {
+  if (!value || typeof value !== 'object') return false;
+  return (value as { status?: unknown }).status === 'created';
+};
+
+/** Human label: 「姓名 · 部门」 or department name. */
+export const formatReminderRecipientLabel = (recipient: {
+  deptName?: string | null;
+  displayName: string;
+  kind: ReminderRecipientKind;
+  memberCount?: number | null;
+}): string => {
+  if (recipient.kind === 'department') {
+    return typeof recipient.memberCount === 'number'
+      ? `${recipient.displayName} · ${recipient.memberCount}`
+      : recipient.displayName;
+  }
+  return recipient.deptName
+    ? `${recipient.displayName} · ${recipient.deptName}`
+    : recipient.displayName;
 };

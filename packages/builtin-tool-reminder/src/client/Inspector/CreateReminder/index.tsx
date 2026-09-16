@@ -65,7 +65,7 @@ export const CreateReminderInspector = memo<
   const { t } = useTranslation('plugin');
 
   const content = args?.content || partialArgs?.content;
-  const reminderId = pluginState?.reminder?.id;
+  const identifier = pluginState?.reminder?.identifier;
   const recipientCount = args?.recipients?.length ?? partialArgs?.recipients?.length;
 
   if (isArgumentsStreaming && !content) {
@@ -85,7 +85,12 @@ export const CreateReminderInspector = memo<
       )}
     >
       <span>{t('builtins.lobe-reminder.apiName.createReminder')}</span>
-      {reminderId && <span className={styles.identifierChip}>{reminderId}</span>}
+      {identifier && <span className={styles.identifierChip}>{identifier}</span>}
+      {pluginState?.needsClarification && (
+        <span className={styles.warnChip} style={{ color: cssVar.colorWarning }}>
+          {t('builtins.lobe-reminder.inspector.needsClarification')}
+        </span>
+      )}
       {pluginState?.needsConfirmation && (
         <span className={styles.warnChip} style={{ color: cssVar.colorWarning }}>
           {t('builtins.lobe-reminder.inspector.needsConfirmation')}

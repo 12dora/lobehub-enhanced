@@ -36,6 +36,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate }),
 }));
 
+vi.mock('react-router', () => ({
+  Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
+}));
+
 vi.mock('@lobehub/ui', () => ({
   Block: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Icon: () => <span data-testid="icon" />,
@@ -45,21 +49,13 @@ vi.mock('@lobehub/ui/base-ui', () => ({
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
-vi.mock('@/features/AgentTasks/ReminderList/ReminderRecipients', () => ({
-  default: ({ recipients }: { recipients?: Array<{ displayName: string }> }) => (
-    <span data-testid="recipients">
-      {(recipients ?? []).map((item) => item.displayName).join(',')}
-    </span>
-  ),
-}));
-
 // The package vitest config has no globals, so RTL's auto-cleanup is off.
 afterEach(() => cleanup());
 
 const emptyCreateArgs: CreateReminderParams = {
   content: '',
-  fireAt: '',
   recipients: [],
+  schedule: { kind: 'once', time: '09:00' },
 };
 
 const renderProps = <A, S>(
@@ -74,50 +70,72 @@ const renderProps = <A, S>(
 });
 
 describe('CreateReminderRender', () => {
-  it('renders the created reminder as a compact card', () => {
+  it('renders the created reminder with identifier, recipients, schedule, next fire', () => {
     const state: CreateReminderState = {
       needsConfirmation: false,
       reminder: {
         content: '周三例会材料准备',
-        creatorName: '张伟',
-        fireAt: '2026-09-23T01:00:00.000Z',
-        id: 'rmd_1',
+        identifier: 'TASK-1',
+        nextFireAt: '2026-09-23T01:00:00.000Z',
         recipients: [
-          { deptName: '安环部', displayName: '胡玉琴A', kind: 'user' },
-          { displayName: '安环部', kind: 'department', memberCount: 12 },
+          {
+            deptName: '安环部',
+            deptPath: '捷发 / 安环部',
+            displayName: '胡玉琴A',
+            kind: 'user',
+            staffId: 'u1',
+          },
+          {
+            deptId: 'd1',
+            deptName: '安环部',
+            deptPath: '捷发 / 安环部',
+            displayName: '安环部',
+            kind: 'department',
+            memberCount: 12,
+          },
         ],
-        repeat: { freq: 'weekly', time: '09:00', weekdays: [3] },
+        scheduleSummary: '每周三 09:00',
+        taskId: 'task-1',
       },
+      status: 'created',
       success: true,
     };
 
     render(<CreateReminderRender {...renderProps(emptyCreateArgs, state)} />);
 
     expect(screen.getByText('已创建定时提醒')).toBeTruthy();
-    expect(screen.getByTestId('recipients').textContent).toBe('胡玉琴A,安环部');
-    expect(screen.getByText('2026-09-23 09:00')).toBeTruthy();
+    expect(screen.getByText('TASK-1')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'TASK-1' }).getAttribute('href')).toBe('/task/TASK-1');
+    expect(screen.getByText('胡玉琴A · 安环部')).toBeTruthy();
+    expect(screen.getByText('安环部 · 12')).toBeTruthy();
     expect(screen.getByText('每周三 09:00')).toBeTruthy();
+    expect(screen.getByText('2026-09-23 09:00')).toBeTruthy();
     expect(screen.getByText('周三例会材料准备')).toBeTruthy();
-    expect(screen.getByText('张伟')).toBeTruthy();
   });
 
-  it('reads repeatRule when the payload has no repeat alias', () => {
+  it('renders clarification candidates as 姓名 · 部门', () => {
     const state: CreateReminderState = {
-      needsConfirmation: false,
-      reminder: {
-        content: '周三例会材料准备',
-        creatorName: '张伟',
-        fireAt: '2026-09-23T01:00:00.000Z',
-        id: 'rmd_1',
-        recipients: [{ deptName: '安环部', displayName: '胡玉琴A', kind: 'user' }],
-        repeatRule: { freq: 'weekly', time: '09:00', weekdays: [3] },
-      },
+      ambiguous: [
+        {
+          candidates: [
+            { deptPath: '捷发 / 安环部', leafDeptName: '安环部', name: '胡玉琴A', staffId: 's1' },
+            { deptPath: '捷发 / 财务部', leafDeptName: '财务部', name: '胡玉琴A', staffId: 's2' },
+          ],
+          query: '胡玉琴A',
+        },
+      ],
+      needsClarification: true,
+      status: 'needs_clarification',
       success: true,
+      unknown: ['不存在的人'],
     };
 
     render(<CreateReminderRender {...renderProps(emptyCreateArgs, state)} />);
 
-    expect(screen.getByText('每周三 09:00')).toBeTruthy();
+    expect(screen.getByText('请选择收件人')).toBeTruthy();
+    expect(screen.getByText('胡玉琴A · 安环部')).toBeTruthy();
+    expect(screen.getByText('胡玉琴A · 财务部')).toBeTruthy();
+    expect(screen.getByText('未找到：不存在的人')).toBeTruthy();
   });
 
   it('renders the confirmation notice with department member counts', () => {
@@ -127,6 +145,7 @@ describe('CreateReminderRender', () => {
         { deptId: 'd2', memberCount: 31, name: '质检部' },
       ],
       needsConfirmation: true,
+      status: 'needs_confirmation',
       success: true,
     };
 
@@ -136,8 +155,6 @@ describe('CreateReminderRender', () => {
     expect(screen.getByText('生产部 · 42 人')).toBeTruthy();
     expect(screen.getByText('质检部 · 31 人')).toBeTruthy();
     expect(screen.getByText('请在对话中确认后再创建。')).toBeTruthy();
-    // Nothing was created, so no reminder card fields.
-    expect(screen.queryByTestId('recipients')).toBeNull();
   });
 
   it('renders nothing before a result lands', () => {
@@ -242,9 +259,8 @@ describe('ListRemindersRender', () => {
             items: [
               {
                 content: '例会材料',
-                creatorName: '张伟',
-                fireAt: '2026-09-23T01:00:00.000Z',
-                id: 'rmd_1',
+                nextFireAt: '2026-09-23T01:00:00.000Z',
+                taskIdentifier: 'TASK-1',
               },
             ],
             scope: 'created',
@@ -255,7 +271,8 @@ describe('ListRemindersRender', () => {
       />,
     );
 
-    expect(screen.getByText('2026-09-23 09:00 · 例会材料')).toBeTruthy();
+    expect(screen.getByText('TASK-1')).toBeTruthy();
+    expect(screen.getByText(/例会材料/)).toBeTruthy();
   });
 
   it('renders received rows from pluginState.items using firedAt', () => {
@@ -292,8 +309,8 @@ describe('CancelReminderRender', () => {
     render(
       <CancelReminderRender
         {...renderProps(
-          { id: 'rmd_1' } satisfies CancelReminderParams,
-          { id: 'rmd_1', success: true } satisfies CancelReminderState,
+          { taskId: 'task-1' } satisfies CancelReminderParams,
+          { success: true, taskId: 'task-1' } satisfies CancelReminderState,
         )}
       />,
     );

@@ -1,4 +1,8 @@
-import type { BuiltinServerRuntimeOutput, BuiltinToolResult } from '@lobechat/types';
+import type {
+  BuiltinServerRuntimeOutput,
+  BuiltinToolContext,
+  BuiltinToolResult,
+} from '@lobechat/types';
 import { BaseExecutor } from '@lobechat/types';
 import debug from 'debug';
 
@@ -12,46 +16,11 @@ import type {
   CreateReminderParams,
   ListRemindersParams,
   ReceivedReminderView,
-  ReminderView,
   SearchDirectoryParams,
 } from '../../types';
-import { isNeedsConfirmationResult, ReminderApiName } from '../../types';
+import { ReminderApiName } from '../../types';
 
 const log = debug('lobe-reminder:executor');
-
-const toClientReminderStatus = (value: string | undefined) => {
-  switch (value) {
-    case 'canceled':
-    case 'expired':
-    case 'failed':
-    case 'scheduled':
-    case 'sent': {
-      return value;
-    }
-    default: {
-      return undefined;
-    }
-  }
-};
-
-const toReminderView = (row: {
-  content: string;
-  creatorName: string;
-  fireAt: Date | string;
-  id: string;
-  recipients?: ReminderView['recipients'];
-  repeat?: ReminderView['repeat'];
-  repeatRule?: ReminderView['repeat'];
-  status?: string | null;
-}): ReminderView => ({
-  content: row.content,
-  creatorName: row.creatorName,
-  fireAt: row.fireAt,
-  id: row.id,
-  recipients: row.recipients,
-  repeat: row.repeat ?? row.repeatRule ?? undefined,
-  status: row.status ?? undefined,
-});
 
 const requireResult = <T>(value: T | undefined, message: string): T => {
   if (value === undefined) throw new Error(message);
@@ -62,24 +31,14 @@ const loadReminderService = async (): Promise<IReminderService> => {
   // Static app import like the task tool: the desktop (vite/rolldown) bundle cannot
   // resolve a dynamic `@/` import from inside a workspace package.
   return {
-    cancel: (id) => reminderService.cancel(id),
-    create: async (input) => {
-      const result = requireResult(
-        await reminderService.create(input),
-        'Create reminder returned no result',
-      );
-      if (isNeedsConfirmationResult(result)) {
-        return { audience: result.audience, needsConfirmation: true };
-      }
-      return toReminderView(result);
-    },
-    listCreated: async (opts) => {
-      const rows = await reminderService.listCreated({
+    cancel: (taskId) => reminderService.cancel(taskId),
+    create: async (input) =>
+      requireResult(await reminderService.create(input), 'Create reminder returned no result'),
+    listCreated: async (opts) =>
+      (await reminderService.listCreated({
+        includeFinished: opts?.includeFinished,
         limit: opts?.limit,
-        status: toClientReminderStatus(opts?.status),
-      });
-      return (rows ?? []).map(toReminderView);
-    },
+      })) ?? [],
     listReceived: async (opts): Promise<ReceivedReminderView[]> =>
       (await reminderService.listReceived(opts)) ?? [],
     searchDirectory: async (q, kind) =>
@@ -112,11 +71,20 @@ class ReminderExecutor extends BaseExecutor<typeof ReminderApiName> {
     }
   };
 
-  createReminder = async (params: CreateReminderParams): Promise<BuiltinToolResult> => {
+  createReminder = async (
+    params: CreateReminderParams,
+    ctx?: BuiltinToolContext,
+  ): Promise<BuiltinToolResult> => {
     try {
-      log('createReminder recipients=%o fireAt=%s', params.recipients, params.fireAt);
+      log('createReminder recipients=%o', params.recipients);
       const runtime = await this.getRuntime();
-      return this.toResult(await runtime.createReminder(params));
+      return this.toResult(
+        await runtime.createReminder({
+          ...params,
+          createdByAgentId: ctx?.agentId,
+          topicId: ctx?.topicId,
+        }),
+      );
     } catch (error) {
       return this.errorResult(error, 'CreateReminderFailed');
     }
@@ -134,7 +102,7 @@ class ReminderExecutor extends BaseExecutor<typeof ReminderApiName> {
 
   cancelReminder = async (params: CancelReminderParams): Promise<BuiltinToolResult> => {
     try {
-      log('cancelReminder id=%s', params.id);
+      log('cancelReminder taskId=%s', params.taskId);
       const runtime = await this.getRuntime();
       return this.toResult(await runtime.cancelReminder(params));
     } catch (error) {

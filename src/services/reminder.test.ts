@@ -9,9 +9,11 @@ vi.mock('@/libs/trpc/client', () => ({
     reminder: {
       cancel: { mutate: vi.fn() },
       create: { mutate: vi.fn() },
+      fireNow: { mutate: vi.fn() },
       hideReceived: { mutate: vi.fn() },
       listCreated: { query: vi.fn() },
       listReceived: { query: vi.fn() },
+      saveTask: { mutate: vi.fn() },
       searchDirectory: { query: vi.fn() },
     },
   },
@@ -36,26 +38,34 @@ describe('reminderService', () => {
     expect(reminder.listReceived.query).toHaveBeenCalledWith({ limit: 8 });
   });
 
-  it('cancel and hideReceived mutate ids', async () => {
-    await reminderService.cancel('rem_1');
+  it('cancel, fireNow, and hideReceived mutate ids', async () => {
+    await reminderService.cancel('task-1');
+    await reminderService.fireNow('task-1');
     await reminderService.hideReceived('del_1');
-    expect(reminder.cancel.mutate).toHaveBeenCalledWith({ id: 'rem_1' });
+    expect(reminder.cancel.mutate).toHaveBeenCalledWith({ taskId: 'task-1' });
+    expect(reminder.fireNow.mutate).toHaveBeenCalledWith({ taskId: 'task-1' });
     expect(reminder.hideReceived.mutate).toHaveBeenCalledWith({ deliveryId: 'del_1' });
   });
 
-  it('create and searchDirectory forward params', async () => {
-    reminder.create.mutate.mockResolvedValueOnce({ id: 'rem_1' });
+  it('create, saveTask, and searchDirectory forward params', async () => {
+    reminder.create.mutate.mockResolvedValueOnce({ status: 'created' });
+    reminder.saveTask.mutate.mockResolvedValueOnce({ status: 'saved' });
     reminder.searchDirectory.query.mockResolvedValueOnce({ users: [] });
     await reminderService.create({
       content: '交报告',
-      fireAt: '2026-09-17T01:00:00+08:00',
-      recipients: [{ kind: 'user', staffId: 's1' }],
+      recipients: ['胡玉琴A'],
+      schedule: { date: '2026-09-17', kind: 'once', time: '09:00' },
     });
+    await reminderService.saveTask({ instruction: '@胡玉琴A\n\n交报告', taskId: 'task-1' });
     await reminderService.searchDirectory({ q: '安环' });
     expect(reminder.create.mutate).toHaveBeenCalledWith({
       content: '交报告',
-      fireAt: '2026-09-17T01:00:00+08:00',
-      recipients: [{ kind: 'user', staffId: 's1' }],
+      recipients: ['胡玉琴A'],
+      schedule: { date: '2026-09-17', kind: 'once', time: '09:00' },
+    });
+    expect(reminder.saveTask.mutate).toHaveBeenCalledWith({
+      instruction: '@胡玉琴A\n\n交报告',
+      taskId: 'task-1',
     });
     expect(reminder.searchDirectory.query).toHaveBeenCalledWith({ q: '安环' });
   });

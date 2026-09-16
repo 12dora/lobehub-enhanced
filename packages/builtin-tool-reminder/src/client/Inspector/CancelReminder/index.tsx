@@ -33,7 +33,7 @@ export const CancelReminderInspector = memo<
 >(({ args, partialArgs, isArgumentsStreaming, isLoading, pluginState }) => {
   const { t } = useTranslation('plugin');
 
-  const id = args?.id || partialArgs?.id || pluginState?.id;
+  const taskId = args?.taskId || partialArgs?.taskId || pluginState?.taskId;
 
   return (
     <div
@@ -45,7 +45,7 @@ export const CancelReminderInspector = memo<
       <span style={{ color: cssVar.colorError }}>
         {t('builtins.lobe-reminder.apiName.cancelReminder')}
       </span>
-      {id && <span className={styles.identifierChip}>{id}</span>}
+      {taskId && <span className={styles.identifierChip}>{taskId}</span>}
     </div>
   );
 });

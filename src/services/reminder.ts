@@ -1,20 +1,6 @@
+import type { ReminderScheduleInput } from '@lobechat/types';
+
 import { lambdaClient } from '@/libs/trpc/client';
-
-type ReminderRecipientRef = {
-  deptId?: string;
-  kind: 'department' | 'user';
-  staffId?: string;
-};
-
-type ReminderRepeatRule = {
-  freq: 'daily' | 'monthly' | 'weekly';
-  monthDays?: number[];
-  time: string;
-  until?: string;
-  weekdays?: number[];
-};
-
-type ReminderStatus = 'canceled' | 'expired' | 'failed' | 'scheduled' | 'sent';
 
 /**
  * Client access to the 定时提醒 (scheduled reminder) lambda router.
@@ -29,16 +15,18 @@ class ReminderService {
     confirmLargeAudience?: boolean;
     content: string;
     createdByAgentId?: string;
-    fireAt: string;
-    recipients: ReminderRecipientRef[];
-    repeat?: ReminderRepeatRule;
-    source?: 'tool' | 'ui';
+    recipients: string[];
+    schedule: ReminderScheduleInput;
     topicId?: string;
   }) => {
     return lambdaClient.reminder.create.mutate(params);
   };
 
-  listCreated = async (params?: { limit?: number; status?: ReminderStatus }) => {
+  saveTask = async (params: { editorData?: unknown; instruction: string; taskId: string }) => {
+    return lambdaClient.reminder.saveTask.mutate(params);
+  };
+
+  listCreated = async (params?: { includeFinished?: boolean; limit?: number }) => {
     return lambdaClient.reminder.listCreated.query(params ?? {});
   };
 
@@ -46,8 +34,12 @@ class ReminderService {
     return lambdaClient.reminder.listReceived.query(params ?? {});
   };
 
-  cancel = async (id: string) => {
-    return lambdaClient.reminder.cancel.mutate({ id });
+  cancel = async (taskId: string) => {
+    return lambdaClient.reminder.cancel.mutate({ taskId });
+  };
+
+  fireNow = async (taskId: string) => {
+    return lambdaClient.reminder.fireNow.mutate({ taskId });
   };
 
   hideReceived = async (deliveryId: string) => {

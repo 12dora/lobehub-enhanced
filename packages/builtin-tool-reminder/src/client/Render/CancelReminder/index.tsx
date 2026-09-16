@@ -24,9 +24,9 @@ export const CancelReminderRender = memo<
 >(({ args, pluginState }) => {
   const { t } = useTranslation('plugin');
 
-  const id = pluginState?.id ?? args?.id;
+  const taskId = pluginState?.taskId ?? args?.taskId;
 
-  if (!pluginState?.success && !id) return null;
+  if (!pluginState?.success && !taskId) return null;
 
   return (
     <div className={styles.row}>
