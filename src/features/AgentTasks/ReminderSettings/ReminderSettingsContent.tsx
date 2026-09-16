@@ -82,6 +82,7 @@ const DINGTALK_HINT_KEY = {
   error: 'task.reminder.channel.dingtalkCheckFailed',
   loading: 'task.reminder.channel.dingtalkChecking',
   unavailable: 'task.reminder.channel.dingtalkUnavailable',
+  unlinked: 'task.reminder.channel.dingtalkUnlinked',
 } as const satisfies Record<DingTalkPushStatus, string>;
 
 interface ReminderSettingsContentProps {
@@ -99,6 +100,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
   const setSettings = useUserStore((s) => s.setSettings);
   const {
     available: dingtalkAvailable,
+    platformUsername: dingtalkUsername,
     retry: retryDingTalk,
     status: dingtalkStatus,
   } = useDingTalkPushAvailable();
@@ -117,6 +119,13 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
   }, [isUserStateInit, notification]);
 
   const locked = saving || !isUserStateInit;
+
+  // Naming the bound account turns "push to DingTalk" into a checkable promise: the user
+  // can tell at a glance whether reminders land on the identity they actually read.
+  const dingtalkHint =
+    dingtalkStatus === 'available' && dingtalkUsername
+      ? t('task.reminder.channel.dingtalkLinkedAs', { name: dingtalkUsername })
+      : t(DINGTALK_HINT_KEY[dingtalkStatus]);
 
   const channelLabel: Record<ReminderChannelId, string> = useMemo(
     () => ({
@@ -183,9 +192,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
                   <Text>{channelLabel[channel]}</Text>
                   <Flexbox horizontal align={'center'} gap={6}>
                     <Text fontSize={12} type={'secondary'}>
-                      {isDingTalk
-                        ? t(DINGTALK_HINT_KEY[dingtalkStatus])
-                        : t('task.reminder.channel.inboxDesc')}
+                      {isDingTalk ? dingtalkHint : t('task.reminder.channel.inboxDesc')}
                     </Text>
                     {isDingTalk && dingtalkStatus === 'error' && (
                       <Button size={'small'} type={'link'} onClick={retryDingTalk}>

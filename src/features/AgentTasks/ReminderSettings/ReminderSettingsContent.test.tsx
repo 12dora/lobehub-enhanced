@@ -10,7 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReminderSettingsContent from './ReminderSettingsContent';
 
 const mocks = vi.hoisted(() => ({
-  dingtalkStatus: 'available' as 'available' | 'error' | 'loading' | 'unavailable',
+  dingtalkStatus: 'available' as 'available' | 'error' | 'loading' | 'unavailable' | 'unlinked',
+  dingtalkUsername: undefined as string | undefined,
   isUserStateInit: true,
   retryDingTalk: vi.fn(),
   setSettings: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./useDingTalkPushAvailable', () => ({
   useDingTalkPushAvailable: () => ({
     available: mocks.dingtalkStatus === 'available',
+    platformUsername: mocks.dingtalkStatus === 'available' ? mocks.dingtalkUsername : undefined,
     retry: mocks.retryDingTalk,
     status: mocks.dingtalkStatus,
   }),
@@ -63,7 +65,12 @@ vi.mock('@lobehub/ui/base-ui', () => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    // Interpolation values are appended so a test can assert the value actually
+    // reaches the key instead of only that the key was picked.
+    t: (key: string, options?: Record<string, unknown>) =>
+      options ? `${key}:${Object.values(options).join(',')}` : key,
+  }),
 }));
 
 const switchFor = (label: string) => screen.getByRole('switch', { name: label });
@@ -71,6 +78,7 @@ const checkedOf = (label: string) => switchFor(label).getAttribute('aria-checked
 
 beforeEach(() => {
   mocks.dingtalkStatus = 'available';
+  mocks.dingtalkUsername = undefined;
   mocks.isUserStateInit = true;
   mocks.retryDingTalk.mockReset();
   mocks.settings = {};
@@ -171,6 +179,39 @@ describe('ReminderSettingsContent', () => {
     expect(screen.getByText('task.reminder.channel.dingtalkUnavailable')).toBeTruthy();
     // DingTalk contributes no column to the matrix.
     expect(screen.getAllByRole('switch')).toHaveLength(6);
+  });
+
+  /**
+   * The connector is provisioned, so the row would otherwise look usable — but without a
+   * DingTalk identity the server drops every push as `user_not_mapped`.
+   */
+  it('disables the DingTalk row when the account has no DingTalk identity', () => {
+    mocks.dingtalkStatus = 'unlinked';
+
+    render(<ReminderSettingsContent />);
+
+    expect(switchFor('task.reminder.channel.dingtalk')).toHaveProperty('disabled', true);
+    expect(checkedOf('task.reminder.channel.dingtalk')).toBe('false');
+    expect(screen.getByText('task.reminder.channel.dingtalkUnlinked')).toBeTruthy();
+    expect(screen.queryByText('task.reminder.channel.dingtalkUnavailable')).toBeNull();
+    // An unlinked channel is not "enabled": it contributes no column to the matrix.
+    expect(screen.getAllByRole('switch')).toHaveLength(6);
+  });
+
+  it('names the DingTalk account that will receive the pushes', () => {
+    mocks.dingtalkUsername = 'ZHANG SAN';
+
+    render(<ReminderSettingsContent />);
+
+    expect(screen.getByText('task.reminder.channel.dingtalkLinkedAs:ZHANG SAN')).toBeTruthy();
+    expect(screen.queryByText('task.reminder.channel.dingtalkDesc')).toBeNull();
+    expect(switchFor('task.reminder.channel.dingtalk')).toHaveProperty('disabled', false);
+  });
+
+  it('falls back to the generic description when no account name is published', () => {
+    render(<ReminderSettingsContent />);
+
+    expect(screen.getByText('task.reminder.channel.dingtalkDesc')).toBeTruthy();
   });
 
   it('restores the shipped defaults without persisting until save', () => {
