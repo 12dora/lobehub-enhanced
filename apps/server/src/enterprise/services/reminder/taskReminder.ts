@@ -47,6 +47,7 @@ import {
 import {
   buildReminderCron,
   describeReminderSchedule,
+  FIRE_NOW_SLOT_MS,
   fireNowSlotStart,
   formatServerNowIso,
   nextFireAt,
@@ -736,7 +737,12 @@ export class ReminderTaskService {
       config,
       now,
       reminder,
-      slotStart: reminderOccurrenceStart(config.schedule, now),
+      // A manual 立即发送 stamps `last_fired_at = now` and claims the previous 60 s; widen the
+      // tick's slot by the same window so a send in the minute before the occurrence counts as
+      // this occurrence (otherwise fireNow at 08:59:50 + tick at 09:00:00 would deliver twice).
+      slotStart: new Date(
+        reminderOccurrenceStart(config.schedule, now).getTime() - FIRE_NOW_SLOT_MS,
+      ),
       task,
     });
     if (!result) {

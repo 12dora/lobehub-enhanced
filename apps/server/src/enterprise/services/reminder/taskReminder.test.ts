@@ -366,6 +366,35 @@ describe('ReminderTaskService', () => {
       taskId: 'task_1',
     };
 
+    it('claims the tick slot one fireNow window before the occurrence (no double send after 立即发送)', async () => {
+      const dailyTask = {
+        ...reminderTask,
+        config: {
+          reminder: {
+            ...reminderTask.config.reminder,
+            once: false,
+            schedule: { kind: 'daily', time: '09:00' },
+            scheduleSummary: '每天 09:00',
+          },
+        },
+        schedulePattern: '0 9 * * *',
+      };
+      mockTaskFindById.mockResolvedValue(dailyTask);
+      mockFindByTaskId.mockResolvedValue({
+        ...profile,
+        repeatRule: { freq: 'daily', time: '09:00' },
+      });
+      const tickNow = new Date('2026-09-16T01:00:00.000Z'); // 09:00 Asia/Shanghai
+
+      await service({ deliverReminder: mockDeliverReminder }).fireForTick('task_1', tickNow);
+
+      expect(mockClaimFireSlot).toHaveBeenCalledOnce();
+      // occurrence start 09:00 − 60 s = 08:59:00 Asia/Shanghai
+      expect(mockClaimFireSlot.mock.calls[0][1].slotStart).toEqual(
+        new Date('2026-09-16T00:59:00.000Z'),
+      );
+    });
+
     it('delivers a once reminder, stamps heartbeat, and completes the task', async () => {
       mockTaskFindById.mockResolvedValue(reminderTask);
       mockFindByTaskId.mockResolvedValue(profile);
