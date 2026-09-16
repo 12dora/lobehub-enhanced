@@ -115,7 +115,13 @@ describe('ReminderModel', () => {
 
       const updated = await ReminderModel.recordFire(serverDB, {
         deliveries: [
-          { staffId: 'staff_hyq_a', status: 'sent', providerTaskId: 'task-1' },
+          {
+            staffId: 'staff_hyq_a',
+            status: 'sent',
+            providerTaskId: 'task-1',
+            robotMessageId: 'pqk-1',
+            robotStatus: 'sent',
+          },
           { failedReason: 'timeout', staffId: 'staff_other', status: 'failed' },
         ],
         firedAt,
@@ -151,6 +157,8 @@ describe('ReminderModel', () => {
         .from(reminderDeliveries)
         .where(eq(reminderDeliveries.id, received[0].id));
       expect(delivery.hiddenByRecipient).toBe(true);
+      expect(delivery.robotMessageId).toBe('pqk-1');
+      expect(delivery.robotStatus).toBe('sent');
     });
 
     it('keeps a recurring reminder scheduled when nextFireAt is provided', async () => {

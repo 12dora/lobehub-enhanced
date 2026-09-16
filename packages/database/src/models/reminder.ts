@@ -58,6 +58,9 @@ export interface ReceivedReminder {
 export interface ReminderFireDeliveryInput {
   failedReason?: string | null;
   providerTaskId?: string | null;
+  robotFailedReason?: string | null;
+  robotMessageId?: string | null;
+  robotStatus?: ReminderDeliveryStatus | null;
   staffId: string;
   status: ReminderDeliveryStatus;
   userId?: string | null;
@@ -250,6 +253,9 @@ export class ReminderModel {
           id: idGenerator('reminderDeliveries'),
           providerTaskId: delivery.providerTaskId ?? null,
           reminderId: input.reminderId,
+          robotFailedReason: delivery.robotFailedReason ?? null,
+          robotMessageId: delivery.robotMessageId ?? null,
+          robotStatus: delivery.robotStatus ?? null,
           staffId: delivery.staffId,
           status: delivery.status,
           userId: delivery.userId ?? null,

@@ -26,18 +26,23 @@ const { resolveServerRuntimeBranding } =
   await import('@/server/enterprise/services/branding/runtimeBranding');
 const {
   buildDirectoryReplaceAllInput,
+  buildNotifyRobotMarkdown,
   buildOaWorkNoticePayload,
   DINGTALK_ASYNCSEND_V2_URL,
   DINGTALK_DEPT_GET_URL,
   DINGTALK_DEPT_LISTSUB_URL,
+  DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY,
   DINGTALK_NOTIFY_TOKEN_REDIS_KEY,
   DINGTALK_OA_HEAD_BGCOLOR,
   DINGTALK_OA_HEAD_TEXT_FALLBACK,
   DINGTALK_OAPI_GETTOKEN_URL,
+  DINGTALK_ROBOT_BATCH_SEND_URL,
+  DINGTALK_ROBOT_USERID_CHUNK,
   DINGTALK_USER_LIST_URL,
   DINGTALK_WORK_NOTICE_USERID_CHUNK,
   DingTalkNotifyAppError,
   fetchDirectoryReplaceAllInput,
+  getNotifyAppNewApiToken,
   getNotifyAppToken,
   invalidateNotifyAppToken,
   listDepartments,
@@ -47,6 +52,7 @@ const {
   readNotifyAppFromProviderRow,
   resetNotifyAppStateForTest,
   resolveWorkNoticeHeadText,
+  sendRobotMessage,
   sendWorkNotice,
 } = await import('./notifyApp');
 
@@ -151,7 +157,10 @@ describe('getNotifyAppToken', () => {
   it('invalidateNotifyAppToken drops memory so the next call refetches', async () => {
     await getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 });
     await invalidateNotifyAppToken();
-    expect(mockRedisDel).toHaveBeenCalledWith(DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+    expect(mockRedisDel).toHaveBeenCalledWith(
+      DINGTALK_NOTIFY_TOKEN_REDIS_KEY,
+      DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY,
+    );
     await getNotifyAppToken({ fetchImpl: tokenFetch, now: 2_000 });
     expect(tokenFetch).toHaveBeenCalledTimes(2);
   });
@@ -170,15 +179,74 @@ describe('getNotifyAppToken', () => {
   });
 });
 
+describe('getNotifyAppNewApiToken', () => {
+  const newTokenFetch = vi.fn(async (_input: string | URL, _init?: RequestInit) =>
+    jsonResponse({ accessToken: 'new-tok', expireIn: 7200 }),
+  );
+
+  beforeEach(() => {
+    newTokenFetch
+      .mockReset()
+      .mockImplementation(async () => jsonResponse({ accessToken: 'new-tok', expireIn: 7200 }));
+  });
+
+  it('calls oauth2/accessToken with the notify credentials and caches per appKey', async () => {
+    const token = await getNotifyAppNewApiToken({ fetchImpl: newTokenFetch, now: 1_000 });
+    expect(token).toBe('new-tok');
+    expect(newTokenFetch).toHaveBeenCalledTimes(1);
+    expect(String(newTokenFetch.mock.calls[0]?.[0])).toBe(
+      'https://api.dingtalk.com/v1.0/oauth2/accessToken',
+    );
+    expect(JSON.parse(String(newTokenFetch.mock.calls[0]?.[1]?.body))).toEqual({
+      appKey: NOTIFY_APP.appKey,
+      appSecret: 'notify-secret',
+    });
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY,
+      expect.stringContaining('"token":"new-tok"'),
+      'EX',
+      expect.any(Number),
+    );
+
+    const again = await getNotifyAppNewApiToken({ fetchImpl: newTokenFetch, now: 2_000 });
+    expect(again).toBe('new-tok');
+    expect(newTokenFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse the oapi gettoken cache', async () => {
+    await getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 });
+    expect(tokenFetch).toHaveBeenCalledTimes(1);
+    await getNotifyAppNewApiToken({ fetchImpl: newTokenFetch, now: 1_000 });
+    expect(newTokenFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('probeNotifyAppToken', () => {
-  it('returns ok when gettoken succeeds', async () => {
+  it('returns ok when gettoken and oauth2/accessToken both succeed', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/gettoken')) {
+        return jsonResponse({ access_token: 'tok', errcode: 0, expires_in: 7200 });
+      }
+      if (url.includes('/oauth2/accessToken')) {
+        return jsonResponse({ accessToken: 'new-tok', expireIn: 7200 });
+      }
+      return jsonResponse({ errcode: 1, errmsg: 'unexpected' }, 400);
+    });
     const result = await probeNotifyAppToken({
       appKey: 'k',
       appSecret: 's',
-      fetchImpl: tokenFetch,
+      fetchImpl,
     });
     expect(result).toMatchObject({ errorCode: null, ok: true, robotName: null });
     expect(result.latencyMs).toEqual(expect.any(Number));
+    expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes('/gettoken'))).toBe(true);
+    expect(
+      fetchImpl.mock.calls.some((call) => String(call[0]).includes('/oauth2/accessToken')),
+    ).toBe(true);
+    expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes('/oToMessages'))).toBe(
+      false,
+    );
   });
 
   it('maps invalid secret to auth_failed', async () => {
@@ -189,6 +257,23 @@ describe('probeNotifyAppToken', () => {
       appKey: 'bad',
       appSecret: 'bad',
       fetchImpl: tokenFetch,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('auth_failed');
+  });
+
+  it('fails when gettoken works but the new-API token does not', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/gettoken')) {
+        return jsonResponse({ access_token: 'tok', errcode: 0, expires_in: 7200 });
+      }
+      return jsonResponse({ code: 'InvalidAuthentication', message: 'bad secret' }, 400);
+    });
+    const result = await probeNotifyAppToken({
+      appKey: 'k',
+      appSecret: 's',
+      fetchImpl,
     });
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe('auth_failed');
@@ -408,6 +493,167 @@ describe('sendWorkNotice', () => {
   });
 });
 
+describe('sendRobotMessage', () => {
+  const fetchImpl = vi.fn();
+
+  beforeEach(() => {
+    fetchImpl.mockReset();
+    fetchImpl.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/oauth2/accessToken')) {
+        return jsonResponse({ accessToken: 'new-tok', expireIn: 7200 });
+      }
+      if (url.includes('/oToMessages/batchSend')) {
+        return jsonResponse({ processQueryKey: 'pqk-1' });
+      }
+      return jsonResponse({ code: 'unexpected' }, 400);
+    });
+  });
+
+  it('sends sampleMarkdown with robotCode = notify AppKey', async () => {
+    const result = await sendRobotMessage(
+      {
+        markdown: {
+          text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 来自 张三',
+          title: 'AI平台 · 定时提醒',
+        },
+        staffIds: ['staff_1'],
+      },
+      { fetchImpl },
+    );
+
+    expect(result).toEqual([{ processQueryKey: 'pqk-1' }]);
+    const tokenCall = fetchImpl.mock.calls.find((entry) =>
+      String(entry[0]).includes('/oauth2/accessToken'),
+    );
+    expect(JSON.parse(String(tokenCall?.[1]?.body))).toEqual({
+      appKey: NOTIFY_APP.appKey,
+      appSecret: NOTIFY_APP.appSecret,
+    });
+    const sendCall = fetchImpl.mock.calls.find((entry) =>
+      String(entry[0]).includes('/oToMessages/batchSend'),
+    );
+    expect(String(sendCall?.[0])).toBe(DINGTALK_ROBOT_BATCH_SEND_URL);
+    expect(sendCall?.[1]?.headers).toMatchObject({
+      'x-acs-dingtalk-access-token': 'new-tok',
+    });
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
+      msgKey: 'sampleMarkdown',
+      msgParam: JSON.stringify({
+        text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 来自 张三',
+        title: 'AI平台 · 定时提醒',
+      }),
+      robotCode: NOTIFY_APP.appKey,
+      userIds: ['staff_1'],
+    });
+  });
+
+  it('sends sampleActionCard (single button) when actionCard is given', async () => {
+    await sendRobotMessage(
+      {
+        actionCard: {
+          singleTitle: '在AI 助手中查看',
+          singleUrl: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+          text: '### AI 助手 · 运行完成\n\n报表完成\n\n09:00',
+          title: 'AI 助手 · 运行完成',
+        },
+        staffIds: ['staff_1'],
+      },
+      { fetchImpl },
+    );
+    const sendCall = fetchImpl.mock.calls.find((entry) =>
+      String(entry[0]).includes('/oToMessages/batchSend'),
+    );
+    const body = JSON.parse(String(sendCall?.[1]?.body)) as {
+      msgKey: string;
+      msgParam: string;
+    };
+    expect(body.msgKey).toBe('sampleActionCard');
+    expect(JSON.parse(body.msgParam)).toEqual({
+      title: 'AI 助手 · 运行完成',
+      text: '### AI 助手 · 运行完成\n\n报表完成\n\n09:00',
+      singleTitle: '在AI 助手中查看',
+      singleURL: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+    });
+    expect(JSON.parse(body.msgParam)).not.toHaveProperty('actionTitle2');
+  });
+
+  it(`chunks userIds at ${DINGTALK_ROBOT_USERID_CHUNK}`, async () => {
+    const staffIds = Array.from({ length: 21 }, (_, index) => `u${index}`);
+    const result = await sendRobotMessage(
+      { markdown: { text: 'x', title: 't' }, staffIds },
+      { fetchImpl },
+    );
+    const sendCalls = fetchImpl.mock.calls.filter((entry) =>
+      String(entry[0]).includes('/oToMessages/batchSend'),
+    );
+    expect(sendCalls).toHaveLength(2);
+    expect(JSON.parse(String(sendCalls[0]?.[1]?.body)).userIds).toHaveLength(20);
+    expect(JSON.parse(String(sendCalls[1]?.[1]?.body)).userIds).toHaveLength(1);
+    expect(result).toHaveLength(2);
+  });
+
+  it('evicts the new-API token and retries once on InvalidAuthentication / 40014', async () => {
+    let tokenCalls = 0;
+    let sendCalls = 0;
+    fetchImpl.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/oauth2/accessToken')) {
+        tokenCalls += 1;
+        return jsonResponse({
+          accessToken: tokenCalls === 1 ? 'stale' : 'fresh',
+          expireIn: 7200,
+        });
+      }
+      if (url.includes('/oToMessages/batchSend')) {
+        sendCalls += 1;
+        if (sendCalls === 1) {
+          return jsonResponse({ code: 'InvalidAuthentication', message: 'invalid token' }, 401);
+        }
+        return jsonResponse({ processQueryKey: 'pqk-retry' });
+      }
+      return jsonResponse({ code: 'unexpected' }, 400);
+    });
+
+    await expect(
+      sendRobotMessage(
+        { markdown: { text: 'body', title: 't' }, staffIds: ['staff_1'] },
+        { fetchImpl },
+      ),
+    ).resolves.toEqual([{ processQueryKey: 'pqk-retry' }]);
+    expect(sendCalls).toBe(2);
+    expect(tokenCalls).toBe(2);
+    expect(mockRedisDel).toHaveBeenCalledWith(DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY);
+
+    const retried = fetchImpl.mock.calls.filter((entry) =>
+      String(entry[0]).includes('/oToMessages/batchSend'),
+    );
+    expect(retried[1]?.[1]?.headers).toMatchObject({
+      'x-acs-dingtalk-access-token': 'fresh',
+    });
+  });
+
+  it('evicts and retries once on oapi-style 40014 from batchSend', async () => {
+    let sendCalls = 0;
+    fetchImpl.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/oauth2/accessToken')) {
+        return jsonResponse({ accessToken: 'tok', expireIn: 7200 });
+      }
+      sendCalls += 1;
+      if (sendCalls === 1) {
+        return jsonResponse({ errcode: 40014, errmsg: '不合法的access_token' }, 200);
+      }
+      return jsonResponse({ processQueryKey: 'pqk-2' });
+    });
+
+    await expect(
+      sendRobotMessage({ markdown: { text: 'body', title: 't' }, staffIds: ['a'] }, { fetchImpl }),
+    ).resolves.toEqual([{ processQueryKey: 'pqk-2' }]);
+    expect(sendCalls).toBe(2);
+  });
+});
+
 describe('directory fetch', () => {
   const fetchImpl = vi.fn();
 
@@ -614,6 +860,22 @@ describe('buildDirectoryReplaceAllInput', () => {
       deptPath: '捷发 / 安环部',
       leafDeptId: '3',
       leafDeptName: '安环部',
+    });
+  });
+});
+
+describe('buildNotifyRobotMarkdown', () => {
+  it('uses ### <应用名> · <kind> then content and footer', () => {
+    expect(
+      buildNotifyRobotMarkdown({
+        content: '交安全报告',
+        footer: '09:00 · 来自 张三',
+        headText: 'AI平台',
+        kind: '定时提醒',
+      }),
+    ).toEqual({
+      text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 来自 张三',
+      title: 'AI平台 · 定时提醒',
     });
   });
 });

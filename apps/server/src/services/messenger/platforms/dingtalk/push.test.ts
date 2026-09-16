@@ -9,6 +9,7 @@ const mockExpire = vi.fn();
 const mockRedisGet = vi.fn();
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
 const mockSendWorkNotice = vi.fn();
+const mockSendRobotMessage = vi.fn();
 const mockResolveWorkNoticeHeadText = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
@@ -59,6 +60,7 @@ vi.mock('./notifyApp', async (importOriginal) => {
         ? (config.notifyApp ?? null)
         : null,
     resolveWorkNoticeHeadText: (...args: unknown[]) => mockResolveWorkNoticeHeadText(...args),
+    sendRobotMessage: (...args: unknown[]) => mockSendRobotMessage(...args),
     sendWorkNotice: (...args: unknown[]) => mockSendWorkNotice(...args),
   };
 });
@@ -95,6 +97,7 @@ beforeEach(() => {
   mockRedisGet.mockResolvedValue(null);
   mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
   mockSendWorkNotice.mockResolvedValue([{ taskId: 'wn-1' }]);
+  mockSendRobotMessage.mockResolvedValue([{ processQueryKey: 'pqk-1' }]);
   mockResolveWorkNoticeHeadText.mockResolvedValue('AI 助手');
 });
 
@@ -333,6 +336,18 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
       },
       { config: NOTIFY_APP },
     );
+    expect(mockSendRobotMessage).toHaveBeenCalledWith(
+      {
+        actionCard: {
+          singleTitle: '在AI 助手中查看',
+          singleUrl: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+          text: '### AI 助手 · 运行完成\n\n**报表**\n\n运行完成\n\n2026-09-16 09:00\n\n09:00',
+          title: 'AI 助手 · 运行完成',
+        },
+        staffIds: ['staff_1'],
+      },
+      { config: NOTIFY_APP },
+    );
     expect(mockIncr).toHaveBeenCalled();
   });
 
@@ -362,6 +377,16 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
     expect(payload.oa.body.form[1]?.value).toMatch(/^\d{2}:\d{2}$/);
     expect(payload.oa).not.toHaveProperty('messageUrl');
     expect(mockSendWorkNotice.mock.calls[0]?.[1]).toEqual({ config: NOTIFY_APP });
+    expect(mockSendRobotMessage).toHaveBeenCalledWith(
+      {
+        markdown: {
+          text: expect.stringContaining('### AI 助手 · 提醒'),
+          title: 'AI 助手 · 提醒',
+        },
+        staffIds: ['staff_1'],
+      },
+      { config: NOTIFY_APP },
+    );
   });
 
   it('maps long task push titles to site title · short event title and keeps the long text in content', async () => {
@@ -412,6 +437,7 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
 
     expect(result).toEqual({ status: 'sent' });
     expect(mockSendWorkNotice).not.toHaveBeenCalled();
+    expect(mockSendRobotMessage).not.toHaveBeenCalled();
     expect(sendOtoMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         msgKey: 'sampleActionCard',
@@ -419,6 +445,43 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
         userIds: ['staff_1'],
       }),
     );
+  });
+
+  it('keeps the work-notice task_id when the notify-app robot send fails', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: NOTIFY_APP,
+    } as any);
+    mockSendRobotMessage.mockRejectedValueOnce(new Error('robot boom'));
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ providerMessageId: 'wn-1', status: 'sent' });
+    expect(mockSendWorkNotice).toHaveBeenCalled();
+    expect(mockSendRobotMessage).toHaveBeenCalled();
+    expect(mockIncr).toHaveBeenCalled();
+  });
+
+  it('still sends the robot when the work notice fails and reports the work-notice error', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: NOTIFY_APP,
+    } as any);
+    mockSendWorkNotice.mockRejectedValueOnce(new Error('work boom'));
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ error: 'work boom', status: 'failed' });
+    expect(mockSendRobotMessage).toHaveBeenCalled();
+    expect(mockIncr).not.toHaveBeenCalled();
   });
 });
 

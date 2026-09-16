@@ -56,6 +56,7 @@ describe('runReminderSweep', () => {
   const listDue = vi.fn();
   const recordFire = vi.fn();
   const send = vi.fn();
+  const sendRobot = vi.fn();
   const createInbox = vi.fn();
   const resolveUserId = vi.fn();
   const getUsers = vi.fn();
@@ -76,6 +77,7 @@ describe('runReminderSweep', () => {
       recordFire,
       resolveHeadText,
       resolveUserId,
+      sendRobotMessage: sendRobot,
       sendWorkNotice: send,
       subtreeMemberStaffIds,
     });
@@ -86,6 +88,7 @@ describe('runReminderSweep', () => {
     listDue.mockResolvedValue([reminder()]);
     recordFire.mockResolvedValue(reminder({ status: 'sent' }));
     send.mockResolvedValue([{ taskId: 'task_1' }]);
+    sendRobot.mockResolvedValue([{ processQueryKey: 'pqk_1' }]);
     createInbox.mockResolvedValue(undefined);
     resolveUserId.mockResolvedValue(null);
     getUsers.mockResolvedValue([{ active: true, staffId: 'staff_hyq' }]);
@@ -137,13 +140,24 @@ describe('runReminderSweep', () => {
       head: { bgcolor: 'FF2E7CF6', text: 'AI平台' },
     });
     expect(send.mock.calls[0][0]).not.toHaveProperty('markdown');
+    expect(sendRobot).toHaveBeenCalledTimes(1);
+    const robotIds = [...(sendRobot.mock.calls[0][0].staffIds as string[])].sort();
+    expect(robotIds).toEqual(['staff_a', 'staff_b']);
+    expect(sendRobot.mock.calls[0][0].markdown).toEqual({
+      text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 来自 张三',
+      title: 'AI平台 · 定时提醒',
+    });
     const deliveries = recordFire.mock.calls[0][1].deliveries;
     expect(deliveries.map((row: { staffId: string }) => row.staffId).sort()).toEqual([
       'staff_a',
       'staff_b',
     ]);
     expect(deliveries.every((row: { status: string }) => row.status === 'sent')).toBe(true);
+    expect(deliveries.every((row: { robotStatus: string }) => row.robotStatus === 'sent')).toBe(
+      true,
+    );
     expect(deliveries[0].providerTaskId).toBe('task_1');
+    expect(deliveries[0].robotMessageId).toBe('pqk_1');
   });
 
   it('writes skipped deliveries when the notify app is missing', async () => {
@@ -155,11 +169,15 @@ describe('runReminderSweep', () => {
     await run();
 
     expect(send).not.toHaveBeenCalled();
+    expect(sendRobot).not.toHaveBeenCalled();
     expect(createInbox).not.toHaveBeenCalled();
     expect(recordFire.mock.calls[0][1].deliveries).toEqual([
       {
         failedReason: NOTIFY_APP_NOT_CONFIGURED,
         providerTaskId: null,
+        robotFailedReason: NOTIFY_APP_NOT_CONFIGURED,
+        robotMessageId: null,
+        robotStatus: 'skipped',
         staffId: 'staff_hyq',
         status: 'skipped',
         userId: 'user_mapped',
@@ -211,6 +229,9 @@ describe('runReminderSweep', () => {
       {
         failedReason: INACTIVE_DELIVERY_REASON,
         providerTaskId: null,
+        robotFailedReason: INACTIVE_DELIVERY_REASON,
+        robotMessageId: null,
+        robotStatus: 'skipped',
         staffId: 'staff_hyq',
         status: 'skipped',
         userId: null,
@@ -271,6 +292,9 @@ describe('runReminderSweep', () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0][0].staffIds).toHaveLength(100);
     expect(send.mock.calls[1][0].staffIds).toHaveLength(1);
+    expect(sendRobot).toHaveBeenCalledTimes(6);
+    expect(sendRobot.mock.calls[0][0].staffIds).toHaveLength(20);
+    expect(sendRobot.mock.calls[5][0].staffIds).toHaveLength(1);
     const deliveries = recordFire.mock.calls[0][1].deliveries as Array<{
       staffId: string;
       status: string;
@@ -296,6 +320,10 @@ describe('runReminderSweep', () => {
     ]);
     expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 定时提醒');
     expect(send.mock.calls[0][0].oa).not.toHaveProperty('messageUrl');
+    expect(sendRobot.mock.calls[0][0].markdown).toEqual({
+      text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 每周三 · 来自 张三',
+      title: 'AI平台 · 定时提醒',
+    });
   });
 
   it('resolves the site-title head text once per sweep', async () => {
@@ -323,6 +351,58 @@ describe('runReminderSweep', () => {
 
     expect(send.mock.calls[0][0].oa.head).toEqual({ bgcolor: 'FF2E7CF6', text: 'AI 助手' });
     expect(send.mock.calls[0][0].oa.body.title).toBe('AI 助手 · 定时提醒');
+  });
+
+  it('creates inbox when the robot succeeds even if the work notice fails', async () => {
+    send.mockRejectedValueOnce(new Error('work boom'));
+    resolveUserId.mockResolvedValue('user_mapped');
+
+    await run();
+
+    expect(createInbox).toHaveBeenCalledTimes(1);
+    expect(createInbox).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_mapped' }));
+  });
+
+  it('records both channels; a robot failure does not fail the work notice', async () => {
+    sendRobot.mockRejectedValueOnce(new Error('robot boom'));
+
+    await run();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sendRobot).toHaveBeenCalledTimes(1);
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      {
+        failedReason: null,
+        providerTaskId: 'task_1',
+        robotFailedReason: 'robot boom',
+        robotMessageId: null,
+        robotStatus: 'failed',
+        staffId: 'staff_hyq',
+        status: 'sent',
+        userId: null,
+      },
+    ]);
+  });
+
+  it('records both channels; a work-notice failure does not block the robot send', async () => {
+    send.mockRejectedValueOnce(new Error('work boom'));
+
+    await run();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sendRobot).toHaveBeenCalledTimes(1);
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      {
+        failedReason: 'work boom',
+        providerTaskId: null,
+        robotFailedReason: null,
+        robotMessageId: 'pqk_1',
+        robotStatus: 'sent',
+        staffId: 'staff_hyq',
+        status: 'failed',
+        userId: null,
+      },
+    ]);
   });
 });
 

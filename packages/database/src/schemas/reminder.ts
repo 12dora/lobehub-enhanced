@@ -107,6 +107,10 @@ export const reminderDeliveries = pgTable(
     failedReason: text('failed_reason'),
     /** DingTalk work-notice `task_id`. */
     providerTaskId: text('provider_task_id'),
+    /** DingTalk 服务号 robot `processQueryKey` from `oToMessages/batchSend`. */
+    robotMessageId: text('robot_message_id'),
+    robotStatus: text('robot_status').$type<ReminderDeliveryStatus>(),
+    robotFailedReason: text('robot_failed_reason'),
     hiddenByRecipient: boolean('hidden_by_recipient').notNull().default(false),
     createdAt: createdAt(),
   },

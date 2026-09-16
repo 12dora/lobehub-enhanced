@@ -15,10 +15,17 @@ export const DINGTALK_DEPT_LISTSUB_URL = `${DINGTALK_OAPI_BASE}/topapi/v2/depart
 export const DINGTALK_DEPT_GET_URL = `${DINGTALK_OAPI_BASE}/topapi/v2/department/get`;
 export const DINGTALK_USER_LIST_URL = `${DINGTALK_OAPI_BASE}/topapi/v2/user/list`;
 
+export const DINGTALK_API_BASE = 'https://api.dingtalk.com';
+export const DINGTALK_NEW_API_ACCESS_TOKEN_URL = `${DINGTALK_API_BASE}/v1.0/oauth2/accessToken`;
+export const DINGTALK_ROBOT_BATCH_SEND_URL = `${DINGTALK_API_BASE}/v1.0/robot/oToMessages/batchSend`;
+
 export const DINGTALK_NOTIFY_TOKEN_REDIS_KEY = 'messenger:dingtalk:notify-token';
+export const DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY = 'messenger:dingtalk:notify-new-token';
 /** ~100 min in-memory + Redis cache (DingTalk tokens last 7200 s). */
 export const DINGTALK_NOTIFY_TOKEN_CACHE_MS = 100 * 60 * 1000;
 export const DINGTALK_WORK_NOTICE_USERID_CHUNK = 100;
+/** New-API `oToMessages/batchSend` accepts at most 20 userIds. */
+export const DINGTALK_ROBOT_USERID_CHUNK = 20;
 export const DINGTALK_USER_LIST_PAGE_SIZE = 100;
 export const DINGTALK_DIRECTORY_ROOT_DEPT_ID = '1';
 export const DINGTALK_NOTIFY_APP_FETCH_TIMEOUT_MS = 15_000;
@@ -76,6 +83,26 @@ export type SendWorkNoticeInput =
 
 export interface SendWorkNoticeResult {
   taskId: string;
+}
+
+export interface DingTalkRobotMarkdown {
+  text: string;
+  title: string;
+}
+
+export interface DingTalkRobotActionCard {
+  singleTitle: string;
+  singleUrl: string;
+  text: string;
+  title: string;
+}
+
+export type SendRobotMessageInput =
+  | { actionCard: DingTalkRobotActionCard; staffIds: string[] }
+  | { markdown: DingTalkRobotMarkdown; staffIds: string[] };
+
+export interface SendRobotMessageResult {
+  processQueryKey?: string;
 }
 
 export interface DingTalkDirectoryDepartmentInput {
@@ -150,24 +177,51 @@ interface NotifyTokenCache {
 }
 
 let memoryToken: NotifyTokenCache | null = null;
+let memoryNewToken: NotifyTokenCache | null = null;
 
 export const resetNotifyAppStateForTest = (): void => {
   memoryToken = null;
+  memoryNewToken = null;
 };
 
-const isInvalidAccessTokenErrcode = (errcode: unknown): boolean =>
-  errcode === 40014 || errcode === '40014';
+const isInvalidAccessTokenErrcode = (errcode: unknown, errmsg?: string | null): boolean => {
+  if (errcode === 40014 || errcode === '40014' || errcode === 401 || errcode === '401') {
+    return true;
+  }
+  const code = typeof errcode === 'string' ? errcode : '';
+  if (/InvalidAuthentication|InvalidAccessToken|invalid.?token/i.test(code)) return true;
+  if (errmsg && /invalid.?access.?token|invalid.?token|不合法的access_token/i.test(errmsg)) {
+    return true;
+  }
+  return false;
+};
 
-/** Drop the in-process + Redis notify-app token so the next gettoken refetch is forced. */
-export const invalidateNotifyAppToken = async (): Promise<void> => {
-  memoryToken = null;
+const delRedisKeys = async (keys: string[]): Promise<void> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return;
   try {
-    await redis.del(DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+    await redis.del(...keys);
   } catch (error) {
-    log('invalidateNotifyAppToken failed: %O', error);
+    log('redis del failed: %O', error);
   }
+};
+
+/** Drop the in-process + Redis new-API (oauth2) token so the next refetch is forced. */
+export const invalidateNotifyAppNewApiToken = async (): Promise<void> => {
+  memoryNewToken = null;
+  await delRedisKeys([DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY]);
+};
+
+const invalidateNotifyAppOapiToken = async (): Promise<void> => {
+  memoryToken = null;
+  await delRedisKeys([DINGTALK_NOTIFY_TOKEN_REDIS_KEY]);
+};
+
+/** Drop both notify-app tokens (oapi gettoken + new-API oauth2) after credential rotation. */
+export const invalidateNotifyAppToken = async (): Promise<void> => {
+  memoryToken = null;
+  memoryNewToken = null;
+  await delRedisKeys([DINGTALK_NOTIFY_TOKEN_REDIS_KEY, DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY]);
 };
 
 const emptyToNull = (value: string | null | undefined): string | null => {
@@ -288,6 +342,23 @@ export const buildOaWorkNoticePayload = (input: {
   };
 };
 
+/**
+ * Robot markdown matching the OA body: `### <应用名> · <kind>` heading, content,
+ * then a footer line (`HH:mm · 来自 <creator>` for reminders).
+ */
+export const buildNotifyRobotMarkdown = (input: {
+  content: string;
+  footer: string;
+  headText: string;
+  kind: string;
+}): { text: string; title: string } => {
+  const title = `${input.headText} · ${input.kind}`;
+  return {
+    text: `### ${title}\n\n${input.content}\n\n${input.footer}`,
+    title,
+  };
+};
+
 const doFetch: DingTalkNotifyFetch = (input, init) => globalThis.fetch(input, init);
 
 const withTimeout = (timeoutMs: number): { abort: () => void; signal: AbortSignal } => {
@@ -392,11 +463,15 @@ const fetchOapiGettoken = async (
   return { expiresAt: now + ttlMs, token };
 };
 
-const readRedisToken = async (appKey: string, now: number): Promise<NotifyTokenCache | null> => {
+const readRedisToken = async (
+  appKey: string,
+  now: number,
+  redisKey: string,
+): Promise<NotifyTokenCache | null> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return null;
   try {
-    const raw = await redis.get(DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+    const raw = await redis.get(redisKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return null;
@@ -411,13 +486,17 @@ const readRedisToken = async (appKey: string, now: number): Promise<NotifyTokenC
   }
 };
 
-const writeRedisToken = async (cache: NotifyTokenCache, now: number): Promise<void> => {
+const writeRedisToken = async (
+  cache: NotifyTokenCache,
+  now: number,
+  redisKey: string,
+): Promise<void> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return;
   const ttlSeconds = Math.max(1, Math.floor((cache.expiresAt - now) / 1000));
   try {
     await redis.set(
-      DINGTALK_NOTIFY_TOKEN_REDIS_KEY,
+      redisKey,
       JSON.stringify({ appKey: cache.appKey, expiresAt: cache.expiresAt, token: cache.token }),
       'EX',
       ttlSeconds,
@@ -448,7 +527,7 @@ export const getNotifyAppToken = async (params?: {
     if (memoryToken && memoryToken.appKey === config.appKey && memoryToken.expiresAt > now) {
       return memoryToken.token;
     }
-    const redisToken = await readRedisToken(config.appKey, now);
+    const redisToken = await readRedisToken(config.appKey, now, DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
     if (redisToken) {
       memoryToken = redisToken;
       return redisToken.token;
@@ -457,7 +536,128 @@ export const getNotifyAppToken = async (params?: {
 
   const fetched = await fetchOapiGettoken(config.appKey, config.appSecret, fetchImpl, now);
   memoryToken = { appKey: config.appKey, expiresAt: fetched.expiresAt, token: fetched.token };
-  await writeRedisToken(memoryToken, now);
+  await writeRedisToken(memoryToken, now, DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+  return fetched.token;
+};
+
+const tokenTtlMs = (expiresInSec: number): number =>
+  Math.min(DINGTALK_NOTIFY_TOKEN_CACHE_MS, Math.max(0, expiresInSec * 1000 - 5 * 60_000));
+
+const throwIfNewApiFailed = (
+  method: string,
+  responseOk: boolean,
+  status: number,
+  body: unknown,
+): Record<string, unknown> => {
+  const record = isRecord(body) ? body : null;
+  const errcode = errcodeFromRecord(record) ?? (responseOk ? null : status);
+  const errmsg = errmsgFromRecord(record);
+  const code = record?.code;
+  const isCodeFailure =
+    code !== undefined &&
+    code !== null &&
+    code !== 0 &&
+    code !== '0' &&
+    code !== 'ok' &&
+    code !== 'OK';
+  if (!responseOk || isCodeFailure || isDingTalkErrcodeFailure(errcodeFromRecord(record))) {
+    throw new DingTalkNotifyAppError(
+      `DingTalk ${method} failed: ${errcode ?? `http_${status}`} ${errmsg ?? ''}`.trim(),
+      errcode,
+      errmsg,
+    );
+  }
+  return record ?? {};
+};
+
+const fetchNewApiAccessToken = async (
+  appKey: string,
+  appSecret: string,
+  fetchImpl: DingTalkNotifyFetch,
+  now: number,
+): Promise<{ expiresAt: number; token: string }> => {
+  const timeout = withTimeout(DINGTALK_NOTIFY_APP_FETCH_TIMEOUT_MS);
+
+  let response: Pick<Response, 'ok' | 'json' | 'status'>;
+  try {
+    response = await fetchImpl(DINGTALK_NEW_API_ACCESS_TOKEN_URL, {
+      body: JSON.stringify({ appKey, appSecret }),
+      cache: 'no-store',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      method: 'POST',
+      redirect: 'error',
+      signal: timeout.signal,
+    });
+  } catch (error) {
+    timeout.abort();
+    if (error instanceof DingTalkNotifyAppError) throw error;
+    throw new DingTalkNotifyAppError(
+      `DingTalk oauth2/accessToken network error: ${error instanceof Error ? error.message : String(error)}`,
+      'network',
+      error instanceof Error ? error.message : 'network error',
+    );
+  } finally {
+    timeout.abort();
+  }
+
+  const body = await parseJson(response);
+  const record = throwIfNewApiFailed('oauth2/accessToken', response.ok, response.status, body);
+  const token = pickTrimmedString(record.accessToken) ?? pickTrimmedString(record.access_token);
+  if (!token) {
+    throw new DingTalkNotifyAppError(
+      'DingTalk oauth2/accessToken missing accessToken',
+      'missing_token',
+    );
+  }
+
+  const expiresIn =
+    typeof record.expireIn === 'number' && Number.isFinite(record.expireIn)
+      ? record.expireIn
+      : typeof record.expires_in === 'number' && Number.isFinite(record.expires_in)
+        ? record.expires_in
+        : 7200;
+  return { expiresAt: now + tokenTtlMs(expiresIn), token };
+};
+
+export const getNotifyAppNewApiToken = async (params?: {
+  config?: DingTalkNotifyAppConfig | null;
+  fetchImpl?: DingTalkNotifyFetch;
+  now?: number;
+  skipCache?: boolean;
+}): Promise<string> => {
+  const config = params?.config === undefined ? await resolveNotifyAppConfig() : params.config;
+  if (!config) {
+    throw new DingTalkNotifyAppError(
+      'DingTalk notify app is not configured',
+      'notify_app_not_configured',
+    );
+  }
+
+  const now = params?.now ?? Date.now();
+  const fetchImpl = params?.fetchImpl ?? doFetch;
+
+  if (!params?.skipCache) {
+    if (
+      memoryNewToken &&
+      memoryNewToken.appKey === config.appKey &&
+      memoryNewToken.expiresAt > now
+    ) {
+      return memoryNewToken.token;
+    }
+    const redisToken = await readRedisToken(
+      config.appKey,
+      now,
+      DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY,
+    );
+    if (redisToken) {
+      memoryNewToken = redisToken;
+      return redisToken.token;
+    }
+  }
+
+  const fetched = await fetchNewApiAccessToken(config.appKey, config.appSecret, fetchImpl, now);
+  memoryNewToken = { appKey: config.appKey, expiresAt: fetched.expiresAt, token: fetched.token };
+  await writeRedisToken(memoryNewToken, now, DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY);
   return fetched.token;
 };
 
@@ -474,15 +674,58 @@ export interface NotifyAppTokenProbeResult {
 const AUTH_FAILED_PATTERN =
   /idorsecret|appkey|appsecret|invalidauthentication|invalidclient|invalid.*secret|invalid.*key/i;
 
+const probeFailure = (error: unknown, startedAt: number): NotifyAppTokenProbeResult => {
+  const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+  if (error instanceof DingTalkNotifyAppError) {
+    const detail = `${error.errcode ?? ''} ${error.errmsg ?? error.message}`;
+    const errorCode: NotifyAppProbeErrorCode =
+      error.errcode === 'network'
+        ? 'network'
+        : AUTH_FAILED_PATTERN.test(detail)
+          ? 'auth_failed'
+          : 'unknown';
+    return {
+      errorCode,
+      errorMessage: clipMessage(error.errmsg ?? error.message),
+      latencyMs,
+      ok: false,
+      robotName: null,
+    };
+  }
+  return {
+    errorCode: 'network',
+    errorMessage: clipMessage(error instanceof Error ? error.message : 'network error'),
+    latencyMs,
+    ok: false,
+    robotName: null,
+  };
+};
+
+/**
+ * Admin 「测试」 for the notify app. Probes oapi `/gettoken` (work notice) and
+ * new-API `/v1.0/oauth2/accessToken` (服务号 robot send). `oToMessages/batchSend`
+ * is not called — that would send a real 1:1 message.
+ */
 export const probeNotifyAppToken = async (params: {
   appKey: string;
   appSecret: string;
   fetchImpl?: DingTalkNotifyFetch;
 }): Promise<NotifyAppTokenProbeResult> => {
   const startedAt = performance.now();
+  const config = { agentId: '0', appKey: params.appKey, appSecret: params.appSecret };
   try {
     await getNotifyAppToken({
-      config: { agentId: '0', appKey: params.appKey, appSecret: params.appSecret },
+      config,
+      fetchImpl: params.fetchImpl,
+      skipCache: true,
+    });
+  } catch (error) {
+    return probeFailure(error, startedAt);
+  }
+
+  try {
+    await getNotifyAppNewApiToken({
+      config,
       fetchImpl: params.fetchImpl,
       skipCache: true,
     });
@@ -494,30 +737,7 @@ export const probeNotifyAppToken = async (params: {
       robotName: null,
     };
   } catch (error) {
-    const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
-    if (error instanceof DingTalkNotifyAppError) {
-      const detail = `${error.errcode ?? ''} ${error.errmsg ?? error.message}`;
-      const errorCode: NotifyAppProbeErrorCode =
-        error.errcode === 'network'
-          ? 'network'
-          : AUTH_FAILED_PATTERN.test(detail)
-            ? 'auth_failed'
-            : 'unknown';
-      return {
-        errorCode,
-        errorMessage: clipMessage(error.errmsg ?? error.message),
-        latencyMs,
-        ok: false,
-        robotName: null,
-      };
-    }
-    return {
-      errorCode: 'network',
-      errorMessage: clipMessage(error instanceof Error ? error.message : 'network error'),
-      latencyMs,
-      ok: false,
-      robotName: null,
-    };
+    return probeFailure(error, startedAt);
   }
 };
 
@@ -569,10 +789,13 @@ const oapiPostWithTokenRetry = async (
   try {
     return await oapiPost(url, ctx.tokenRef.current, body, ctx.fetchImpl);
   } catch (error) {
-    if (!(error instanceof DingTalkNotifyAppError) || !isInvalidAccessTokenErrcode(error.errcode)) {
+    if (
+      !(error instanceof DingTalkNotifyAppError) ||
+      !isInvalidAccessTokenErrcode(error.errcode, error.errmsg)
+    ) {
       throw error;
     }
-    await invalidateNotifyAppToken();
+    await invalidateNotifyAppOapiToken();
     ctx.tokenRef.current = await getNotifyAppToken({
       config: ctx.config,
       fetchImpl: ctx.fetchImpl,
@@ -690,6 +913,148 @@ export const sendWorkNotice = async (
       throw new DingTalkNotifyAppError('DingTalk asyncsend_v2 missing task_id', 'missing_task_id');
     }
     results.push({ taskId });
+  }
+
+  return results;
+};
+
+const extractProcessQueryKey = (data: unknown): string | undefined => {
+  if (!isRecord(data)) return undefined;
+  if (typeof data.processQueryKey === 'string' && data.processQueryKey) {
+    return data.processQueryKey;
+  }
+  const keys = data.processQueryKeys;
+  if (Array.isArray(keys) && typeof keys[0] === 'string' && keys[0]) return keys[0];
+  if (isRecord(data.result)) return extractProcessQueryKey(data.result);
+  return undefined;
+};
+
+const buildRobotMsg = (input: SendRobotMessageInput): { msgKey: string; msgParam: string } => {
+  if ('actionCard' in input) {
+    const { actionCard } = input;
+    // One button → sampleActionCard. sampleActionCard2 requires two buttons and
+    // rendered a dummy second button in the 2026-09-15 live test (v1.4.2).
+    return {
+      msgKey: 'sampleActionCard',
+      msgParam: JSON.stringify({
+        title: actionCard.title,
+        text: actionCard.text,
+        singleTitle: actionCard.singleTitle,
+        singleURL: actionCard.singleUrl,
+      }),
+    };
+  }
+  return {
+    msgKey: 'sampleMarkdown',
+    msgParam: JSON.stringify({ text: input.markdown.text, title: input.markdown.title }),
+  };
+};
+
+const newApiPost = async (
+  url: string,
+  accessToken: string,
+  body: Record<string, unknown>,
+  fetchImpl: DingTalkNotifyFetch,
+): Promise<Record<string, unknown>> => {
+  const timeout = withTimeout(DINGTALK_NOTIFY_APP_FETCH_TIMEOUT_MS);
+
+  let response: Pick<Response, 'ok' | 'json' | 'status'>;
+  try {
+    response = await fetchImpl(url, {
+      body: JSON.stringify(body),
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'x-acs-dingtalk-access-token': accessToken,
+      },
+      method: 'POST',
+      redirect: 'error',
+      signal: timeout.signal,
+    });
+  } catch (error) {
+    timeout.abort();
+    if (error instanceof DingTalkNotifyAppError) throw error;
+    throw new DingTalkNotifyAppError(
+      `DingTalk POST ${url} network error: ${error instanceof Error ? error.message : String(error)}`,
+      'network',
+      error instanceof Error ? error.message : 'network error',
+    );
+  } finally {
+    timeout.abort();
+  }
+
+  const parsed = await parseJson(response);
+  return throwIfNewApiFailed(url, response.ok, response.status, parsed);
+};
+
+const newApiPostWithTokenRetry = async (
+  url: string,
+  body: Record<string, unknown>,
+  ctx: {
+    config: DingTalkNotifyAppConfig;
+    fetchImpl: DingTalkNotifyFetch;
+    tokenRef: { current: string };
+  },
+): Promise<Record<string, unknown>> => {
+  try {
+    return await newApiPost(url, ctx.tokenRef.current, body, ctx.fetchImpl);
+  } catch (error) {
+    if (
+      !(error instanceof DingTalkNotifyAppError) ||
+      !isInvalidAccessTokenErrcode(error.errcode, error.errmsg)
+    ) {
+      throw error;
+    }
+    await invalidateNotifyAppNewApiToken();
+    ctx.tokenRef.current = await getNotifyAppNewApiToken({
+      config: ctx.config,
+      fetchImpl: ctx.fetchImpl,
+      skipCache: true,
+    });
+    return newApiPost(url, ctx.tokenRef.current, body, ctx.fetchImpl);
+  }
+};
+
+/**
+ * 1:1 send from the 服务号 robot (`robotCode` = notify AppKey). Send-only —
+ * AIHub never subscribes to this robot's Stream.
+ */
+export const sendRobotMessage = async (
+  input: SendRobotMessageInput,
+  params?: {
+    config?: DingTalkNotifyAppConfig | null;
+    fetchImpl?: DingTalkNotifyFetch;
+  },
+): Promise<SendRobotMessageResult[]> => {
+  const config = params?.config === undefined ? await resolveNotifyAppConfig() : params.config;
+  if (!config) {
+    throw new DingTalkNotifyAppError(
+      'DingTalk notify app is not configured',
+      'notify_app_not_configured',
+    );
+  }
+
+  const staffIds = uniqueStaffIds(input.staffIds);
+  if (staffIds.length === 0) return [];
+
+  const fetchImpl = params?.fetchImpl ?? doFetch;
+  const tokenRef = { current: await getNotifyAppNewApiToken({ config, fetchImpl }) };
+  const { msgKey, msgParam } = buildRobotMsg(input);
+  const results: SendRobotMessageResult[] = [];
+
+  for (const chunk of chunkIds(staffIds, DINGTALK_ROBOT_USERID_CHUNK)) {
+    const record = await newApiPostWithTokenRetry(
+      DINGTALK_ROBOT_BATCH_SEND_URL,
+      {
+        msgKey,
+        msgParam,
+        robotCode: config.appKey,
+        userIds: chunk,
+      },
+      { config, fetchImpl, tokenRef },
+    );
+    results.push({ processQueryKey: extractProcessQueryKey(record) });
   }
 
   return results;

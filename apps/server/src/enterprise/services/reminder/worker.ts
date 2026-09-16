@@ -30,11 +30,14 @@ import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis'
 import { buildDingTalkIdentityEmail } from '@/server/services/messenger/platforms/dingtalk/const';
 import type { DingTalkWorkNoticeOa } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 import {
+  buildNotifyRobotMarkdown,
   buildOaWorkNoticePayload,
   DINGTALK_OA_HEAD_TEXT_FALLBACK,
+  DINGTALK_ROBOT_USERID_CHUNK,
   DINGTALK_WORK_NOTICE_USERID_CHUNK,
   resolveNotifyAppConfig,
   resolveWorkNoticeHeadText,
+  sendRobotMessage,
   sendWorkNotice,
 } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 
@@ -133,6 +136,7 @@ export interface ReminderSweepDeps {
   recordFire?: typeof ReminderModel.recordFire;
   resolveHeadText?: () => Promise<string>;
   resolveUserId?: (staffId: string) => Promise<string | null>;
+  sendRobotMessage?: typeof sendRobotMessage;
   sendWorkNotice?: typeof sendWorkNotice;
   subtreeMemberStaffIds?: (deptId: string) => Promise<string[]>;
 }
@@ -211,7 +215,7 @@ const expandStaffIds = async (
   return { activeIds: [...activeIds], inactiveIds: [...inactiveIds] };
 };
 
-const deliverChunk = async (input: {
+const deliverWorkNoticeChunk = async (input: {
   oa: DingTalkWorkNoticeOa;
   send: typeof sendWorkNotice;
   staffIds: string[];
@@ -235,6 +239,34 @@ const deliverChunk = async (input: {
   }
 };
 
+const deliverRobotChunk = async (input: {
+  markdown: { text: string; title: string };
+  send: typeof sendRobotMessage;
+  staffIds: string[];
+}): Promise<{
+  failedReason?: string;
+  processQueryKey?: string;
+  staffIds: string[];
+  status: 'failed' | 'sent';
+}> => {
+  try {
+    const results = await input.send({
+      markdown: input.markdown,
+      staffIds: input.staffIds,
+    });
+    return {
+      processQueryKey: results[0]?.processQueryKey,
+      staffIds: input.staffIds,
+      status: 'sent',
+    };
+  } catch (error) {
+    const failedReason =
+      error instanceof Error && error.message ? error.message.slice(0, 500) : 'send_failed';
+    log('sendRobotMessage failed: %s', failedReason);
+    return { failedReason, staffIds: input.staffIds, status: 'failed' };
+  }
+};
+
 export const buildReminderWorkNoticeOa = (input: {
   content: string;
   creatorName: string;
@@ -254,6 +286,27 @@ export const buildReminderWorkNoticeOa = (input: {
     ],
     headText: input.headText,
     title: formatReminderOaBodyTitle(input.headText),
+  });
+};
+
+export const buildReminderRobotMarkdown = (input: {
+  content: string;
+  creatorName: string;
+  firedAt: Date;
+  headText: string;
+  repeatRule?: ReminderRepeatRule | null;
+  timezone: string;
+}): { text: string; title: string } => {
+  const clock = formatFireClock(input.firedAt, input.timezone);
+  const summary = formatRepeatSummary(input.repeatRule ?? null);
+  const footer = summary
+    ? `${clock} · ${summary} · 来自 ${input.creatorName}`
+    : `${clock} · 来自 ${input.creatorName}`;
+  return buildNotifyRobotMarkdown({
+    content: input.content,
+    footer,
+    headText: input.headText,
+    kind: REMINDER_OA_BODY_TITLE,
   });
 };
 
@@ -285,6 +338,7 @@ export const runReminderSweep = async (
       ? await (deps.resolveHeadText ?? resolveWorkNoticeHeadText)()
       : DINGTALK_OA_HEAD_TEXT_FALLBACK;
     const send = deps.sendWorkNotice ?? sendWorkNotice;
+    const sendRobot = deps.sendRobotMessage ?? sendRobotMessage;
     const recordFire = deps.recordFire ?? ReminderModel.recordFire;
     const getUsers =
       deps.getUsers ??
@@ -320,6 +374,7 @@ export const runReminderSweep = async (
           recordFire,
           resolveUserId,
           send,
+          sendRobot,
           subtreeMemberStaffIds,
         });
         counts.fired += 1;
@@ -353,6 +408,7 @@ const fireOneReminder = async (
     recordFire: typeof ReminderModel.recordFire;
     resolveUserId: (staffId: string) => Promise<string | null>;
     send: typeof sendWorkNotice;
+    sendRobot: typeof sendRobotMessage;
     subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
   },
 ): Promise<void> => {
@@ -373,6 +429,14 @@ const fireOneReminder = async (
     repeatRule: reminder.repeatRule ?? null,
     timezone: tz,
   });
+  const robotMarkdown = buildReminderRobotMarkdown({
+    content: reminder.content,
+    creatorName: reminder.creatorName,
+    firedAt: deps.now,
+    headText: deps.headText,
+    repeatRule: reminder.repeatRule ?? null,
+    timezone: tz,
+  });
   const userIds = new Map<string, string>();
   await Promise.all(
     [...staffIds, ...inactiveIds].map(async (staffId) => {
@@ -381,9 +445,16 @@ const fireOneReminder = async (
     }),
   );
 
-  const deliveries: ReminderFireDeliveryInput[] = inactiveIds.map((staffId) => ({
-    failedReason: INACTIVE_DELIVERY_REASON,
+  const skippedChannel = (reason: string) => ({
+    failedReason: reason,
     providerTaskId: null,
+    robotFailedReason: reason,
+    robotMessageId: null,
+    robotStatus: 'skipped' as const,
+  });
+
+  const deliveries: ReminderFireDeliveryInput[] = inactiveIds.map((staffId) => ({
+    ...skippedChannel(INACTIVE_DELIVERY_REASON),
     staffId,
     status: 'skipped' as const,
     userId: userIds.get(staffId) ?? null,
@@ -412,25 +483,58 @@ const fireOneReminder = async (
   if (!deps.notifyConfigured) {
     for (const staffId of staffIds) {
       deliveries.push({
-        failedReason: NOTIFY_APP_NOT_CONFIGURED,
-        providerTaskId: null,
+        ...skippedChannel(NOTIFY_APP_NOT_CONFIGURED),
         staffId,
         status: 'skipped',
         userId: userIds.get(staffId) ?? null,
       });
     }
   } else {
-    for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
-      const result = await deliverChunk({ oa, send: deps.send, staffIds: chunk });
-      for (const staffId of result.staffIds) {
-        deliveries.push({
-          failedReason: result.failedReason ?? null,
-          providerTaskId: result.taskId ?? null,
-          staffId,
-          status: result.status,
-          userId: userIds.get(staffId) ?? null,
-        });
-      }
+    const workByStaff = new Map<
+      string,
+      { failedReason?: string; status: 'failed' | 'sent'; taskId?: string }
+    >();
+    const robotByStaff = new Map<
+      string,
+      { failedReason?: string; processQueryKey?: string; status: 'failed' | 'sent' }
+    >();
+
+    await Promise.all([
+      (async () => {
+        for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
+          const result = await deliverWorkNoticeChunk({ oa, send: deps.send, staffIds: chunk });
+          for (const staffId of result.staffIds) {
+            workByStaff.set(staffId, result);
+          }
+        }
+      })(),
+      (async () => {
+        for (const chunk of chunkStaffIds(staffIds, DINGTALK_ROBOT_USERID_CHUNK)) {
+          const result = await deliverRobotChunk({
+            markdown: robotMarkdown,
+            send: deps.sendRobot,
+            staffIds: chunk,
+          });
+          for (const staffId of result.staffIds) {
+            robotByStaff.set(staffId, result);
+          }
+        }
+      })(),
+    ]);
+
+    for (const staffId of staffIds) {
+      const work = workByStaff.get(staffId);
+      const robot = robotByStaff.get(staffId);
+      deliveries.push({
+        failedReason: work?.failedReason ?? null,
+        providerTaskId: work?.taskId ?? null,
+        robotFailedReason: robot?.failedReason ?? null,
+        robotMessageId: robot?.processQueryKey ?? null,
+        robotStatus: robot?.status ?? 'failed',
+        staffId,
+        status: work?.status ?? 'failed',
+        userId: userIds.get(staffId) ?? null,
+      });
     }
   }
 
@@ -446,7 +550,8 @@ const fireOneReminder = async (
 
   const dedupeKey = `reminder:${reminder.id}:${firedAt.toISOString()}`;
   for (const delivery of deliveries) {
-    if (delivery.status !== 'sent' || !delivery.userId) continue;
+    const delivered = delivery.status === 'sent' || delivery.robotStatus === 'sent';
+    if (!delivered || !delivery.userId) continue;
     try {
       await deps.createInbox({
         content: inboxBody.text,

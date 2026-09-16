@@ -176,6 +176,13 @@
       "when": 1789535329978,
       "tag": "0032_reminders_directory",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789544352071,
+      "tag": "0033_reminder_deliveries_robot",
+      "breakpoints": true
     }
   ]
 }

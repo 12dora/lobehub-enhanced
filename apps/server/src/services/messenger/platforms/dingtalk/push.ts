@@ -11,9 +11,11 @@ import { registerMessengerPushProvider } from '../../push';
 import { resolveDingTalkBrandingDisplayName } from './branding';
 import { DINGTALK_CORP_ID_KEY, formatDingTalkViewInBrandingLabel } from './const';
 import {
+  buildNotifyRobotMarkdown,
   buildOaWorkNoticePayload,
   readNotifyAppFromMessengerConfig,
   resolveWorkNoticeHeadText,
+  sendRobotMessage,
   sendWorkNotice,
 } from './notifyApp';
 import { incrementDingTalkDailyCounter } from './redis';
@@ -231,19 +233,72 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
       const notifyApp = readNotifyAppFromMessengerConfig(config);
       if (notifyApp) {
         const headText = await resolveWorkNoticeHeadText();
+        const kind = shortTaskEventTitle(title);
+        const clock = clockFromMarkdownOrNow(markdown, new Date());
         const oa = buildOaWorkNoticePayload({
           content: markdown,
           form: [
             { key: '任务', value: taskNameFromPushMessage(title, markdown) },
-            { key: '时间', value: clockFromMarkdownOrNow(markdown, new Date()) },
+            { key: '时间', value: clock },
           ],
           headText,
           messageUrl: oaMessageUrl(wrappedUrl),
           title: formatTaskOaBodyTitle(headText, title),
         });
-        const sent = await sendWorkNotice({ oa, staffIds: [staffId] }, { config: notifyApp });
+        const robotMarkdown = buildNotifyRobotMarkdown({
+          content: markdown,
+          footer: clock,
+          headText,
+          kind,
+        });
+
+        let workError: unknown;
+        let taskId: string | undefined;
+        try {
+          const sent = await sendWorkNotice({ oa, staffIds: [staffId] }, { config: notifyApp });
+          taskId = sent[0]?.taskId;
+        } catch (error) {
+          workError = error;
+          log('work notice failed user=%s: %O', params.userId, error);
+        }
+
+        try {
+          if (wrappedUrl) {
+            await sendRobotMessage(
+              {
+                actionCard: {
+                  singleTitle: formatDingTalkViewInBrandingLabel(headText),
+                  singleUrl: wrappedUrl,
+                  text: robotMarkdown.text,
+                  title: robotMarkdown.title,
+                },
+                staffIds: [staffId],
+              },
+              { config: notifyApp },
+            );
+          } else {
+            await sendRobotMessage(
+              { markdown: robotMarkdown, staffIds: [staffId] },
+              { config: notifyApp },
+            );
+          }
+        } catch (error) {
+          console.warn('[dingtalk-push] notify-app robot send failed', {
+            errorClass: error instanceof Error ? error.name : 'UnknownError',
+            message: error instanceof Error ? error.message : String(error),
+            userId: params.userId,
+          });
+          log('notify-app robot send failed user=%s: %O', params.userId, error);
+        }
+
+        if (workError) {
+          return {
+            error: workError instanceof Error ? workError.message : String(workError),
+            status: 'failed',
+          };
+        }
         await incrementDingTalkDailyCounter('pushes');
-        return { providerMessageId: sent[0]?.taskId, status: 'sent' };
+        return { providerMessageId: taskId, status: 'sent' };
       }
 
       const api = new DingTalkApiClient(config.clientId, config.clientSecret);
