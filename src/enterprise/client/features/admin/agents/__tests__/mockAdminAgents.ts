@@ -475,7 +475,8 @@ export const createMockAdminAgentsClient = (): AdminAgentsClient => {
      * Take over the default assistant: the `default-inbox` Agent and its mandatory global
      * assignment appear together, already published. Refuses a second default, like the server.
      */
-    provisionDefaultInbox: async ({ locale }) => {
+    provisionDefaultInbox: async (input) => {
+      const locale = input?.locale;
       if ([...records.values()].some(({ identity }) => identity.isDefault)) {
         throw new Error('PLATFORM_AGENT_DEFAULT_ALREADY_EXISTS');
       }
@@ -546,7 +547,8 @@ export const createMockAdminAgentsClient = (): AdminAgentsClient => {
      * Take over the task assistant, mirroring the server: idempotent, so a second call hands back
      * the row that is already there instead of creating a second reserved identity.
      */
-    provisionTaskManager: async ({ locale }) => {
+    provisionTaskManager: async (input) => {
+      const locale = input?.locale;
       const existing = [...records.values()].find(
         ({ identity }) => identity.systemKey === PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
       );

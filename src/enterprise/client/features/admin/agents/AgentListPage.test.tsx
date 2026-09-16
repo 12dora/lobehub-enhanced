@@ -1132,7 +1132,7 @@ describe('AgentListPage with the real AsyncBoundary', () => {
       // and a second reserved key the platform may ship later is excluded by the same rule.
       const rows = [
         item('agent-task-manager', { systemKey: 'task-manager' }),
-        item('agent-future-system', { systemKey: 'some-future-key' }),
+        item('agent-future-system', { systemKey: 'some-future-key' as never }),
         item('agent-2'),
       ];
       mocks.list = pagination({ boundaryData: rows, items: rows });
