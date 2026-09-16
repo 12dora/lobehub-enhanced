@@ -5,6 +5,17 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.6.1 (2026-09-16)
+
+1.6.0 上线后的跟进。
+
+#### 🐛 Fixes
+
+- 定时提醒推送标题改为「<站点标题> · <发起人>提醒你：<摘要>」（工具调用带 ≤12 字的 `title`，缺省截取正文），不再是无信息量的「定时提醒」。
+- 提醒任务不再在到点之前的 cron 容差窗内提前触发（19:28 的提醒曾在 19:25 的扫描就发出）。
+- `createReminder` 的 schedule 入参容忍空字符串/空数组并归一 `H:mm`/`HH:mm:ss`，缺 `time` 时返回明确的字段提示，减少一轮模型重试。
+- 任务助手自动开通时 `DEFAULT_LANG` 为空默认中文名「任务助手」。
+
 ## 1.6.0 (2026-09-16)
 
 定时提醒改为「提醒即任务」，任务助手纳入平台助理管理，提醒工具常驻并改为单次调用。

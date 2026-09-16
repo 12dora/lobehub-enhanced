@@ -811,7 +811,7 @@ export class ReminderTaskService {
         now: input.now,
         persistMode: 'deliveries',
         recipients: input.reminder.recipients,
-        title: input.task.name,
+        title: input.task.name ?? undefined,
       });
     } catch (error) {
       log('deliver after claim failed reminder=%s %O', claimed.id, error);
