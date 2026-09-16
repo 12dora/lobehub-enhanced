@@ -32,8 +32,15 @@ const loadReminderService = async (): Promise<IReminderService> => {
   // resolve a dynamic `@/` import from inside a workspace package.
   return {
     cancel: (taskId) => reminderService.cancel(taskId),
-    create: async (input) =>
-      requireResult(await reminderService.create(input), 'Create reminder returned no result'),
+    create: async ({ createdByAgentId, topicId, ...input }) =>
+      requireResult(
+        await reminderService.create({
+          ...input,
+          createdByAgentId: createdByAgentId ?? undefined,
+          topicId: topicId ?? undefined,
+        }),
+        'Create reminder returned no result',
+      ),
     listCreated: async (opts) =>
       (await reminderService.listCreated({
         includeFinished: opts?.includeFinished,
