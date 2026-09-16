@@ -115,7 +115,7 @@ describe('createAuthSlice', () => {
       expect(mockBetterAuthClient.signOut).toHaveBeenCalled();
     });
 
-    it('fetches end-session before local revoke, then POSTs Authentik form fields', async () => {
+    it('fetches end-session before local revoke, then navigates to Authentik with GET query fields', async () => {
       const order: string[] = [];
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
         const url = String(input);
@@ -135,9 +135,7 @@ describe('createAuthSlice', () => {
           options?.fetchOptions?.onSuccess?.();
         },
       );
-      const submit = vi.fn();
-      const originalSubmit = HTMLFormElement.prototype.submit;
-      HTMLFormElement.prototype.submit = submit;
+      const restoreLocation = stubLocationHref();
 
       const { result } = renderHook(() => useUserStore());
       let redirected: boolean | undefined;
@@ -156,18 +154,15 @@ describe('createAuthSlice', () => {
           method: 'GET',
         }),
       );
-      expect(submit).toHaveBeenCalledOnce();
-      const form = document.querySelector('form');
-      expect(form?.getAttribute('action')).toBe(endSessionPayload.url);
-      expect(form?.getAttribute('method')).toBe('POST');
-      expect(
-        [...(form?.querySelectorAll('input') ?? [])].map((input) => [input.name, input.value]),
-      ).toEqual([
+      // A cross-site POST would hit Authentik's CSRF check; the navigation must be a GET.
+      expect(document.querySelector('form')).toBeNull();
+      const target = new URL(window.location.href);
+      expect(`${target.origin}${target.pathname}`).toBe(endSessionPayload.url);
+      expect([...target.searchParams.entries()]).toEqual([
         ['id_token_hint', 'raw-id-token'],
         ['post_logout_redirect_uri', 'https://chat.example.test/signin'],
       ]);
-      HTMLFormElement.prototype.submit = originalSubmit;
-      form?.remove();
+      restoreLocation();
     });
 
     it('falls back to /signin when end-session is unavailable', async () => {
@@ -227,34 +222,29 @@ describe('createAuthSlice', () => {
       restoreLocation();
     });
 
-    it('only posts id_token_hint and post_logout_redirect_uri even when extra fields are returned', async () => {
-      const submit = vi.fn();
-      const originalSubmit = HTMLFormElement.prototype.submit;
-      HTMLFormElement.prototype.submit = submit;
+    it('only sends id_token_hint and post_logout_redirect_uri even when extra fields are returned', async () => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
         if (String(input).includes('/api/auth/oidc/end-session')) {
           return jsonResponse({
             ...endSessionPayload,
-            fields: { ...endSessionPayload.fields, foo: 'should-not-become-an-input' },
+            fields: { ...endSessionPayload.fields, foo: 'should-not-become-a-param' },
           });
         }
         return jsonResponse({ ok: true });
       });
       mockSignOutOnSuccess();
+      const restoreLocation = stubLocationHref();
 
       const { result } = renderHook(() => useUserStore());
       await act(async () => {
         await result.current.logout();
       });
 
-      const form = document.querySelector('form');
-      expect([...(form?.querySelectorAll('input') ?? [])].map((input) => input.name)).toEqual([
+      expect([...new URL(window.location.href).searchParams.keys()]).toEqual([
         'id_token_hint',
         'post_logout_redirect_uri',
       ]);
-
-      HTMLFormElement.prototype.submit = originalSubmit;
-      form?.remove();
+      restoreLocation();
     });
 
     it.each([

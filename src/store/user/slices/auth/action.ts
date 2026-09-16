@@ -75,20 +75,11 @@ const fetchOidcEndSessionForm = async (): Promise<OidcEndSessionForm | null> => 
   }
 };
 
-const submitHiddenPostForm = (url: string, fields: Record<string, string>): void => {
-  const form = document.createElement('form');
-  form.action = url;
-  form.method = 'POST';
-  form.style.display = 'none';
-  for (const [name, value] of Object.entries(fields)) {
-    const input = document.createElement('input');
-    input.name = name;
-    input.type = 'hidden';
-    input.value = value;
-    form.appendChild(input);
-  }
-  document.body.appendChild(form);
-  form.submit();
+const navigateToEndSession = (url: string, fields: Record<string, string>): void => {
+  // GET, not a hidden form POST: Authentik's end-session view is CSRF-protected, so a
+  // cross-site POST from this origin lands on Django's 403 page. OIDC allows GET here.
+  const separator = url.includes('?') ? '&' : '?';
+  window.location.href = `${url}${separator}${new URLSearchParams(fields).toString()}`;
 };
 
 type Setter = StoreSetter<UserStore>;
@@ -142,7 +133,7 @@ export class UserAuthActionImpl {
           // signed-out user's cache (localStorage survives the reload below).
           clearActiveScopeKey();
           if (endSession) {
-            submitHiddenPostForm(endSession.url, endSession.fields);
+            navigateToEndSession(endSession.url, endSession.fields);
             redirected = true;
             return;
           }
