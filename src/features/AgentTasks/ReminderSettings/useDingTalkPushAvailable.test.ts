@@ -70,6 +70,28 @@ describe('readDingTalkBinding', () => {
     ).toEqual({ linked: false, platformUsername: undefined });
   });
 
+  /** A1 always sends both keys; `platformUsername: null` is the unlinked wire and a linked account with no display name. */
+  it('treats an explicit null username as no name, not as unlinked', () => {
+    expect(
+      readDingTalkBinding([
+        {
+          binding: { linked: true, platformUsername: null },
+          capabilities: { push: true },
+          id: 'dingtalk',
+        },
+      ]),
+    ).toEqual({ linked: true, platformUsername: undefined });
+    expect(
+      readDingTalkBinding([
+        {
+          binding: { linked: false, platformUsername: null },
+          capabilities: { push: true },
+          id: 'dingtalk',
+        },
+      ]),
+    ).toEqual({ linked: false, platformUsername: undefined });
+  });
+
   /**
    * `binding` is additive: an older server omits it, and that unknown must stay unknown
    * rather than collapsing into "not linked", which would block every user.
@@ -143,6 +165,32 @@ describe('useDingTalkPushAvailable', () => {
 
     expect(result.current.status).toBe('available');
     expect(result.current.available).toBe(true);
+    expect(result.current.platformUsername).toBeUndefined();
+  });
+
+  /**
+   * A1 always sends both keys. `{ linked: true, platformUsername: null }` is a
+   * linked account with no display name (legacy A1 email path, or a link row
+   * with neither username nor userId). Must stay `available` and must not
+   * surface a blank `dingtalkLinkedAs`.
+   */
+  it('stays available on the A1 linked wire with a null username and does not name a blank account', () => {
+    swrState.data = dingtalk({ binding: { linked: true, platformUsername: null } });
+
+    const { result } = renderHook(() => useDingTalkPushAvailable());
+
+    expect(result.current.status).toBe('available');
+    expect(result.current.available).toBe(true);
+    expect(result.current.platformUsername).toBeUndefined();
+  });
+
+  it('blocks on the A1 unlinked wire `{ linked: false, platformUsername: null }`', () => {
+    swrState.data = dingtalk({ binding: { linked: false, platformUsername: null } });
+
+    const { result } = renderHook(() => useDingTalkPushAvailable());
+
+    expect(result.current.status).toBe('unlinked');
+    expect(result.current.available).toBe(false);
     expect(result.current.platformUsername).toBeUndefined();
   });
 

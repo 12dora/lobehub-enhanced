@@ -1,10 +1,9 @@
 import type { MessengerPlatformBinding } from '@lobechat/types';
 
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
-import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
 
-import { staffIdFromDingTalkIdentityEmail } from './platforms/dingtalk/resolveStaffId';
+import { resolveDingTalkStaffId } from './platforms/dingtalk/resolveStaffId';
 
 export type { MessengerPlatformBinding };
 
@@ -12,8 +11,10 @@ export type { MessengerPlatformBinding };
  * Per-user mapping status for each enabled messenger platform.
  *
  * `linked` is true when a `messenger_account_links` row exists for
- * `(userId, platform)`, or (DingTalk only) the user's email matches the
- * identity-email convention used by DingTalk push.
+ * `(userId, platform)`. DingTalk uses the same lookup as push
+ * (`resolveDingTalkStaffId`: `findByPlatform('dingtalk', '')`, then the
+ * identity-email convention) so `binding.linked` cannot drift from a
+ * `user_not_mapped` skip.
  */
 export const resolveMessengerPlatformBindings = async (
   db: LobeChatDatabase,
@@ -31,15 +32,18 @@ export const resolveMessengerPlatformBindings = async (
     if (!(link.platform in result) || result[link.platform]?.linked) continue;
     result[link.platform] = {
       linked: true,
-      platformUsername: link.platformUsername ?? null,
+      platformUsername: link.platformUsername ?? link.platformUserId ?? null,
     };
   }
 
-  if (platforms.includes('dingtalk') && !result.dingtalk?.linked) {
-    const user = await UserModel.findById(db, userId);
-    if (staffIdFromDingTalkIdentityEmail(user?.email ?? null)) {
-      result.dingtalk = { linked: true, platformUsername: null };
-    }
+  if (platforms.includes('dingtalk')) {
+    const staffId = await resolveDingTalkStaffId(db, userId);
+    result.dingtalk = staffId
+      ? {
+          linked: true,
+          platformUsername: result.dingtalk?.platformUsername ?? staffId,
+        }
+      : { linked: false, platformUsername: null };
   }
 
   return result;

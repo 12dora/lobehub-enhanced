@@ -11,6 +11,5 @@ export { MessengerDingTalkBinder } from './platforms/dingtalk';
 export { MessengerDiscordBinder } from './platforms/discord';
 export { MessengerSlackBinder } from './platforms/slack';
 export { MessengerTelegramBinder } from './platforms/telegram';
-export { resolveMessengerPlatformBindings } from './resolveBinding';
-export type { MessengerPlatformBinding } from './resolveBinding';
+export { type MessengerPlatformBinding, resolveMessengerPlatformBindings } from './resolveBinding';
 export type { MessengerPlatformBinder } from './types';
