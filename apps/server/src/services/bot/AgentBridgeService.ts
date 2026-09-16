@@ -1569,7 +1569,7 @@ export class AgentBridgeService {
                             this.workspaceId,
                           );
                           const generated = await systemAgent.generateTopicTitle({
-                            lastAssistantContent,
+                            lastAssistantContent: sinkContent,
                             userPrompt: prompt,
                           });
                           if (!generated) return;
