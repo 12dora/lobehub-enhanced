@@ -12,4 +12,6 @@ export * from './publication';
 export * from './rolloutService';
 export * from './rolloutWorker';
 export * from './runtimeReadiness';
+export * from './taskManagerAgent';
+export * from './taskManagerProvision';
 export * from './userListProjection';

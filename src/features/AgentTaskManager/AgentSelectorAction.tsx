@@ -84,7 +84,11 @@ const AgentSelectorAction = memo<AgentSelectorActionProps>(({ onAgentChange }) =
           description: taskAgentData?.description || null,
           id: taskAgentId,
           pinned: false,
-          title: t('taskManager.agent', { ns: 'topic' }),
+          // The task assistant is a platform-managed system agent: once an admin has named it in
+          // 助理管理, the server overlay puts that name on this row, and the picker must show what
+          // the admin published rather than the shipped label. The locale title stays the fallback
+          // for a platform that has not taken it over yet.
+          title: taskAgentData?.title || t('taskManager.agent', { ns: 'topic' }),
           type: 'agent' as const,
           updatedAt: new Date(),
         },

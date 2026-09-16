@@ -6,6 +6,7 @@ import {
   fetchDefaultAdminAgent,
   fetchPublishedAdminAgentReplacements,
   findDefaultAdminAgent,
+  findTaskManagerAdminAgent,
 } from './useAdminAgents';
 
 describe('Admin Agent detail aggregate through the injected client boundary', () => {
@@ -128,6 +129,19 @@ describe('Admin Agent detail aggregate through the injected client boundary', ()
     expect(found?.identity.isDefault).toBe(true);
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith({ isDefault: true, limit: 1 });
+  });
+
+  it('picks the task-manager row from a loaded list by identity.systemKey', async () => {
+    const client = createMockAdminAgentsClient();
+    await client.provisionTaskManager({ locale: 'zh-CN' });
+    const page = await client.list({ limit: 50 });
+    const found = findTaskManagerAdminAgent(page.items);
+    expect(found?.identity.systemKey).toBe('task-manager');
+    expect(found?.identity.isDefault).toBe(false);
+
+    const pointer = await client.list({ limit: 1, systemKey: 'task-manager' });
+    expect(pointer.items).toHaveLength(1);
+    expect(pointer.items[0]?.identity.id).toBe(found?.identity.id);
   });
 
   it('pairs the default pointer with the published version the pinned card renders', async () => {

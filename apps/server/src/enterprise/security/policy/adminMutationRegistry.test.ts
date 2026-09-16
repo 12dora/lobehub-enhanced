@@ -154,6 +154,7 @@ describe('enterprise admin mutation policy registry', () => {
       // B0 DTOs for these have no reason field — `noReason` / `notApplicable` is the matching control.
       const dtoHasNoReason =
         procedure === 'admin.agents.provisionDefaultInbox' ||
+        procedure === 'admin.agents.provisionTaskManager' ||
         procedure === 'admin.networkProxy.createSubscription' ||
         procedure === 'admin.networkProxy.updateSubscription' ||
         procedure === 'admin.networkProxy.installArtifact' ||
@@ -248,6 +249,14 @@ describe('enterprise admin mutation policy registry', () => {
 
   it('requires create, publish, and assign for default-inbox provisioning', () => {
     const entry = ADMIN_MUTATION_REGISTRY['admin.agents.provisionDefaultInbox'];
+    expect(entry.summary).toContain('AGENT_CREATE');
+    expect(entry.summary).toContain('AGENT_PUBLISH');
+    expect(entry.summary).toContain('AGENT_ASSIGN');
+    expect(entry).toMatchObject({ dangerous: true, risk: 'critical' });
+  });
+
+  it('requires create, publish, and assign for task-manager provisioning', () => {
+    const entry = ADMIN_MUTATION_REGISTRY['admin.agents.provisionTaskManager'];
     expect(entry.summary).toContain('AGENT_CREATE');
     expect(entry.summary).toContain('AGENT_PUBLISH');
     expect(entry.summary).toContain('AGENT_ASSIGN');

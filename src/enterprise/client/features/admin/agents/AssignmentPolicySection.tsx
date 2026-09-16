@@ -11,6 +11,7 @@ import UserSearchSelect from '../primitives/UserSearchSelect';
 import type { AssignmentEntry, AssignmentMode, AssignmentTargetType } from './assignmentDraft';
 import { assignmentTargetKey } from './assignmentDraft';
 import { FieldLabel } from './dependencyEditorShared';
+import { systemAgentLabel } from './systemAgents';
 import type { AgentAssignmentDraft } from './useAgentAssignmentDraft';
 
 const styles = createStaticStyles(({ css }) => ({
@@ -99,8 +100,12 @@ const MODES: AssignmentMode[] = ['mandatory', 'default', 'optional'];
 
 export interface AssignmentPolicySectionProps {
   assignments: AgentAssignmentDraft;
-  /** `default-inbox` already reaches every member, so its assignments are additive only. */
-  isDefaultInbox?: boolean;
+  /**
+   * The reserved system key of the assistant being edited, or null for an ordinary one. A system
+   * assistant already reaches every member without an assignment, so its rows are additive only
+   * and whatever the platform owns is locked.
+   */
+  systemKey?: string | null;
 }
 
 /**
@@ -108,8 +113,9 @@ export interface AssignmentPolicySectionProps {
  * commits it, so there is exactly one write boundary for the whole assistant.
  */
 export const AssignmentPolicySection = memo<AssignmentPolicySectionProps>(
-  ({ assignments, isDefaultInbox = false }) => {
+  ({ assignments, systemKey = null }) => {
     const { t } = useTranslation('admin');
+    const labelKey = systemAgentLabel(systemKey);
     const { draft, truncated } = assignments;
     const [userRefs, setUserRefs] = useState<Record<string, UserPublicRef>>({});
     const describe = (entry: AssignmentEntry) =>
@@ -117,17 +123,26 @@ export const AssignmentPolicySection = memo<AssignmentPolicySectionProps>(
     const targetUser = (entry: AssignmentEntry): UserPublicRef | null =>
       userRefs[entry.targetId] ?? entry.targetUser ?? null;
     /**
-     * The mandatory global row IS the default assistant's delivery to every member — dropping it
-     * would silently demote the platform default. The server owns it; the editor shows it.
+     * The mandatory global row IS a system assistant's delivery to every member — dropping it
+     * would silently demote it. The server owns that row; the editor shows it.
      */
     const locked = (entry: AssignmentEntry) =>
-      isDefaultInbox && entry.targetType === 'global' && entry.mode === 'mandatory';
+      labelKey !== null && entry.targetType === 'global' && entry.mode === 'mandatory';
 
     return (
       <div className={styles.stack}>
-        {isDefaultInbox ? (
-          <span className={styles.hint}>{t('agentCatalog.assignment.defaultInboxHint')}</span>
-        ) : null}
+        {/* Both reserved assistants reach every member already, but for different reasons: the
+            default assistant is delivered to everyone, the task assistant is what every task page
+            runs. Say which one this is rather than one vague sentence for both. */}
+        {labelKey === null ? null : (
+          <span className={styles.hint}>
+            {t(
+              labelKey === 'agentCatalog.systemAgent.taskManager'
+                ? 'agentCatalog.assignment.taskManagerHint'
+                : 'agentCatalog.assignment.defaultInboxHint',
+            )}
+          </span>
+        )}
 
         {/* The loaded list is incomplete, so a diff written from it could not be trusted: the
             section falls back to a read-only view rather than half-applying the operator's edit. */}

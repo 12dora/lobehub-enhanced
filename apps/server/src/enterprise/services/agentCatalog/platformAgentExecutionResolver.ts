@@ -4,6 +4,7 @@
  * Keeps identity decoding, entitlement, resume-pin binding, materialization, and managed
  * runtime policy out of the upstream AiAgentService body so rebases only touch a thin adapter.
  */
+import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import { SkillsIdentifier } from '@lobechat/builtin-tool-skills';
 import { INBOX_SESSION_ID } from '@lobechat/const';
@@ -171,9 +172,13 @@ export class PlatformAgentExecutionResolver {
     let inboxAgentId: string | undefined;
     if (identifier === INBOX_SESSION_ID) {
       inboxAgentId = (await this.agentModel.getBuiltinAgent(INBOX_SESSION_ID))?.id;
+    } else if (identifier === BUILTIN_AGENT_SLUGS.taskAgent) {
+      // Light-mode overlay: task-agent stays on the member row (plugins / chatConfig).
+      return null;
     } else if (agentId) {
       const candidate = await this.agentModel.getAgentConfigById(agentId);
       if (candidate?.slug === INBOX_SESSION_ID) inboxAgentId = candidate.id;
+      else if (candidate?.slug === BUILTIN_AGENT_SLUGS.taskAgent) return null;
     }
     if (inboxAgentId) {
       // Observe / unmanaged: inbox stays on the legacy overlay path (user

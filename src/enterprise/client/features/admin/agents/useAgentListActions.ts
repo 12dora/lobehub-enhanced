@@ -28,6 +28,8 @@ export interface UseAgentListActionsParams {
   /** The shared invalidator for both surfaces — never a bare list refresher. */
   refresh: AdminAgentRefresh;
   removeListItem: (id: string) => Promise<unknown>;
+  /** The pinned 任务助手's id, once its pointer read has settled. */
+  taskManagerAgentId?: string | undefined;
   updateListItem: (
     id: string,
     patch: (row: AdminAgentListItem) => AdminAgentListItem,
@@ -46,6 +48,7 @@ export const useAgentListActions = ({
   defaultAgentId,
   refresh,
   removeListItem,
+  taskManagerAgentId,
   updateListItem,
 }: UseAgentListActionsParams) => {
   const { t } = useTranslation('admin');
@@ -55,10 +58,12 @@ export const useAgentListActions = ({
    * changed; a create, or anything that wrote an assignment, changes counters the output does not
    * carry — those revalidate instead of patching a row into a half-truth.
    *
-   * The pinned 默认助理 card is a SECOND entry over the same assistant, so a save that touched the
-   * default — it IS the pinned one, or this save made it the default — invalidates that key too.
-   * Patching only the table row would leave the card showing the name / avatar / model just
-   * replaced. `editedAgentId` is what identifies an assignment-only submit, which carries no output.
+   * Each pinned system card (默认助理 / 任务助手) is a SECOND entry over the same assistant, so a
+   * save that touched one — it IS a pinned assistant, or this save made it the default —
+   * invalidates those keys too. Patching only the table row would leave a card showing the name /
+   * avatar / model just replaced. `editedAgentId` identifies an assignment-only submit, which
+   * carries no output; the saved identity's own `systemKey` covers a pinned read that has not
+   * settled yet.
    */
   const handleSaved = useCallback(
     async (
@@ -67,9 +72,10 @@ export const useAgentListActions = ({
       editedAgentId?: string,
     ) => {
       const savedId = output?.identity.id ?? editedAgentId;
-      const touchesDefault =
+      const touchesPinned =
         Boolean(output?.identity.isDefault) ||
-        (savedId !== undefined && savedId === defaultAgentId);
+        output?.identity.systemKey != null ||
+        (savedId !== undefined && (savedId === defaultAgentId || savedId === taskManagerAgentId));
       // Only a pure config save describes its row completely enough to patch in place.
       const listWrite =
         output && !meta.created && !meta.assignmentsChanged
@@ -79,13 +85,13 @@ export const useAgentListActions = ({
               )
           : undefined;
       try {
-        await (touchesDefault ? refresh.defaultAndList(listWrite) : refresh.listOnly(listWrite));
+        await (touchesPinned ? refresh.defaultAndList(listWrite) : refresh.listOnly(listWrite));
       } catch {
         // A failed revalidation is reported, never swallowed into a stale row.
         toast.warning(t('agentCatalog.recovery.refreshFailed'));
       }
     },
-    [defaultAgentId, refresh, t, updateListItem],
+    [defaultAgentId, refresh, t, taskManagerAgentId, updateListItem],
   );
 
   // List rows carry no draftToken or version config; both row actions load the authoritative

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
       agt_task: {
         avatar: 'task-avatar',
         description: 'Task manager',
+        title: '' as string,
       },
     },
     builtinAgentIdMap: {
@@ -138,6 +139,7 @@ describe('AgentSelectorAction', () => {
       { id: 'agt_custom', title: 'Custom Agent', type: 'agent' },
       { id: 'grp_custom', title: 'Custom Group', type: 'group' },
     ];
+    mocks.agentState.agentMap.agt_task.title = '';
   });
 
   it('adds the builtin task agent and filters out group sessions', () => {
@@ -159,6 +161,25 @@ describe('AgentSelectorAction', () => {
 
     fireEvent.click(getByText('Custom Agent'));
     expect(onAgentChange).toHaveBeenCalledWith('agt_custom');
+  });
+
+  // The task assistant is platform-managed now: once an admin names it in 助理管理, the server
+  // overlay puts that name on the agent row, and the picker must show what members actually get.
+  it('shows the managed identity name for the builtin task agent', () => {
+    mocks.agentState.agentMap.agt_task.title = '客服任务助手';
+
+    render(<AgentSelectorAction onAgentChange={vi.fn()} />);
+
+    expect(document.body.textContent).toContain('客服任务助手');
+    expect(document.body.textContent).not.toContain('Task Manager');
+  });
+
+  it('falls back to the shipped label while the platform has not named it', () => {
+    mocks.agentState.agentMap.agt_task.title = '';
+
+    render(<AgentSelectorAction onAgentChange={vi.fn()} />);
+
+    expect(document.body.textContent).toContain('Task Manager');
   });
 
   it('does not duplicate the task agent when it already exists in the home list', () => {

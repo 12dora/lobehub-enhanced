@@ -27,6 +27,11 @@ vi.mock('./useAdminAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./useAdminAgents')>()),
   useDefaultAdminAgent: () => ({ data: null, error: undefined, mutate: vi.fn() }),
 }));
+// Same reason for the pinned 任务助手: its own `list` read would otherwise consume the mocked
+// response this file hands the table.
+vi.mock('./useTaskManagerAgent', () => ({
+  useTaskManagerAdminAgent: () => ({ data: null, error: undefined, mutate: vi.fn() }),
+}));
 vi.mock('./openAgentEditorModal', () => ({ openAgentEditorModal: vi.fn() }));
 vi.mock('./pruneLegacyAgentDrafts', () => ({ usePruneLegacyAdminAgentDrafts: vi.fn() }));
 vi.mock('@/components/Loading/BrandTextLoading', () => ({
@@ -52,8 +57,11 @@ vi.mock('@lobehub/ui', () => ({
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 vi.mock('@lobehub/ui/base-ui', () => ({
+  Avatar: () => <span />,
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
   Select: () => <select />,
+  Tag: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 vi.mock('../primitives/AdminPageTemplate', () => ({
   default: ({ actions, children, toolbar }: any) => (

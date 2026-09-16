@@ -30,5 +30,9 @@ export const deriveAdminAgentActionAvailability = (params: {
   // operator without it start a write that can only come back as an error.
   canProvisionDefaultInbox:
     params.permissions.canCreate && params.permissions.canPublish && params.permissions.canAssign,
+  // Taking over the task assistant writes a published Agent every member's task page then uses,
+  // so the server demands the same create + publish + assign compound as the default assistant.
+  canProvisionTaskManager:
+    params.permissions.canCreate && params.permissions.canPublish && params.permissions.canAssign,
   canSetDefaultNow: params.permissions.canPublish && Boolean(params.hasCurrentVersion),
 });

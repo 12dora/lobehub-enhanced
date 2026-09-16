@@ -406,7 +406,7 @@ export class PlatformAgentRolloutService {
         if (
           identity.status !== 'published' ||
           !identity.currentVersionId ||
-          identity.systemKey === 'default-inbox'
+          identity.systemKey !== null
         ) {
           // Default inbox has no ordinary per-user materialization to reverse. Its V2→V1 rollback
           // is the publication pointer CAS, which preserves old operation pins and changes new work.
@@ -548,7 +548,7 @@ export class PlatformAgentRolloutService {
         const repository = new PlatformAgentCatalogRepository(tx);
         await acquirePlatformAgentReferenceLock(tx, input.agentId);
         const identity = await repository.lockIdentity(input.agentId);
-        if (!identity || identity.systemKey === 'default-inbox') {
+        if (!identity || identity.systemKey !== null) {
           throw new PlatformAgentInvalidInputError();
         }
         const currentTarget = await repository.getExactVersion(

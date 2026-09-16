@@ -56,6 +56,7 @@ describe('deriveAdminAgentPermissions', () => {
       canCreate: false,
       canEdit: false,
       canProvisionDefaultInbox: false,
+      canProvisionTaskManager: false,
       canSetDefaultNow: false,
     });
   });
@@ -94,6 +95,7 @@ describe('deriveAdminAgentPermissions', () => {
       canEdit: true,
       // Creating an assistant is allowed here, but initializing the default one also assigns it.
       canProvisionDefaultInbox: false,
+      canProvisionTaskManager: false,
       canSetDefaultNow: true,
     });
   });
@@ -112,22 +114,25 @@ describe('deriveAdminAgentPermissions', () => {
       [PLATFORM_PERMISSIONS.AGENT_PUBLISH, PLATFORM_PERMISSIONS.AGENT_ASSIGN],
     ],
   ])(
-    'withholds default-assistant initialization for %s — the server would only reject it',
+    'withholds system-assistant initialization for %s — the server would only reject it',
     (_label, granted) => {
       const permissions = deriveAdminAgentPermissions(granted);
-      expect(deriveAdminAgentActionAvailability({ permissions }).canProvisionDefaultInbox).toBe(
-        false,
-      );
+      const availability = deriveAdminAgentActionAvailability({ permissions });
+      expect(availability.canProvisionDefaultInbox).toBe(false);
+      // The task assistant is written the same way, so it needs the same compound.
+      expect(availability.canProvisionTaskManager).toBe(false);
     },
   );
 
-  it('allows default-assistant initialization only with create + publish + assign', () => {
+  it('allows system-assistant initialization only with create + publish + assign', () => {
     const permissions = deriveAdminAgentPermissions([
       PLATFORM_PERMISSIONS.AGENT_CREATE,
       PLATFORM_PERMISSIONS.AGENT_PUBLISH,
       PLATFORM_PERMISSIONS.AGENT_ASSIGN,
     ]);
-    expect(deriveAdminAgentActionAvailability({ permissions }).canProvisionDefaultInbox).toBe(true);
+    const availability = deriveAdminAgentActionAvailability({ permissions });
+    expect(availability.canProvisionDefaultInbox).toBe(true);
+    expect(availability.canProvisionTaskManager).toBe(true);
   });
 
   it('keeps the default-Inbox switch closed until a version exists', () => {

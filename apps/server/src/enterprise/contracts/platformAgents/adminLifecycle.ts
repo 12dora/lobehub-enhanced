@@ -8,6 +8,7 @@ import {
   platformAgentDependencySnapshotSchema,
   platformAgentKeySchema,
   platformAgentSystemKeySchema,
+  platformAgentSystemKeyValueSchema,
   platformAgentVersionConfigSchema,
   platformAgentVersionSchema,
   positiveRevisionSchema,
@@ -75,6 +76,11 @@ export const adminPlatformAgentListInputSchema = z
     limit: z.number().int().min(1).max(100).default(50),
     query: safeText(200, 1).optional(),
     status: z.enum(['archived', 'draft', 'published']).optional(),
+    /**
+     * Dedicated system-agent pointer read (e.g. `task-manager`). Returns at most the identity
+     * with that `systemKey` so the admin pin card never page-walks the catalog to find it.
+     */
+    systemKey: platformAgentSystemKeyValueSchema.optional(),
   })
   .strict();
 
@@ -210,6 +216,19 @@ export const adminPlatformAgentProvisionDefaultInboxInputSchema = z
 
 export const adminPlatformAgentProvisionDefaultInboxOutputSchema =
   adminPlatformAgentGetOutputSchema;
+
+/**
+ * Idempotent bootstrap of the task-manager identity + published version + global assignment.
+ * Optional `locale` selects the builtin display-name fallback (`任务助手` vs `Task Agent`).
+ */
+export const adminPlatformAgentProvisionTaskManagerInputSchema = z
+  .object({
+    locale: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+export const adminPlatformAgentProvisionTaskManagerOutputSchema = adminPlatformAgentGetOutputSchema;
 
 /**
  * Image avatar upload for the Agent editor. The server validates the bytes exactly like a

@@ -64,12 +64,22 @@ export class PlatformAgentIdentityRepository {
     return row;
   };
 
+  getIdentityBySystemKey = async (systemKey: string): Promise<PlatformAgentItem | undefined> => {
+    const [row] = await this.db
+      .select()
+      .from(platformAgents)
+      .where(eq(platformAgents.systemKey, systemKey))
+      .limit(1);
+    return row;
+  };
+
   listIdentities = async (params: {
     cursor?: string;
     isDefault?: boolean;
     limit?: number;
     query?: string;
     status?: PlatformAgentItem['status'];
+    systemKey?: string;
   }): Promise<PlatformAgentIdentityPage> => {
     const limit = boundedLimit(params.limit);
     const rows = await this.db
@@ -84,6 +94,7 @@ export class PlatformAgentIdentityRepository {
             : eq(platformAgents.isDefault, params.isDefault),
           params.query ? ilike(platformAgents.agentKey, likeContains(params.query)) : undefined,
           params.status ? eq(platformAgents.status, params.status) : undefined,
+          params.systemKey ? eq(platformAgents.systemKey, params.systemKey) : undefined,
         ),
       )
       .orderBy(asc(platformAgents.agentKey))

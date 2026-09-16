@@ -153,7 +153,10 @@ export const useAgentEditorForm = ({
     submit,
     /** A rejected write may have committed and we could not tell — Save is closed until reopened. */
     resumeBlocked: commit.resumeBlocked,
-    /** `default-inbox` for the platform's built-in assistant, which every member already gets. */
+    /**
+     * The reserved system key (`default-inbox` / `task-manager`) when this is one of the platform's
+     * built-in assistants, else null. It gates the identity and delivery the platform owns.
+     */
     systemKey: agent?.identity.systemKey ?? null,
     value: draft.value,
   };

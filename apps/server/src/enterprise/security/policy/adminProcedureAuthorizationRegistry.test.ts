@@ -106,6 +106,7 @@ describe('admin procedure authorization registry', () => {
     // status, queue, and artifact GC).
     // +1 query since: admin.system.getSandboxPackageStats (sandbox pip/npm/apt ledger).
     // +1 mutation since: admin.agents.provisionDefaultInbox (bootstrap the default inbox).
+    // +1 mutation since: admin.agents.provisionTaskManager (bootstrap the task assistant).
     // +1 mutation since: admin.skills.setEnabled (org-wide catalog enable/disable).
     // +1 mutation since: admin.agents.uploadAvatar (image avatar for the platform Agent editor).
     // +1 query since: admin.users.search (shared admin picker; USER_READ | AUDIT_READ | MODERATION_READ).
@@ -114,14 +115,14 @@ describe('admin procedure authorization registry', () => {
     // (DingTalk IM connector admin surface).
     // +1 query / +2 mutations since: admin.imConnectors.bindings.{list,upsert,remove}
     // (admin-managed DingTalk account links for any AIHub user).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(252);
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(253);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
     ).toHaveLength(112);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
-    ).toHaveLength(140);
-    expect(mutationPaths).toHaveLength(140);
+    ).toHaveLength(141);
+    expect(mutationPaths).toHaveLength(141);
     expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter((entry) => 'selfAccess' in entry)).toEqual(
       [{ kind: 'query', path: 'admin.auth.getMyAccess', selfAccess: true }],
     );
@@ -390,6 +391,23 @@ describe('admin procedure authorization registry', () => {
   it('requires create, publish, and assign for default-inbox provisioning', () => {
     const entry = ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.find(
       (declaration) => declaration.path === 'admin.agents.provisionDefaultInbox',
+    );
+    expect(entry).toMatchObject({
+      kind: 'mutation',
+      permission: {
+        mode: 'all',
+        permissions: [
+          PLATFORM_PERMISSIONS.AGENT_CREATE,
+          PLATFORM_PERMISSIONS.AGENT_PUBLISH,
+          PLATFORM_PERMISSIONS.AGENT_ASSIGN,
+        ],
+      },
+    });
+  });
+
+  it('requires create, publish, and assign for task-manager provisioning', () => {
+    const entry = ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.find(
+      (declaration) => declaration.path === 'admin.agents.provisionTaskManager',
     );
     expect(entry).toMatchObject({
       kind: 'mutation',

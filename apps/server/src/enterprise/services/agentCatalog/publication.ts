@@ -1,4 +1,9 @@
-import { PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY } from '@lobechat/types';
+import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
+import { INBOX_SESSION_ID } from '@lobechat/const';
+import {
+  PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
+  PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
+} from '@lobechat/types';
 import debug from 'debug';
 
 import { AgentModel } from '@/database/models/agent';
@@ -14,6 +19,7 @@ import type {
   AdminPlatformAgentRollbackInput,
   AdminPlatformAgentSaveInput,
 } from '../../contracts/platformAgents';
+import { asPlatformAgentSystemKey } from '../../contracts/platformAgents';
 import type { EnterpriseConfigPublishOperation } from '../../observability';
 import { classifyEnterpriseError, observeEnterprisePlatformEvent } from '../../observability';
 import type { AuditAction } from '../audit/auditActionCatalog';
@@ -92,7 +98,7 @@ export const platformAgentIdentityView = (identity: PlatformAgentItem) => ({
   migrationRequired: identity.migrationRequired,
   revision: identity.revision,
   status: identity.status as 'archived' | 'draft' | 'published',
-  systemKey: identity.systemKey === 'default-inbox' ? ('default-inbox' as const) : null,
+  systemKey: asPlatformAgentSystemKey(identity.systemKey),
 });
 
 /** Identity projection plus the CAS token every follow-up mutation must echo back. */
@@ -346,8 +352,8 @@ export class PlatformAgentPublicationService {
   }): void => observePlatformAgentPublication(params);
 
   /**
-   * Rollback is a publish: if the default-inbox pair changed, clear per-user inbox
-   * model/provider overrides in the same transaction as the pointer move.
+   * Rollback is a publish: if a system-agent overlay pair changed, clear per-user
+   * model/provider overrides on the matching builtin slug in the same transaction.
    */
   private maybeResetInboxModelProviderOnPublish = async (params: {
     actorUserId: string;
@@ -355,8 +361,14 @@ export class PlatformAgentPublicationService {
     nextSnapshot: ExactPlatformAgentVersion['dependencySnapshot'];
     repository: PlatformAgentCatalogRepository;
     tx: Transaction;
-  }): Promise<number | undefined> => {
-    if (params.identity.systemKey !== PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY) return undefined;
+  }): Promise<{ inboxModelReset?: number; taskAgentModelReset?: number } | undefined> => {
+    const slug =
+      params.identity.systemKey === PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY
+        ? INBOX_SESSION_ID
+        : params.identity.systemKey === PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY
+          ? BUILTIN_AGENT_SLUGS.taskAgent
+          : null;
+    if (!slug) return undefined;
 
     const previous = params.identity.currentVersionId
       ? await params.repository.getExactVersion(
@@ -370,12 +382,12 @@ export class PlatformAgentPublicationService {
       return undefined;
     }
 
-    const inboxModelReset = await new AgentModel(
-      params.tx,
-      params.actorUserId,
-    ).resetInboxModelProviderForAllUsers();
-    log('reset inbox model/provider agent=%s rows=%d', params.identity.id, inboxModelReset);
-    return inboxModelReset;
+    const agentModel = new AgentModel(params.tx, params.actorUserId);
+    const resetCount = await agentModel.resetModelProviderForSlugForAllUsers(slug);
+    log('reset %s model/provider agent=%s rows=%d', slug, params.identity.id, resetCount);
+    return slug === INBOX_SESSION_ID
+      ? { inboxModelReset: resetCount }
+      : { taskAgentModelReset: resetCount };
   };
 
   /**
@@ -408,7 +420,7 @@ export class PlatformAgentPublicationService {
           },
         });
 
-        const inboxModelReset = await this.maybeResetInboxModelProviderOnPublish({
+        const modelReset = await this.maybeResetInboxModelProviderOnPublish({
           actorUserId,
           identity: locked,
           nextSnapshot: version.dependencySnapshot,
@@ -424,7 +436,7 @@ export class PlatformAgentPublicationService {
               connectors: version.dependencySnapshot.connectors.length,
               skills: version.dependencySnapshot.skills.length,
             },
-            ...(inboxModelReset === undefined ? {} : { inboxModelReset }),
+            ...modelReset,
             revision: identity.revision,
             version: version.version,
             versionChecksum: version.checksum,
@@ -496,7 +508,7 @@ export class PlatformAgentPublicationService {
         });
         if (!identity) throw new PlatformAgentRevisionConflictError();
 
-        const inboxModelReset = await this.maybeResetInboxModelProviderOnPublish({
+        const modelReset = await this.maybeResetInboxModelProviderOnPublish({
           actorUserId,
           identity: locked,
           nextSnapshot: target.dependencySnapshot,
@@ -508,7 +520,7 @@ export class PlatformAgentPublicationService {
           action: 'admin.agents.rollback',
           actorUserId,
           afterDiff: {
-            ...(inboxModelReset === undefined ? {} : { inboxModelReset }),
+            ...modelReset,
             revision: identity.revision,
             version: target.version,
             versionChecksum: target.checksum,

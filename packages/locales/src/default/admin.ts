@@ -13,6 +13,8 @@ export default {
   'agentCatalog.assignment.defaultInboxHint':
     'The default assistant already reaches every member; assignments here only add mandatory or role-specific delivery.',
   'agentCatalog.assignment.disabledTag': 'Disabled',
+  'agentCatalog.assignment.taskManagerHint':
+    'Every member’s task page uses this assistant automatically; assignments here only add mandatory or role-specific delivery.',
   'agentCatalog.assignment.empty': 'No assignments yet.',
   'agentCatalog.assignment.enabled': 'Enabled',
   'agentCatalog.assignment.enabledOff': 'Kept, but not delivered',
@@ -77,6 +79,21 @@ export default {
   'agentCatalog.defaultAgent.provision.success': 'The default assistant is ready.',
   'agentCatalog.defaultAgent.title': 'Default assistant',
   'agentCatalog.defaultInbox': 'Default',
+  'agentCatalog.systemAgent.defaultInbox': 'Default assistant',
+  'agentCatalog.systemAgent.taskManager': 'Task assistant',
+  'agentCatalog.systemScope': 'System',
+  'agentCatalog.taskManagerAgent.description': 'The assistant behind every member’s task page.',
+  'agentCatalog.taskManagerAgent.loadError': 'Could not load the task assistant.',
+  'agentCatalog.taskManagerAgent.loading': 'Loading…',
+  'agentCatalog.taskManagerAgent.preparing': 'Preparing the task assistant…',
+  'agentCatalog.taskManagerAgent.provision.action': 'Start managing the task assistant',
+  'agentCatalog.taskManagerAgent.provision.error':
+    'The task assistant could not be prepared. Members are using the built-in one meanwhile.',
+  'agentCatalog.taskManagerAgent.provision.readOnly':
+    'The task assistant is not managed yet. Ask an administrator with the right permissions.',
+  'agentCatalog.taskManagerAgent.provision.success': 'The task assistant is ready.',
+  'agentCatalog.taskManagerAgent.title': 'Task assistant',
+  'agentCatalog.taskManagerAgent.unmanaged': 'Not managed',
   'agentCatalog.delete.action': 'Delete',
   'agentCatalog.delete.description':
     'Permanently delete this assistant, including all its versions, assignments, and members’ copies. This cannot be undone.',
@@ -156,8 +173,7 @@ export default {
   'agentCatalog.editor.identity': 'Identity',
   'agentCatalog.editor.key': 'Identifier',
   'agentCatalog.editor.keyPlaceholder': 'research-assistant',
-  'agentCatalog.editor.keyDefaultInboxDesc':
-    'The default assistant’s identifier is reserved by the platform.',
+  'agentCatalog.editor.keySystemDesc': 'The {{agent}} identifier is reserved by the platform.',
   'agentCatalog.editor.keyDesc':
     'Permanent identifier: lowercase letters, digits and . _ -. Generated from the name; editable.',
   'agentCatalog.editor.keyInvalid':
@@ -2814,6 +2830,7 @@ export default {
   'audit.logs.action.admin.agents.createVersion': 'Create agent version',
   'audit.logs.action.admin.agents.delete': 'Delete agent',
   'audit.logs.action.admin.agents.provisionDefaultInbox': 'Provision default agent',
+  'audit.logs.action.admin.agents.provisionTaskManager': 'Provision task assistant',
   'audit.logs.action.admin.agents.publish': 'Publish agent',
   'audit.logs.action.admin.agents.rollback': 'Roll back agent',
   'audit.logs.action.admin.agents.rollouts.cancel': 'Cancel agent rollout',

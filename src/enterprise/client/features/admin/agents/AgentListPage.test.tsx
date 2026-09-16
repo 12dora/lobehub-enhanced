@@ -22,11 +22,14 @@ const mocks = vi.hoisted(() => ({
   openEditor: vi.fn(),
   permissions: [] as string[],
   provisionDefaultInbox: vi.fn(),
+  provisionTaskManager: vi.fn(),
   refresh: vi.fn(),
   removeItem: vi.fn(),
   rowActionParams: [] as unknown[],
   runAdminMutation: vi.fn(),
   setDefaultInbox: vi.fn(),
+  taskManagerAgent: {} as Record<string, unknown>,
+  taskManagerAgentMutate: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
@@ -58,6 +61,9 @@ vi.mock('./useAdminAgents', () => ({
   },
   useDefaultAdminAgent: () => mocks.defaultAgent,
 }));
+vi.mock('./useTaskManagerAgent', () => ({
+  useTaskManagerAdminAgent: () => mocks.taskManagerAgent,
+}));
 // The takeover's reauth retry belongs to runAdminMutation's own tests; here it just commits.
 vi.mock('@/enterprise/client/features/admin/primitives/runAdminMutation', () => ({
   runAdminMutation: (...args: unknown[]) => mocks.runAdminMutation(...args),
@@ -80,6 +86,7 @@ vi.mock('@/enterprise/client/services/adminAgents', () => ({
   adminAgentsService: {
     get: (...args: unknown[]) => mocks.get(...args),
     provisionDefaultInbox: (...args: unknown[]) => mocks.provisionDefaultInbox(...args),
+    provisionTaskManager: (...args: unknown[]) => mocks.provisionTaskManager(...args),
   },
 }));
 // Only the brand mark is stubbed — it drags in the real Icon styles, which the
@@ -124,6 +131,7 @@ vi.mock('@lobehub/ui', () => ({
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 vi.mock('@lobehub/ui/base-ui', () => ({
+  Avatar: ({ avatar }: { avatar?: string }) => <img alt="avatar" src={avatar} />,
   Button: ({ children, loading, ...props }: any) => (
     <button data-loading={String(Boolean(loading))} {...props}>
       {children}
@@ -161,6 +169,8 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       ))}
     </select>
   ),
+  Tag: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   toast: {
     error: (...args: unknown[]) => mocks.toastError(...args),
     success: (...args: unknown[]) => mocks.toastSuccess(...args),
@@ -326,6 +336,37 @@ const defaultAgentState = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** The same, for the pinned 任务助手 read. */
+const taskManagerAgentState = (over: Record<string, unknown> = {}) => ({
+  data: undefined,
+  error: undefined,
+  mutate: mocks.taskManagerAgentMutate,
+  ...over,
+});
+
+/** A provisioned 任务助手: the reserved row plus the published version its card reads. */
+const taskManagerSnapshot = (id = 'agent-task-manager') => ({
+  detail: {
+    identity: { currentVersionId: `version-${id}`, id },
+    versions: [
+      {
+        config: { avatar: '🗂️', backgroundColor: '#123', displayName: '任务助手' },
+        dependencySnapshot: { model: { modelKey: 'gpt-4o-mini', providerKey: 'openai' } },
+        id: `version-${id}`,
+      },
+    ],
+  },
+  item: {
+    ...item(id, {
+      agentKey: 'task-manager',
+      currentVersionId: `version-${id}`,
+      systemKey: 'task-manager',
+    }),
+    displayName: '任务助手',
+    publishedVersion: '1.0.0',
+  },
+});
+
 /** A provisioned default: the pointer row plus the published version the card reads. */
 const defaultSnapshot = (id = 'agent-inbox') => ({
   detail: {
@@ -363,6 +404,9 @@ describe('AgentListPage with the real AsyncBoundary', () => {
     mocks.listInputs = [];
     mocks.defaultAgent = defaultAgentState({ data: null });
     mocks.defaultAgentMutate.mockReset().mockResolvedValue(undefined);
+    mocks.taskManagerAgent = taskManagerAgentState({ data: null });
+    mocks.taskManagerAgentMutate.mockReset().mockResolvedValue(undefined);
+    mocks.provisionTaskManager.mockReset();
     mocks.confirmModal.mockReset();
     mocks.provisionDefaultInbox.mockReset();
     mocks.toastSuccess.mockReset();
@@ -1005,6 +1049,123 @@ describe('AgentListPage with the real AsyncBoundary', () => {
       </MemoryRouter>,
     );
     expect(screen.getByText('agentCatalog.list.bulk.actions')).toBeTruthy();
+  });
+
+  describe('the pinned 任务助手 section', () => {
+    const grantEverything = () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.AGENT_READ,
+        PLATFORM_PERMISSIONS.AGENT_CREATE,
+        PLATFORM_PERMISSIONS.AGENT_UPDATE,
+        PLATFORM_PERMISSIONS.AGENT_PUBLISH,
+        PLATFORM_PERMISSIONS.AGENT_ASSIGN,
+      ];
+    };
+
+    it('shows the managed task assistant with its own published presentation', () => {
+      mocks.taskManagerAgent = taskManagerAgentState({ data: taskManagerSnapshot() });
+      renderPage();
+
+      expect(screen.getByText('agentCatalog.taskManagerAgent.title')).toBeTruthy();
+      expect(screen.getByText('任务助手')).toBeTruthy();
+      expect(screen.getByAltText('avatar').getAttribute('src')).toBe('🗂️');
+      // Unlike the always-published default, this one CAN be absent, so it states its status.
+      expect(screen.getByText('status')).toBeTruthy();
+    });
+
+    it('takes the task assistant over on request, in the admin’s own UI language', async () => {
+      grantEverything();
+      mocks.provisionTaskManager.mockResolvedValue({ created: true, identityId: 'agent-new' });
+      renderPage();
+
+      // Nothing runs unasked: the built-in task agent still answers until an admin presses this.
+      expect(mocks.provisionTaskManager).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByText('agentCatalog.taskManagerAgent.provision.action'));
+
+      await waitFor(() => expect(mocks.provisionTaskManager).toHaveBeenCalledOnce());
+      expect(mocks.provisionTaskManager).toHaveBeenCalledWith({ locale: 'zh-CN' });
+      // Both pinned reads AND the table: the write added a catalog row that did not exist before.
+      await waitFor(() => expect(mocks.taskManagerAgentMutate).toHaveBeenCalled());
+      expect(mocks.refresh).toHaveBeenCalled();
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(
+        'agentCatalog.taskManagerAgent.provision.success',
+      );
+    });
+
+    it('keeps the failed takeover on its own card instead of a toast', async () => {
+      grantEverything();
+      mocks.provisionTaskManager.mockRejectedValue(new Error('nope'));
+      renderPage();
+
+      fireEvent.click(screen.getByText('agentCatalog.taskManagerAgent.provision.action'));
+      await waitFor(() =>
+        expect(screen.getByText('agentCatalog.taskManagerAgent.provision.error')).toBeTruthy(),
+      );
+      expect(mocks.toastError).not.toHaveBeenCalled();
+    });
+
+    it('opens the editor for the pinned task assistant through the authoritative aggregate', async () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.AGENT_READ,
+        PLATFORM_PERMISSIONS.AGENT_UPDATE,
+        PLATFORM_PERMISSIONS.AGENT_PUBLISH,
+      ];
+      mocks.taskManagerAgent = taskManagerAgentState({ data: taskManagerSnapshot() });
+      mocks.list = pagination({ boundaryData: [], isEmpty: true });
+      const detail = { identity: { id: 'agent-task-manager' }, versions: [] };
+      mocks.fetchDetail.mockResolvedValue(detail);
+      renderPage();
+
+      fireEvent.click(screen.getByText('agentCatalog.action.edit'));
+      await waitFor(() => expect(mocks.openEditor).toHaveBeenCalledOnce());
+      expect(mocks.fetchDetail).toHaveBeenCalledWith(
+        'agent-task-manager',
+        expect.anything(),
+        false,
+      );
+      expect(mocks.openEditor.mock.calls[0]![0]).toMatchObject({ agent: detail });
+    });
+
+    it('keeps every reserved system row out of the table, not just the default', () => {
+      mocks.taskManagerAgent = taskManagerAgentState({ data: taskManagerSnapshot() });
+      // The task assistant's own row carries its system key, so it goes with the first page —
+      // and a second reserved key the platform may ship later is excluded by the same rule.
+      const rows = [
+        item('agent-task-manager', { systemKey: 'task-manager' }),
+        item('agent-future-system', { systemKey: 'some-future-key' }),
+        item('agent-2'),
+      ];
+      mocks.list = pagination({ boundaryData: rows, items: rows });
+      renderPage();
+
+      expect(screen.getByText('rows:1')).toBeTruthy();
+      expect(screen.queryByText('activate:agent-task-manager')).toBeNull();
+      expect(screen.queryByText('activate:agent-future-system')).toBeNull();
+      expect(screen.getByText('activate:agent-2')).toBeTruthy();
+    });
+
+    it('refreshes the pinned task assistant after it is saved from the editor', async () => {
+      mocks.permissions = [
+        PLATFORM_PERMISSIONS.AGENT_READ,
+        PLATFORM_PERMISSIONS.AGENT_UPDATE,
+        PLATFORM_PERMISSIONS.AGENT_PUBLISH,
+      ];
+      mocks.taskManagerAgent = taskManagerAgentState({ data: taskManagerSnapshot() });
+      mocks.list = pagination({ boundaryData: [], isEmpty: true });
+      mocks.fetchDetail.mockResolvedValue({ identity: { id: 'agent-task-manager' }, versions: [] });
+      renderPage();
+
+      fireEvent.click(screen.getByText('agentCatalog.action.edit'));
+      await waitFor(() => expect(mocks.openEditor).toHaveBeenCalledOnce());
+      const { onSaved } = mocks.openEditor.mock.calls[0]![0] as { onSaved: SavedHandler };
+      await onSaved(
+        { ...saveOutput, identity: { ...saveOutput.identity, id: 'agent-task-manager' } },
+        { assignmentsChanged: false, created: false },
+      );
+
+      // …or the card keeps rendering the name / avatar / model this save just replaced.
+      expect(mocks.taskManagerAgentMutate).toHaveBeenCalledOnce();
+    });
   });
 
   describe('the pinned 默认助理 section', () => {

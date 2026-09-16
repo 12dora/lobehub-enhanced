@@ -224,8 +224,23 @@ describe('AssignmentPolicySection', () => {
   });
 
   it('explains that the default assistant already reaches everyone', () => {
-    render(<AssignmentPolicySection isDefaultInbox assignments={assignments} />);
+    render(<AssignmentPolicySection assignments={assignments} systemKey={'default-inbox'} />);
     expect(screen.getByText('agentCatalog.assignment.defaultInboxHint')).toBeTruthy();
+    expect(screen.queryByText('agentCatalog.assignment.taskManagerHint')).toBeNull();
+  });
+
+  // The task assistant is not "delivered" to anyone — every task page just runs it. Reusing the
+  // default assistant's sentence here would state something that is not true of it.
+  it('explains that every task page already uses the task assistant', () => {
+    render(<AssignmentPolicySection assignments={assignments} systemKey={'task-manager'} />);
+    expect(screen.getByText('agentCatalog.assignment.taskManagerHint')).toBeTruthy();
+    expect(screen.queryByText('agentCatalog.assignment.defaultInboxHint')).toBeNull();
+  });
+
+  it('says nothing about reserved delivery on an ordinary assistant', () => {
+    render(<AssignmentPolicySection assignments={assignments} />);
+    expect(screen.queryByText('agentCatalog.assignment.defaultInboxHint')).toBeNull();
+    expect(screen.queryByText('agentCatalog.assignment.taskManagerHint')).toBeNull();
   });
 
   it('locks the default assistant’s mandatory global delivery instead of offering to drop it', () => {
@@ -235,12 +250,20 @@ describe('AssignmentPolicySection', () => {
         entry({ id: 'extra', mode: 'optional', targetId: 'user-2', targetType: 'user' }),
       ],
     });
-    render(<AssignmentPolicySection isDefaultInbox assignments={assignments} />);
+    const { unmount } = render(
+      <AssignmentPolicySection assignments={assignments} systemKey={'default-inbox'} />,
+    );
 
     // Removing it would silently demote the platform default — the server owns that row.
     expect(screen.getByText('agentCatalog.assignment.lockedTag')).toBeTruthy();
     expect(screen.getAllByText('agentCatalog.assignment.remove')).toHaveLength(1);
     expect(screen.getByLabelText('agentCatalog.assignment.removeTarget|user-2')).toBeTruthy();
+    unmount();
+
+    // The same lock covers the task assistant: it is reserved for the same reason.
+    render(<AssignmentPolicySection assignments={assignments} systemKey={'task-manager'} />);
+    expect(screen.getByText('agentCatalog.assignment.lockedTag')).toBeTruthy();
+    expect(screen.getAllByText('agentCatalog.assignment.remove')).toHaveLength(1);
   });
 
   it('leaves the same mandatory global row removable on an ordinary assistant', () => {

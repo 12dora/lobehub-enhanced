@@ -17,7 +17,7 @@ export const isRolloutIdentityCurrent = (
 ): boolean => {
   if (identity.status !== 'published') return false;
   if (identity.migrationRequired) return false;
-  if (identity.systemKey === 'default-inbox') return false;
+  if (identity.systemKey) return false;
   return true;
 };
 

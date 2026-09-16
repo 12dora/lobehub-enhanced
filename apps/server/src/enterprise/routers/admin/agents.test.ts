@@ -27,7 +27,11 @@ import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
 
 import { ADMIN_REAUTH_MAX_AGE_MS } from '../../contracts/adminUsers';
-import { platformAgentDraftToken, PlatformDefaultInboxService } from '../../services/agentCatalog';
+import {
+  platformAgentDraftToken,
+  PlatformDefaultInboxService,
+  PlatformTaskManagerService,
+} from '../../services/agentCatalog';
 import { adminRouter } from '../admin';
 
 const db: LobeChatDatabase = await getTestDB();
@@ -212,7 +216,10 @@ describe('adminAgentsRouter security gates', () => {
     const reader = await callerFor({ authenticatedAt: new Date(), userId: ids.reader });
     const listed = await reader.list({ limit: 10 });
     expect(listed.nextCursor).toBeNull();
-    expect(listed.items.map(({ identity }) => identity.agentKey)).toEqual(['default-inbox']);
+    expect(listed.items.map(({ identity }) => identity.agentKey)).toEqual([
+      'default-inbox',
+      'task-manager',
+    ]);
     await expect(reader.rollouts.list({ agentId: 'missing-agent', limit: 10 })).resolves.toEqual({
       items: [],
       nextCursor: null,
@@ -950,5 +957,118 @@ describe('adminAgentsRouter provisionDefaultInbox', () => {
       .from(platformAgents)
       .where(eq(platformAgents.id, first.identity.id));
     expect(identityRow?.currentVersion).toBe(saved.version.version);
+  });
+});
+
+describe('adminAgentsRouter provisionTaskManager', () => {
+  it('rejects anonymous, ordinary, half-granted and stale-reauth callers', async () => {
+    await expect((await callerFor({})).provisionTaskManager()).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    await expect(
+      (await callerFor({ authenticatedAt: new Date(), userId: ids.normal })).provisionTaskManager(),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (
+        await callerFor({ authenticatedAt: new Date(), userId: ids.publisher })
+      ).provisionTaskManager(),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (
+        await callerFor({ authenticatedAt: new Date(), userId: ids.creator })
+      ).provisionTaskManager(),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (
+        await callerFor({ authenticatedAt: new Date(), userId: ids.assigner })
+      ).provisionTaskManager(),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await callerFor({ authenticatedAt: null, userId: ids.provisioner })).provisionTaskManager(),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('provisions idempotently and overlays the version onto an ordinary user task-agent', async () => {
+    const provisioner = await callerFor({ authenticatedAt: new Date(), userId: ids.provisioner });
+    const first = await provisioner.provisionTaskManager({ locale: 'zh-CN' });
+    expect(first.identity).toMatchObject({
+      agentKey: 'task-manager',
+      isDefault: false,
+      status: 'published',
+      systemKey: 'task-manager',
+    });
+    expect(first.identity.isDefault).toBe(false);
+    const second = await provisioner.provisionTaskManager();
+    expect(second.identity.id).toBe(first.identity.id);
+
+    const listed = await (
+      await callerFor({ authenticatedAt: new Date(), userId: ids.reader })
+    ).list({ limit: 10, systemKey: 'task-manager' });
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]?.identity).toMatchObject({
+      id: first.identity.id,
+      isDefault: false,
+      systemKey: 'task-manager',
+    });
+
+    const [version] = await db
+      .select()
+      .from(platformAgentVersions)
+      .where(eq(platformAgentVersions.agentId, first.identity.id));
+    const overlay = await new PlatformTaskManagerService(db, ids.normal, {
+      materializationService: {
+        resolveForExistingAgent: async (snapshot, agentId) => ({
+          agentId,
+          config: {
+            ...DEFAULT_AGENT_CONFIG,
+            id: agentId,
+            model: version!.dependencySnapshot!.model.modelKey,
+            provider: version!.dependencySnapshot!.model.providerKey,
+            systemRole: snapshot.config.systemRole,
+            title: snapshot.config.displayName,
+          },
+          dependencySnapshot: version!.dependencySnapshot!,
+        }),
+      },
+      validateDependencies: async () => ({ valid: true as const }),
+    }).getEffectiveBuiltinConfig({
+      ...DEFAULT_AGENT_CONFIG,
+      id: 'builtin-task-agent-id',
+      plugins: ['lobe-task'],
+      slug: 'task-agent',
+      title: 'Legacy task agent',
+    });
+    expect(overlay.title).toBe(version!.config.displayName);
+    expect(overlay.systemRole).toBe(version!.config.systemRole);
+    expect(overlay.plugins).toEqual(['lobe-task']);
+    expect(overlay.platform).toMatchObject({
+      managed: true,
+      modelLocked: false,
+      source: 'platform',
+    });
+
+    const deleter = await callerFor({ authenticatedAt: new Date(), userId: ids.deleter });
+    await expect(
+      deleter.delete({
+        agentId: first.identity.id,
+        expectedDraftToken: first.draftToken,
+        expectedRevision: first.identity.revision,
+        reason: 'try delete provisioned task-manager',
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
+
+  it('ensures the task-manager exists before listing', async () => {
+    const reader = await callerFor({ authenticatedAt: new Date(), userId: ids.reader });
+    const listed = await reader.list({ limit: 10, systemKey: 'task-manager' });
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]?.identity).toMatchObject({
+      agentKey: 'task-manager',
+      isDefault: false,
+      systemKey: 'task-manager',
+    });
+    const again = await reader.list({ limit: 10, systemKey: 'task-manager' });
+    expect(again.items).toHaveLength(1);
+    expect(again.items[0]?.identity.id).toBe(listed.items[0]?.identity.id);
   });
 });

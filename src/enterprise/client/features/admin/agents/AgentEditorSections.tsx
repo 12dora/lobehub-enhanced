@@ -1,6 +1,9 @@
 'use client';
 
-import type { PlatformAgentVersionConfig } from '@lobechat/types';
+import {
+  PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
+  type PlatformAgentVersionConfig,
+} from '@lobechat/types';
 import { Avatar, Input, InputNumber, Select, TextArea } from '@lobehub/ui/base-ui';
 import { cx } from 'antd-style';
 import type { ReactNode } from 'react';
@@ -24,6 +27,7 @@ import {
   TAGS_ID,
 } from './agentEditorForm.styles';
 import { FieldLabel } from './dependencyEditorShared';
+import { systemAgentLabel } from './systemAgents';
 import { AGENT_KEY_MAX_LENGTH } from './useAgentEditorForm';
 
 type PatchConfig = <Key extends keyof PlatformAgentVersionConfig>(
@@ -38,13 +42,16 @@ export interface AgentEditorIdentityFieldsProps {
   changeAgentKey: (next: string) => void;
   config: PlatformAgentVersionConfig;
   isCreate: boolean;
-  /** The platform's `default-inbox` assistant: its identifier is reserved and never editable. */
-  isDefaultInbox?: boolean;
   keyInvalid: boolean;
   keyMissing: boolean;
   patchConfig: PatchConfig;
   readOnly: boolean;
   setDisplayName: (next: string) => void;
+  /**
+   * Reserved system key of the assistant being edited, or null for an ordinary one. A reserved
+   * identity's identifier belongs to the platform and is never editable.
+   */
+  systemKey?: string | null;
   /** Stores the picked image and writes back only the hosted URL. */
   uploadAvatar: (file: File) => void;
 }
@@ -56,16 +63,18 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
     changeAgentKey,
     config,
     isCreate,
-    isDefaultInbox = false,
     keyInvalid,
     keyMissing,
     patchConfig,
     readOnly,
     setDisplayName,
+    systemKey = null,
     uploadAvatar,
   }) => {
     const { t } = useTranslation('admin');
     const background = config.backgroundColor ?? undefined;
+    const systemLabelKey = systemAgentLabel(systemKey);
+    const isDefaultInbox = systemKey === PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY;
     // Members see the default assistant's built-in avatar as the published brand icon, so the
     // editor shows exactly that. What is stored never changes — this is display only.
     const inboxAvatar = useDefaultInboxAvatar(config.avatar);
@@ -143,8 +152,8 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
               htmlFor={KEY_ID}
               required={isCreate}
               help={
-                isDefaultInbox
-                  ? t('agentCatalog.editor.keyDefaultInboxDesc')
+                systemLabelKey
+                  ? t('agentCatalog.editor.keySystemDesc', { agent: t(systemLabelKey) })
                   : isCreate
                     ? t('agentCatalog.editor.keyDesc')
                     : t('agentCatalog.editor.keyLockedDesc')
@@ -154,7 +163,7 @@ export const AgentEditorIdentityFields = memo<AgentEditorIdentityFieldsProps>(
             </FieldLabel>
             <Input
               aria-label={t('agentCatalog.editor.key')}
-              disabled={readOnly || !isCreate || isDefaultInbox}
+              disabled={readOnly || !isCreate || systemLabelKey !== null}
               id={KEY_ID}
               maxLength={AGENT_KEY_MAX_LENGTH}
               placeholder={t('agentCatalog.editor.keyPlaceholder')}

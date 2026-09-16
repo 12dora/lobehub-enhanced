@@ -26,10 +26,12 @@ import type {
   AdminPlatformAgentGetOutput,
   AdminPlatformAgentListInput,
   AdminPlatformAgentListOutput,
+  AdminPlatformAgentProvisionDefaultInboxInput,
+  AdminPlatformAgentProvisionDefaultInboxOutput,
+  AdminPlatformAgentProvisionTaskManagerInput,
+  AdminPlatformAgentProvisionTaskManagerOutput,
   AdminPlatformAgentRollbackInput,
   AdminPlatformAgentRollbackOutput,
-  AdminPlatformAgentUploadAvatarInput,
-  AdminPlatformAgentUploadAvatarOutput,
   AdminPlatformAgentRolloutCancelInput,
   AdminPlatformAgentRolloutCancelOutput,
   AdminPlatformAgentRolloutGetInput,
@@ -46,6 +48,8 @@ import type {
   AdminPlatformAgentSaveOutput,
   AdminPlatformAgentSetDefaultInboxInput,
   AdminPlatformAgentSetDefaultInboxOutput,
+  AdminPlatformAgentUploadAvatarInput,
+  AdminPlatformAgentUploadAvatarOutput,
   AdminPlatformAgentValidateDependenciesInput,
   AdminPlatformAgentValidateDependenciesOutput,
   AdminPlatformAgentVersionsListInput,
@@ -73,6 +77,10 @@ export type {
   AdminPlatformAgentGetOutput,
   AdminPlatformAgentListInput,
   AdminPlatformAgentListOutput,
+  AdminPlatformAgentProvisionDefaultInboxInput,
+  AdminPlatformAgentProvisionDefaultInboxOutput,
+  AdminPlatformAgentProvisionTaskManagerInput,
+  AdminPlatformAgentProvisionTaskManagerOutput,
   AdminPlatformAgentRollbackInput,
   AdminPlatformAgentRollbackOutput,
   AdminPlatformAgentRolloutCancelInput,
@@ -96,21 +104,6 @@ export type {
   AdminPlatformAgentVersionsListInput,
   AdminPlatformAgentVersionsListOutput,
 };
-
-/**
- * Take over the platform default assistant: the server creates the `default-inbox` Agent and its
- * mandatory global assignment in one transaction, seeding the copy from `locale`.
- *
- * Declared here rather than re-exported from the server contracts so the client compiles against
- * the agreed shape independently of when the procedure lands.
- */
-export interface AdminPlatformAgentProvisionDefaultInboxInput {
-  /** UI language the seeded name / prompt / opening message are written in. */
-  locale?: string;
-}
-
-/** Same aggregate root `get` returns — the freshly provisioned default, ready to edit. */
-export type AdminPlatformAgentProvisionDefaultInboxOutput = AdminPlatformAgentGetOutput;
 
 export type AdminAgentListInput = AdminPlatformAgentListInput;
 export type AdminAgentListItem = AdminPlatformAgentListOutput['items'][number];
@@ -198,6 +191,10 @@ export interface AdminAgentsClient {
   provisionDefaultInbox: (
     input: AdminPlatformAgentProvisionDefaultInboxInput,
   ) => Promise<AdminPlatformAgentProvisionDefaultInboxOutput>;
+  /** Create the reserved `task-manager` Agent from the builtin task-agent seed. */
+  provisionTaskManager: (
+    input: AdminPlatformAgentProvisionTaskManagerInput,
+  ) => Promise<AdminPlatformAgentProvisionTaskManagerOutput>;
   removeAssignment: (
     input: AdminPlatformAgentAssignmentRemoveInput,
   ) => Promise<AdminPlatformAgentAssignmentRemoveOutput>;
@@ -216,11 +213,11 @@ export interface AdminAgentsClient {
   startRollout: (
     input: AdminPlatformAgentRolloutStartInput,
   ) => Promise<AdminPlatformAgentRolloutStartOutput>;
-  upsertAssignment: (
-    input: AdminPlatformAgentAssignmentUpsertInput,
-  ) => Promise<AdminPlatformAgentAssignmentUpsertOutput>;
   /** Upload an image avatar for the editor; the returned `url` is what `config.avatar` stores. */
   uploadAvatar: (
     input: AdminPlatformAgentUploadAvatarInput,
   ) => Promise<AdminPlatformAgentUploadAvatarOutput>;
+  upsertAssignment: (
+    input: AdminPlatformAgentAssignmentUpsertInput,
+  ) => Promise<AdminPlatformAgentAssignmentUpsertOutput>;
 }

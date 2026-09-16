@@ -38,7 +38,10 @@ import { PHASE_PRODUCTION_BUILD } from 'next/constants';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { parseEnterpriseFeatureFlags } from '../featureFlags';
-import { ensureDefaultInboxProvisioned } from '../services/agentCatalog/adminService';
+import {
+  ensureDefaultInboxProvisioned,
+  ensureTaskManagerProvisioned,
+} from '../services/agentCatalog/adminService';
 import { repairLockVisiblePublishedPolicies } from '../services/settings/lockVisiblePolicy';
 import {
   ensureAgentTemplateCatalogSeeded,
@@ -181,7 +184,7 @@ export const runStartupPlatformBootstrap = async (
 };
 
 /**
- * Independent managed-agents bootstrap: default-inbox provision. Not gated on the
+ * Independent managed-agents bootstrap: default-inbox and task-manager provision. Not gated on the
  * admin console. Callers must already have a post-migration database handle; when
  * the admin bootstrap ran, this runs after template seeding.
  */
@@ -191,6 +194,7 @@ const runManagedAgentsStartupBootstrap = async (
 ): Promise<void> => {
   if (!parseEnterpriseFeatureFlags(env).ENABLE_PLATFORM_MANAGED_AGENTS) return;
   await ensureDefaultInboxProvisioned(db, { locale: env.DEFAULT_LANG });
+  await ensureTaskManagerProvisioned(db, { locale: env.DEFAULT_LANG });
 };
 
 const bootstrapProcess = process as NodeJS.Process & {

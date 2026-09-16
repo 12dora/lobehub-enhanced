@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
   PLATFORM_AGENT_GLOBAL_TARGET_ID,
+  PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
 } from '@lobechat/types';
 
 import {
@@ -167,6 +168,66 @@ const seedAgents = (): AdminAgentDetailOutput[] => [
     ],
   },
 ];
+
+/**
+ * The reserved 任务助手 catalog row, as `admin.agents.list` projects it once the platform has taken
+ * it over: a published, non-default identity whose `agentKey` IS its system key, and which carries
+ * no assignment (every member's task page uses it implicitly).
+ *
+ * Opt-in rather than part of the default seed: most suites assert against the two-row catalog, and
+ * a third row silently shifting their expectations would be a worse default than this call.
+ */
+export const createTaskManagerAgentRecord = (
+  over: Partial<AdminAgentDetailOutput['identity']> = {},
+): AdminAgentDetailOutput => ({
+  assignments: [],
+  draftToken: checksum('7'),
+  identity: {
+    agentKey: PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
+    currentVersionId: 'version-task-manager-1',
+    draftSequence: 1,
+    id: 'agent-task-manager',
+    isDefault: false,
+    migrationRequired: false,
+    revision: 1,
+    status: 'published',
+    systemKey: PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
+    ...over,
+  },
+  rollouts: [],
+  versions: [
+    {
+      agentId: 'agent-task-manager',
+      checksum: checksum('8'),
+      config: {
+        avatar: '/avatars/lobe-ai.png',
+        backgroundColor: null,
+        description: 'Runs every member’s task page.',
+        displayName: '任务助手',
+        modelParameters: {},
+        openingMessage: null,
+        openingQuestions: [],
+        systemRole: 'You manage tasks for the member who opened this page.',
+        tags: [],
+        thinkingEffort: null,
+      },
+      createdAt: new Date('2026-07-18T06:00:00.000Z'),
+      createdBy: 'admin-1',
+      dependencySnapshot: {
+        connectors: [],
+        model: {
+          modelKey: 'gpt-4.1',
+          providerChecksum: checksum('c'),
+          providerKey: 'openai',
+          providerRevision: 4,
+        },
+        skills: [],
+      },
+      id: 'version-task-manager-1',
+      version: '1.0.0',
+    },
+  ],
+});
 
 const toListItem = (detail: AdminAgentDetailOutput): AdminAgentListItem => {
   const current = detail.versions.find(({ id }) => id === detail.identity.currentVersionId);
@@ -373,6 +434,9 @@ export const createMockAdminAgentsClient = (): AdminAgentsClient => {
         if (input.isDefault !== undefined && item.identity.isDefault !== input.isDefault) {
           return false;
         }
+        if (input.systemKey && item.identity.systemKey !== input.systemKey) {
+          return false;
+        }
         if (input.status && item.identity.status !== input.status) return false;
         if (!query) return true;
         return `${item.displayName} ${item.identity.agentKey}`.toLocaleLowerCase().includes(query);
@@ -477,6 +541,31 @@ export const createMockAdminAgentsClient = (): AdminAgentsClient => {
         versions: [version],
       });
       return adminPlatformAgentGetOutputSchema.parse(structuredClone({ draftToken, identity }));
+    },
+    /**
+     * Take over the task assistant, mirroring the server: idempotent, so a second call hands back
+     * the row that is already there instead of creating a second reserved identity.
+     */
+    provisionTaskManager: async ({ locale }) => {
+      const existing = [...records.values()].find(
+        ({ identity }) => identity.systemKey === PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
+      );
+      if (existing) {
+        return adminPlatformAgentGetOutputSchema.parse(
+          structuredClone({ draftToken: existing.draftToken, identity: existing.identity }),
+        );
+      }
+      const record = createTaskManagerAgentRecord({ id: `agent-${crypto.randomUUID()}` });
+      const version = record.versions[0]!;
+      version.agentId = record.identity.id;
+      version.id = `version-${record.identity.id}-1`;
+      version.config.displayName = locale?.startsWith('zh') ? '任务助手' : 'Task Agent';
+      record.identity = { ...record.identity, currentVersionId: version.id };
+      record.draftToken = draftTokenFromIdentity(record.identity);
+      records.set(record.identity.id, record);
+      return adminPlatformAgentGetOutputSchema.parse(
+        structuredClone({ draftToken: record.draftToken, identity: record.identity }),
+      );
     },
     removeAssignment: async (input) => {
       const record = requireCas(input.agentId, input.expectedRevision, input.expectedDraftToken);

@@ -78,6 +78,18 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_CATALOG = [
   },
   {
     kind: 'mutation',
+    path: 'admin.agents.provisionTaskManager',
+    permission: {
+      mode: 'all',
+      permissions: [
+        PLATFORM_PERMISSIONS.AGENT_CREATE,
+        PLATFORM_PERMISSIONS.AGENT_PUBLISH,
+        PLATFORM_PERMISSIONS.AGENT_ASSIGN,
+      ],
+    },
+  },
+  {
+    kind: 'mutation',
     path: 'admin.agents.rollback',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.AGENT_PUBLISH] },
   },

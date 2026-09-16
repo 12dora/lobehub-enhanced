@@ -16,6 +16,7 @@ import {
   adminPlatformAgentListInputSchema,
   adminPlatformAgentListOutputSchema,
   adminPlatformAgentProvisionDefaultInboxInputSchema,
+  adminPlatformAgentProvisionTaskManagerInputSchema,
   adminPlatformAgentRollbackInputSchema,
   adminPlatformAgentRolloutCancelInputSchema,
   adminPlatformAgentRolloutListOutputSchema,
@@ -26,6 +27,7 @@ import {
   adminPlatformAgentSaveOutputSchema,
   adminPlatformAgentSetDefaultInboxInputSchema,
   adminPlatformAgentVersionsListOutputSchema,
+  asPlatformAgentSystemKey,
   platformAgentAssignmentSchema,
   platformAgentDependencySnapshotSchema,
   platformAgentEffectiveListOutputSchema,
@@ -295,6 +297,54 @@ describe('platform Agent contracts', () => {
     expect(
       adminPlatformAgentProvisionDefaultInboxInputSchema.safeParse({ locale: 'zh-CN', extra: 1 })
         .success,
+    ).toBe(false);
+  });
+
+  it('accepts a published task-manager identity that is not the default inbox', () => {
+    const draft = {
+      agentKey: 'task-manager',
+      currentVersionId: 'version-id',
+      draftSequence: 1,
+      id: 'agent-id',
+      isDefault: false,
+      migrationRequired: false,
+      revision: 1,
+      status: 'published' as const,
+      systemKey: 'task-manager' as const,
+    };
+    expect(platformAgentIdentityDraftSchema.safeParse(draft).success).toBe(true);
+    expect(platformAgentIdentityDraftSchema.safeParse({ ...draft, isDefault: true }).success).toBe(
+      false,
+    );
+    expect(
+      platformAgentIdentityDraftSchema.safeParse({ ...draft, currentVersionId: null }).success,
+    ).toBe(false);
+  });
+
+  it('accepts an omitted or locale-only provisionTaskManager payload', () => {
+    expect(adminPlatformAgentProvisionTaskManagerInputSchema.safeParse(undefined).success).toBe(
+      true,
+    );
+    expect(adminPlatformAgentProvisionTaskManagerInputSchema.safeParse({}).success).toBe(true);
+    expect(
+      adminPlatformAgentProvisionTaskManagerInputSchema.safeParse({ locale: 'zh-CN' }).success,
+    ).toBe(true);
+    expect(
+      adminPlatformAgentProvisionTaskManagerInputSchema.safeParse({ locale: 'zh-CN', extra: 1 })
+        .success,
+    ).toBe(false);
+  });
+
+  it('narrows stored system keys to the published union and lists by systemKey pointer', () => {
+    expect(asPlatformAgentSystemKey('default-inbox')).toBe('default-inbox');
+    expect(asPlatformAgentSystemKey('task-manager')).toBe('task-manager');
+    expect(asPlatformAgentSystemKey('unknown')).toBeNull();
+    expect(asPlatformAgentSystemKey(null)).toBeNull();
+    expect(
+      adminPlatformAgentListInputSchema.safeParse({ systemKey: 'task-manager', limit: 1 }).success,
+    ).toBe(true);
+    expect(
+      adminPlatformAgentListInputSchema.safeParse({ systemKey: 'not-a-role', limit: 1 }).success,
     ).toBe(false);
   });
 

@@ -1,7 +1,6 @@
 import { INBOX_SESSION_ID } from '@lobechat/const';
 import {
   encodePlatformAgentListId,
-  PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
   type PlatformAgentAssignmentMode,
   type PlatformAgentConfigMeta,
   type PlatformAgentUserListMeta,
@@ -174,10 +173,10 @@ export class PlatformAgentUserListService {
       this.resolver().getEffectiveList(userId),
       this.repository().listMaterializedAgentIds(userId),
     ]);
-    // The stable default-inbox is rendered through the existing builtin inbox row/selector/URL.
-    // Do not add a second encoded platform identity to ordinary lists.
+    // The stable system agents (default-inbox, task-manager) are rendered through their
+    // existing builtin rows/selectors. Do not add a second encoded platform identity.
     const entries = agents
-      .filter((agent) => agent.systemKey !== PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY)
+      .filter((agent) => agent.systemKey === null)
       .map((agent): PlatformAgentUserListEntry => ({
         avatar: agent.config.avatar,
         backgroundColor: agent.config.backgroundColor,

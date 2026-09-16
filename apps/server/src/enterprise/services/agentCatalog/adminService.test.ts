@@ -4,7 +4,11 @@ import type { LobeChatDatabase, Transaction } from '@/database/type';
 
 import type { EnterpriseObservabilityEvent } from '../../observability';
 import { setEnterprisePlatformObserverForTest } from '../../observability';
-import { ensureDefaultInboxProvisioned, PlatformAgentAdminService } from './adminService';
+import {
+  ensureDefaultInboxProvisioned,
+  ensureTaskManagerProvisioned,
+  PlatformAgentAdminService,
+} from './adminService';
 import {
   PlatformAgentDefaultRequiredError,
   PlatformAgentInvalidInputError,
@@ -16,6 +20,7 @@ import { platformAgentDraftToken } from './publication';
 
 const mocks = vi.hoisted(() => ({
   acquireDefaultLock: vi.fn(),
+  acquireTaskManagerLock: vi.fn(),
   acquireLock: vi.fn(),
   acquireReferenceLock: vi.fn(),
   appendAudit: vi.fn(),
@@ -37,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   getExactVersionsByIds: vi.fn(),
   getIdentity: vi.fn(),
   getIdentityByAgentKey: vi.fn(),
+  getIdentityBySystemKey: vi.fn(),
   getAssignment: vi.fn(),
   hardDeleteAgentCascade: vi.fn(),
   isModuleEnabled: vi.fn(),
@@ -73,6 +79,7 @@ vi.mock('@/database/repositories/platformAgentCatalog', () => ({
     getExactVersionsByIds = mocks.getExactVersionsByIds;
     getIdentity = mocks.getIdentity;
     getIdentityByAgentKey = mocks.getIdentityByAgentKey;
+    getIdentityBySystemKey = mocks.getIdentityBySystemKey;
     hardDeleteAgentCascade = mocks.hardDeleteAgentCascade;
     listAssignments = mocks.listAssignments;
     listDependentMaterializations = mocks.listDependentMaterializations;
@@ -91,6 +98,7 @@ vi.mock('../platformAudit', () => ({
 }));
 vi.mock('../platformDependencyLock', () => ({
   acquirePlatformDefaultInboxLock: mocks.acquireDefaultLock,
+  acquirePlatformTaskManagerLock: mocks.acquireTaskManagerLock,
   acquirePlatformDependencyPublicationLock: mocks.acquireLock,
 }));
 vi.mock('../moduleSettings', () => ({
@@ -151,6 +159,11 @@ const pgError = (code: string, constraint?: string, message = 'db failure') =>
 
 const transaction = {} as Transaction;
 const db = {
+  select: vi.fn(() => ({
+    from: () => ({
+      where: async () => mocks.findByIds(),
+    }),
+  })),
   transaction: vi.fn(async (operation: (tx: Transaction) => Promise<unknown>) =>
     operation(transaction),
   ),
@@ -279,7 +292,7 @@ describe('PlatformAgentAdminService', () => {
     expect(result.items[0]?.targetUser).toEqual(known);
     expect(result.items[1]?.targetUser).toBeNull();
     expect(result.items[2]?.targetUser).toBeNull();
-    expect(mocks.findByIds).toHaveBeenCalledWith(db, ['user-known', 'user-missing']);
+    expect(db.select).toHaveBeenCalled();
   });
 
   it('switches default Inbox by clearing the old row before promoting the new row', async () => {
@@ -448,6 +461,20 @@ describe('PlatformAgentAdminService', () => {
       await expect(
         new PlatformAgentAdminService(db).create('admin-id', {
           agentKey: 'default-inbox',
+          config: createConfig,
+          dependencySnapshot: createDependencySnapshot,
+          isDefault: false,
+          reason: 'take the reserved key',
+          systemKey: null,
+        }),
+      ).rejects.toBeInstanceOf(PlatformAgentInvalidInputError);
+      expect(mocks.createIdentity).not.toHaveBeenCalled();
+    });
+
+    it('rejects create that consumes the reserved task-manager agentKey', async () => {
+      await expect(
+        new PlatformAgentAdminService(db).create('admin-id', {
+          agentKey: 'task-manager',
           config: createConfig,
           dependencySnapshot: createDependencySnapshot,
           isDefault: false,
@@ -1509,6 +1536,219 @@ describe('PlatformAgentAdminService', () => {
             result: 'success',
           }),
         );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
+  describe('provisionTaskManager', () => {
+    const seed = {
+      config: createConfig,
+      dependencySnapshot: createDependencySnapshot,
+    };
+
+    beforeEach(() => {
+      mocks.backfillEmptyCurrentVersionLabel.mockResolvedValue(undefined);
+    });
+
+    it('creates a published task-manager identity, global assignment, and audit row', async () => {
+      const created = identity({
+        agentKey: 'task-manager',
+        currentVersionId: null,
+        draftSequence: 0,
+        id: 'task-agent',
+        isDefault: false,
+        revision: 0,
+        status: 'draft',
+        systemKey: 'task-manager',
+      });
+      const published = {
+        ...created,
+        currentVersionId: 'version-id',
+        draftSequence: 2,
+        revision: 1,
+        status: 'published',
+      };
+      mocks.getIdentityBySystemKey.mockResolvedValue(undefined);
+      mocks.getIdentityByAgentKey.mockResolvedValue(undefined);
+      mocks.createIdentity.mockResolvedValue(created);
+      mocks.appendVersionCas.mockResolvedValue({
+        agentId: created.id,
+        checksum: 'f'.repeat(64),
+        config: createConfig,
+        createdAt: new Date('2026-09-04T00:00:00Z'),
+        createdBy: 'admin-id',
+        dependencySnapshot: createDependencySnapshot,
+        id: 'version-id',
+        version: '1.0.0',
+      });
+      mocks.pointToVersionCas.mockResolvedValue(published);
+      mocks.lockIdentity.mockResolvedValue(published);
+      mocks.listAssignments.mockResolvedValue({ items: [], nextCursor: null });
+      mocks.createAssignment.mockResolvedValue({
+        agentId: published.id,
+        enabled: true,
+        id: 'global-assignment',
+        mode: 'default',
+        pinnedVersionId: null,
+        status: 'active',
+        targetId: '__global__',
+        targetType: 'global',
+        versionPolicy: 'latest_published',
+      });
+      mocks.updateDraftCas.mockResolvedValue({ ...published, draftSequence: 3 });
+
+      const buildSeed = vi.fn(async () => seed);
+      const result = await new PlatformAgentAdminService(db, {
+        buildTaskManagerSeed: buildSeed,
+        invalidation: { publish: vi.fn() },
+      }).provisionTaskManager({ actorId: 'admin-id', locale: 'zh-CN' });
+
+      expect(result.identity).toMatchObject({
+        agentKey: 'task-manager',
+        isDefault: false,
+        status: 'published',
+        systemKey: 'task-manager',
+      });
+      expect(mocks.acquireTaskManagerLock).toHaveBeenCalledBefore(mocks.createIdentity);
+      expect(mocks.createIdentity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKey: 'task-manager',
+          createdBy: 'admin-id',
+          isDefault: false,
+          systemKey: 'task-manager',
+        }),
+      );
+      expect(mocks.createAssignment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabled: true,
+          mode: 'default',
+          targetId: '__global__',
+          targetType: 'global',
+        }),
+      );
+      expect(buildSeed).toHaveBeenCalledWith(expect.anything(), { locale: 'zh-CN' });
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'admin.agents.provisionTaskManager',
+          actorUserId: 'admin-id',
+          afterDiff: expect.objectContaining({ created: true, locale: 'zh-CN' }),
+          result: 'success',
+        }),
+      );
+    });
+
+    it('is idempotent when the task-manager already has an effective global assignment', async () => {
+      const existing = identity({
+        agentKey: 'task-manager',
+        id: 'task-agent',
+        isDefault: false,
+        systemKey: 'task-manager',
+      });
+      mocks.getIdentityBySystemKey.mockResolvedValue(existing);
+      mocks.lockIdentity.mockResolvedValue(existing);
+      mocks.listAssignments.mockResolvedValue({
+        items: [
+          {
+            agentId: existing.id,
+            enabled: true,
+            id: 'global-assignment',
+            mode: 'default',
+            pinnedVersionId: null,
+            status: 'active',
+            targetId: '__global__',
+            targetType: 'global',
+            versionPolicy: 'latest_published',
+          },
+        ],
+        nextCursor: null,
+      });
+
+      const result = await new PlatformAgentAdminService(db, {
+        buildTaskManagerSeed: async () => seed,
+      }).provisionTaskManager({ actorId: 'admin-id' });
+
+      expect(result.identity.id).toBe(existing.id);
+      expect(result.identity.isDefault).toBe(false);
+      expect(mocks.createIdentity).not.toHaveBeenCalled();
+      expect(mocks.createAssignment).not.toHaveBeenCalled();
+      expect(mocks.acquireTaskManagerLock).toHaveBeenCalledBefore(mocks.acquireReferenceLock);
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'admin.agents.provisionTaskManager',
+          afterDiff: expect.objectContaining({ created: false }),
+          result: 'success',
+        }),
+      );
+    });
+
+    it('refuses when the reserved agentKey is already a default inbox', async () => {
+      mocks.getIdentityBySystemKey.mockResolvedValue(undefined);
+      mocks.getIdentityByAgentKey.mockResolvedValue(
+        identity({
+          agentKey: 'task-manager',
+          id: 'stolen',
+          isDefault: true,
+          systemKey: 'default-inbox',
+        }),
+      );
+
+      await expect(
+        new PlatformAgentAdminService(db).provisionTaskManager({ actorId: 'admin-id' }),
+      ).rejects.toBeInstanceOf(PlatformAgentDefaultRequiredError);
+      expect(mocks.createIdentity).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ensureTaskManagerProvisioned', () => {
+    const healthyAssignment = (agentId: string) => ({
+      agentId,
+      enabled: true,
+      id: 'global-assignment',
+      mode: 'default',
+      pinnedVersionId: null,
+      status: 'active',
+      targetId: '__global__',
+      targetType: 'global',
+      versionPolicy: 'latest_published',
+    });
+
+    it('returns without locks or audit when the task-manager is already healthy', async () => {
+      const existing = identity({
+        agentKey: 'task-manager',
+        id: 'task-agent',
+        isDefault: false,
+        systemKey: 'task-manager',
+      });
+      mocks.getIdentityBySystemKey.mockResolvedValue(existing);
+      mocks.listAssignments.mockResolvedValue({
+        items: [healthyAssignment(existing.id)],
+        nextCursor: null,
+      });
+
+      vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
+      try {
+        await ensureTaskManagerProvisioned(db);
+        expect(mocks.createIdentity).not.toHaveBeenCalled();
+        expect(mocks.createAssignment).not.toHaveBeenCalled();
+        expect(mocks.acquireTaskManagerLock).not.toHaveBeenCalled();
+        expect(mocks.lockIdentity).not.toHaveBeenCalled();
+        expect(mocks.appendAudit).not.toHaveBeenCalled();
+        expect(db.transaction).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('skips when the managed-agents env flag is off', async () => {
+      vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '0');
+      try {
+        await ensureTaskManagerProvisioned(db);
+        expect(mocks.isModuleEnabled).not.toHaveBeenCalled();
+        expect(mocks.getIdentityBySystemKey).not.toHaveBeenCalled();
+        expect(mocks.acquireTaskManagerLock).not.toHaveBeenCalled();
+        expect(mocks.appendAudit).not.toHaveBeenCalled();
       } finally {
         vi.unstubAllEnvs();
       }

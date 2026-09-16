@@ -1,3 +1,4 @@
+import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { INBOX_SESSION_ID } from '@lobechat/const';
 import { TRPCError } from '@trpc/server';
 
@@ -10,6 +11,7 @@ import { trpc } from '@/libs/trpc/lambda/init';
 import { parseEnterpriseFeatureFlags } from '../featureFlags';
 import { PlatformDefaultInboxService } from '../services/agentCatalog/defaultInbox';
 import { isPlatformAgentTakeoverActive } from '../services/agentCatalog/enforcement';
+import { PlatformTaskManagerService } from '../services/agentCatalog/taskManagerAgent';
 import { throwEnterpriseError } from './enterpriseErrors';
 
 /** Stable enterprise code for client i18n (`enterprise.error.MANAGED_RESOURCE_BY_PLATFORM`). */
@@ -37,6 +39,14 @@ export const assertDefaultInboxNotPlatformManaged = async (params: {
 }): Promise<void> => {
   const managedDefault = await new PlatformDefaultInboxService(params.db, params.userId).capture();
   if (managedDefault) throw new TRPCError(MANAGED_AGENT_MUTATION_FORBIDDEN);
+};
+
+export const assertTaskManagerNotPlatformManaged = async (params: {
+  db: LobeChatDatabase;
+  userId: string;
+}): Promise<void> => {
+  const managed = await new PlatformTaskManagerService(params.db, params.userId).capture();
+  if (managed) throw new TRPCError(MANAGED_AGENT_MUTATION_FORBIDDEN);
 };
 
 /**
@@ -76,6 +86,9 @@ export const INBOX_PLATFORM_MANAGED_FIELDS = [
 
 export type InboxPlatformManagedField = (typeof INBOX_PLATFORM_MANAGED_FIELDS)[number];
 
+/** Same identity/copy field lock as inbox light mode, applied to slug `task-agent`. */
+export const TASK_MANAGER_PLATFORM_IDENTITY_MANAGED_FIELDS = INBOX_PLATFORM_IDENTITY_MANAGED_FIELDS;
+
 const patchTouchesInboxPlatformManagedFields = (
   patch: unknown,
   fields: readonly string[],
@@ -93,6 +106,9 @@ const patchTouchesInboxPlatformManagedFields = (
  * provider / params stay writable. Enforced takeover locks the full
  * {@link INBOX_PLATFORM_MANAGED_FIELDS} set.
  *
+ * Also locks identity/copy fields on the builtin `task-agent` row while the task-manager
+ * overlay is bound (always light mode — model stays writable).
+ *
  * Cheap: skip when the feature flag is off or the patch has no candidate keys; look up the
  * slug first; call the memoised takeover predicate and `capture()` only for the inbox row.
  */
@@ -105,14 +121,29 @@ export const assertInboxManagedFieldsNotEdited = async (params: {
 }): Promise<void> => {
   const flags = parseEnterpriseFeatureFlags(process.env);
   if (!flags.ENABLE_PLATFORM_MANAGED_AGENTS) return;
-  if (!patchTouchesInboxPlatformManagedFields(params.patch, INBOX_PLATFORM_MANAGED_FIELDS)) return;
   if (typeof params.agentId !== 'string' || params.agentId.length === 0) return;
 
-  const inboxIds = await new AgentModel(
-    params.db,
-    params.userId,
-    params.workspaceId,
-  ).findAgentIdsBySlug([params.agentId], INBOX_SESSION_ID);
+  const agentModel = new AgentModel(params.db, params.userId, params.workspaceId);
+
+  if (
+    patchTouchesInboxPlatformManagedFields(
+      params.patch,
+      TASK_MANAGER_PLATFORM_IDENTITY_MANAGED_FIELDS,
+    )
+  ) {
+    const taskAgentIds = await agentModel.findAgentIdsBySlug(
+      [params.agentId],
+      BUILTIN_AGENT_SLUGS.taskAgent,
+    );
+    if (taskAgentIds.has(params.agentId)) {
+      await assertTaskManagerNotPlatformManaged(params);
+      return;
+    }
+  }
+
+  if (!patchTouchesInboxPlatformManagedFields(params.patch, INBOX_PLATFORM_MANAGED_FIELDS)) return;
+
+  const inboxIds = await agentModel.findAgentIdsBySlug([params.agentId], INBOX_SESSION_ID);
   if (!inboxIds.has(params.agentId)) return;
 
   const takeover = await isPlatformAgentTakeoverActive(params.db, flags);
@@ -193,14 +224,18 @@ export const assertAgentsNotPlatformManaged = async (params: {
   }
   const repository = new PlatformAgentCatalogRepository(params.db);
   const agentModel = new AgentModel(params.db, params.userId, params.workspaceId);
-  const [platformAgentIds, inboxAgentIds] = await Promise.all([
+  const [platformAgentIds, inboxAgentIds, taskAgentIds] = await Promise.all([
     repository.getPlatformAgentIdsByMaterializedAgentIds(params.userId, uniqueIds),
     params.skipManagedInbox
       ? Promise.resolve(new Set<string>())
       : agentModel.findAgentIdsBySlug(uniqueIds, INBOX_SESSION_ID),
+    params.skipManagedInbox
+      ? Promise.resolve(new Set<string>())
+      : agentModel.findAgentIdsBySlug(uniqueIds, BUILTIN_AGENT_SLUGS.taskAgent),
   ]);
   if (platformAgentIds.size > 0) throw new TRPCError(MANAGED_AGENT_MUTATION_FORBIDDEN);
   if (inboxAgentIds.size > 0) await assertDefaultInboxNotPlatformManaged(params);
+  if (taskAgentIds.size > 0) await assertTaskManagerNotPlatformManaged(params);
 };
 
 /** Extracts the agent id(s) a mutation targets from its raw tRPC input. */

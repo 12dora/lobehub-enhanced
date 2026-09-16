@@ -39,7 +39,7 @@ export const platformAgents = pgTable(
       .notNull(),
 
     agentKey: varchar('agent_key', { length: 128 }).notNull(),
-    /** Stable system key e.g. `default-inbox`; partially unique when set. */
+    /** Stable system key e.g. `default-inbox` / `task-manager`; partially unique when set. */
     systemKey: varchar('system_key', { length: 128 }),
     slug: varchar('slug', { length: 128 }),
     title: text('title').notNull(),
@@ -96,6 +96,8 @@ export const platformAgents = pgTable(
       foreignColumns: [platformAgentVersions.agentId, platformAgentVersions.id],
       name: 'platform_agents_current_version_same_agent_fk',
     }).onDelete('restrict'),
+    // is_default is inbox-only. Other system keys (e.g. task-manager) are
+    // NOT is_default AND system_key IS DISTINCT FROM 'default-inbox'.
     check(
       'platform_agents_default_inbox_consistency_check',
       sql`(${t.isDefault} AND ${t.systemKey} = 'default-inbox')

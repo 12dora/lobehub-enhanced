@@ -1,5 +1,6 @@
 'use client';
 
+import { PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY } from '@lobechat/types';
 import useSWRInfinite from 'swr/infinite';
 
 import { adminAgentsService } from '@/enterprise/client/services/adminAgents';
@@ -76,6 +77,16 @@ export const findDefaultAdminAgent = async (
   const page = await client.list({ isDefault: true, limit: 1 });
   return page.items.find(({ identity }) => identity.isDefault) ?? page.items[0];
 };
+
+/**
+ * Pick the task-manager catalog row from an already-loaded admin list page.
+ * Prefer {@link fetchTaskManagerAdminAgent} in `useTaskManagerAgent.ts` for the pin card —
+ * that uses the dedicated `systemKey` pointer read.
+ */
+export const findTaskManagerAdminAgent = (
+  items: AdminAgentListItem[],
+): AdminAgentListItem | undefined =>
+  items.find(({ identity }) => identity.systemKey === PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY);
 
 /**
  * One page of published replacement candidates for archive-default, optionally filtered by

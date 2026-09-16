@@ -123,6 +123,17 @@ export const ADMIN_MUTATION_ENTRIES_CATALOG = {
       reauth: recentReauth,
     },
   ),
+  'admin.agents.provisionTaskManager': dangerousMutation(
+    'admin.agents.provisionTaskManager',
+    'critical',
+    'Create or repair the global task-manager agent and its assignment (AGENT_CREATE + AGENT_PUBLISH + AGENT_ASSIGN).',
+    {
+      reason: notApplicable(
+        'Provisioning records a server-authored audit outcome; the procedure DTO has no operator reason.',
+      ),
+      reauth: recentReauth,
+    },
+  ),
   'admin.agents.rollback': dangerousMutation(
     'admin.agents.rollback',
     'high',

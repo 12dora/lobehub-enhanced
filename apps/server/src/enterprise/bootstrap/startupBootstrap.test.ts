@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   bootstrapSuperAdmin: vi.fn(),
   ensureAgentTemplateCatalogSeeded: vi.fn(),
   ensureDefaultInboxProvisioned: vi.fn(),
+  ensureTaskManagerProvisioned: vi.fn(),
   ensurePlatformRbacSeeded: vi.fn(),
   ensureTaskTemplateCatalogSeeded: vi.fn(),
   getServerDB: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('../services/templateCatalogBootstrap', () => ({
 vi.mock('../services/agentCatalog/adminService', () => ({
   DEFAULT_INBOX_BOOTSTRAP_ACTOR: null,
   ensureDefaultInboxProvisioned: mocks.ensureDefaultInboxProvisioned,
+  ensureTaskManagerProvisioned: mocks.ensureTaskManagerProvisioned,
 }));
 
 vi.mock('../services/settings/lockVisiblePolicy', () => ({
@@ -63,6 +65,7 @@ beforeEach(() => {
   mocks.ensurePlatformRbacSeeded.mockResolvedValue({ superAdminCount: 0 });
   mocks.ensureAgentTemplateCatalogSeeded.mockResolvedValue(undefined);
   mocks.ensureDefaultInboxProvisioned.mockResolvedValue(undefined);
+  mocks.ensureTaskManagerProvisioned.mockResolvedValue(undefined);
   mocks.ensureTaskTemplateCatalogSeeded.mockResolvedValue(undefined);
   mocks.repairLockVisiblePublishedPolicies.mockResolvedValue({ repairedPaths: [] });
   mocks.getServerDB.mockResolvedValue(db);
@@ -77,6 +80,7 @@ afterEach(() => {
   mocks.ensurePlatformRbacSeeded.mockReset();
   mocks.ensureAgentTemplateCatalogSeeded.mockReset();
   mocks.ensureDefaultInboxProvisioned.mockReset();
+  mocks.ensureTaskManagerProvisioned.mockReset();
   mocks.ensureTaskTemplateCatalogSeeded.mockReset();
   mocks.repairLockVisiblePublishedPolicies.mockReset();
   mocks.getServerDB.mockReset();
@@ -94,6 +98,7 @@ describe('runStartupPlatformBootstrap', () => {
     expect(mocks.ensureTaskTemplateCatalogSeeded).toHaveBeenCalledWith(db);
     expect(mocks.repairLockVisiblePublishedPolicies).toHaveBeenCalledWith(db);
     expect(mocks.ensureDefaultInboxProvisioned).not.toHaveBeenCalled();
+    expect(mocks.ensureTaskManagerProvisioned).not.toHaveBeenCalled();
     expect(mocks.bootstrapSuperAdmin).not.toHaveBeenCalled();
   });
 
@@ -250,6 +255,7 @@ describe('bootstrapPlatformAdminRuntime', () => {
     expect(mocks.ensurePlatformRbacSeeded).not.toHaveBeenCalled();
     expect(mocks.ensureAgentTemplateCatalogSeeded).not.toHaveBeenCalled();
     expect(mocks.ensureDefaultInboxProvisioned).not.toHaveBeenCalled();
+    expect(mocks.ensureTaskManagerProvisioned).not.toHaveBeenCalled();
   });
 
   it('provisions the default inbox when admin is off and managed agents is on', async () => {
@@ -267,6 +273,8 @@ describe('bootstrapPlatformAdminRuntime', () => {
     expect(mocks.ensureTaskTemplateCatalogSeeded).not.toHaveBeenCalled();
     expect(mocks.ensureDefaultInboxProvisioned).toHaveBeenCalledTimes(1);
     expect(mocks.ensureDefaultInboxProvisioned).toHaveBeenCalledWith(db, { locale: 'zh-CN' });
+    expect(mocks.ensureTaskManagerProvisioned).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureTaskManagerProvisioned).toHaveBeenCalledWith(db, { locale: 'zh-CN' });
   });
 
   it('runs managed-agents provision after admin template seeding', async () => {
@@ -281,6 +289,7 @@ describe('bootstrapPlatformAdminRuntime', () => {
       mocks.ensureDefaultInboxProvisioned,
     );
     expect(mocks.ensureDefaultInboxProvisioned).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureTaskManagerProvisioned).toHaveBeenCalledTimes(1);
   });
 
   it('skips default-inbox provision when the managed-agents module is disabled', async () => {
@@ -292,6 +301,7 @@ describe('bootstrapPlatformAdminRuntime', () => {
     expect(outcome).toEqual({ status: 'seeded', superAdminCount: 0 });
     expect(mocks.ensurePlatformRbacSeeded).toHaveBeenCalled();
     expect(mocks.ensureDefaultInboxProvisioned).not.toHaveBeenCalled();
+    expect(mocks.ensureTaskManagerProvisioned).not.toHaveBeenCalled();
   });
 
   it('accepts the ENABLE_ENTERPRISE_ADMIN alias but still needs a database URL', async () => {

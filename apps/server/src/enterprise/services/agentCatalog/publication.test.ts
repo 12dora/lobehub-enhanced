@@ -36,6 +36,7 @@ vi.mock('@/database/repositories/platformAgentCatalog', () => ({
 vi.mock('@/database/models/agent', () => ({
   AgentModel: class {
     resetInboxModelProviderForAllUsers = mocks.resetInbox;
+    resetModelProviderForSlugForAllUsers = mocks.resetInbox;
   },
 }));
 vi.mock('../platformAudit', () => ({
@@ -534,6 +535,138 @@ describe('PlatformAgentPublicationService', () => {
       expect(mocks.resetInbox).not.toHaveBeenCalled();
       const afterDiff = mocks.appendAudit.mock.calls[0]?.[0]?.afterDiff as Record<string, unknown>;
       expect(afterDiff).not.toHaveProperty('inboxModelReset');
+    });
+  });
+
+  describe('task-manager task-agent model reset on save', () => {
+    const taskManagerIdentity = {
+      ...identity,
+      isDefault: false,
+      systemKey: 'task-manager' as const,
+    };
+
+    const saveTaskManager = (
+      locked: Omit<typeof taskManagerIdentity, 'currentVersionId'> & {
+        currentVersionId: string | null;
+      },
+    ) => {
+      mocks.lockIdentity.mockResolvedValue(locked);
+      return new PlatformAgentPublicationService(db, { invalidation: { publish: vi.fn() } }).save(
+        'admin-id',
+        {
+          ...input,
+          agentId: locked.id,
+          expectedDraftToken: platformAgentDraftToken(locked),
+        },
+      );
+    };
+
+    it('resets every member task-agent pair when the published model pair changes', async () => {
+      const locked = { ...taskManagerIdentity, currentVersionId: 'old-version-id' };
+      mocks.getExactVersion.mockResolvedValue({
+        dependencySnapshot: {
+          ...dependencySnapshot,
+          model: {
+            modelKey: 'gpt-6-astra',
+            providerChecksum: 'a'.repeat(64),
+            providerKey: 'chatgpt',
+            providerRevision: 1,
+          },
+        },
+        id: 'old-version-id',
+      });
+      mocks.resetInbox.mockResolvedValue(4);
+
+      await saveTaskManager(locked);
+
+      expect(mocks.getExactVersion).toHaveBeenCalledWith(taskManagerIdentity.id, 'old-version-id');
+      expect(mocks.resetInbox).toHaveBeenCalledTimes(1);
+      expect(mocks.resetInbox).toHaveBeenCalledWith('task-agent');
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterDiff: expect.objectContaining({ taskAgentModelReset: 4 }),
+        }),
+      );
+    });
+
+    it('does not reset when the published model pair is unchanged', async () => {
+      const locked = { ...taskManagerIdentity, currentVersionId: 'old-version-id' };
+      mocks.getExactVersion.mockResolvedValue({
+        dependencySnapshot: {
+          ...dependencySnapshot,
+          model: {
+            ...dependencySnapshot.model,
+            providerChecksum: 'c'.repeat(64),
+            providerRevision: 9,
+          },
+        },
+        id: 'old-version-id',
+      });
+
+      await saveTaskManager(locked);
+
+      expect(mocks.resetInbox).not.toHaveBeenCalled();
+      const afterDiff = mocks.appendAudit.mock.calls[0]?.[0]?.afterDiff as Record<string, unknown>;
+      expect(afterDiff).not.toHaveProperty('taskAgentModelReset');
+    });
+  });
+
+  describe('task-manager task-agent model reset on rollback', () => {
+    const taskManagerIdentity = {
+      ...identity,
+      currentVersionId: 'live-version-id',
+      isDefault: false,
+      systemKey: 'task-manager' as const,
+    };
+
+    const rollbackTaskManager = (targetVersionId: string) => {
+      mocks.lockIdentity.mockResolvedValue(taskManagerIdentity);
+      return new PlatformAgentPublicationService(db, {
+        invalidation: { publish: vi.fn() },
+      }).rollback('admin-id', {
+        agentId: taskManagerIdentity.id,
+        expectedDraftToken: platformAgentDraftToken(taskManagerIdentity),
+        expectedRevision: 0,
+        reason: 'roll back task-agent model',
+        targetVersionId,
+      });
+    };
+
+    it('resets every member task-agent pair when the rolled-back model pair differs', async () => {
+      mocks.getExactVersion.mockImplementation(async (_agentId: string, versionId: string) => {
+        if (versionId === 'older-version-id') {
+          return {
+            checksum: 'f'.repeat(64),
+            dependencySnapshot,
+            id: 'older-version-id',
+            version: '1.0.0',
+          };
+        }
+        return {
+          checksum: 'a'.repeat(64),
+          dependencySnapshot: {
+            ...dependencySnapshot,
+            model: {
+              ...dependencySnapshot.model,
+              modelKey: 'gpt-6-astra',
+              providerKey: 'chatgpt',
+            },
+          },
+          id: 'live-version-id',
+          version: '1.0.1',
+        };
+      });
+      mocks.resetInbox.mockResolvedValue(4);
+
+      await rollbackTaskManager('older-version-id');
+
+      expect(mocks.resetInbox).toHaveBeenCalledWith('task-agent');
+      expect(mocks.appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'admin.agents.rollback',
+          afterDiff: expect.objectContaining({ taskAgentModelReset: 4 }),
+        }),
+      );
     });
   });
 });

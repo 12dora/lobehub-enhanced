@@ -28,7 +28,10 @@ import type { AuditAction } from '../audit/auditActionCatalog';
 import { isModuleEnabled } from '../moduleSettings';
 import { PlatformAuditService } from '../platformAudit';
 import type { PlatformConfigInvalidationPublisher } from '../platformConfigInvalidation';
-import { acquirePlatformDefaultInboxLock } from '../platformDependencyLock';
+import {
+  acquirePlatformDefaultInboxLock,
+  acquirePlatformTaskManagerLock,
+} from '../platformDependencyLock';
 import { resolveUserRefs, userRefOf } from '../shared/userRefResolver';
 import {
   buildDefaultInboxSeed,
@@ -57,6 +60,13 @@ import {
   platformAgentMutationView,
   platformAgentVersionView,
 } from './publication';
+import {
+  buildTaskManagerSeed,
+  isEffectiveTaskManagerGlobalAssignment,
+  isTaskManagerGlobalAssignment,
+  isTaskManagerIdentity,
+  PLATFORM_TASK_MANAGER_AGENT_KEY,
+} from './taskManagerProvision';
 
 const log = debug('lobe-server:platform-agent-admin');
 
@@ -121,6 +131,61 @@ export const ensureDefaultInboxProvisioned = async (
   }
 };
 
+const isHealthyTaskManagerIdentity = (identity: PlatformAgentItem): boolean =>
+  isTaskManagerIdentity(identity) &&
+  !identity.isDefault &&
+  !identity.migrationRequired &&
+  identity.status === 'published' &&
+  Boolean(identity.currentVersionId) &&
+  Boolean(identity.currentVersion?.trim());
+
+const peekTaskManagerProvisionHealth = async (db: LobeChatDatabase): Promise<boolean> => {
+  const repository = new PlatformAgentCatalogRepository(db);
+  const identity = await repository.getIdentityBySystemKey(PLATFORM_TASK_MANAGER_AGENT_KEY);
+  if (!identity || !isHealthyTaskManagerIdentity(identity)) return false;
+  const assignment = await findTaskManagerGlobalAssignment(repository, identity.id);
+  return Boolean(assignment && isEffectiveTaskManagerGlobalAssignment(assignment));
+};
+
+const findTaskManagerGlobalAssignment = async (
+  repository: PlatformAgentCatalogRepository,
+  agentId: string,
+): Promise<PlatformAgentAssignmentSafeItem | undefined> => {
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await repository.listAssignments({ agentId, cursor, limit: 100 });
+    const found = page.items.find(isTaskManagerGlobalAssignment);
+    if (found) return found;
+    if (!page.nextCursor) return undefined;
+    cursor = page.nextCursor;
+  }
+};
+
+/**
+ * Idempotent task-manager provision for bootstrap and the admin list path.
+ * Healthy catalogs return without taking locks or writing an audit row. Errors are
+ * logged and never rethrown so a missing AI catalog or similar cannot crash boot / list.
+ */
+export const ensureTaskManagerProvisioned = async (
+  db: LobeChatDatabase,
+  params: { actorId?: string | null; locale?: string } = {},
+): Promise<void> => {
+  if (!parseEnterpriseFeatureFlags(process.env).ENABLE_PLATFORM_MANAGED_AGENTS) return;
+  try {
+    if (!(await isModuleEnabled('managedAgents'))) return;
+    if (await peekTaskManagerProvisionHealth(db)) return;
+    await new PlatformAgentAdminService(db).provisionTaskManager({
+      actorId: params.actorId ?? null,
+      locale: params.locale,
+    });
+  } catch (error) {
+    console.error('[platformBootstrap] task-manager provision failed (non-blocking)', {
+      errorCategory: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 const identityView = platformAgentIdentityView;
 const mutationView = platformAgentMutationView;
 const versionView = platformAgentVersionView;
@@ -153,13 +218,14 @@ const assignmentView = (
   versionPolicy: assignment.versionPolicy,
 });
 
-/** The default-inbox global assignment cannot be disabled, retargeted, or removed. */
+/** The default-inbox / task-manager global assignment cannot be disabled, retargeted, or removed. */
 const assertDefaultInboxGlobalAssignmentMutable = (
   identity: PlatformAgentItem,
   current: Pick<PlatformAgentAssignmentSafeItem, 'enabled' | 'targetId' | 'targetType'>,
   next?: Pick<PlatformAgentAssignmentSafeItem, 'enabled' | 'targetId' | 'targetType'>,
 ) => {
-  if (!isDefaultInboxIdentity(identity) || !isDefaultInboxGlobalAssignment(current)) return;
+  const isLockedSystemAgent = isDefaultInboxIdentity(identity) || isTaskManagerIdentity(identity);
+  if (!isLockedSystemAgent || !isDefaultInboxGlobalAssignment(current)) return;
   if (!next || !next.enabled || !isDefaultInboxGlobalAssignment(next)) {
     throw new PlatformAgentDefaultRequiredError();
   }
@@ -167,6 +233,7 @@ const assertDefaultInboxGlobalAssignmentMutable = (
 
 export interface PlatformAgentAdminServiceOptions {
   buildDefaultInboxSeed?: typeof buildDefaultInboxSeed;
+  buildTaskManagerSeed?: typeof buildTaskManagerSeed;
   invalidation?: PlatformConfigInvalidationPublisher;
   validateDependencies?: typeof assertExactPlatformAgentDependencies;
 }
@@ -330,6 +397,7 @@ export class PlatformAgentAdminService {
           // idempotent repair. Platform agents have no separate slug field.
           if (
             input.agentKey === PLATFORM_DEFAULT_INBOX_AGENT_KEY ||
+            input.agentKey === PLATFORM_TASK_MANAGER_AGENT_KEY ||
             input.isDefault ||
             input.systemKey !== null
           ) {
@@ -451,6 +519,94 @@ export class PlatformAgentAdminService {
           revision: identity.identity.revision,
         }),
         targetId: PLATFORM_DEFAULT_INBOX_AGENT_KEY,
+      });
+      if (result.created) {
+        await invalidatePlatformAgentPublication({
+          agentId: result.identity.identity.id,
+          invalidation: this.options.invalidation,
+          revision: result.identity.identity.revision,
+        });
+        observePlatformAgentPublication({ operation: 'save', startedAt });
+      }
+      return result.identity;
+    } catch (error) {
+      observePlatformAgentPublication({ error, operation: 'save', startedAt });
+      throw error;
+    }
+  };
+
+  /**
+   * Idempotent bootstrap of the task-manager identity. Called from startup / admin list
+   * via `ensureTaskManagerProvisioned`; the mutation remains as a repair path.
+   */
+  provisionTaskManager = async (params: { actorId?: string | null; locale?: string } = {}) => {
+    const actorUserId = params.actorId ?? null;
+    const startedAt = Date.now();
+    try {
+      const result = await this.atomicMutation({
+        action: 'admin.agents.provisionTaskManager',
+        actorUserId,
+        run: async (tx) => {
+          const repository = new PlatformAgentCatalogRepository(tx);
+          await acquirePlatformTaskManagerLock(tx);
+          const existingSystem = await repository.getIdentityBySystemKey(
+            PLATFORM_TASK_MANAGER_AGENT_KEY,
+          );
+          const reserved = await repository.getIdentityByAgentKey(PLATFORM_TASK_MANAGER_AGENT_KEY);
+          if (reserved && !isTaskManagerIdentity(reserved)) {
+            throw new PlatformAgentDefaultRequiredError(
+              `Reserved agentKey '${PLATFORM_TASK_MANAGER_AGENT_KEY}' is already held by a non-system identity`,
+            );
+          }
+          const existing =
+            existingSystem ?? (reserved && isTaskManagerIdentity(reserved) ? reserved : undefined);
+          if (existing) {
+            if (existing.isDefault) {
+              throw new PlatformAgentDefaultRequiredError(
+                `Reserved agentKey '${PLATFORM_TASK_MANAGER_AGENT_KEY}' cannot be the default inbox`,
+              );
+            }
+            const identity = await this.ensureDefaultInboxGlobalAssignment(
+              tx,
+              repository,
+              existing.id,
+              actorUserId,
+            );
+            return { created: false as const, identity };
+          }
+
+          const seed = await (this.options.buildTaskManagerSeed ?? buildTaskManagerSeed)(tx, {
+            locale: params.locale,
+          });
+          const created = await repository.createIdentity({
+            agentKey: PLATFORM_TASK_MANAGER_AGENT_KEY,
+            createdBy: actorUserId,
+            isDefault: false,
+            systemKey: PLATFORM_TASK_MANAGER_AGENT_KEY,
+          });
+          const { identity: published } = await appendAndPublishPlatformAgentVersion(tx, {
+            actorUserId,
+            config: seed.config,
+            dependencySnapshot: seed.dependencySnapshot,
+            identity: created,
+            validateDependencies: this.options.validateDependencies,
+            version: FIRST_PLATFORM_AGENT_VERSION,
+          });
+          const identity = await this.ensureDefaultInboxGlobalAssignment(
+            tx,
+            repository,
+            published.id,
+            actorUserId,
+          );
+          return { created: true as const, identity };
+        },
+        summarize: ({ created, identity }) => ({
+          agentKey: identity.identity.agentKey,
+          created,
+          locale: params.locale ?? null,
+          revision: identity.identity.revision,
+        }),
+        targetId: PLATFORM_TASK_MANAGER_AGENT_KEY,
       });
       if (result.created) {
         await invalidatePlatformAgentPublication({

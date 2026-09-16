@@ -18,6 +18,7 @@ import { adminAgentsService } from '@/enterprise/client/services/adminAgents';
 
 import { getAdminAgentErrorMessage } from './errorPresentation';
 import { AGENT_DELETE_AUTO_REASON } from './openDeleteAgentModal';
+import { isReservedSystemAgent } from './systemAgents';
 import type { AdminAgentListItem, AdminPlatformAgentGetOutput } from './types';
 
 /** How many names / failures are spelled out before the copy switches to a count. */
@@ -50,15 +51,15 @@ interface AgentBulkProgress {
 }
 
 /**
- * Archiving is one-way and the default assistant needs a successor picked by hand, so bulk archive
- * only takes published, non-default rows. Everything else is reported as skipped.
+ * Archiving is one-way and a reserved system assistant has no successor to hand over to, so bulk
+ * archive only takes published, non-system rows. Everything else is reported as skipped.
  */
 export const selectArchivableAgents = (rows: readonly AdminAgentListItem[]): AdminAgentListItem[] =>
-  rows.filter((row) => row.identity.status === 'published' && !row.identity.isDefault);
+  rows.filter((row) => row.identity.status === 'published' && !isReservedSystemAgent(row.identity));
 
-/** The server refuses to hard-delete the default assistant or a system one — mirror that here. */
+/** The server refuses to hard-delete a reserved system assistant — mirror that here. */
 export const selectDeletableAgents = (rows: readonly AdminAgentListItem[]): AdminAgentListItem[] =>
-  rows.filter((row) => !row.identity.isDefault && row.identity.systemKey === null);
+  rows.filter((row) => !isReservedSystemAgent(row.identity));
 
 export const toAgentBulkTargets = (rows: readonly AdminAgentListItem[]): AgentBulkTarget[] =>
   rows.map((row) => ({ id: row.identity.id, label: row.displayName }));

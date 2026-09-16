@@ -1,5 +1,5 @@
 import { type BuiltinAgentSlug } from '@lobechat/builtin-agents';
-import { BUILTIN_AGENTS } from '@lobechat/builtin-agents';
+import { BUILTIN_AGENT_SLUGS, BUILTIN_AGENTS } from '@lobechat/builtin-agents';
 import { DEFAULT_AGENT_CONFIG, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
 import { type LobeChatDatabase } from '@lobechat/database';
 import type { AgentItem, LobeAgentConfig } from '@lobechat/types';
@@ -32,6 +32,7 @@ import {
 } from '@/server/enterprise/services/agentCatalog';
 import type { GetEffectiveBuiltinConfigOptions } from '@/server/enterprise/services/agentCatalog/defaultInbox';
 import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
+import { PlatformTaskManagerService } from '@/server/enterprise/services/agentCatalog/taskManagerAgent';
 import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
 import { getEffectiveDefaultAgentConfig } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
 import { getServerDefaultAgentConfig } from '@/server/globalConfig';
@@ -179,6 +180,17 @@ export class AgentService {
       );
     }
 
+    if (slug === BUILTIN_AGENT_SLUGS.taskAgent) {
+      return this.applyTaskManagerOverlay(
+        {
+          ...withBuiltinAvatar,
+          avatar: withBuiltinAvatar.avatar ?? undefined,
+          title: withBuiltinAvatar.title ?? undefined,
+        },
+        inboxUserRowOptions(agent),
+      );
+    }
+
     return withBuiltinAvatar;
   }
 
@@ -209,8 +221,8 @@ export class AgentService {
     const config = this.mergeDefaultConfig(normalizedAgent, defaultAgentConfig);
 
     return config
-      ? ((await this.applyDefaultInboxTakeover(
-          config,
+      ? ((await this.applyTaskManagerOverlay(
+          await this.applyDefaultInboxTakeover(config, inboxUserRowOptions(agent)),
           inboxUserRowOptions(agent),
         )) as AgentConfigWithId)
       : null;
@@ -245,17 +257,23 @@ export class AgentService {
 
     // Merge AI-generated welcome data if available
     if (welcomeData) {
-      return this.applyDefaultInboxTakeover(
-        {
-          ...config,
-          openingMessage: welcomeData.welcomeMessage,
-          openingQuestions: welcomeData.openQuestions,
-        },
+      return this.applyTaskManagerOverlay(
+        await this.applyDefaultInboxTakeover(
+          {
+            ...config,
+            openingMessage: welcomeData.welcomeMessage,
+            openingQuestions: welcomeData.openQuestions,
+          },
+          takeoverOptions,
+        ),
         takeoverOptions,
       );
     }
 
-    return this.applyDefaultInboxTakeover(config, takeoverOptions);
+    return this.applyTaskManagerOverlay(
+      await this.applyDefaultInboxTakeover(config, takeoverOptions),
+      takeoverOptions,
+    );
   }
 
   private applyDefaultInboxTakeover = async (
@@ -269,6 +287,25 @@ export class AgentService {
     };
     if (candidate.slug !== INBOX_SESSION_ID) return config;
     return new PlatformDefaultInboxService(this.db, this.userId).getEffectiveBuiltinConfig(
+      {
+        ...candidate,
+        slug: candidate.slug,
+      },
+      options,
+    );
+  };
+
+  private applyTaskManagerOverlay = async (
+    config: LobeAgentConfig,
+    options?: GetEffectiveBuiltinConfigOptions,
+  ) => {
+    const candidate = config as AgentConfigWithId & {
+      description?: string | null;
+      slug?: string | null;
+      tags?: string[];
+    };
+    if (candidate.slug !== BUILTIN_AGENT_SLUGS.taskAgent) return config;
+    return new PlatformTaskManagerService(this.db, this.userId).getEffectiveBuiltinConfig(
       {
         ...candidate,
         slug: candidate.slug,

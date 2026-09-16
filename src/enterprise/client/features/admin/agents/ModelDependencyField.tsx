@@ -75,7 +75,7 @@ export interface ModelDependencyFieldProps {
    * Only the default assistant publishes the model and the effort as DEFAULTS members may change
    * in chat, so only it says so. Every other platform assistant pins them.
    */
-  isDefaultInbox?: boolean;
+  isSystemAgent?: boolean;
   model: PlatformAgentModelDependencyRef | null;
   onChooseModel: (modelKey: string | undefined) => void;
   onChooseProvider: (providerId: string | undefined) => void;
@@ -160,7 +160,7 @@ const ProviderPicker = ({
 /** The model half: nothing can be picked until a provider resolves its published model source. */
 const ModelPicker = ({
   editable,
-  isDefaultInbox,
+  isSystemAgent,
   model,
   onChooseModel,
   providerId,
@@ -169,7 +169,7 @@ const ModelPicker = ({
 }: Pick<
   ModelDependencyFieldProps,
   | 'editable'
-  | 'isDefaultInbox'
+  | 'isSystemAgent'
   | 'model'
   | 'onChooseModel'
   | 'providerId'
@@ -177,10 +177,10 @@ const ModelPicker = ({
   | 'sourceSettled'
 >) => {
   const { t } = useTranslation('admin');
-  // For the default assistant the published model is a DEFAULT members may replace in chat; every
-  // other platform assistant pins it. The label must not promise a lock that does not exist.
+  // For a reserved system assistant the published model is a DEFAULT members may replace in chat;
+  // every other platform assistant pins it. The label must not promise a lock that does not exist.
   const label = t(
-    isDefaultInbox
+    isSystemAgent
       ? 'agentCatalog.dependency.model.defaultModel'
       : 'agentCatalog.dependency.model.model',
   );
@@ -191,7 +191,7 @@ const ModelPicker = ({
         required
         htmlFor={MODEL_SELECT_ID}
         help={t(
-          isDefaultInbox
+          isSystemAgent
             ? 'agentCatalog.dependency.model.defaultModelDesc'
             : 'agentCatalog.dependency.model.required',
         )}
@@ -260,14 +260,14 @@ const ModelPicker = ({
  */
 const ThinkingEffortPicker = ({
   editable,
-  isDefaultInbox,
+  isSystemAgent,
   model,
   onChooseThinkingEffort,
   source,
   thinkingEffort,
 }: Pick<
   ModelDependencyFieldProps,
-  'editable' | 'isDefaultInbox' | 'model' | 'onChooseThinkingEffort' | 'source' | 'thinkingEffort'
+  'editable' | 'isSystemAgent' | 'model' | 'onChooseThinkingEffort' | 'source' | 'thinkingEffort'
 >) => {
   const { t } = useTranslation(['admin', 'setting']);
   const option = model
@@ -282,9 +282,9 @@ const ThinkingEffortPicker = ({
       <FieldLabel
         htmlFor={THINKING_EFFORT_SELECT_ID}
         help={t(
-          // Only the default assistant applies the effort as a default a member can still change;
-          // every other platform assistant pins it, so it must not promise otherwise.
-          isDefaultInbox
+          // Only a reserved system assistant applies the effort as a default a member can still
+          // change; every other platform assistant pins it, so it must not promise otherwise.
+          isSystemAgent
             ? 'agentCatalog.editor.thinkingEffortDescDefaultInbox'
             : 'agentCatalog.editor.thinkingEffortDesc',
         )}
@@ -328,7 +328,7 @@ export const ModelDependencyField = ({
   displayModelStale,
   editable,
   hideTitle = false,
-  isDefaultInbox = false,
+  isSystemAgent = false,
   model,
   onChooseModel,
   onChooseThinkingEffort,
@@ -392,7 +392,7 @@ export const ModelDependencyField = ({
 
             <ModelPicker
               editable={editable}
-              isDefaultInbox={isDefaultInbox}
+              isSystemAgent={isSystemAgent}
               model={model}
               providerId={providerId}
               source={source}
@@ -403,7 +403,7 @@ export const ModelDependencyField = ({
             {/* The effort belongs to the model, so it is picked in the same row, not a section away. */}
             <ThinkingEffortPicker
               editable={editable}
-              isDefaultInbox={isDefaultInbox}
+              isSystemAgent={isSystemAgent}
               model={model}
               source={source}
               thinkingEffort={thinkingEffort}

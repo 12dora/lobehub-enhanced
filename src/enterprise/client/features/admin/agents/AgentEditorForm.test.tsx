@@ -119,15 +119,15 @@ vi.mock('./DependencyEditor', () => ({
   DependencyEditor: ({
     children,
     editable,
-    isDefaultInbox,
+    isSystemAgent,
   }: {
     children: (slots: Record<string, ReactNode>) => ReactNode;
     editable?: boolean;
-    isDefaultInbox?: boolean;
+    isSystemAgent?: boolean;
   }) => (
     <div
-      data-dependency-default-inbox={String(Boolean(isDefaultInbox))}
       data-dependency-editable={String(Boolean(editable))}
+      data-dependency-system-agent={String(Boolean(isSystemAgent))}
     >
       {children({
         connectors: <div>connectors-field</div>,
@@ -138,8 +138,8 @@ vi.mock('./DependencyEditor', () => ({
   ),
 }));
 vi.mock('./AssignmentPolicySection', () => ({
-  AssignmentPolicySection: ({ isDefaultInbox }: { isDefaultInbox?: boolean }) => (
-    <div data-default-inbox={String(Boolean(isDefaultInbox))}>assignment-policy</div>
+  AssignmentPolicySection: ({ systemKey }: { systemKey?: string | null }) => (
+    <div data-system-key={String(systemKey ?? '')}>assignment-policy</div>
   ),
 }));
 vi.mock('./useAgentEditorForm', () => ({
@@ -310,10 +310,20 @@ describe('AgentEditorForm layout', () => {
     expect(helpFor('agentCatalog.editor.section.assignmentDesc')).toBeTruthy();
   });
 
-  it('tells the assignment editor when it is looking at the default assistant', () => {
+  it('hands the assignment editor the reserved system key it is looking at', () => {
     formMock.value = { ...baseForm(), canAssign: true, systemKey: 'default-inbox' };
+    const { unmount } = render(<AgentEditorForm />);
+    expect(screen.getByText('assignment-policy').dataset.systemKey).toBe('default-inbox');
+    unmount();
+
+    formMock.value = { ...baseForm(), canAssign: true, systemKey: 'task-manager' };
+    const managed = render(<AgentEditorForm />);
+    expect(screen.getByText('assignment-policy').dataset.systemKey).toBe('task-manager');
+    managed.unmount();
+
+    formMock.value = { ...baseForm(), canAssign: true };
     render(<AgentEditorForm />);
-    expect(screen.getByText('assignment-policy').dataset.defaultInbox).toBe('true');
+    expect(screen.getByText('assignment-policy').dataset.systemKey).toBe('');
   });
 
   it('keeps the mandatory model picker with the basics, above the fold', () => {
@@ -480,14 +490,14 @@ describe('AgentEditorForm layout', () => {
     }
   });
 
-  it('says the model parameters are defaults only for the default assistant', () => {
+  it('says the model parameters are defaults only for a reserved system assistant', () => {
     // The heading stays "Parameters" for every assistant; only the help text carries the nuance.
     const { unmount } = render(<AgentEditorForm />);
     expect(helpFor('agentCatalog.editor.section.paramsDesc')).toBeTruthy();
     expect(helpFor('agentCatalog.editor.section.paramsDescDefaultInbox')).toBeNull();
     unmount();
 
-    formMock.value = { ...baseForm(), isCreate: false, systemKey: 'default-inbox' };
+    formMock.value = { ...baseForm(), isCreate: false, systemKey: 'task-manager' };
     render(<AgentEditorForm />);
     expect(helpFor('agentCatalog.editor.section.paramsDescDefaultInbox')).toBeTruthy();
     expect(helpFor('agentCatalog.editor.section.paramsDesc')).toBeNull();
@@ -532,24 +542,37 @@ describe('AgentEditorForm layout', () => {
     expect(helpFor('agentCatalog.editor.keyLockedDesc')).toBeTruthy();
   });
 
-  it('reserves the default assistant’s identifier and says the platform owns it', () => {
+  it('reserves every system assistant’s identifier and says the platform owns it', () => {
     formMock.value = { ...baseForm(), isCreate: false, systemKey: 'default-inbox' };
+    const { unmount } = render(<AgentEditorForm />);
+    expect(screen.getByLabelText('agentCatalog.editor.key')).toBeDisabled();
+    expect(helpFor('agentCatalog.editor.keySystemDesc')).toBeTruthy();
+    unmount();
+
+    // The task assistant's identifier is reserved for exactly the same reason.
+    formMock.value = { ...baseForm(), isCreate: false, systemKey: 'task-manager' };
     render(<AgentEditorForm />);
     expect(screen.getByLabelText('agentCatalog.editor.key')).toBeDisabled();
-    expect(helpFor('agentCatalog.editor.keyDefaultInboxDesc')).toBeTruthy();
+    expect(helpFor('agentCatalog.editor.keySystemDesc')).toBeTruthy();
+    expect(helpFor('agentCatalog.editor.keyLockedDesc')).toBeNull();
   });
 
-  it('tells the dependency editor when it is looking at the default assistant', () => {
-    // Only the default assistant's thinking effort stays adjustable by members, so only its help
+  it('tells the dependency editor when it is looking at a reserved system assistant', () => {
+    // Only a system assistant's thinking effort stays adjustable by members, so only its help
     // text may say so.
-    const dependencyRoot = () => document.querySelector('[data-dependency-default-inbox]');
+    const dependencyRoot = () => document.querySelector('[data-dependency-system-agent]');
     const { unmount } = render(<AgentEditorForm />);
-    expect(dependencyRoot()?.getAttribute('data-dependency-default-inbox')).toBe('false');
+    expect(dependencyRoot()?.getAttribute('data-dependency-system-agent')).toBe('false');
     unmount();
 
     formMock.value = { ...baseForm(), isCreate: false, systemKey: 'default-inbox' };
+    const inbox = render(<AgentEditorForm />);
+    expect(dependencyRoot()?.getAttribute('data-dependency-system-agent')).toBe('true');
+    inbox.unmount();
+
+    formMock.value = { ...baseForm(), isCreate: false, systemKey: 'task-manager' };
     render(<AgentEditorForm />);
-    expect(dependencyRoot()?.getAttribute('data-dependency-default-inbox')).toBe('true');
+    expect(dependencyRoot()?.getAttribute('data-dependency-system-agent')).toBe('true');
   });
 
   it('keeps the default assistant’s presentation fully editable', () => {

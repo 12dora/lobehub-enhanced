@@ -7,6 +7,11 @@ export interface UseAdminAgentRefreshParams {
   refreshDefaultAgent: () => Promise<unknown>;
   /** The bound `useSWRInfinite` mutate over the loaded table pages. */
   refreshList: () => Promise<unknown>;
+  /**
+   * `mutate` bound to `ADMIN_AGENT_TASK_MANAGER_KEY` — the pinned 任务助手 card. Optional so a
+   * caller that does not render that card (tests, partial surfaces) stays valid.
+   */
+  refreshTaskManagerAgent?: () => Promise<unknown>;
 }
 
 /**
@@ -15,11 +20,12 @@ export interface UseAdminAgentRefreshParams {
  */
 export interface AdminAgentRefresh {
   /**
-   * Table AND pinned card. `listWrite` substitutes the list half with the caller's own operation
-   * (an optimistic row patch or drop) when it describes the row better than a plain revalidate.
+   * Table AND every pinned system card. `listWrite` substitutes the list half with the caller's
+   * own operation (an optimistic row patch or drop) when it describes the row better than a plain
+   * revalidate.
    */
   defaultAndList: (listWrite?: () => Promise<unknown>) => Promise<void>;
-  /** The pinned card alone. */
+  /** The pinned system cards alone. */
   defaultOnly: () => Promise<void>;
   /** The table alone — only for writes that provably cannot touch the default pointer. */
   listOnly: (listWrite?: () => Promise<unknown>) => Promise<void>;
@@ -28,18 +34,27 @@ export interface AdminAgentRefresh {
 export const createAdminAgentRefresh = ({
   refreshDefaultAgent,
   refreshList,
+  refreshTaskManagerAgent,
 }: UseAdminAgentRefreshParams): AdminAgentRefresh => {
   const listOnly = async (listWrite: () => Promise<unknown> = refreshList) => {
     await listWrite();
   };
+  // allSettled again: a rejected 任务助手 revalidation must not skip the default pointer, or the
+  // card next to it keeps rendering the assistant this write just replaced.
   const defaultOnly = async () => {
-    await refreshDefaultAgent();
+    const settled = await Promise.allSettled([
+      refreshDefaultAgent(),
+      refreshTaskManagerAgent?.() ?? Promise.resolve(),
+    ]);
+    for (const result of settled) {
+      if (result.status === 'rejected') throw result.reason;
+    }
   };
 
   return {
     defaultAndList: async (listWrite) => {
-      // allSettled, not Promise.all: a rejected list revalidation must NOT skip the pinned key, or
-      // the card keeps rendering the assistant / name / avatar / model this write just replaced.
+      // allSettled, not Promise.all: a rejected list revalidation must NOT skip the pinned keys,
+      // or a card keeps rendering the assistant / name / avatar / model this write just replaced.
       // The first failure is still rethrown, so the caller reports "this view may be behind".
       const settled = await Promise.allSettled([listOnly(listWrite), defaultOnly()]);
       for (const result of settled) {
@@ -62,8 +77,9 @@ export const createAdminAgentRefresh = ({
 export const useAdminAgentRefresh = ({
   refreshDefaultAgent,
   refreshList,
+  refreshTaskManagerAgent,
 }: UseAdminAgentRefreshParams): AdminAgentRefresh =>
   useMemo(
-    () => createAdminAgentRefresh({ refreshDefaultAgent, refreshList }),
-    [refreshDefaultAgent, refreshList],
+    () => createAdminAgentRefresh({ refreshDefaultAgent, refreshList, refreshTaskManagerAgent }),
+    [refreshDefaultAgent, refreshList, refreshTaskManagerAgent],
   );

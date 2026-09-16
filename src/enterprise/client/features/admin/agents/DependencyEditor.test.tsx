@@ -1442,7 +1442,7 @@ describe('DependencyEditor thinking effort', () => {
   const renderWithEffort = (
     thinkingEffort: { controlKey: string; level: string } | null,
     onThinkingEffortChange = vi.fn(),
-    isDefaultInbox = false,
+    isSystemAgent = false,
   ) => {
     const { unmount } = render(
       <DependencyEditor
@@ -1450,7 +1450,7 @@ describe('DependencyEditor thinking effort', () => {
         enabled
         agentId="agent-1"
         dependencies={{ connectors: [], model: MODEL_REF, skills: [] }}
-        isDefaultInbox={isDefaultInbox}
+        isSystemAgent={isSystemAgent}
         thinkingEffort={thinkingEffort}
         onChange={vi.fn()}
         onThinkingEffortChange={onThinkingEffortChange}
@@ -1544,7 +1544,8 @@ describe('DependencyEditor thinking effort', () => {
     ).toBe(true);
     pinned.unmount();
 
-    const inbox = renderWithEffort(null, vi.fn(), true);
+    // Both reserved system assistants (默认助理 / 任务助手) publish the effort as a default.
+    const systemAgent = renderWithEffort(null, vi.fn(), true);
     expect(
       [...help()].some(
         (node) =>
@@ -1552,10 +1553,10 @@ describe('DependencyEditor thinking effort', () => {
           'agentCatalog.editor.thinkingEffortDescDefaultInbox',
       ),
     ).toBe(true);
-    inbox.unmount();
+    systemAgent.unmount();
   });
 
-  it('calls the model a DEFAULT only for the default assistant', () => {
+  it('calls the model a DEFAULT only for a reserved system assistant', () => {
     publishEffortModels(['reasoningEffort']);
     const tooltips = () =>
       [...document.querySelectorAll('[data-tooltip]')].map((node) =>
@@ -1568,11 +1569,11 @@ describe('DependencyEditor thinking effort', () => {
     expect(tooltips()).toContain('agentCatalog.dependency.model.required');
     pinned.unmount();
 
-    const inbox = renderWithEffort(null, vi.fn(), true);
+    const systemAgent = renderWithEffort(null, vi.fn(), true);
     expect(screen.getByLabelText('agentCatalog.dependency.model.defaultModel')).toBeTruthy();
     expect(screen.queryByLabelText('agentCatalog.dependency.model.model')).toBeNull();
     expect(tooltips()).toContain('agentCatalog.dependency.model.defaultModelDesc');
-    inbox.unmount();
+    systemAgent.unmount();
   });
 
   it('drops a stored effort when the provider changes and the model goes with it', () => {

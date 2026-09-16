@@ -2,6 +2,7 @@ import { DEFAULT_AGENT_CONFIG, DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE } from 
 import type {
   PlatformAgentAssignmentMode,
   PlatformAgentDependencySnapshot,
+  PlatformAgentModelDependencyRef,
   PlatformAgentModelParameters,
   PlatformAgentVersionConfig,
   PlatformAgentVersionPolicy,
@@ -121,6 +122,47 @@ export interface BuildDefaultInboxSeedOptions {
 const builtinInboxTitleFor = (_locale?: string) => DEFAULT_INBOX_TITLE;
 
 /**
+ * Pin the merged legacy DEFAULT_AGENT_CONFIG model onto the published AI catalog revision.
+ * Shared by default-inbox and task-manager first-version seeds so both overlay the same catalog default.
+ */
+export const resolvePublishedDefaultModelPin = async (
+  db: LobeChatDatabase | Transaction,
+  options: { getServerDefaultAgentConfig?: typeof getServerDefaultAgentConfig } = {},
+): Promise<PlatformAgentModelDependencyRef> => {
+  const merged = merge(
+    DEFAULT_AGENT_CONFIG,
+    (options.getServerDefaultAgentConfig ?? getServerDefaultAgentConfig)(),
+  );
+  const providerKey = merged.provider || DEFAULT_AGENT_CONFIG.provider;
+  const modelKey = merged.model || DEFAULT_AGENT_CONFIG.model;
+  if (!providerKey || !modelKey) {
+    throw new PlatformAgentDependencyValidationError(['AI_MODEL_UNAVAILABLE']);
+  }
+  const aiRepository = new PlatformAiCatalogRepository(db);
+  const provider = await aiRepository.getProviderByKey(providerKey);
+  const revision = provider
+    ? await aiRepository.getLatestPublishedProviderRevision(provider.id)
+    : undefined;
+  const payload = revision && isRecord(revision.payload) ? revision.payload : undefined;
+  if (
+    !provider ||
+    provider.status !== 'published' ||
+    !revision ||
+    revision.status !== 'published' ||
+    !payload ||
+    !isEnabledChatModel(payload, providerKey, modelKey)
+  ) {
+    throw new PlatformAgentDependencyValidationError(['AI_MODEL_UNAVAILABLE']);
+  }
+  return {
+    modelKey,
+    providerChecksum: revision.checksum,
+    providerKey,
+    providerRevision: revision.revision,
+  };
+};
+
+/**
  * Seed the first published default-inbox version from the current legacy defaults:
  * `DEFAULT_AGENT_CONFIG` merged with the server env `DEFAULT_AGENT_CONFIG`, plus published
  * branding / builtin inbox title and avatar. Model/provider are pinned to the published AI
@@ -154,27 +196,7 @@ export const buildDefaultInboxSeed = async (
     (question) => question.trim().length > 0,
   );
 
-  const providerKey = merged.provider || DEFAULT_AGENT_CONFIG.provider;
-  const modelKey = merged.model || DEFAULT_AGENT_CONFIG.model;
-  if (!providerKey || !modelKey) {
-    throw new PlatformAgentDependencyValidationError(['AI_MODEL_UNAVAILABLE']);
-  }
-  const aiRepository = new PlatformAiCatalogRepository(db);
-  const provider = await aiRepository.getProviderByKey(providerKey);
-  const revision = provider
-    ? await aiRepository.getLatestPublishedProviderRevision(provider.id)
-    : undefined;
-  const payload = revision && isRecord(revision.payload) ? revision.payload : undefined;
-  if (
-    !provider ||
-    provider.status !== 'published' ||
-    !revision ||
-    revision.status !== 'published' ||
-    !payload ||
-    !isEnabledChatModel(payload, providerKey, modelKey)
-  ) {
-    throw new PlatformAgentDependencyValidationError(['AI_MODEL_UNAVAILABLE']);
-  }
+  const model = await resolvePublishedDefaultModelPin(db, options);
 
   const configParsed = platformAgentVersionConfigSchema.safeParse({
     avatar,
@@ -195,12 +217,7 @@ export const buildDefaultInboxSeed = async (
   }
   const dependencyParsed = platformAgentDependencySnapshotSchema.safeParse({
     connectors: [],
-    model: {
-      modelKey,
-      providerChecksum: revision.checksum,
-      providerKey,
-      providerRevision: revision.revision,
-    },
+    model,
     skills: [],
   });
   if (!dependencyParsed.success) {

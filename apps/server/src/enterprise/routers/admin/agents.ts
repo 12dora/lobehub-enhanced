@@ -16,6 +16,8 @@ import {
   adminPlatformAgentListOutputSchema,
   adminPlatformAgentProvisionDefaultInboxInputSchema,
   adminPlatformAgentProvisionDefaultInboxOutputSchema,
+  adminPlatformAgentProvisionTaskManagerInputSchema,
+  adminPlatformAgentProvisionTaskManagerOutputSchema,
   adminPlatformAgentRollbackInputSchema,
   adminPlatformAgentRollbackOutputSchema,
   adminPlatformAgentSaveInputSchema,
@@ -35,6 +37,7 @@ import {
 } from '../../guards/platformPermission';
 import {
   ensureDefaultInboxProvisioned,
+  ensureTaskManagerProvisioned,
   PlatformAgentAdminService,
   PlatformAgentAvatarUploadService,
   PlatformAgentPublicationService,
@@ -151,6 +154,7 @@ export const adminAgentsRouter = router({
       assertAgentFeatureEnabled();
       try {
         await ensureDefaultInboxProvisioned(ctx.serverDB);
+        await ensureTaskManagerProvisioned(ctx.serverDB);
         return await new PlatformAgentAdminService(ctx.serverDB).list(input);
       } catch (error) {
         return mapAgentServiceError(error);
@@ -192,6 +196,36 @@ export const adminAgentsRouter = router({
       });
       try {
         return await new PlatformAgentAdminService(ctx.serverDB).provisionDefaultInbox({
+          actorId: ctx.userId!,
+          locale: input?.locale,
+        });
+      } catch (error) {
+        return mapAgentServiceError(error);
+      }
+    }),
+
+  provisionTaskManager: adminBase
+    .use(
+      withAllPlatformPermissions([
+        PLATFORM_PERMISSIONS.AGENT_CREATE,
+        PLATFORM_PERMISSIONS.AGENT_PUBLISH,
+        PLATFORM_PERMISSIONS.AGENT_ASSIGN,
+      ]),
+    )
+    .input(adminPlatformAgentProvisionTaskManagerInputSchema)
+    .output(adminPlatformAgentProvisionTaskManagerOutputSchema)
+    .mutation(async ({ ctx, input }) => {
+      assertAgentFeatureEnabled();
+      await assertAgentDangerousReauth({
+        action: 'admin.agents.provisionTaskManager',
+        actorUserId: ctx.userId!,
+        authenticatedAt: ctx.authenticatedAt,
+        authMethod: ctx.authMethod,
+        serverDB: ctx.serverDB,
+        targetId: 'task-manager',
+      });
+      try {
+        return await new PlatformAgentAdminService(ctx.serverDB).provisionTaskManager({
           actorId: ctx.userId!,
           locale: input?.locale,
         });

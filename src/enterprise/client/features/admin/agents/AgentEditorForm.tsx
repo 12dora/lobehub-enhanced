@@ -74,9 +74,10 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
     // One flag for every config control: an assignment-only operator (or an assistant whose live
     // version could not be loaded) reads the configuration but never authors it.
     const readOnly = !form.configEditable;
-    // The platform reserves the default assistant's identity and its mandatory global delivery —
-    // everything that makes it *the default*. Its presentation stays fully editable.
-    const isDefaultInbox = form.systemKey === 'default-inbox';
+    // The platform reserves a system assistant's identity and its delivery — everything that makes
+    // it 默认助理 or 任务助手. Its presentation stays fully editable either way.
+    const systemKey = form.systemKey;
+    const isSystemAgent = systemKey !== null;
     const keyInvalid = form.isCreate && form.agentKey.length > 0 && !form.keyValid;
     // An empty identifier is only worth raising once the admin has named the assistant — before
     // that the whole form is empty and there is nothing to correct yet.
@@ -93,7 +94,7 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
             agentId={agent?.identity.id ?? 'new-platform-agent'}
             dependencies={form.value.dependencies}
             editable={!readOnly}
-            isDefaultInbox={isDefaultInbox}
+            isSystemAgent={isSystemAgent}
             thinkingEffort={config.thinkingEffort ?? null}
             onChange={form.setDependencies}
             onThinkingEffortChange={(next) => form.patchConfig('thinkingEffort', next)}
@@ -127,12 +128,12 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                         changeAgentKey={form.changeAgentKey}
                         config={config}
                         isCreate={form.isCreate}
-                        isDefaultInbox={isDefaultInbox}
                         keyInvalid={keyInvalid}
                         keyMissing={keyMissing}
                         patchConfig={form.patchConfig}
                         readOnly={readOnly}
                         setDisplayName={form.setDisplayName}
+                        systemKey={systemKey}
                         uploadAvatar={(file) => void form.avatarUpload.upload(file)}
                       />
                       {/* The model is required, so it stays above the fold with the other basics. */}
@@ -179,7 +180,7 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                     <div className={styles.groupBody}>
                       <AssignmentPolicySection
                         assignments={form.assignments}
-                        isDefaultInbox={isDefaultInbox}
+                        systemKey={systemKey}
                       />
                     </div>
                   </FormGroup>
@@ -195,9 +196,9 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                     <HelpTooltip
                       field={t('agentCatalog.editor.section.params')}
                       title={t(
-                        // The heading stays "Parameters" everywhere; only the default assistant
-                        // publishes these as defaults a member may still change in chat.
-                        isDefaultInbox
+                        // The heading stays "Parameters" everywhere; only a reserved system
+                        // assistant publishes these as defaults a member may change in chat.
+                        isSystemAgent
                           ? 'agentCatalog.editor.section.paramsDescDefaultInbox'
                           : 'agentCatalog.editor.section.paramsDesc',
                       )}

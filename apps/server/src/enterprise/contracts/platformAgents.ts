@@ -24,6 +24,8 @@ export {
   adminPlatformAgentMutationOutputSchema,
   adminPlatformAgentProvisionDefaultInboxInputSchema,
   adminPlatformAgentProvisionDefaultInboxOutputSchema,
+  adminPlatformAgentProvisionTaskManagerInputSchema,
+  adminPlatformAgentProvisionTaskManagerOutputSchema,
   adminPlatformAgentUploadAvatarInputSchema,
   adminPlatformAgentUploadAvatarOutputSchema,
   adminPlatformAgentRollbackInputSchema,
@@ -53,6 +55,7 @@ export {
   platformAgentAssignmentWarningCodeSchema,
 } from './platformAgents/assignments';
 export {
+  asPlatformAgentSystemKey,
   platformAgentConnectorDependencyRefSchema,
   platformAgentDependencySnapshotSchema,
   platformAgentKeySchema,
@@ -60,6 +63,7 @@ export {
   platformAgentModelParametersSchema,
   platformAgentSkillDependencyRefSchema,
   platformAgentSystemKeySchema,
+  platformAgentSystemKeyValueSchema,
   platformAgentVersionConfigSchema,
   platformAgentVersionSchema,
 } from './platformAgents/common';
@@ -118,6 +122,8 @@ export type {
   AdminPlatformAgentMutationOutput,
   AdminPlatformAgentProvisionDefaultInboxInput,
   AdminPlatformAgentProvisionDefaultInboxOutput,
+  AdminPlatformAgentProvisionTaskManagerInput,
+  AdminPlatformAgentProvisionTaskManagerOutput,
   AdminPlatformAgentUploadAvatarInput,
   AdminPlatformAgentUploadAvatarOutput,
   AdminPlatformAgentRollbackInput,

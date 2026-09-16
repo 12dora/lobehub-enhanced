@@ -841,6 +841,30 @@ export class AgentModel {
 
   /**
    * Cross-user (ignores `this.userId`): clear `model`/`provider` on every raw `agents` row
+   * whose slug matches and that currently has a non-null pair. Used when a platform
+   * system-agent published model pair changes so new conversations pick up the admin default.
+   * Does not touch other slugs, topics, or messages, and does not bump `updatedAt`.
+   */
+  resetModelProviderForSlugForAllUsers = async (slug: string): Promise<number> => {
+    const result = await this.db
+      .update(agents)
+      .set({
+        model: null,
+        provider: null,
+        // `updatedAt` has `$onUpdate`; pin the existing value so a publish does not
+        // yank the row to the top of every user's agent list.
+        updatedAt: sql`${agents.updatedAt}`,
+        accessedAt: sql`${agents.accessedAt}`,
+      })
+      .where(
+        and(eq(agents.slug, slug), or(isNotNull(agents.model), isNotNull(agents.provider))),
+      );
+
+    return result.rowCount ?? 0;
+  };
+
+  /**
+   * Cross-user (ignores `this.userId`): clear `model`/`provider` on every raw `agents` row
    * whose slug is the builtin inbox and that currently has a non-null pair. Used when the
    * platform default-inbox published model pair changes so new conversations pick up the
    * admin default. Does not touch other slugs, topics, or messages, and does not bump
@@ -849,26 +873,14 @@ export class AgentModel {
    * Legacy pre-migration inbox rows (session-shaped, random slug until the lazy migration
    * in {@link AgentModel.getBuiltinAgent} runs) are intentionally not covered.
    */
-  resetInboxModelProviderForAllUsers = async (): Promise<number> => {
-    const result = await this.db
-      .update(agents)
-      .set({
-        model: null,
-        provider: null,
-        // `updatedAt` has `$onUpdate`; pin the existing value so a publish does not
-        // yank Inbox to the top of every user's agent list.
-        updatedAt: sql`${agents.updatedAt}`,
-        accessedAt: sql`${agents.accessedAt}`,
-      })
-      .where(
-        and(
-          eq(agents.slug, INBOX_SESSION_ID),
-          or(isNotNull(agents.model), isNotNull(agents.provider)),
-        ),
-      );
+  resetInboxModelProviderForAllUsers = async (): Promise<number> =>
+    this.resetModelProviderForSlugForAllUsers(INBOX_SESSION_ID);
 
-    return result.rowCount ?? 0;
-  };
+  /**
+   * Same as {@link resetInboxModelProviderForAllUsers} for the builtin task-page assistant.
+   */
+  resetTaskAgentModelProviderForAllUsers = async (): Promise<number> =>
+    this.resetModelProviderForSlugForAllUsers(BUILTIN_AGENT_SLUGS.taskAgent);
 
   /**
    * Strip fields the Agent Builder's own row must never carry (see

@@ -6,6 +6,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { deriveAdminAgentActionAvailability, deriveAdminAgentPermissions } from './controller';
+import { isReservedSystemAgent } from './systemAgents';
 import type { AdminAgentListItem } from './types';
 import type { useAgentRowActions } from './useAgentRowActions';
 
@@ -23,11 +24,12 @@ export const AgentListRowActions = memo<AgentListRowActionsProps>(
   ({ agentPermissions, availability, canOpenEditor, item, openDelete, openEditor, rowActions }) => {
     const { t } = useTranslation('admin');
     // Default / system assistants cannot be hard-deleted (server refuses too).
-    const deletable = !item.identity.isDefault && item.identity.systemKey === null;
-    // Archiving an already-archived assistant is a no-op the server rejects. The default is
-    // excluded outright: it is every member's assistant, and it is managed from the pinned
-    // 默认助理 section above the table, not from a row menu.
-    const archivable = item.identity.status === 'published' && !item.identity.isDefault;
+    const deletable = !isReservedSystemAgent(item.identity);
+    // Archiving an already-archived assistant is a no-op the server rejects. Reserved system
+    // assistants are excluded outright: members are served them whether an admin listed them or
+    // not, and they are managed from the pinned cards above the table, not from a row menu.
+    const archivable =
+      item.identity.status === 'published' && !isReservedSystemAgent(item.identity);
     // A published row always has a current version (the DB pointer check guarantees
     // it), which is exactly what the detail page's `canSetDefaultNow` required.
     const promotable = agentPermissions.canPublish && archivable;

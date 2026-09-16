@@ -16,6 +16,8 @@ import type {
   adminPlatformAgentMutationOutputSchema,
   adminPlatformAgentProvisionDefaultInboxInputSchema,
   adminPlatformAgentProvisionDefaultInboxOutputSchema,
+  adminPlatformAgentProvisionTaskManagerInputSchema,
+  adminPlatformAgentProvisionTaskManagerOutputSchema,
   adminPlatformAgentRollbackInputSchema,
   adminPlatformAgentRollbackOutputSchema,
   adminPlatformAgentSaveInputSchema,
@@ -113,6 +115,12 @@ export type AdminPlatformAgentProvisionDefaultInboxInput = z.input<
 >;
 export type AdminPlatformAgentProvisionDefaultInboxOutput = z.output<
   typeof adminPlatformAgentProvisionDefaultInboxOutputSchema
+>;
+export type AdminPlatformAgentProvisionTaskManagerInput = z.input<
+  typeof adminPlatformAgentProvisionTaskManagerInputSchema
+>;
+export type AdminPlatformAgentProvisionTaskManagerOutput = z.output<
+  typeof adminPlatformAgentProvisionTaskManagerOutputSchema
 >;
 export type AdminPlatformAgentUploadAvatarInput = z.input<
   typeof adminPlatformAgentUploadAvatarInputSchema

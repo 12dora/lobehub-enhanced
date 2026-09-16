@@ -43,8 +43,12 @@ interface DependencyEditorProps {
   dependencies: AdminAgentDraftDependencies;
   editable: boolean;
   enabled: boolean;
-  /** The platform default assistant, whose thinking effort members may still override in chat. */
-  isDefaultInbox?: boolean;
+  /**
+   * A reserved system assistant (默认助理 / 任务助手). Both publish the model, its parameters and
+   * the thinking effort as DEFAULTS members may still override in chat, so the copy must not
+   * promise a lock that does not exist.
+   */
+  isSystemAgent?: boolean;
   onChange: (next: AdminAgentDraftDependencies) => void;
   /**
    * The thinking effort lives on the version config, not on the dependency snapshot, but it is
@@ -61,7 +65,7 @@ export const DependencyEditor = ({
   dependencies,
   editable,
   enabled,
-  isDefaultInbox = false,
+  isSystemAgent = false,
   onChange,
   onThinkingEffortChange,
   onValidityChange,
@@ -309,7 +313,7 @@ export const DependencyEditor = ({
         displayModelStale={displayModelStale}
         editable={editable}
         hideTitle={Boolean(children)}
-        isDefaultInbox={isDefaultInbox}
+        isSystemAgent={isSystemAgent}
         model={model}
         providerId={providerId}
         providerSearch={providerSearch}

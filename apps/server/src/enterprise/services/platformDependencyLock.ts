@@ -7,6 +7,7 @@ import { loadCurrentAiCatalogSnapshot } from './platformInstance/catalogAuthorit
 
 const PLATFORM_DEPENDENCY_LOCK_NAMESPACE = 'aihub:platform-published-dependencies:v1';
 const PLATFORM_DEFAULT_INBOX_LOCK_NAMESPACE = 'aihub:platform-default-inbox:v1';
+const PLATFORM_TASK_MANAGER_LOCK_NAMESPACE = 'aihub:platform-task-manager:v1';
 
 /**
  * Shared protocol for publishing dependency references and checking destructive mutations.
@@ -40,6 +41,17 @@ export const acquirePlatformDependencyValidationLock = async (tx: Transaction): 
 export const acquirePlatformDefaultInboxLock = async (tx: Transaction): Promise<void> => {
   await tx.execute(
     sql`SELECT pg_advisory_xact_lock(hashtext(${PLATFORM_DEFAULT_INBOX_LOCK_NAMESPACE})::bigint)`,
+  );
+};
+
+/**
+ * Transaction-level singleton lock for the task-manager identity. Every path that can
+ * create or repair that catalog row (`provisionTaskManager`) must acquire it FIRST so
+ * concurrent bootstraps serialize even when no row yet exists.
+ */
+export const acquirePlatformTaskManagerLock = async (tx: Transaction): Promise<void> => {
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtext(${PLATFORM_TASK_MANAGER_LOCK_NAMESPACE})::bigint)`,
   );
 };
 

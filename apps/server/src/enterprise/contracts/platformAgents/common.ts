@@ -1,5 +1,6 @@
 import { EFFORT_CONTROL_REGISTRY, isEffortControlKey } from '@lobechat/model-runtime';
-import { PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY } from '@lobechat/types';
+import type { PlatformAgentSystemKey } from '@lobechat/types';
+import { PLATFORM_AGENT_SYSTEM_KEYS } from '@lobechat/types';
 import { z } from 'zod';
 
 import { containsEnterpriseSecretMaterial } from '../../security/redaction';
@@ -41,9 +42,16 @@ export const platformAgentVersionSchema = z
   .max(64)
   .refine(isStrictSemVer, 'version must be valid SemVer');
 
-export const platformAgentSystemKeySchema = z
-  .literal(PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY)
-  .nullable();
+export const platformAgentSystemKeyValueSchema = z.enum(PLATFORM_AGENT_SYSTEM_KEYS);
+export const platformAgentSystemKeySchema = platformAgentSystemKeyValueSchema.nullable();
+
+const PLATFORM_AGENT_SYSTEM_KEY_SET = new Set<string>(PLATFORM_AGENT_SYSTEM_KEYS);
+
+/** Narrow a stored `system_key` to the published union; anything else is treated as unmanaged. */
+export const asPlatformAgentSystemKey = (
+  value: string | null | undefined,
+): PlatformAgentSystemKey | null =>
+  value && PLATFORM_AGENT_SYSTEM_KEY_SET.has(value) ? (value as PlatformAgentSystemKey) : null;
 
 export const platformAgentModelParametersSchema = z
   .object({

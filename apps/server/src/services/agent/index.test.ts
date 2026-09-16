@@ -13,8 +13,9 @@ import { parseAgentConfig } from '@/server/globalConfig/parseDefaultAgent';
 
 import { AgentService, completeInboxModelProviderPairPatch } from './index';
 
-const { mockGetEffectiveBuiltinConfig } = vi.hoisted(() => ({
+const { mockGetEffectiveBuiltinConfig, mockGetEffectiveTaskManagerConfig } = vi.hoisted(() => ({
   mockGetEffectiveBuiltinConfig: vi.fn(async (base: any, _options?: any) => base),
+  mockGetEffectiveTaskManagerConfig: vi.fn(async (base: any, _options?: any) => base),
 }));
 
 vi.mock('@/envs/app', () => ({
@@ -40,6 +41,13 @@ vi.mock('@/server/enterprise/services/agentCatalog/defaultInbox', () => ({
       base: Parameters<PlatformDefaultInboxServiceContract['getEffectiveBuiltinConfig']>[0],
       options?: Parameters<PlatformDefaultInboxServiceContract['getEffectiveBuiltinConfig']>[1],
     ) => mockGetEffectiveBuiltinConfig(base, options);
+  },
+}));
+
+vi.mock('@/server/enterprise/services/agentCatalog/taskManagerAgent', () => ({
+  PlatformTaskManagerService: class PlatformTaskManagerService {
+    getEffectiveBuiltinConfig = (base: any, options?: any) =>
+      mockGetEffectiveTaskManagerConfig(base, options);
   },
 }));
 
@@ -85,6 +93,7 @@ describe('AgentService', () => {
     mockUserModel.getUserSettings.mockReset().mockResolvedValue({});
     mockUserModel.getUserSettingsDefaultAgentConfig.mockReset().mockResolvedValue({});
     mockGetEffectiveBuiltinConfig.mockReset().mockImplementation(async (base) => base);
+    mockGetEffectiveTaskManagerConfig.mockReset().mockImplementation(async (base) => base);
     vi.mocked(resolveServerRuntimeBranding)
       .mockReset()
       .mockResolvedValue({ defaultAgentDisplayName: DEFAULT_INBOX_TITLE } as any);
@@ -673,6 +682,38 @@ describe('AgentService', () => {
         }),
       );
       expect(result?.title).toBe('Managed Inbox');
+    });
+
+    it('overlays the published task-manager version onto getAgentConfigById for slug task-agent', async () => {
+      const mockAgentModel = {
+        getAgentConfigById: vi.fn().mockResolvedValue({
+          id: 'task-agent-row',
+          plugins: ['lobe-task'],
+          slug: 'task-agent',
+          title: 'Legacy task agent',
+        }),
+      };
+      (AgentModel as any).mockImplementation(() => mockAgentModel);
+      (parseAgentConfig as any).mockReturnValue({});
+      vi.mocked(isRedisEnabled).mockReturnValue(false);
+      mockGetEffectiveTaskManagerConfig.mockImplementationOnce(async (base) => ({
+        ...base,
+        systemRole: 'Managed task prompt',
+        title: '任务助手',
+      }));
+
+      const result = await new AgentService(mockDb, mockUserId).getAgentConfigById(
+        'task-agent-row',
+      );
+
+      expect(mockGetEffectiveTaskManagerConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'task-agent-row', slug: 'task-agent' }),
+        expect.objectContaining({ userRow: expect.any(Object) }),
+      );
+      expect(mockGetEffectiveBuiltinConfig).not.toHaveBeenCalled();
+      expect(result?.title).toBe('任务助手');
+      expect(result?.systemRole).toBe('Managed task prompt');
+      expect(result?.plugins).toEqual(['lobe-task']);
     });
 
     it('passes the raw inbox row into the overlay so merged deepseek defaults do not count as a user choice', async () => {

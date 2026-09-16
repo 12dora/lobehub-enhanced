@@ -93,9 +93,15 @@ export const buildAgentListColumns = ({
     key: 'isDefault',
     title: t('agentCatalog.list.columns.scope'),
     width: 120,
+    // The page filters every reserved row out, so this only ever paints in an unfiltered view —
+    // which is exactly where a system assistant must not read as an ordinary one.
     render: (_, item) => (
       <Tag size="small">
-        {item.identity.isDefault ? t('agentCatalog.defaultInbox') : t('agentCatalog.standard')}
+        {item.identity.isDefault
+          ? t('agentCatalog.defaultInbox')
+          : item.identity.systemKey != null
+            ? t('agentCatalog.systemScope')
+            : t('agentCatalog.standard')}
       </Tag>
     ),
   },
