@@ -316,14 +316,24 @@ describe('AgentEditorForm layout', () => {
     expect(screen.getByText('assignment-policy').dataset.systemKey).toBe('default-inbox');
     unmount();
 
-    formMock.value = { ...baseForm(), canAssign: true, systemKey: 'task-manager' };
-    const managed = render(<AgentEditorForm />);
-    expect(screen.getByText('assignment-policy').dataset.systemKey).toBe('task-manager');
-    managed.unmount();
-
     formMock.value = { ...baseForm(), canAssign: true };
     render(<AgentEditorForm />);
     expect(screen.getByText('assignment-policy').dataset.systemKey).toBe('');
+  });
+
+  it('drops 分配策略 entirely for the task assistant, whose delivery is implicit', () => {
+    formMock.value = { ...baseForm(), canAssign: true, isCreate: false, systemKey: 'task-manager' };
+    render(<AgentEditorForm />);
+
+    // Every task page runs it already; the platform owns the one global row and the server
+    // refuses anything else, so an inert section would only invite a save that fails.
+    expect(screen.queryByText('assignment-policy')).toBeNull();
+    expect([...document.querySelectorAll('section')].map((node) => node.dataset.group)).toEqual([
+      'agentCatalog.editor.section.basic',
+      'agentCatalog.editor.section.prompt',
+      'agentCatalog.editor.section.params',
+      'agentCatalog.editor.section.more',
+    ]);
   });
 
   it('keeps the mandatory model picker with the basics, above the fold', () => {

@@ -243,10 +243,12 @@ describe('AssignmentPolicySection', () => {
     expect(screen.queryByText('agentCatalog.assignment.taskManagerHint')).toBeNull();
   });
 
-  it('locks the default assistant’s mandatory global delivery instead of offering to drop it', () => {
+  it('locks a system assistant’s provisioned global delivery instead of offering to drop it', () => {
     assignments = draftState({
+      // The shape the platform actually provisions for both reserved assistants: a global row in
+      // `default` mode, NOT `mandatory`. Locking on the mode would leave this one removable.
       entries: [
-        entry({ id: 'global', mode: 'mandatory', targetId: 'global', targetType: 'global' }),
+        entry({ id: 'global', mode: 'default', targetId: 'global', targetType: 'global' }),
         entry({ id: 'extra', mode: 'optional', targetId: 'user-2', targetType: 'user' }),
       ],
     });
@@ -266,11 +268,9 @@ describe('AssignmentPolicySection', () => {
     expect(screen.getAllByText('agentCatalog.assignment.remove')).toHaveLength(1);
   });
 
-  it('leaves the same mandatory global row removable on an ordinary assistant', () => {
+  it('leaves the same global row removable on an ordinary assistant', () => {
     assignments = draftState({
-      entries: [
-        entry({ id: 'global', mode: 'mandatory', targetId: 'global', targetType: 'global' }),
-      ],
+      entries: [entry({ id: 'global', mode: 'default', targetId: 'global', targetType: 'global' })],
     });
     render(<AssignmentPolicySection assignments={assignments} />);
 

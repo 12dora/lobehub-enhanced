@@ -1075,7 +1075,13 @@ describe('AgentListPage with the real AsyncBoundary', () => {
 
     it('takes the task assistant over on request, in the admin’s own UI language', async () => {
       grantEverything();
-      mocks.provisionTaskManager.mockResolvedValue({ created: true, identityId: 'agent-new' });
+      // The contract hands back the aggregate pointer read — `{ draftToken, identity }` — not a
+      // `{ created, identityId }` flag. The UI ignores the value, but the mock should not pin a
+      // shape the server never returns.
+      mocks.provisionTaskManager.mockResolvedValue({
+        draftToken: 'draft-agent-new',
+        identity: taskManagerSnapshot('agent-new').detail.identity,
+      });
       renderPage();
 
       // Nothing runs unasked: the built-in task agent still answers until an admin presses this.

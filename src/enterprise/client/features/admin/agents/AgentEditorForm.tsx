@@ -19,6 +19,7 @@ import {
 import { AssignmentPolicySection } from './AssignmentPolicySection';
 import { DependencyEditor } from './DependencyEditor';
 import { HelpTooltip } from './dependencyEditorShared';
+import { hidesAssignmentPolicy } from './systemAgents';
 import type { AdminAgentDetailOutput, AdminPlatformAgentSaveOutput } from './types';
 import type { AgentEditorSaveMeta } from './useAgentEditorForm';
 import { useAgentEditorForm } from './useAgentEditorForm';
@@ -165,7 +166,9 @@ export const AgentEditorForm = memo<AgentEditorFormProps>(
                   </div>
                 </FormGroup>
 
-                {form.canAssign ? (
+                {/* A system assistant whose delivery is implicit has no policy to author, so the
+                    section is absent rather than present-but-inert. */}
+                {form.canAssign && !hidesAssignmentPolicy(systemKey) ? (
                   <FormGroup
                     className={styles.group}
                     title={t('agentCatalog.editor.section.assignment')}

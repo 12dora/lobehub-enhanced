@@ -36,3 +36,12 @@ export const isReservedSystemAgent = (identity: {
   isDefault?: boolean;
   systemKey?: string | null;
 }): boolean => identity.systemKey != null || identity.isDefault === true;
+
+/**
+ * 任务助手 reaches every member through the task page itself, so the platform provisions its one
+ * global assignment and the editor has nothing left to author: the section is hidden rather than
+ * offering rows the server would refuse. 默认助理 keeps its section — additive role/user rows on
+ * top of the global delivery are a real operator tool there.
+ */
+export const hidesAssignmentPolicy = (systemKey: string | null | undefined): boolean =>
+  systemKey === PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY;

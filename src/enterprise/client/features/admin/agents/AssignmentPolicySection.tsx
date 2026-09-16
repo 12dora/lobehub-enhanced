@@ -123,11 +123,11 @@ export const AssignmentPolicySection = memo<AssignmentPolicySectionProps>(
     const targetUser = (entry: AssignmentEntry): UserPublicRef | null =>
       userRefs[entry.targetId] ?? entry.targetUser ?? null;
     /**
-     * The mandatory global row IS a system assistant's delivery to every member — dropping it
-     * would silently demote it. The server owns that row; the editor shows it.
+     * The global row IS a system assistant's delivery to every member — dropping it would
+     * silently demote it, and the server refuses the save anyway. The platform provisions it as
+     * `mode: 'default'`, so lock on the target rather than on the mode.
      */
-    const locked = (entry: AssignmentEntry) =>
-      labelKey !== null && entry.targetType === 'global' && entry.mode === 'mandatory';
+    const locked = (entry: AssignmentEntry) => labelKey !== null && entry.targetType === 'global';
 
     return (
       <div className={styles.stack}>

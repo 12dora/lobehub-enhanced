@@ -56,12 +56,15 @@ export const useProvisionTaskManager = ({
     if (!committed) return;
     setFailed(false);
 
+    // The write committed, so say so BEFORE the re-read: a refresh that fails does not undo the
+    // takeover, and a success toast printed after the warning would read as if it had recovered.
+    toast.success(t('agentCatalog.taskManagerAgent.provision.success'));
+
     try {
       await refresh();
     } catch {
       toast.warning(t('agentCatalog.recovery.refreshFailed'));
     }
-    toast.success(t('agentCatalog.taskManagerAgent.provision.success'));
   }, [authMethod, client, refresh, t]);
 
   return { failed, provision, provisioning };

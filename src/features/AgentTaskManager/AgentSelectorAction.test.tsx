@@ -182,15 +182,32 @@ describe('AgentSelectorAction', () => {
     expect(document.body.textContent).toContain('Task Manager');
   });
 
-  it('does not duplicate the task agent when it already exists in the home list', () => {
+  it('overlays the managed identity onto the task agent the home list already carries', () => {
+    mocks.agentState.agentMap.agt_task.title = '客服任务助手';
     mocks.homeState.ungroupedAgents = [
       { id: 'agt_task', title: 'Task Manager From Home', type: 'agent' },
       { id: 'agt_custom', title: 'Custom Agent', type: 'agent' },
     ];
 
+    const { getByTestId } = render(<AgentSelectorAction onAgentChange={vi.fn()} />);
+
+    // The home list is not overlayed — it carries the raw row — so the admin's identity has to be
+    // applied on this path too, or exactly the members who already have the assistant listed keep
+    // seeing the shipped name. It must still appear once.
+    expect(document.body.textContent).toContain('客服任务助手');
+    expect(document.body.textContent).not.toContain('Task Manager From Home');
+    expect(document.body.textContent).toContain('Custom Agent');
+    expect(getByTestId('avatar').dataset.avatar).toBe('task-avatar');
+  });
+
+  it('keeps the home-list title while the platform has not named the task agent', () => {
+    mocks.homeState.ungroupedAgents = [
+      { id: 'agt_task', title: 'Task Manager From Home', type: 'agent' },
+    ];
+
     render(<AgentSelectorAction onAgentChange={vi.fn()} />);
 
-    expect(document.body.textContent).not.toContain('Task ManagerTask Manager');
     expect(document.body.textContent).toContain('Task Manager From Home');
+    expect(document.body.textContent).not.toContain('Task ManagerTask Manager');
   });
 });

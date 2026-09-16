@@ -77,26 +77,39 @@ const AgentSelectorAction = memo<AgentSelectorActionProps>(({ onAgentChange }) =
       (agent) => agent.type === 'agent',
     );
 
-    if (taskAgentId && !merged.some((agent) => agent.id === taskAgentId)) {
-      return [
-        {
-          avatar: taskAgentData?.avatar || null,
-          description: taskAgentData?.description || null,
-          id: taskAgentId,
-          pinned: false,
-          // The task assistant is a platform-managed system agent: once an admin has named it in
-          // 助理管理, the server overlay puts that name on this row, and the picker must show what
-          // the admin published rather than the shipped label. The locale title stays the fallback
-          // for a platform that has not taken it over yet.
-          title: taskAgentData?.title || t('taskManager.agent', { ns: 'topic' }),
-          type: 'agent' as const,
-          updatedAt: new Date(),
-        },
-        ...merged,
-      ];
+    if (!taskAgentId) return merged;
+
+    // The task assistant is a platform-managed system agent: once an admin has named it in
+    // 助理管理, the server overlay puts that identity on the agent config the store holds, while
+    // the home list still carries the raw row. So the managed name/avatar/description win on BOTH
+    // paths — injecting the row and finding it already listed — or the picker would show the
+    // shipped label to exactly the members whose sidebar already has it.
+    if (merged.some((agent) => agent.id === taskAgentId)) {
+      return merged.map((agent) =>
+        agent.id === taskAgentId
+          ? {
+              ...agent,
+              avatar: taskAgentData?.avatar || agent.avatar,
+              description: taskAgentData?.description || agent.description,
+              title: taskAgentData?.title || agent.title,
+            }
+          : agent,
+      );
     }
 
-    return merged;
+    return [
+      {
+        avatar: taskAgentData?.avatar || null,
+        description: taskAgentData?.description || null,
+        id: taskAgentId,
+        pinned: false,
+        // Nothing listed it, so the shipped locale label is the only fallback left.
+        title: taskAgentData?.title || t('taskManager.agent', { ns: 'topic' }),
+        type: 'agent' as const,
+        updatedAt: new Date(),
+      },
+      ...merged,
+    ];
   }, [pinnedAgents, agentGroups, ungroupedAgents, taskAgentId, taskAgentData, t]);
 
   const privateAgents = useMemo<SidebarAgentItem[]>(() => {
