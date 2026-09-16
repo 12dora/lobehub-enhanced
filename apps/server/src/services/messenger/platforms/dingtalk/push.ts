@@ -2,8 +2,6 @@ import { buildSampleActionCardParam, DingTalkApiClient } from '@lobechat/chat-ad
 import debug from 'debug';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
-import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
-import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
@@ -11,12 +9,9 @@ import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis'
 import type { MessengerPushMessage, MessengerPushProvider, MessengerPushResult } from '../../push';
 import { registerMessengerPushProvider } from '../../push';
 import { resolveDingTalkBrandingDisplayName } from './branding';
-import {
-  DINGTALK_CORP_ID_KEY,
-  formatDingTalkViewInBrandingLabel,
-  resolveDingTalkIdentityEmailDomain,
-} from './const';
+import { DINGTALK_CORP_ID_KEY, formatDingTalkViewInBrandingLabel } from './const';
 import { incrementDingTalkDailyCounter } from './redis';
+import { resolveDingTalkStaffId } from './resolveStaffId';
 
 const log = debug('lobe-server:messenger:dingtalk:push');
 
@@ -134,25 +129,6 @@ const wrapDingTalkPushButtonUrl = async (
   return buildDingTalkOpenAppUrl({ agentId, corpId, url: httpsSso });
 };
 
-const emailStaffId = (email: string | null | undefined): string | null => {
-  if (!email) return null;
-  const at = email.lastIndexOf('@');
-  if (at <= 0) return null;
-  const domain = email.slice(at + 1);
-  const expected = resolveDingTalkIdentityEmailDomain();
-  if (domain.toLowerCase() !== expected.toLowerCase()) return null;
-  const local = email.slice(0, at).trim();
-  return local.length > 0 ? local : null;
-};
-
-const resolveStaffId = async (db: LobeChatDatabase, userId: string): Promise<string | null> => {
-  const link = await new MessengerAccountLinkModel(db, userId).findByPlatform('dingtalk', '');
-  if (link?.platformUserId) return link.platformUserId;
-
-  const user = await UserModel.findById(db, userId);
-  return emailStaffId(user?.email ?? null);
-};
-
 class DingTalkMessengerPushProvider implements MessengerPushProvider {
   readonly platform = 'dingtalk' as const;
 
@@ -165,7 +141,7 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
     if (!config) return { reason: 'platform_disabled', status: 'skipped' };
     if (!config.pushEnabled) return { reason: 'push_disabled', status: 'skipped' };
 
-    const staffId = await resolveStaffId(params.db, params.userId);
+    const staffId = await resolveDingTalkStaffId(params.db, params.userId);
     if (!staffId) return { reason: 'user_not_mapped', status: 'skipped' };
 
     const api = new DingTalkApiClient(config.clientId, config.clientSecret);

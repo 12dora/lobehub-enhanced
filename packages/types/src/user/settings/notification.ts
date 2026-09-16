@@ -25,6 +25,14 @@ export type TaskNotificationType = (typeof TASK_NOTIFICATION_TYPES)[number];
 /** Delivery channels persisted in `notification_deliveries.channel`. */
 export type NotificationDeliveryChannel = 'email' | 'inbox' | 'push' | 'dingtalk';
 
+/** Lifecycle status persisted in `notification_deliveries.status`. */
+export type NotificationDeliveryStatus =
+  | 'delivered'
+  | 'failed'
+  | 'pending'
+  | 'sent'
+  | 'skipped';
+
 export interface NotificationSettings {
   /**
    * DingTalk push through the platform IM connector (管理端 → IM 连接器 → 钉钉). Only takes

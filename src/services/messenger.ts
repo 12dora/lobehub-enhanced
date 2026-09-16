@@ -1,8 +1,14 @@
 import { lambdaClient } from '@/libs/trpc/client';
 
+export type { MessengerPlatformBinding } from '@lobechat/types';
+
 type MessengerPlatform = 'telegram' | 'slack' | 'discord' | 'dingtalk';
 
 class MessengerService {
+  /**
+   * Enabled IM connectors plus per-user `binding` (`{ linked, platformUsername }`).
+   * Import `MessengerPlatformBinding` from this module or `@lobechat/types`.
+   */
   availablePlatforms = async () => {
     return lambdaClient.messenger.availablePlatforms.query();
   };

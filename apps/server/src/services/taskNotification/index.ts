@@ -77,10 +77,13 @@ export interface TopicCompleteNotifyInput {
  * - `notifications` has no jsonb metadata column — `agentId` is accepted on
  *   the input for callers but is not persisted.
  * - `notification_deliveries.notification_id` is NOT NULL. When inbox is off
- *   and DingTalk is on, a parent row is inserted with `isArchived=true` only
- *   after a non-skipped push so the delivery has a parent and the bell does
- *   not show it. A DingTalk-only `skipped` push writes no parent row.
- * - Push `skipped` writes NO delivery row (connector/user not mapped).
+ *   and DingTalk is on, a parent row is inserted with `isArchived=true` so
+ *   the delivery has a parent and the bell does not show it — including when
+ *   the push is `skipped` (connector / user not mapped).
+ * - Push `skipped` still writes a delivery row
+ *   `{ channel: 'dingtalk', status: 'skipped', failedReason }`. Duplicate
+ *   parents are prevented by `findByDedupeKey` plus `ON CONFLICT DO NOTHING`
+ *   on `(userId, dedupeKey)`.
  */
 export class TaskNotificationService {
   async notify(input: TaskNotifyInput): Promise<void> {
@@ -124,8 +127,6 @@ export class TaskNotificationService {
       return;
     }
 
-    // Defer the parent insert when inbox is off so a DingTalk-only `skipped`
-    // push does not leave an archived row with zero deliveries.
     const ensureParent = async () => {
       const created = await model.create({
         actionUrl,
@@ -155,6 +156,12 @@ export class TaskNotificationService {
     ) => {
       if (push.status === 'skipped') {
         log('dingtalk skipped: task=%s reason=%s', taskId, push.reason);
+        await model.createDelivery({
+          channel: 'dingtalk',
+          failedReason: push.reason,
+          notificationId,
+          status: 'skipped',
+        });
         return;
       }
       if (push.status === 'sent') {
@@ -175,37 +182,25 @@ export class TaskNotificationService {
       });
     };
 
+    const created = await ensureParent();
+    if (!created) return;
+
     if (inboxEnabled) {
-      const created = await ensureParent();
-      if (!created) return;
       await model.createDelivery({
         channel: 'inbox',
         notificationId: created.id,
         sentAt: new Date(),
         status: 'sent',
       });
-      if (!dingtalkEnabled) return;
-      const push = await new MessengerPushService(db).pushToUser({
-        message: pushMessage,
-        platform: 'dingtalk',
-        userId,
-      });
-      await recordDingTalkDelivery(created.id, push);
-      return;
     }
 
-    // DingTalk-only: push first; insert the archived parent only on sent/failed.
+    if (!dingtalkEnabled) return;
+
     const push = await new MessengerPushService(db).pushToUser({
       message: pushMessage,
       platform: 'dingtalk',
       userId,
     });
-    if (push.status === 'skipped') {
-      log('dingtalk skipped (no parent): task=%s reason=%s', taskId, push.reason);
-      return;
-    }
-    const created = await ensureParent();
-    if (!created) return;
     await recordDingTalkDelivery(created.id, push);
   }
 }

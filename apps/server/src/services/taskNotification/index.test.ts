@@ -149,16 +149,24 @@ describe('TaskNotificationService.notify', () => {
     );
   });
 
-  it('writes no dingtalk delivery row when push is skipped', async () => {
+  it('records a skipped dingtalk delivery when push is skipped', async () => {
     mockPushToUser.mockResolvedValue({ status: 'skipped', reason: 'user_not_mapped' });
 
     await new TaskNotificationService().notify(baseInput);
 
+    expect(mockCreateDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'dingtalk',
+        failedReason: 'user_not_mapped',
+        notificationId: 'n-1',
+        status: 'skipped',
+      }),
+    );
     const channels = mockCreateDelivery.mock.calls.map((call) => call[0].channel);
-    expect(channels).toEqual(['inbox']);
+    expect(channels).toEqual(['inbox', 'dingtalk']);
   });
 
-  it('does not insert an archived parent when dingTalk-only push is skipped', async () => {
+  it('inserts an archived parent and skipped delivery when dingTalk-only push is skipped', async () => {
     mockGetUserSettings.mockResolvedValue({
       notification: { inbox: { enabled: false } },
     });
@@ -166,8 +174,16 @@ describe('TaskNotificationService.notify', () => {
 
     await new TaskNotificationService().notify(baseInput);
 
-    expect(mockCreate).not.toHaveBeenCalled();
-    expect(mockCreateDelivery).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ isArchived: true }));
+    expect(mockCreateDelivery).toHaveBeenCalledTimes(1);
+    expect(mockCreateDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'dingtalk',
+        failedReason: 'user_not_mapped',
+        notificationId: 'n-1',
+        status: 'skipped',
+      }),
+    );
   });
 
   it('uses a stable kickoff suffix when topicId is missing', async () => {

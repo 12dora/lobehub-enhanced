@@ -23,3 +23,4 @@ export {
 export { dingtalk } from './definition';
 export { dingtalkMessengerPushProvider, registerDingTalkMessengerPushProvider } from './push';
 export { dropStaleDingTalkQueues } from './queue';
+export { resolveDingTalkStaffId, staffIdFromDingTalkIdentityEmail } from './resolveStaffId';

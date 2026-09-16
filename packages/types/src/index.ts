@@ -27,6 +27,7 @@ export * from './importer';
 export * from './knowledgeBase';
 export * from './llm';
 export * from './message';
+export * from './messenger';
 export * from './meta';
 export * from './platform';
 export * from './plugins';

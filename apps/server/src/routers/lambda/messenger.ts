@@ -38,6 +38,7 @@ import {
   MessengerTelegramBinder,
   peekConsumedLinkToken,
   peekLinkToken,
+  resolveMessengerPlatformBindings,
 } from '@/server/services/messenger';
 
 const platformEnum = z.enum([
@@ -197,14 +198,17 @@ export const messengerRouter = router({
    * registry's serialized definitions — same pattern as
    * `agentBotProvider.listPlatforms` for bot channels. Per-deployment
    * fields (`appId`, `botUsername`) layer on top from each platform's
-   * DB-backed config:
+   * DB-backed config. Per-caller `binding` (`{ linked, platformUsername }`)
+   * is resolved from `messenger_account_links` (or the DingTalk identity
+   * email convention) so the UI can tell "push is enabled" from "this
+   * user can actually receive it".
    *
    * - Slack `appId` powers the verify-im success state's
    *   `slack://app?team=…&id=…` deep link straight into the bot DM.
    * - Discord `applicationId` doubles as the bot user id and feeds the
    *   LinkModal's OAuth2 install URL.
    */
-  availablePlatforms: publicProcedure.query(async () => {
+  availablePlatforms: publicProcedure.use(serverDatabase).query(async ({ ctx }) => {
     const enabled = await getEnabledMessengerPlatforms();
     const enabledSet = new Set<string>(enabled);
     const definitions = messengerPlatformRegistry
@@ -217,6 +221,12 @@ export const messengerRouter = router({
       enabledSet.has('telegram') ? getMessengerTelegramConfig() : Promise.resolve(null),
       enabledSet.has('dingtalk') ? getMessengerDingTalkConfig() : Promise.resolve(null),
     ]);
+
+    const bindings = await resolveMessengerPlatformBindings(
+      ctx.serverDB,
+      ctx.userId,
+      definitions.map((def) => def.id),
+    );
 
     return definitions.map((def) => ({
       ...def,
@@ -237,6 +247,7 @@ export const messengerRouter = router({
           : def.id === 'dingtalk'
             ? null
             : undefined,
+      binding: bindings[def.id] ?? { linked: false, platformUsername: null },
       capabilities:
         def.id === 'dingtalk'
           ? {

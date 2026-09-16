@@ -10,8 +10,9 @@
 - **会话**：单聊按会话保持当前话题；群聊按「群 + 提问人」隔离，机器人只能看到 @ 它的消息及其引用内容。话题在网页端可见，标题前缀「钉钉 ·」。空闲超过连接器设定时长自动新建会话。
 - **指令**：`/助手`（列出并切换）、`/切换 N`、`/新会话`、`/会话`（最近 5 个）、`/继续 N`、`/当前`、`/停止`、`/帮助`；同时接受英文别名 `/agents /use /new /topics /resume /status /stop /help`。
 - **回复**：配置了 AI 卡片模板时流式更新卡片；否则先回复「正在思考…」再发送完整 Markdown（超长按段落分片）。卡片接口失败自动回退 Markdown。
-- **任务提醒**：任务事件（运行完成 / 运行失败 / 等待处理 / 任务完成）写入站内通知并按用户在任务页「提醒设置」中的渠道选择推送到钉钉（ActionCard，含直达链接）。投递结果记录在 `notification_deliveries`（channel = `dingtalk`）。
+- **任务提醒**：任务事件（运行完成 / 运行失败 / 等待处理 / 任务完成）写入站内通知并按用户在任务页「提醒设置」中的渠道选择推送到钉钉（ActionCard，含直达链接）。投递结果记录在 `notification_deliveries`（channel = `dingtalk`），含 `sent` / `failed` / `skipped`。推送 `skipped`（例如账号未映射）仍会写一条 `{ status: 'skipped', failed_reason }` 的投递行；仅钉钉、站内关闭时，父通知以 `isArchived=true` 插入，以便 skipped 行有 parent 且不出现在铃铛里。
 - **定时任务**：本部署没有 QStash，`taskSchedulingWorker` 每 60 s 在进程内扫描 cron 到期任务、补发心跳、执行看门狗，见 `task-scheduling.md`。
+- **客户端绑定状态**：`messenger.availablePlatforms` 每条平台除 `capabilities.push` 外还带 `binding: { linked: boolean; platformUsername?: string | null }`（调用用户）。`linked` 为 true 当存在 `messenger_account_links` 行，或（仅钉钉）用户邮箱符合 `<staffId>@dingtalk.jiefakj.com` 约定。客户端可 `import type { MessengerPlatformBinding } from '@lobechat/types'` 或 `@/services/messenger`。
 
 ## 钉钉开发者后台配置
 
@@ -38,6 +39,7 @@
 - 容器出网经 `HTTP(S)_PROXY`，`NODE_USE_ENV_PROXY=1` 使 Node 的 fetch 与 WebSocket 均经代理；`NO_PROXY` 需包含 `localhost,127.0.0.1`。
 - 单实例部署：Stream 连接与调度 worker 都在服务进程内，多副本时分别依赖钉钉的多连接分发与 Redis 锁。
 - 排查：`DEBUG=lobe-server:messenger:*,lobe-server:task-scheduling` 查看连接/转发/调度日志；Redis 键 `messenger:dingtalk:*`；`notification_deliveries` 表的 `failed_reason`。
+- reminder never reaches DingTalk → check `notification_deliveries` for `status=skipped`/`failed_reason=user_not_mapped`; the task owner must be a DingTalk-linked account.
 
 ## 免登页 JSAPI
 

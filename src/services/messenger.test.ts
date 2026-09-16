@@ -30,9 +30,13 @@ beforeEach(() => {
 
 describe('messengerService', () => {
   it('availablePlatforms delegates to lambdaClient query', async () => {
-    messenger.availablePlatforms.query.mockResolvedValueOnce([{ id: 'slack' }]);
+    messenger.availablePlatforms.query.mockResolvedValueOnce([
+      { binding: { linked: false, platformUsername: null }, id: 'slack' },
+    ]);
     const result = await messengerService.availablePlatforms();
-    expect(result).toEqual([{ id: 'slack' }]);
+    expect(result).toEqual([
+      { binding: { linked: false, platformUsername: null }, id: 'slack' },
+    ]);
     expect(messenger.availablePlatforms.query).toHaveBeenCalledTimes(1);
   });
 

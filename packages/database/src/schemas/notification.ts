@@ -73,7 +73,8 @@ export const notificationDeliveries = pgTable(
     /**
      * Parent notification. NOT NULL — DingTalk-only deliveries still need a parent row.
      * When inbox is disabled for that type, TaskNotificationService inserts the parent with
-     * `isArchived=true` so it does not surface in the bell, then attaches the dingtalk delivery.
+     * `isArchived=true` so it does not surface in the bell, then attaches the dingtalk delivery
+     * (including `status=skipped` when the push is not mapped / connector-disabled).
      */
     notificationId: uuid('notification_id')
       .references(() => notifications.id, { onDelete: 'cascade' })
@@ -81,12 +82,12 @@ export const notificationDeliveries = pgTable(
 
     /** Delivery channel: `inbox` | `email` | `push` | `dingtalk` */
     channel: text('channel').$type<'dingtalk' | 'email' | 'inbox' | 'push'>().notNull(),
-    /** Lifecycle status: `pending` | `sent` | `delivered` | `failed` */
-    status: text('status').$type<'delivered' | 'failed' | 'pending' | 'sent'>().notNull(),
+    /** Lifecycle status: `pending` | `sent` | `delivered` | `failed` | `skipped` */
+    status: text('status').$type<'delivered' | 'failed' | 'pending' | 'sent' | 'skipped'>().notNull(),
 
     /** ID returned by the channel provider, e.g. Resend messageId */
     providerMessageId: text('provider_message_id'),
-    /** Error description when status is `failed` */
+    /** Error / skip description when status is `failed` or `skipped` */
     failedReason: text('failed_reason'),
     sentAt: timestamptz('sent_at'),
 

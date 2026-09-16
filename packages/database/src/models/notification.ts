@@ -118,6 +118,10 @@ export class NotificationModel {
     return result ?? null;
   }
 
+  /**
+   * Persist a channel attempt. `status` accepts `pending` | `sent` |
+   * `delivered` | `failed` | `skipped` (e.g. DingTalk `user_not_mapped`).
+   */
   async createDelivery(data: NewNotificationDelivery) {
     const [result] = await this.db.insert(notificationDeliveries).values(data).returning();
 

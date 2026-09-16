@@ -27,6 +27,7 @@ const {
   mockNotifyTelegramLinkSuccess,
   mockPeekConsumedLinkToken,
   mockPeekLinkToken,
+  mockResolveMessengerPlatformBindings,
   mockSlackAuthTest,
   mockUpsertForPlatform,
 } = vi.hoisted(() => ({
@@ -50,6 +51,7 @@ const {
   mockNotifyTelegramLinkSuccess: vi.fn(),
   mockPeekConsumedLinkToken: vi.fn(),
   mockPeekLinkToken: vi.fn(),
+  mockResolveMessengerPlatformBindings: vi.fn().mockResolvedValue({}),
   mockSlackAuthTest: vi.fn(),
   mockUpsertForPlatform: vi.fn(),
 }));
@@ -126,6 +128,7 @@ vi.mock('@/server/services/messenger', () => ({
   })),
   peekConsumedLinkToken: mockPeekConsumedLinkToken,
   peekLinkToken: mockPeekLinkToken,
+  resolveMessengerPlatformBindings: mockResolveMessengerPlatformBindings,
 }));
 
 vi.mock('@/server/services/bot/platforms/slack/api', () => ({
@@ -523,6 +526,7 @@ describe('messengerRouter.listAgentsForBinding', () => {
 describe('messengerRouter.availablePlatforms', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetServerDB.mockResolvedValue({ kind: 'server-db' });
     mockGetEnabledMessengerPlatforms.mockResolvedValue(['dingtalk']);
     mockListSerializedPlatforms.mockReturnValue([
       { connectionMode: 'websocket', id: 'dingtalk', name: '钉钉' },
@@ -533,6 +537,9 @@ describe('messengerRouter.availablePlatforms', () => {
       pushEnabled: false,
       robotCode: 'robot_1',
     });
+    mockResolveMessengerPlatformBindings.mockResolvedValue({
+      dingtalk: { linked: false, platformUsername: null },
+    });
   });
 
   it('returns capabilities and a null botUsername for dingtalk', async () => {
@@ -542,6 +549,7 @@ describe('messengerRouter.availablePlatforms', () => {
     expect(result).toEqual([
       expect.objectContaining({
         appId: 'app_key',
+        binding: { linked: false, platformUsername: null },
         botUsername: null,
         capabilities: { chat: true, push: false },
         connectionMode: 'websocket',
@@ -551,5 +559,21 @@ describe('messengerRouter.availablePlatforms', () => {
         platform: 'dingtalk',
       }),
     ]);
+    expect(mockResolveMessengerPlatformBindings).toHaveBeenCalledWith(
+      { kind: 'server-db' },
+      'user-1',
+      ['dingtalk'],
+    );
+  });
+
+  it('forwards the caller binding when the user is mapped', async () => {
+    mockResolveMessengerPlatformBindings.mockResolvedValue({
+      dingtalk: { linked: true, platformUsername: 'staff_1' },
+    });
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const result = await caller.availablePlatforms();
+
+    expect(result[0].binding).toEqual({ linked: true, platformUsername: 'staff_1' });
   });
 });
