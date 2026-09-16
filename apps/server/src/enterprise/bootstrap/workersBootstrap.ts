@@ -53,6 +53,21 @@ const startDingTalkStreamWorker = async (): Promise<void> => {
   });
 };
 
+const startDingTalkDirectorySyncWorker = async (): Promise<void> => {
+  if (
+    !process.env.DATABASE_URL ||
+    process.env.VERCEL_ENV ||
+    process.env.VERCEL === '1' ||
+    process.env.NEXT_RUNTIME === 'edge' ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME
+  ) {
+    return;
+  }
+  const { ensureDingTalkDirectorySyncWorkerStarted } =
+    await import('../services/dingtalkDirectory/sync');
+  ensureDingTalkDirectorySyncWorkerStarted();
+};
+
 /**
  * Module-owned names MUST equal `PLATFORM_MODULES[*].workers` entries.
  * Specs without `moduleId` are core and always start (subject to their own
@@ -234,6 +249,15 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
+    // Core: no moduleId. In-process reminder sweep (DingTalk work notice).
+    // Internal predicate skips Vercel / Lambda / missing DATABASE_URL.
+    name: 'reminderWorker',
+    start: async () => {
+      const { ensureReminderWorkerStarted } = await import('../services/reminder');
+      ensureReminderWorkerStarted();
+    },
+  },
+  {
     // Core: no moduleId. Only meaningful when the key provider is Vault —
     // otherwise the 2s poller is a pure idle-CPU leak.
     name: 'secretRewrap',
@@ -274,6 +298,13 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     name: 'dingtalkStreamWorker',
     start: startDingTalkStreamWorker,
   },
+  {
+    // Core: hourly DingTalk org directory sync via the notify app (服务号).
+    // Internal predicate skips serverless hosts; ticks skip when notify app
+    // is not configured. First run is delayed 60 s after boot.
+    name: 'dingtalkDirectorySyncWorker',
+    start: startDingTalkDirectorySyncWorker,
+  },
 ];
 
 let started = false;
@@ -297,10 +328,26 @@ export const stopEnterpriseWorkers = async (): Promise<void> => {
     await import('../services/imConnectors/dingtalkStreamWorker');
   await stopDingTalkStreamWorker();
   try {
+    const { stopDingTalkDirectorySyncWorker } = await import('../services/dingtalkDirectory/sync');
+    stopDingTalkDirectorySyncWorker();
+  } catch (error) {
+    console.error('[modules] failed to stop dingtalkDirectorySyncWorker', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
+  try {
     const { stopTaskSchedulingWorker } = await import('../services/taskScheduling/runtime');
     stopTaskSchedulingWorker();
   } catch (error) {
     console.error('[modules] failed to stop taskSchedulingWorker', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
+  try {
+    const { stopReminderWorker } = await import('../services/reminder');
+    stopReminderWorker();
+  } catch (error) {
+    console.error('[modules] failed to stop reminderWorker', {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     });
   }

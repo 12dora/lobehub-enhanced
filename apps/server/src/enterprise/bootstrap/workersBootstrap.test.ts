@@ -50,6 +50,14 @@ describe('ENTERPRISE_WORKER_SPECS', () => {
       expect(spec?.moduleId).toBe(moduleId);
     }
   });
+
+  it('registers dingtalkDirectorySyncWorker as a core spec', () => {
+    const spec = ENTERPRISE_WORKER_SPECS.find(
+      (item) => item.name === 'dingtalkDirectorySyncWorker',
+    );
+    expect(spec?.moduleId).toBeUndefined();
+    expect(spec?.start).toEqual(expect.any(Function));
+  });
 });
 
 describe('startEnterpriseWorkers', () => {

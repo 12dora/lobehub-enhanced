@@ -14,11 +14,14 @@ const createCaller = createCallerFactory(adminRouter);
 const fixture = createAdminAuthorizationFixture({ namespace: 'im-connectors' });
 
 const serviceMocks = vi.hoisted(() => ({
+  directoryStatus: vi.fn(),
   get: vi.fn(),
   list: vi.fn(),
   listBindings: vi.fn(),
   removeBinding: vi.fn(),
+  syncDirectory: vi.fn(),
   test: vi.fn(),
+  testNotifyApp: vi.fn(),
   upsert: vi.fn(),
   upsertBinding: vi.fn(),
 }));
@@ -27,11 +30,14 @@ vi.mock('@/database/core/db-adaptor', () => ({ getServerDB: vi.fn(async () => db
 
 vi.mock('../../services/imConnectors/service', () => ({
   ImConnectorsAdminService: class {
+    directoryStatus = serviceMocks.directoryStatus;
     get = serviceMocks.get;
     list = serviceMocks.list;
     listBindings = serviceMocks.listBindings;
     removeBinding = serviceMocks.removeBinding;
+    syncDirectory = serviceMocks.syncDirectory;
     test = serviceMocks.test;
+    testNotifyApp = serviceMocks.testNotifyApp;
     upsert = serviceMocks.upsert;
     upsertBinding = serviceMocks.upsertBinding;
   },
@@ -47,6 +53,9 @@ const sampleView = {
   hasClientSecret: false,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
+  notifyAgentId: null,
+  notifyAppKey: null,
+  notifyAppSecretSet: false,
   platform: 'dingtalk' as const,
   pushEnabled: true,
   robotCode: null,
@@ -100,6 +109,27 @@ beforeEach(() => {
   });
   serviceMocks.upsertBinding.mockReset().mockResolvedValue(sampleBinding);
   serviceMocks.removeBinding.mockReset().mockResolvedValue({ success: true });
+  serviceMocks.directoryStatus.mockReset().mockResolvedValue({
+    departments: 3,
+    lastError: null,
+    lastRunAt: '2026-09-16T04:00:00.000Z',
+    state: 'ok',
+    users: 12,
+  });
+  serviceMocks.syncDirectory.mockReset().mockResolvedValue({
+    departments: 3,
+    lastError: null,
+    lastRunAt: '2026-09-16T04:00:00.000Z',
+    state: 'ok',
+    users: 12,
+  });
+  serviceMocks.testNotifyApp.mockReset().mockResolvedValue({
+    errorCode: null,
+    errorMessage: null,
+    latencyMs: 9,
+    ok: true,
+    robotName: null,
+  });
 });
 
 const callerFor = async (principal: 'auditor' | 'normal' | 'superAdmin') => {
@@ -161,6 +191,18 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(denied.directoryStatus()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(denied.syncDirectory()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(denied.testNotifyApp()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
     expect(serviceMocks.list).not.toHaveBeenCalled();
     expect(serviceMocks.upsert).not.toHaveBeenCalled();
     expect(serviceMocks.test).not.toHaveBeenCalled();
@@ -217,6 +259,15 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(reader.directoryStatus()).resolves.toMatchObject({ state: 'ok', users: 12 });
+    await expect(reader.syncDirectory()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(reader.testNotifyApp()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
     expect(serviceMocks.upsert).not.toHaveBeenCalled();
     expect(serviceMocks.test).not.toHaveBeenCalled();
     expect(serviceMocks.upsertBinding).not.toHaveBeenCalled();
@@ -244,8 +295,14 @@ describe('admin.imConnectors permission gating', () => {
       }),
     ).resolves.toMatchObject({ configured: true });
     await expect(operator.test({ platform: 'dingtalk' })).resolves.toMatchObject({ ok: true });
+    await expect(operator.syncDirectory()).resolves.toMatchObject({ state: 'ok' });
+    await expect(
+      operator.testNotifyApp({ notifyAppKey: 'k', notifyAppSecret: 's' }),
+    ).resolves.toMatchObject({ ok: true });
     expect(serviceMocks.upsert).toHaveBeenCalled();
     expect(serviceMocks.test).toHaveBeenCalled();
+    expect(serviceMocks.syncDirectory).toHaveBeenCalled();
+    expect(serviceMocks.testNotifyApp).toHaveBeenCalled();
   });
 
   it('allows SYSTEM_OPERATE binding upsert/remove for a super admin', async () => {

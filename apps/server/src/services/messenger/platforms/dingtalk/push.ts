@@ -10,6 +10,7 @@ import type { MessengerPushMessage, MessengerPushProvider, MessengerPushResult }
 import { registerMessengerPushProvider } from '../../push';
 import { resolveDingTalkBrandingDisplayName } from './branding';
 import { DINGTALK_CORP_ID_KEY, formatDingTalkViewInBrandingLabel } from './const';
+import { readNotifyAppFromMessengerConfig, sendWorkNotice } from './notifyApp';
 import { incrementDingTalkDailyCounter } from './redis';
 import { resolveDingTalkStaffId } from './resolveStaffId';
 
@@ -144,7 +145,6 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
     const staffId = await resolveDingTalkStaffId(params.db, params.userId);
     if (!staffId) return { reason: 'user_not_mapped', status: 'skipped' };
 
-    const api = new DingTalkApiClient(config.clientId, config.clientSecret);
     const { actionUrl, markdown, title } = params.message;
 
     try {
@@ -154,6 +154,32 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
             corpId: config.corpId ?? null,
           })
         : null;
+      const notifyApp = readNotifyAppFromMessengerConfig(config);
+      if (notifyApp) {
+        const sent = wrappedUrl
+          ? await sendWorkNotice(
+              {
+                actionCard: {
+                  markdown,
+                  singleTitle: formatDingTalkViewInBrandingLabel(
+                    await resolveDingTalkBrandingDisplayName(),
+                  ),
+                  singleUrl: wrappedUrl,
+                  title,
+                },
+                staffIds: [staffId],
+              },
+              { config: notifyApp },
+            )
+          : await sendWorkNotice(
+              { markdown: { text: markdown, title }, staffIds: [staffId] },
+              { config: notifyApp },
+            );
+        await incrementDingTalkDailyCounter('pushes');
+        return { providerMessageId: sent[0]?.taskId, status: 'sent' };
+      }
+
+      const api = new DingTalkApiClient(config.clientId, config.clientSecret);
       if (wrappedUrl) {
         const displayName = await resolveDingTalkBrandingDisplayName();
         const card = buildSampleActionCardParam({

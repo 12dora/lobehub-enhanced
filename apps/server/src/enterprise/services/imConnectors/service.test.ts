@@ -16,6 +16,10 @@ const lookupDingTalkStaff = vi.hoisted(() => vi.fn());
 const upsertImConnectorBinding = vi.hoisted(() => vi.fn());
 const removeImConnectorBinding = vi.hoisted(() => vi.fn());
 const listImConnectorBindings = vi.hoisted(() => vi.fn());
+const readDingTalkDirectoryStatus = vi.hoisted(() => vi.fn());
+const syncDingTalkDirectory = vi.hoisted(() => vi.fn());
+const probeNotifyAppToken = vi.hoisted(() => vi.fn());
+const readNotifyAppFromProviderRow = vi.hoisted(() => vi.fn());
 const getImConnectorStats = vi.hoisted(() =>
   vi.fn(async () => ({ linkedUsers: 2, messages7d: 7, pushes7d: 1 })),
 );
@@ -73,6 +77,16 @@ vi.mock('./stats', () => ({
 
 vi.mock('./status', () => ({
   readImConnectorStatus,
+}));
+
+vi.mock('../dingtalkDirectory/sync', () => ({
+  readDingTalkDirectoryStatus,
+  syncDingTalkDirectory,
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
+  probeNotifyAppToken,
+  readNotifyAppFromProviderRow,
 }));
 
 const SECRET = 'dingtalk-client-secret';
@@ -156,6 +170,26 @@ describe('ImConnectorsAdminService', () => {
       success: true,
     });
     listImConnectorBindings.mockResolvedValue({ hasMore: false, items: [], total: 0 });
+    readDingTalkDirectoryStatus.mockResolvedValue({
+      departments: 2,
+      lastError: null,
+      lastRunAt: '2026-09-16T04:00:00.000Z',
+      state: 'ok',
+      users: 9,
+    });
+    syncDingTalkDirectory.mockResolvedValue({ departments: 2, durationMs: 12, users: 9 });
+    probeNotifyAppToken.mockResolvedValue({
+      errorCode: null,
+      errorMessage: null,
+      latencyMs: 7,
+      ok: true,
+      robotName: null,
+    });
+    readNotifyAppFromProviderRow.mockReturnValue({
+      agentId: '9',
+      appKey: 'notify-key',
+      appSecret: 'notify-secret',
+    });
     vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue(existingRow as never);
     vi.spyOn(SystemBotProviderModel, 'update').mockResolvedValue(existingRow as never);
     vi.spyOn(SystemBotProviderModel, 'upsertByPlatform').mockResolvedValue(existingRow as never);
@@ -187,10 +221,11 @@ describe('ImConnectorsAdminService', () => {
         enabled: true,
         settings: expect.objectContaining({ corpId: null, robotCode: 'ding-robot' }),
       }),
+      expect.anything(),
     );
-    expect(vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2]).not.toHaveProperty(
-      'credentials',
-    );
+    expect(
+      vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2]?.credentials,
+    ).toBeUndefined();
     expect(SystemBotProviderModel.upsertByPlatform).not.toHaveBeenCalled();
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
   });
@@ -350,6 +385,7 @@ describe('ImConnectorsAdminService', () => {
       expect.objectContaining({
         settings: expect.objectContaining({ corpId: 'ding42', robotCode: 'ding-robot' }),
       }),
+      expect.anything(),
     );
     expect(view.corpId).toBe('ding42');
     expect(appendAudit).toHaveBeenCalledWith(
@@ -378,12 +414,91 @@ describe('ImConnectorsAdminService', () => {
       expect.objectContaining({
         settings: expect.objectContaining({ agentId: '4617854000', robotCode: 'ding-robot' }),
       }),
+      expect.anything(),
     );
     expect(view.agentId).toBe('4617854000');
     expect(appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         afterDiff: expect.objectContaining({ agentId: '4617854000' }),
       }),
+    );
+  });
+
+  it('persists notify-app settings and secret without leaking the secret', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    const notifySecret = 'notify-app-secret';
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      credentials: { clientSecret: SECRET, notifyAppSecret: notifySecret },
+      settings: {
+        ...existingRow.settings,
+        notifyAgentId: '4617854000',
+        notifyAppKey: 'notify-app-key',
+      },
+    } as never);
+
+    const view = await service.upsert({
+      actorUserId: 'operator-1',
+      input: {
+        ...upsertInput,
+        notifyAgentId: '4617854000',
+        notifyAppKey: 'notify-app-key',
+        notifyAppSecret: { action: 'replace', value: notifySecret },
+      },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        credentials: { clientSecret: SECRET, notifyAppSecret: notifySecret },
+        settings: expect.objectContaining({
+          notifyAgentId: '4617854000',
+          notifyAppKey: 'notify-app-key',
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(view.notifyAppKey).toBe('notify-app-key');
+    expect(view.notifyAgentId).toBe('4617854000');
+    expect(view.notifyAppSecretSet).toBe(true);
+    expect(JSON.stringify(view)).not.toContain(notifySecret);
+    expect(JSON.stringify(appendAudit.mock.calls[0]?.[0])).not.toContain(notifySecret);
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterDiff: expect.objectContaining({
+          notifyAgentId: '4617854000',
+          notifyAppKey: 'notify-app-key',
+          notifyAppSecretRotation: 'replace',
+        }),
+      }),
+    );
+  });
+
+  it('keeps the stored notify-app secret when clientSecret is replaced', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    const notifySecret = 'notify-app-secret';
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      credentials: { clientSecret: SECRET, notifyAppSecret: notifySecret },
+    } as never);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: {
+        ...upsertInput,
+        clientSecret: { action: 'replace', value: REPLACED_SECRET },
+      },
+    });
+
+    expect(SystemBotProviderModel.upsertByPlatform).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        credentials: { clientSecret: REPLACED_SECRET, notifyAppSecret: notifySecret },
+      }),
+      expect.anything(),
     );
   });
 
@@ -530,5 +645,47 @@ describe('ImConnectorsAdminService', () => {
         targetType: 'im_connector',
       }),
     );
+  });
+
+  it('returns directoryStatus from Redis/model', async () => {
+    const service = new ImConnectorsAdminService(createDb());
+    await expect(service.directoryStatus()).resolves.toEqual({
+      departments: 2,
+      lastError: null,
+      lastRunAt: '2026-09-16T04:00:00.000Z',
+      state: 'ok',
+      users: 9,
+    });
+  });
+
+  it('syncDirectory runs sync then returns the status', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    await expect(service.syncDirectory()).resolves.toMatchObject({ state: 'ok', users: 9 });
+    expect(syncDingTalkDirectory).toHaveBeenCalledWith(db);
+    expect(readDingTalkDirectoryStatus).toHaveBeenCalledWith(db);
+  });
+
+  it('testNotifyApp uses stored notify credentials when the form omits them', async () => {
+    const service = new ImConnectorsAdminService(createDb());
+    await expect(service.testNotifyApp()).resolves.toMatchObject({ ok: true });
+    expect(probeNotifyAppToken).toHaveBeenCalledWith({
+      appKey: 'notify-key',
+      appSecret: 'notify-secret',
+    });
+  });
+
+  it('testNotifyApp maps missing notify credentials', async () => {
+    readNotifyAppFromProviderRow.mockReturnValueOnce(null);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValueOnce(null);
+    const service = new ImConnectorsAdminService(createDb());
+    await expect(service.testNotifyApp()).resolves.toEqual({
+      errorCode: 'missing_credentials',
+      errorMessage: 'Notify AppKey and AppSecret are required',
+      latencyMs: null,
+      ok: false,
+      robotName: null,
+    });
+    expect(probeNotifyAppToken).not.toHaveBeenCalled();
   });
 });

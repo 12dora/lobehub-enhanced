@@ -13,11 +13,17 @@ import {
 import { agentShares } from './agentShare';
 import { asyncTasks } from './asyncTask';
 import { chatGroups, chatGroupsAgents } from './chatGroup';
+import {
+  dingtalkDepartments,
+  dingtalkDirectoryUsers,
+  dingtalkUserDepartments,
+} from './dingtalkDirectory';
 import { documentHistories } from './documentHistory';
 import { documents, files, knowledgeBases } from './file';
 import { generationBatches, generations, generationTopics } from './generation';
 import { messageGroups, messages, messagesFiles, messageTranslates } from './message';
 import { chunks, documentChunks, unstructuredChunks } from './rag';
+import { reminderDeliveries, reminderRecipients, reminders } from './reminder';
 import { sessionGroups, sessions } from './session';
 import { threads, topicDocuments, topics } from './topic';
 import { users } from './user';
@@ -424,5 +430,53 @@ export const agentEvalRunTopicsRelations = relations(agentEvalRunTopics, ({ one 
   testCase: one(agentEvalTestCases, {
     fields: [agentEvalRunTopics.testCaseId],
     references: [agentEvalTestCases.id],
+  }),
+}));
+
+export const dingtalkDepartmentsRelations = relations(dingtalkDepartments, ({ one, many }) => ({
+  parent: one(dingtalkDepartments, {
+    fields: [dingtalkDepartments.parentId],
+    references: [dingtalkDepartments.deptId],
+    relationName: 'dingtalkDepartmentParent',
+  }),
+  children: many(dingtalkDepartments, { relationName: 'dingtalkDepartmentParent' }),
+  memberships: many(dingtalkUserDepartments),
+}));
+
+export const dingtalkDirectoryUsersRelations = relations(dingtalkDirectoryUsers, ({ many }) => ({
+  memberships: many(dingtalkUserDepartments),
+}));
+
+export const dingtalkUserDepartmentsRelations = relations(dingtalkUserDepartments, ({ one }) => ({
+  department: one(dingtalkDepartments, {
+    fields: [dingtalkUserDepartments.deptId],
+    references: [dingtalkDepartments.deptId],
+  }),
+  user: one(dingtalkDirectoryUsers, {
+    fields: [dingtalkUserDepartments.staffId],
+    references: [dingtalkDirectoryUsers.staffId],
+  }),
+}));
+
+export const remindersRelations = relations(reminders, ({ one, many }) => ({
+  creator: one(users, {
+    fields: [reminders.createdByUserId],
+    references: [users.id],
+  }),
+  recipients: many(reminderRecipients),
+  deliveries: many(reminderDeliveries),
+}));
+
+export const reminderRecipientsRelations = relations(reminderRecipients, ({ one }) => ({
+  reminder: one(reminders, {
+    fields: [reminderRecipients.reminderId],
+    references: [reminders.id],
+  }),
+}));
+
+export const reminderDeliveriesRelations = relations(reminderDeliveries, ({ one }) => ({
+  reminder: one(reminders, {
+    fields: [reminderDeliveries.reminderId],
+    references: [reminders.id],
   }),
 }));

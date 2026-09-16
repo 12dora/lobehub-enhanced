@@ -8,6 +8,7 @@ const mockIncr = vi.fn();
 const mockExpire = vi.fn();
 const mockRedisGet = vi.fn();
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
+const mockSendWorkNotice = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
@@ -48,6 +49,14 @@ vi.mock('./branding', () => ({
     mockResolveDingTalkBrandingDisplayName(...args),
 }));
 
+vi.mock('./notifyApp', () => ({
+  readNotifyAppFromMessengerConfig: (config: { notifyApp?: unknown } | null) =>
+    config && typeof config === 'object' && 'notifyApp' in config
+      ? (config.notifyApp ?? null)
+      : null,
+  sendWorkNotice: (...args: unknown[]) => mockSendWorkNotice(...args),
+}));
+
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const { resetMessengerPushProvidersForTest } = await import('../../push');
 const {
@@ -77,6 +86,7 @@ beforeEach(() => {
   mockExpire.mockResolvedValue(1);
   mockRedisGet.mockResolvedValue(null);
   mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
+  mockSendWorkNotice.mockResolvedValue([{ taskId: 'wn-1' }]);
 });
 
 afterEach(() => {
@@ -272,6 +282,85 @@ describe('DingTalkMessengerPushProvider', () => {
       userId: 'user_1',
     });
     expect(sendOtoMessage.mock.calls[0][0].userIds).toEqual(['staff_9']);
+  });
+});
+
+describe('DingTalkMessengerPushProvider notify app work notice', () => {
+  const NOTIFY_APP = { agentId: '4617854001', appKey: 'notify-key', appSecret: 'notify-secret' };
+
+  it('sends action_card via asyncsend_v2 and records task_id when notify app is configured', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: NOTIFY_APP,
+    } as any);
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ providerMessageId: 'wn-1', status: 'sent' });
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(mockSendWorkNotice).toHaveBeenCalledWith(
+      {
+        actionCard: {
+          markdown: 'body',
+          singleTitle: '在AI平台中查看',
+          singleUrl: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+          title: '提醒',
+        },
+        staffIds: ['staff_1'],
+      },
+      { config: NOTIFY_APP },
+    );
+    expect(mockIncr).toHaveBeenCalled();
+  });
+
+  it('sends markdown work notice when notify app is configured and there is no actionUrl', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: NOTIFY_APP,
+    } as any);
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ providerMessageId: 'wn-1', status: 'sent' });
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(mockSendWorkNotice).toHaveBeenCalledWith(
+      { markdown: { text: 'body', title: '提醒' }, staffIds: ['staff_1'] },
+      { config: NOTIFY_APP },
+    );
+  });
+
+  it('keeps the robot path unchanged when notify app is not configured', async () => {
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: {
+        actionUrl: '/task/1',
+        markdown: 'body',
+        title: '提醒',
+      },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ status: 'sent' });
+    expect(mockSendWorkNotice).not.toHaveBeenCalled();
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msgKey: 'sampleActionCard',
+        robotCode: 'robot_1',
+        userIds: ['staff_1'],
+      }),
+    );
   });
 });
 

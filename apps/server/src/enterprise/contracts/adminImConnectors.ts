@@ -43,6 +43,10 @@ export const dingTalkConnectorSettingsSchema = z
       .min(IM_CONNECTOR_IDLE_HOURS_MIN)
       .max(IM_CONNECTOR_IDLE_HOURS_MAX)
       .default(IM_CONNECTOR_IDLE_HOURS_DEFAULT),
+    /** Notify-app (服务号) AgentId used by work notifications. Empty = notify app unset. */
+    notifyAgentId: z.string().trim().max(64).nullable().optional().default(null),
+    /** Notify-app (服务号) AppKey. Empty = notify app unset. */
+    notifyAppKey: z.string().trim().max(200).nullable().optional().default(null),
     /** Proactive push (task reminders) capability. */
     pushEnabled: z.boolean().default(true),
     /** RobotCode from the DingTalk robot page (often equals the Client ID). */
@@ -110,6 +114,12 @@ export const adminImConnectorViewSchema = z
     hasClientSecret: z.boolean(),
     idleNewTopicEnabled: z.boolean(),
     idleNewTopicHours: z.number().int(),
+    /** Notify-app (服务号) AgentId. Null when unset. */
+    notifyAgentId: z.string().nullable(),
+    /** Notify-app (服务号) AppKey. Null when unset. */
+    notifyAppKey: z.string().nullable(),
+    /** True when a notify-app secret is stored; the secret itself is never returned. */
+    notifyAppSecretSet: z.boolean(),
     platform: imConnectorPlatformSchema,
     pushEnabled: z.boolean(),
     robotCode: z.string().nullable(),
@@ -140,6 +150,13 @@ export const adminImConnectorSecretInputSchema = z.discriminatedUnion('action', 
   z.object({ action: z.literal('replace'), value: z.string().trim().min(1).max(500) }).strict(),
 ]);
 
+/** Notify-app secret: keep / replace / clear. Optional on upsert (omitted = keep). */
+export const adminImConnectorNotifyAppSecretInputSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('keep') }).strict(),
+  z.object({ action: z.literal('replace'), value: z.string().trim().min(1).max(500) }).strict(),
+  z.object({ action: z.literal('clear') }).strict(),
+]);
+
 export const adminImConnectorUpsertInputSchema = z
   .object({
     agentId: z.string().trim().max(64).nullable().optional(),
@@ -155,6 +172,9 @@ export const adminImConnectorUpsertInputSchema = z
       .int()
       .min(IM_CONNECTOR_IDLE_HOURS_MIN)
       .max(IM_CONNECTOR_IDLE_HOURS_MAX),
+    notifyAgentId: z.string().trim().max(64).nullable().optional(),
+    notifyAppKey: z.string().trim().max(200).nullable().optional(),
+    notifyAppSecret: adminImConnectorNotifyAppSecretInputSchema.optional(),
     platform: imConnectorPlatformSchema,
     pushEnabled: z.boolean(),
     reason: secretSafeAuditReasonSchema.optional(),

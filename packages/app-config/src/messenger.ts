@@ -71,6 +71,12 @@ export interface MessengerDiscordConfig {
   publicKey: string;
 }
 
+export interface MessengerDingTalkNotifyApp {
+  agentId: string;
+  appKey: string;
+  appSecret: string;
+}
+
 /**
  * DingTalk System Bot (Stream mode). `null` from the getter means the
  * `system_bot_providers` row is missing, disabled, or incomplete.
@@ -91,6 +97,11 @@ export interface MessengerDingTalkConfig {
   corpId: string | null;
   idleNewTopicEnabled: boolean;
   idleNewTopicHours: number;
+  /**
+   * Notify app (服务号) used for work notifications. Null unless AppKey, AppSecret
+   * and AgentId are all present.
+   */
+  notifyApp: MessengerDingTalkNotifyApp | null;
   pushEnabled: boolean;
   robotCode: string;
   selectCardTemplateId: string | null;
@@ -113,6 +124,8 @@ const dingTalkConnectorSettingsSchema = z
       .min(IM_CONNECTOR_IDLE_HOURS_MIN)
       .max(IM_CONNECTOR_IDLE_HOURS_MAX)
       .optional(),
+    notifyAgentId: z.string().trim().max(64).nullable().optional(),
+    notifyAppKey: z.string().trim().max(200).nullable().optional(),
     pushEnabled: z.boolean().optional(),
     robotCode: z.string().trim().min(1).max(200),
     selectCardTemplateId: z.string().trim().max(200).nullable().optional(),
@@ -217,7 +230,7 @@ export const getMessengerDiscordConfig = async (): Promise<MessengerDiscordConfi
 export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkConfig | null> => {
   return fetchAndCache<MessengerDingTalkConfig>('dingtalk', (row) => {
     const clientId = row.applicationId?.trim();
-    const c = row.credentials as { clientSecret?: unknown };
+    const c = row.credentials as { clientSecret?: unknown; notifyAppSecret?: unknown };
     const clientSecret = typeof c.clientSecret === 'string' ? c.clientSecret.trim() : '';
     if (!clientId || !clientSecret) return null;
 
@@ -225,6 +238,15 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
     if (!parsed.success) return null;
 
     const settings = parsed.data;
+    const notifyAppKey = emptyToNull(settings.notifyAppKey ?? null);
+    const notifyAgentId = emptyToNull(settings.notifyAgentId ?? null);
+    const notifyAppSecret =
+      typeof c.notifyAppSecret === 'string' ? emptyToNull(c.notifyAppSecret) : null;
+    const notifyApp =
+      notifyAppKey && notifyAppSecret && notifyAgentId
+        ? { agentId: notifyAgentId, appKey: notifyAppKey, appSecret: notifyAppSecret }
+        : null;
+
     return {
       agentId: emptyToNull(settings.agentId ?? null),
       aiCardTemplateId: emptyToNull(settings.aiCardTemplateId ?? null),
@@ -234,6 +256,7 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
       corpId: emptyToNull(settings.corpId ?? null),
       idleNewTopicEnabled: settings.idleNewTopicEnabled ?? true,
       idleNewTopicHours: settings.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,
+      notifyApp,
       pushEnabled: settings.pushEnabled ?? true,
       robotCode: settings.robotCode,
       selectCardTemplateId: emptyToNull(settings.selectCardTemplateId ?? null),

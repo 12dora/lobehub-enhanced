@@ -6,6 +6,10 @@ import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
+import {
+  probeNotifyAppToken,
+  readNotifyAppFromProviderRow,
+} from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 
 import type {
   AdminImConnectorBindingItem,
@@ -27,6 +31,8 @@ import {
   imConnectorPlatformSchema,
 } from '../../contracts/adminImConnectors';
 import { AUDIT_ACTION } from '../audit/auditActionCatalog';
+import type { DingTalkDirectoryStatus } from '../dingtalkDirectory/sync';
+import { readDingTalkDirectoryStatus, syncDingTalkDirectory } from '../dingtalkDirectory/sync';
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
 import { PlatformAuditService } from '../platformAudit';
 import {
@@ -50,6 +56,8 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   corpId: null,
   idleNewTopicEnabled: true,
   idleNewTopicHours: IM_CONNECTOR_IDLE_HOURS_DEFAULT,
+  notifyAgentId: null,
+  notifyAppKey: null,
   pushEnabled: true,
   robotCode: '',
   selectCardTemplateId: null,
@@ -64,6 +72,27 @@ const emptyToNull = (value: string | null | undefined): string | null => {
 const pickClientSecret = (credentials: Record<string, unknown> | undefined): string | null => {
   const value = credentials?.clientSecret;
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+};
+
+const pickNotifyAppSecret = (credentials: Record<string, unknown> | undefined): string | null => {
+  const value = credentials?.notifyAppSecret;
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+};
+
+const mergeConnectorCredentials = (params: {
+  clientSecret: string;
+  existing?: Record<string, unknown>;
+  notifyAppSecret: { action: 'clear' | 'keep' | 'replace'; value?: string } | undefined;
+}): Record<string, unknown> => {
+  const credentials: Record<string, unknown> = { clientSecret: params.clientSecret };
+  const action = params.notifyAppSecret?.action ?? 'keep';
+  if (action === 'replace' && params.notifyAppSecret?.value) {
+    credentials.notifyAppSecret = params.notifyAppSecret.value;
+  } else if (action === 'keep') {
+    const stored = pickNotifyAppSecret(params.existing);
+    if (stored) credentials.notifyAppSecret = stored;
+  }
+  return credentials;
 };
 
 export const fingerprintClientSecret = (secret: string): string =>
@@ -91,6 +120,8 @@ const parseDingTalkSettings = (
       typeof raw?.idleNewTopicHours === 'number'
         ? raw.idleNewTopicHours
         : DEFAULT_SETTINGS.idleNewTopicHours,
+    notifyAgentId: emptyToNull(typeof raw?.notifyAgentId === 'string' ? raw.notifyAgentId : null),
+    notifyAppKey: emptyToNull(typeof raw?.notifyAppKey === 'string' ? raw.notifyAppKey : null),
     pushEnabled:
       typeof raw?.pushEnabled === 'boolean' ? raw.pushEnabled : DEFAULT_SETTINGS.pushEnabled,
     robotCode: typeof raw?.robotCode === 'string' ? raw.robotCode : '',
@@ -108,6 +139,8 @@ const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnect
     corpId: emptyToNull(input.corpId ?? null),
     idleNewTopicEnabled: input.idleNewTopicEnabled,
     idleNewTopicHours: input.idleNewTopicHours,
+    notifyAgentId: emptyToNull(input.notifyAgentId ?? null),
+    notifyAppKey: emptyToNull(input.notifyAppKey ?? null),
     pushEnabled: input.pushEnabled,
     robotCode: input.robotCode,
     selectCardTemplateId: emptyToNull(input.selectCardTemplateId),
@@ -135,6 +168,9 @@ const unconfiguredView = async (
     hasClientSecret: false,
     idleNewTopicEnabled: DEFAULT_SETTINGS.idleNewTopicEnabled,
     idleNewTopicHours: DEFAULT_SETTINGS.idleNewTopicHours,
+    notifyAgentId: DEFAULT_SETTINGS.notifyAgentId,
+    notifyAppKey: DEFAULT_SETTINGS.notifyAppKey,
+    notifyAppSecretSet: false,
     platform,
     pushEnabled: DEFAULT_SETTINGS.pushEnabled,
     robotCode: null,
@@ -172,6 +208,9 @@ const toView = async (
     hasClientSecret: Boolean(secret),
     idleNewTopicEnabled: settings.idleNewTopicEnabled,
     idleNewTopicHours: settings.idleNewTopicHours,
+    notifyAgentId: emptyToNull(settings.notifyAgentId),
+    notifyAppKey: emptyToNull(settings.notifyAppKey),
+    notifyAppSecretSet: Boolean(pickNotifyAppSecret(row.credentials)),
     platform,
     pushEnabled: settings.pushEnabled,
     robotCode: emptyToNull(settings.robotCode),
@@ -212,6 +251,8 @@ export class ImConnectorsAdminService {
     const replacementSecret =
       input.clientSecret.action === 'replace' ? input.clientSecret.value : undefined;
     const settings = settingsFromUpsert(input);
+    const notifySecretAction = input.notifyAppSecret?.action ?? 'keep';
+    const notifySecretMutates = notifySecretAction === 'replace' || notifySecretAction === 'clear';
 
     await this.db.transaction(async (tx) => {
       const existing = await SystemBotProviderModel.findByPlatform(tx, input.platform, gateKeeper);
@@ -226,12 +267,24 @@ export class ImConnectorsAdminService {
       }
 
       if (existing && !replacing) {
-        await SystemBotProviderModel.update(tx, existing.id, {
-          applicationId: input.clientId,
-          connectionMode: IM_CONNECTOR_CONNECTION_MODE,
-          enabled: input.enabled,
-          settings,
-        });
+        await SystemBotProviderModel.update(
+          tx,
+          existing.id,
+          {
+            applicationId: input.clientId,
+            connectionMode: IM_CONNECTOR_CONNECTION_MODE,
+            credentials: notifySecretMutates
+              ? mergeConnectorCredentials({
+                  clientSecret: nextSecret!,
+                  existing: existing.credentials,
+                  notifyAppSecret: input.notifyAppSecret,
+                })
+              : undefined,
+            enabled: input.enabled,
+            settings,
+          },
+          gateKeeper,
+        );
       } else {
         if (!nextSecret) {
           throw new InfraSettingsSecretRequiredError('clientSecret');
@@ -241,7 +294,11 @@ export class ImConnectorsAdminService {
           {
             applicationId: input.clientId,
             connectionMode: IM_CONNECTOR_CONNECTION_MODE,
-            credentials: { clientSecret: nextSecret },
+            credentials: mergeConnectorCredentials({
+              clientSecret: nextSecret,
+              existing: existing?.credentials,
+              notifyAppSecret: input.notifyAppSecret,
+            }),
             enabled: input.enabled,
             platform: input.platform,
             settings,
@@ -259,13 +316,16 @@ export class ImConnectorsAdminService {
           chatEnabled: settings.chatEnabled,
           clientId: input.clientId,
           corpId: settings.corpId,
-          rotation: replacing ? 'replaced' : 'kept',
           enabled: input.enabled,
           idleNewTopicEnabled: settings.idleNewTopicEnabled,
           idleNewTopicHours: settings.idleNewTopicHours,
+          notifyAgentId: settings.notifyAgentId,
+          notifyAppKey: settings.notifyAppKey,
+          notifyAppSecretRotation: notifySecretAction,
           platform: input.platform,
           pushEnabled: settings.pushEnabled,
           robotCode: settings.robotCode,
+          rotation: replacing ? 'replaced' : 'kept',
           selectCardTemplateId: settings.selectCardTemplateId,
         },
         reason: input.reason ?? null,
@@ -275,8 +335,7 @@ export class ImConnectorsAdminService {
       });
     });
 
-    // `dingtalk` is being added to MessengerPlatform by another agent; the function exists today.
-    invalidateMessengerConfigCache('dingtalk' as never);
+    invalidateMessengerConfigCache('dingtalk');
 
     const row = await SystemBotProviderModel.findByPlatform(this.db, input.platform, gateKeeper);
     return toView(this.db, input.platform, row);
@@ -303,6 +362,47 @@ export class ImConnectorsAdminService {
     }
 
     return probeDingTalkCredentials({ clientId, clientSecret });
+  };
+
+  directoryStatus = (): Promise<DingTalkDirectoryStatus> => readDingTalkDirectoryStatus(this.db);
+
+  syncDirectory = async (): Promise<DingTalkDirectoryStatus> => {
+    try {
+      await syncDingTalkDirectory(this.db);
+    } catch (error) {
+      console.error('[admin.imConnectors.syncDirectory] failed', {
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+    return readDingTalkDirectoryStatus(this.db);
+  };
+
+  testNotifyApp = async (input?: {
+    notifyAppKey?: string;
+    notifyAppSecret?: string;
+  }): Promise<AdminImConnectorTestOutput> => {
+    const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
+    const existing = await SystemBotProviderModel.findByPlatform(this.db, 'dingtalk', gateKeeper);
+    const stored = existing
+      ? readNotifyAppFromProviderRow({
+          credentials: existing.credentials,
+          settings: existing.settings,
+        })
+      : null;
+    const appKey = input?.notifyAppKey?.trim() || stored?.appKey || null;
+    const appSecret = input?.notifyAppSecret?.trim() || stored?.appSecret || null;
+
+    if (!appKey || !appSecret) {
+      return {
+        errorCode: 'missing_credentials',
+        errorMessage: 'Notify AppKey and AppSecret are required',
+        latencyMs: null,
+        ok: false,
+        robotName: null,
+      };
+    }
+
+    return probeNotifyAppToken({ appKey, appSecret });
   };
 
   listBindings = (

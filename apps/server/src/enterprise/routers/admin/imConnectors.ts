@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
@@ -30,6 +31,23 @@ import {
 } from '../../services/imConnectors/bindings';
 import { ImConnectorsAdminService } from '../../services/imConnectors/service';
 import { executePlatformSystem } from './system.errors';
+
+export const adminImConnectorDirectoryStatusSchema = z
+  .object({
+    departments: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+    lastRunAt: z.string().nullable(),
+    state: z.enum(['idle', 'error', 'ok', 'running']),
+    users: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const adminImConnectorTestNotifyAppInputSchema = z
+  .object({
+    notifyAppKey: z.string().trim().min(1).max(200).optional(),
+    notifyAppSecret: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
 
 const platformSystemBase = preAccessAuthedProcedure
   .use(serverDatabase)
@@ -106,6 +124,13 @@ export const adminImConnectorsRouter = router({
       ),
   }),
 
+  directoryStatus: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
+    .output(adminImConnectorDirectoryStatusSchema)
+    .query(({ ctx }) =>
+      executeImConnectors(() => new ImConnectorsAdminService(ctx.serverDB).directoryStatus()),
+    ),
+
   get: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
     .input(adminImConnectorGetInputSchema)
@@ -121,12 +146,27 @@ export const adminImConnectorsRouter = router({
       executePlatformSystem(() => new ImConnectorsAdminService(ctx.serverDB).list()),
     ),
 
+  syncDirectory: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+    .output(adminImConnectorDirectoryStatusSchema)
+    .mutation(({ ctx }) =>
+      executeImConnectors(() => new ImConnectorsAdminService(ctx.serverDB).syncDirectory()),
+    ),
+
   test: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
     .input(adminImConnectorTestInputSchema)
     .output(adminImConnectorTestOutputSchema)
     .mutation(({ ctx, input }) =>
       executePlatformSystem(() => new ImConnectorsAdminService(ctx.serverDB).test(input)),
+    ),
+
+  testNotifyApp: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+    .input(adminImConnectorTestNotifyAppInputSchema.optional())
+    .output(adminImConnectorTestOutputSchema)
+    .mutation(({ ctx, input }) =>
+      executeImConnectors(() => new ImConnectorsAdminService(ctx.serverDB).testNotifyApp(input)),
     ),
 
   upsert: platformSystemBase

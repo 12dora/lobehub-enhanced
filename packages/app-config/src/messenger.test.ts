@@ -81,6 +81,7 @@ describe('getMessengerDingTalkConfig', () => {
       corpId: null,
       idleNewTopicEnabled: true,
       idleNewTopicHours: 24,
+      notifyApp: null,
       pushEnabled: true,
       robotCode: 'robot_1',
       selectCardTemplateId: null,
@@ -127,5 +128,37 @@ describe('getMessengerDingTalkConfig', () => {
     invalidateMessengerConfigCache('dingtalk');
     findEnabledByPlatform.mockResolvedValueOnce(null);
     expect(await getMessengerDingTalkConfig()).toBeNull();
+  });
+
+  it('returns notifyApp only when appKey, appSecret and agentId are all present', async () => {
+    invalidateMessengerConfigCache('dingtalk');
+    findEnabledByPlatform.mockReset();
+    findEnabledByPlatform.mockResolvedValue({
+      ...COMPLETE_ROW,
+      credentials: { clientSecret: 'app_secret', notifyAppSecret: 'notify-secret' },
+      settings: {
+        ...COMPLETE_ROW.settings,
+        notifyAgentId: '4617854000',
+        notifyAppKey: 'notify-app-key',
+      },
+    });
+    await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+      notifyApp: {
+        agentId: '4617854000',
+        appKey: 'notify-app-key',
+        appSecret: 'notify-secret',
+      },
+    });
+  });
+
+  it('returns notifyApp null when notify app fields are incomplete', async () => {
+    invalidateMessengerConfigCache('dingtalk');
+    findEnabledByPlatform.mockReset();
+    findEnabledByPlatform.mockResolvedValue({
+      ...COMPLETE_ROW,
+      credentials: { clientSecret: 'app_secret', notifyAppSecret: 'notify-secret' },
+      settings: { ...COMPLETE_ROW.settings, notifyAppKey: 'notify-app-key' },
+    });
+    await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({ notifyApp: null });
   });
 });

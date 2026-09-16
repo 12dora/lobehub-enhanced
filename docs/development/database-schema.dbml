@@ -603,6 +603,7 @@ table two_factor {
   id text [pk, not null]
   secret text [not null]
   user_id text [not null]
+  verified boolean [not null, default: true]
 
   indexes {
     secret [name: 'two_factor_secret_idx']
@@ -774,6 +775,59 @@ table devices {
     (workspace_id, device_id) [name: 'devices_workspace_id_device_id_unique', unique]
     user_id [name: 'devices_user_id_idx']
     workspace_id [name: 'devices_workspace_id_idx']
+  }
+}
+
+table dingtalk_departments {
+  dept_id text [pk, not null]
+  parent_id text
+  name text [not null]
+  name_pinyin_full text [not null, default: '']
+  name_pinyin_initials text [not null, default: '']
+  path_names text [not null, default: '']
+  sort_order integer [not null, default: 0]
+  member_count integer [not null, default: 0]
+  synced_at "timestamp with time zone" [not null]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    parent_id [name: 'dingtalk_departments_parent_id_idx']
+    name [name: 'dingtalk_departments_name_idx']
+    name_pinyin_full [name: 'dingtalk_departments_name_pinyin_full_idx']
+    name_pinyin_initials [name: 'dingtalk_departments_name_pinyin_initials_idx']
+  }
+}
+
+table dingtalk_directory_users {
+  staff_id text [pk, not null]
+  name text [not null]
+  name_pinyin_full text [not null, default: '']
+  name_pinyin_initials text [not null, default: '']
+  avatar text
+  union_id text
+  active boolean [not null, default: true]
+  leaf_dept_id text
+  leaf_dept_name text [not null, default: '']
+  dept_path text [not null, default: '']
+  synced_at "timestamp with time zone" [not null]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    name [name: 'dingtalk_directory_users_name_idx']
+    name_pinyin_full [name: 'dingtalk_directory_users_name_pinyin_full_idx']
+    name_pinyin_initials [name: 'dingtalk_directory_users_name_pinyin_initials_idx']
+  }
+}
+
+table dingtalk_user_departments {
+  staff_id text [not null]
+  dept_id text [not null]
+
+  indexes {
+    (staff_id, dept_id) [pk]
+    dept_id [name: 'dingtalk_user_departments_dept_id_idx']
   }
 }
 
@@ -1266,6 +1320,7 @@ table messenger_account_links {
   tenant_id varchar(255) [not null, default: '']
   platform_user_id varchar(255) [not null]
   platform_username text
+  source text [not null, default: 'auto']
   active_agent_id text
   accessed_at "timestamp with time zone" [not null, default: `now()`]
   created_at "timestamp with time zone" [not null, default: `now()`]
@@ -1701,6 +1756,32 @@ table platform_user_agent_materializations {
   }
 }
 
+table platform_agent_templates {
+  id text [pk, not null]
+  identifier text [not null]
+  title text [not null]
+  description text [not null, default: '']
+  avatar text
+  background_color text
+  system_role text [not null]
+  tags jsonb [not null, default: `'[]'::jsonb`]
+  enabled boolean [not null, default: true]
+  sort_order integer [not null, default: 0]
+  source text [not null, default: 'manual']
+  revision integer [not null, default: 0]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    enabled [name: 'platform_agent_templates_enabled_idx']
+    identifier [name: 'platform_agent_templates_identifier_unique', unique]
+    sort_order [name: 'platform_agent_templates_sort_idx']
+    
+    
+  }
+}
+
 table platform_ai_models {
   id text [pk, not null]
   provider_id text [not null]
@@ -1813,6 +1894,10 @@ table platform_audit_exports {
     (kind, created_at) [name: 'platform_audit_exports_kind_created_at_idx']
     requested_by [name: 'platform_audit_exports_requested_by_idx']
     expires_at [name: 'platform_audit_exports_expires_at_idx']
+    (finished_at, created_at, id) [name: 'platform_audit_exports_retention_sort_at_id_idx']
+    (updated_at, id) [name: 'platform_audit_exports_purge_outbox_updated_at_id_v2_idx']
+    id [name: 'platform_audit_exports_purge_status_deleting_idx']
+    error [name: 'platform_audit_exports_purge_storage_key_expr_v2_idx']
     job_id [name: 'platform_audit_exports_job_id_unique', unique]
     
     
@@ -1932,6 +2017,7 @@ table platform_auth_settings {
   email_domain_allowlist jsonb [not null, default: `[]`]
   email_domain_allowlist_enabled boolean [not null, default: false]
   open_registration boolean [not null, default: true]
+  revision integer [not null, default: 0]
   updated_by text
   created_at "timestamp with time zone" [not null, default: `now()`]
   updated_at "timestamp with time zone" [not null, default: `now()`]
@@ -2031,6 +2117,24 @@ table platform_branding_operations {
     (status, lease_until) [name: 'platform_branding_operations_pending_lease_idx']
     
   }
+}
+
+table platform_browser_profiles {
+  id text [pk, not null]
+  profile jsonb [not null]
+  revision integer [not null, default: 0]
+  seed text [not null]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+}
+
+table platform_catalog_authority {
+  domain text [pk, not null]
+  generation bigint [not null, default: 0]
+  token_kind text [not null]
+  token_value text [not null]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
 }
 
 table platform_connector_governance {
@@ -2162,6 +2266,13 @@ table platform_connectors {
   oauth_client_secret_ref text
   oauth_client_secret_fingerprint varchar(256)
   oauth_client_secret_updated_at "timestamp with time zone"
+  connection_test_status varchar(16)
+  connection_test_latency_ms integer
+  connection_test_error_category varchar(32)
+  connection_test_message_code varchar(128)
+  connection_tested_at "timestamp with time zone"
+  connection_tested_draft_token varchar(64)
+  connection_tested_revision integer
   enabled boolean [not null, default: false]
   sort integer [not null, default: 0]
   status varchar(32) [not null, default: 'draft']
@@ -2228,6 +2339,87 @@ table platform_user_connector_bindings {
   }
 }
 
+table platform_content_moderation_decisions {
+  prompt_hash text [pk, not null]
+  categories jsonb [not null]
+  source text [not null]
+  hit_count integer [not null, default: 0]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  last_hit_at "timestamp with time zone" [not null, default: `now()`]
+  expires_at "timestamp with time zone" [not null]
+
+  indexes {
+    expires_at [name: 'platform_content_moderation_decisions_expires_at_idx']
+  }
+}
+
+table platform_content_moderation_hourly_stats {
+  bucket_start "timestamp with time zone" [not null]
+  request_kind text [not null]
+  effective_action text [not null]
+  policy_action text [not null]
+  source text [not null]
+  top_category text [not null, default: '']
+  count integer [not null, default: 0]
+  latency_sum_ms bigint [not null, default: 0]
+  latency_count integer [not null, default: 0]
+
+  indexes {
+    (bucket_start, request_kind, effective_action, policy_action, source, top_category) [pk]
+  }
+}
+
+table platform_content_moderation_records {
+  id text [pk, not null]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  user_id text
+  user_snapshot jsonb
+  request_kind text [not null]
+  request_id text
+  topic_id text
+  message_id text
+  provider text [not null]
+  model text [not null]
+  effective_provider text
+  effective_model text
+  policy_action text [not null]
+  effective_action text [not null]
+  source text [not null]
+  top_category text
+  top_score "numeric(6, 4)"
+  category_scores jsonb [not null]
+  threshold_snapshot jsonb [not null]
+  matched_rule jsonb
+  prompt_hash text [not null]
+  prompt_excerpt text [not null]
+  prompt_full text
+  classifier_latency_ms integer
+  error text
+  enforced boolean [not null, default: false]
+  violation_count integer [not null, default: 0]
+  auto_banned boolean [not null, default: false]
+  notified boolean [not null, default: false]
+  revealed_at "timestamp with time zone"
+  revealed_by text
+
+  indexes {
+    created_at [name: 'platform_content_moderation_records_created_at_idx']
+    (user_id, created_at) [name: 'platform_content_moderation_records_user_id_created_at_idx']
+    (effective_action, created_at) [name: 'platform_content_moderation_records_effective_action_created_at_idx']
+    (top_category, created_at) [name: 'platform_content_moderation_records_top_category_created_at_idx']
+    prompt_hash [name: 'platform_content_moderation_records_prompt_hash_idx']
+  }
+}
+
+table platform_content_moderation_settings {
+  id text [pk, not null]
+  config jsonb [not null]
+  revision integer [not null, default: 0]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+}
+
 table platform_global_credential_secrets {
   id text [pk, not null]
   credential_id integer [not null]
@@ -2281,6 +2473,7 @@ table platform_global_credentials {
   type varchar(32) [not null]
   meta jsonb [not null, default: `{}`]
   enabled boolean [not null, default: true]
+  revision integer [not null, default: 0]
   created_by text
   updated_by text
   created_at "timestamp with time zone" [not null, default: `now()`]
@@ -2292,7 +2485,17 @@ table platform_global_credentials {
     enabled [name: 'platform_global_credentials_enabled_idx']
     
     
+    
   }
+}
+
+table platform_document_render_settings {
+  id text [pk, not null]
+  config jsonb [not null, default: `'{"enabled":false}'::jsonb`]
+  revision integer [not null, default: 0]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
 }
 
 table platform_identity_provider_instances {
@@ -2426,6 +2629,7 @@ table platform_identity_providers {
   use_pkce boolean [not null, default: true]
   claim_mapping jsonb [not null, default: `{"dingtalkTitle":[],"dingtalkUserId":[],"email":["email"],"name":["name","preferred_username"],"picture":["picture"],"subject":["sub"]}`]
   domain_allowlist jsonb [not null, default: `[]`]
+  dingtalk_allowed_corps jsonb [not null, default: `[]`]
   auto_provision boolean [not null, default: true]
   group_role_mapping jsonb [not null, default: `{}`]
   enabled boolean [not null, default: false]
@@ -2452,7 +2656,17 @@ table platform_identity_providers {
     
     
     
+    
   }
+}
+
+table platform_infra_settings {
+  id text [pk, not null]
+  config jsonb [not null, default: `'{}'::jsonb`]
+  revision integer [not null, default: 0]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
 }
 
 table platform_instance_heartbeats {
@@ -2545,6 +2759,77 @@ table platform_managed_resource_policies {
   }
 }
 
+table platform_module_settings {
+  id text [pk, not null]
+  modules jsonb [not null, default: `'{}'::jsonb`]
+  setup_completed_at "timestamp with time zone"
+  revision integer [not null, default: 1]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+}
+
+table platform_network_proxy_instance_status {
+  instance_id text [pk, not null]
+  engine_state text [not null]
+  engine_version text
+  platform text [not null]
+  arch text [not null]
+  artifact_state jsonb [not null, default: `'[]'::jsonb`]
+  applied_revision integer
+  applied_engine_generation integer
+  active_node text
+  alive_node_count integer
+  proxied_count integer [not null, default: 0]
+  fallback_count integer [not null, default: 0]
+  last_issue jsonb
+  healing jsonb
+  last_error text
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+}
+
+table platform_network_proxy_settings {
+  id text [pk, not null]
+  config jsonb [not null]
+  revision integer [not null, default: 0]
+  engine_generation integer [not null, default: 0]
+  desired_artifacts jsonb [not null, default: `'{}'::jsonb`]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+}
+
+table platform_network_proxy_subscriptions {
+  id text [pk, not null]
+  name text [not null]
+  kind text [not null]
+  url_ciphertext text
+  url_host text
+  payload_ciphertext text
+  enabled boolean [not null, default: true]
+  update_interval_sec integer
+  user_agent text
+  filter text
+  exclude_filter text
+  sort_order integer [not null, default: 0]
+  refresh_requested_at "timestamp with time zone"
+  last_update_at "timestamp with time zone"
+  last_issue jsonb
+  last_error text
+  node_count integer
+  traffic_upload bigint
+  traffic_download bigint
+  traffic_total bigint
+  traffic_expire_at "timestamp with time zone"
+  created_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (enabled, sort_order) [name: 'platform_network_proxy_subscriptions_enabled_sort_idx']
+  }
+}
+
 table platform_resource_revisions {
   id text [pk, not null]
   resource_type varchar(64) [not null]
@@ -2567,6 +2852,34 @@ table platform_resource_revisions {
     (resource_type, resource_id) [name: 'platform_resource_revisions_type_id_idx']
     status [name: 'platform_resource_revisions_status_idx']
   }
+}
+
+table platform_sandbox_package_installs {
+  id text [pk, not null]
+  user_id text [not null]
+  manager text [not null]
+  package text [not null]
+  install_count integer [not null, default: 1]
+  last_command text
+  first_at "timestamp with time zone" [not null, default: `now()`]
+  last_at "timestamp with time zone" [not null, default: `now()`]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (user_id, manager, package) [name: 'platform_sandbox_package_installs_user_manager_package_unique', unique]
+    (manager, package, last_at) [name: 'platform_sandbox_package_installs_manager_package_last_at_idx']
+    
+  }
+}
+
+table platform_sandbox_settings {
+  id text [pk, not null]
+  config jsonb [not null, default: `'{"enabled":false}'::jsonb`]
+  revision integer [not null, default: 0]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
 }
 
 table platform_setting_policies {
@@ -2622,6 +2935,7 @@ table platform_sidebar_layout {
   id text [pk, not null]
   layout jsonb
   mode text [not null, default: 'user']
+  revision integer [not null, default: 0]
   updated_by text
   created_at "timestamp with time zone" [not null, default: `now()`]
   updated_at "timestamp with time zone" [not null, default: `now()`]
@@ -2675,6 +2989,41 @@ table platform_skills {
     
     
   }
+}
+
+table platform_task_templates {
+  id text [pk, not null]
+  identifier text [not null]
+  category text [not null]
+  connectors jsonb [not null, default: `'[]'::jsonb`]
+  cron_pattern text [not null]
+  description text [not null, default: '']
+  icon text
+  instruction text [not null]
+  interests jsonb [not null, default: `'[]'::jsonb`]
+  title text [not null]
+  enabled boolean [not null, default: true]
+  sort_order integer [not null, default: 0]
+  source text [not null, default: 'manual']
+  revision integer [not null, default: 0]
+  updated_by text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    enabled [name: 'platform_task_templates_enabled_idx']
+    identifier [name: 'platform_task_templates_identifier_unique', unique]
+    sort_order [name: 'platform_task_templates_sort_idx']
+    
+    
+  }
+}
+
+table platform_template_catalog_state {
+  domain text [pk, not null]
+  seeded_at "timestamp with time zone" [not null, default: `now()`]
+  seeded_locale text [not null]
+  seeded_by text
 }
 
 table push_tokens {
@@ -2962,6 +3311,67 @@ table files_to_sessions {
     workspace_id [name: 'files_to_sessions_workspace_id_idx']
     file_id [name: 'files_to_sessions_file_id_idx']
     session_id [name: 'files_to_sessions_session_id_idx']
+  }
+}
+
+table reminder_deliveries {
+  id text [pk, not null]
+  reminder_id text [not null]
+  fired_at "timestamp with time zone" [not null]
+  staff_id text [not null]
+  user_id text
+  status text [not null]
+  failed_reason text
+  provider_task_id text
+  hidden_by_recipient boolean [not null, default: false]
+  created_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (staff_id, fired_at) [name: 'reminder_deliveries_staff_id_fired_at_idx']
+    reminder_id [name: 'reminder_deliveries_reminder_id_idx']
+  }
+}
+
+table reminder_recipients {
+  id text [pk, not null]
+  reminder_id text [not null]
+  kind text [not null]
+  staff_id text
+  dept_id text
+  display_name text [not null]
+  dept_name text [not null, default: '']
+  dept_path text [not null, default: '']
+  member_count integer
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (reminder_id, kind, staff_id) [name: 'reminder_recipients_user_unique', unique]
+    (reminder_id, kind, dept_id) [name: 'reminder_recipients_dept_unique', unique]
+    reminder_id [name: 'reminder_recipients_reminder_id_idx']
+  }
+}
+
+table reminders {
+  id text [pk, not null]
+  created_by_user_id text [not null]
+  created_by_agent_id text
+  creator_name text [not null]
+  content text [not null]
+  timezone text [not null, default: 'Asia/Shanghai']
+  fire_at "timestamp with time zone" [not null]
+  repeat_rule jsonb
+  status text [not null, default: 'scheduled']
+  fired_count integer [not null, default: 0]
+  last_fired_at "timestamp with time zone"
+  canceled_at "timestamp with time zone"
+  source text [not null, default: 'tool']
+  topic_id text
+  created_at "timestamp with time zone" [not null, default: `now()`]
+  updated_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (status, fire_at) [name: 'reminders_status_fire_at_idx']
   }
 }
 
@@ -3325,6 +3735,7 @@ table topics {
     user_id [name: 'topics_user_id_idx']
     (id, user_id) [name: 'topics_id_user_id_idx']
     (user_id, created_at, id) [name: 'topics_user_id_created_at_id_idx']
+    (updated_at, id) [name: 'topics_retention_updated_at_id_idx']
     session_id [name: 'topics_session_id_idx']
     group_id [name: 'topics_group_id_idx']
     agent_id [name: 'topics_agent_id_idx']
@@ -3365,6 +3776,8 @@ table users {
   first_name text
   last_name text
   full_name text
+  pinyin_full text
+  pinyin_initials text
   interests "varchar(64)[]"
   is_onboarded boolean [default: false]
   agent_onboarding jsonb
@@ -3396,6 +3809,12 @@ table users {
     email [name: 'users_email_lower_pattern_idx']
     username [name: 'users_username_lower_pattern_idx']
     normalized_email [name: 'users_normalized_email_lower_pattern_idx']
+    pinyin_full [name: 'users_pinyin_full_pattern_idx']
+    pinyin_initials [name: 'users_pinyin_initials_pattern_idx']
+    full_name [name: 'users_full_name_trgm_idx']
+    username [name: 'users_username_trgm_idx']
+    email [name: 'users_email_trgm_idx']
+    normalized_email [name: 'users_normalized_email_trgm_idx']
   }
 }
 
@@ -3917,6 +4336,12 @@ ref: chat_groups.user_id - users.id
 
 ref: unstructured_chunks.file_id - files.id
 
+ref: dingtalk_departments.parent_id > dingtalk_departments.dept_id
+
+ref: dingtalk_user_departments.dept_id > dingtalk_departments.dept_id
+
+ref: dingtalk_user_departments.staff_id > dingtalk_directory_users.staff_id
+
 ref: document_chunks.document_id > documents.id
 
 ref: document_histories.document_id > documents.id
@@ -3970,6 +4395,12 @@ ref: messages.topic_id - topics.id
 ref: threads.source_message_id - messages.id
 
 ref: messages.message_group_id > message_groups.id
+
+ref: reminder_deliveries.reminder_id > reminders.id
+
+ref: reminder_recipients.reminder_id > reminders.id
+
+ref: reminders.created_by_user_id - users.id
 
 ref: sessions.group_id - session_groups.id
 
