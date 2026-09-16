@@ -3323,6 +3323,9 @@ table reminder_deliveries {
   status text [not null]
   failed_reason text
   provider_task_id text
+  robot_message_id text
+  robot_status text
+  robot_failed_reason text
   hidden_by_recipient boolean [not null, default: false]
   created_at "timestamp with time zone" [not null, default: `now()`]
 
