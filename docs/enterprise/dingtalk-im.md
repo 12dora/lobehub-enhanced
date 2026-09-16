@@ -52,6 +52,20 @@
 
 进程内 `dingtalkDirectorySyncWorker` 在启动 60 s 后跑一次，之后每小时走一遍部门树（`topapi/v2/department/listsub` 从部门 `1` 开始，根部门名用 `topapi/v2/department/get`）和部门成员（`topapi/v2/user/list`，cursor 分页，每页 100）。结果写入 `dingtalk_departments` / `dingtalk_directory_users` / `dingtalk_user_departments`（拼音列用 `pinyinFull` / `pinyinInitials`）。未配置通知应用时跳过。管理端「立即同步」走同一套逻辑（Redis 锁 `messenger:dingtalk:directory-sync-lock`）。状态在 Redis `messenger:dingtalk:directory-status`（无 TTL）：`idle` / `running` / `ok` / `error`，含部门数、人员数、上次同步时间。
 
+### 定时提醒数据模型（提醒即任务）
+
+新的定时提醒是一条 `automationMode='schedule'` 的任务，而不是独立调度对象：
+
+| 表 | 角色 |
+| --- | --- |
+| `tasks` | 提醒任务。`config.reminder.kind='reminder'`，`schedule_timezone='Asia/Shanghai'`，`status='scheduled'`，`assignee_agent_id` 为空。`instruction` 第一行是 `@姓名·部门` mention，空行后是正文。`name` 为正文前 40 字。 |
+| `reminders` | 提醒档案：正文（不含 mention 行）、`repeat_rule`、下次 `fire_at`、投递计数。新行 `source='task'` 且 `task_id` 指向任务（`ON DELETE CASCADE`，`task_id` 非空唯一）。`status` 与任务对齐：`scheduled` / `sent`（任务 completed）/ `canceled`。 |
+| `reminder_recipients` / `reminder_deliveries` | 不变，仍按 `reminder_id`。`listReceived`（我收到的）继续读投递行。 |
+
+Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTaskService.fireForTick`：走与原先相同的工作通知 + 服务号机器人 + 站内 `reminder.received`，**不** `execAgent`。遗留 `task_id IS NULL` 行仍由 `reminderWorker` 每 60s 扫描 `fire_at <= now`。
+
+一次提醒的 cron 是 `mm HH D M *`（当天当时分）。任务扫描间隔 60s、`isExecutionTime` 容差 5 分钟；发出后写 `tasks.last_heartbeat_at` 以免同一窗口连发。重复提醒的 `until`（YYYY-MM-DD，Asia/Shanghai，含当日）在 tick 时判断，过期则完成任务且不投递。
+
 ### 工作通知格式（OA）
 
 钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`。`head.bgcolor` 固定 `FF2E7CF6`（色带标识应用）；`head.text` 仍发送管理端通用设置的站点标题（未设置时为「AI 助手」），但钉钉工作通知会把 `oa.head.text` **改写成服务号在开放平台登记的应用名**，因此调用方身份写在 `body.title`：`<站点标题或「AI 助手」> · <通知种类>`。载荷形如 `{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<站点标题> · <定时提醒 | 运行完成 | 运行失败 | 等待处理 | 任务完成>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，`body.title` 为 `<站点标题> · 定时提醒`，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」。任务生命周期推送的 `body.title` 为 `<站点标题> ·` 加短事件名（运行完成 / 运行失败 / 等待处理 / 任务完成，各不超过 12 字；原先较长的推送标题与说明放在 `content`，任务名在 form「任务」），form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录工作通知的 `task_id`。`reminder_deliveries` 另有 `robot_message_id` / `robot_status` / `robot_failed_reason` 记录服务号机器人投递；任务推送的机器人结果只记日志，不改 `notification_deliveries`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径。未配置通知应用时，任务推送回退到对话机器人 `oToMessages/batchSend`。

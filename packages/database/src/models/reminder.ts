@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 
 import type {
   NewReminderDelivery,
@@ -28,11 +28,25 @@ export interface ReminderCreateInput {
   createdByAgentId?: string | null;
   creatorName: string;
   fireAt: Date;
+  /** Explicit id so a task can persist `config.reminder.reminderId` before insert. */
+  id?: string;
   recipients: ReminderRecipientInput[];
   repeatRule?: ReminderRepeatRule | null;
   source?: ReminderSource;
+  /** Linked reminder-task id. Null on legacy (tool/ui) rows. */
+  taskId?: string | null;
   timezone?: string;
   topicId?: string | null;
+}
+
+export interface ReminderProfileUpdateInput {
+  canceledAt?: Date | null;
+  content?: string;
+  fireAt?: Date;
+  recipients?: ReminderRecipientInput[];
+  repeatRule?: ReminderRepeatRule | null;
+  status?: ReminderStatus;
+  taskId?: string | null;
 }
 
 export interface ReminderDeliveryCounts {
@@ -94,7 +108,7 @@ export class ReminderModel {
 
   create = async (input: ReminderCreateInput): Promise<ReminderWithRecipients> => {
     return this.db.transaction(async (tx) => {
-      const id = idGenerator('reminders');
+      const id = input.id ?? idGenerator('reminders');
       const [row] = await tx
         .insert(reminders)
         .values({
@@ -105,7 +119,8 @@ export class ReminderModel {
           fireAt: input.fireAt,
           id,
           repeatRule: input.repeatRule ?? null,
-          source: input.source ?? 'tool',
+          source: input.source ?? (input.taskId ? 'task' : 'tool'),
+          taskId: input.taskId ?? null,
           timezone: input.timezone ?? 'Asia/Shanghai',
           topicId: input.topicId ?? null,
         })
@@ -133,6 +148,95 @@ export class ReminderModel {
 
       return { ...row, deliveryCounts: emptyDeliveryCounts(), recipients };
     });
+  };
+
+  createForTask = async (
+    input: ReminderCreateInput & { taskId: string },
+  ): Promise<ReminderWithRecipients> => this.create({ ...input, source: input.source ?? 'task' });
+
+  findByTaskId = async (taskId: string): Promise<ReminderWithRecipients | null> => {
+    const [row] = await this.db
+      .select()
+      .from(reminders)
+      .where(and(eq(reminders.taskId, taskId), eq(reminders.createdByUserId, this.userId)))
+      .limit(1);
+    if (!row) return null;
+    const [attached] = await this.attachRecipientsAndCounts(this.db, [row]);
+    return attached ?? null;
+  };
+
+  updateProfile = async (
+    id: string,
+    input: ReminderProfileUpdateInput,
+  ): Promise<ReminderWithRecipients> => {
+    return this.db.transaction(async (tx) => {
+      const patch: Partial<ReminderItem> = {};
+      if (input.content !== undefined) patch.content = input.content;
+      if (input.fireAt !== undefined) patch.fireAt = input.fireAt;
+      if (input.repeatRule !== undefined) patch.repeatRule = input.repeatRule;
+      if (input.status !== undefined) patch.status = input.status;
+      if (input.canceledAt !== undefined) patch.canceledAt = input.canceledAt;
+      if (input.taskId !== undefined) patch.taskId = input.taskId;
+
+      const [row] = Object.keys(patch).length
+        ? await tx
+            .update(reminders)
+            .set(patch)
+            .where(and(eq(reminders.id, id), eq(reminders.createdByUserId, this.userId)))
+            .returning()
+        : await tx
+            .select()
+            .from(reminders)
+            .where(and(eq(reminders.id, id), eq(reminders.createdByUserId, this.userId)))
+            .limit(1);
+
+      if (!row) {
+        throw new Error(`Reminder not found: ${id}`);
+      }
+
+      if (input.recipients) {
+        await tx.delete(reminderRecipients).where(eq(reminderRecipients.reminderId, id));
+        if (input.recipients.length > 0) {
+          await tx.insert(reminderRecipients).values(
+            input.recipients.map((recipient) => ({
+              deptId: recipient.deptId ?? null,
+              deptName: recipient.deptName ?? '',
+              deptPath: recipient.deptPath ?? '',
+              displayName: recipient.displayName,
+              id: idGenerator('reminderRecipients'),
+              kind: recipient.kind,
+              memberCount: recipient.memberCount ?? null,
+              reminderId: id,
+              staffId: recipient.staffId ?? null,
+            })),
+          );
+        }
+      }
+
+      const [attached] = await this.attachRecipientsAndCounts(tx, [row]);
+      if (!attached) {
+        throw new Error(`Reminder not found: ${id}`);
+      }
+      return attached;
+    });
+  };
+
+  listCreatedByTasks = async (opts?: {
+    includeFinished?: boolean;
+    limit?: number;
+  }): Promise<ReminderWithRecipients[]> => {
+    const limit = clampLimit(opts?.limit, DEFAULT_LIST_LIMIT);
+    const conditions = [eq(reminders.createdByUserId, this.userId), isNotNull(reminders.taskId)];
+    if (!opts?.includeFinished) conditions.push(eq(reminders.status, 'scheduled'));
+
+    const rows = await this.db
+      .select()
+      .from(reminders)
+      .where(and(...conditions))
+      .orderBy(desc(reminders.fireAt), desc(reminders.id))
+      .limit(limit);
+
+    return this.attachRecipientsAndCounts(this.db, rows);
   };
 
   listCreated = async (opts?: {
@@ -207,7 +311,13 @@ export class ReminderModel {
     return db
       .select()
       .from(reminders)
-      .where(and(eq(reminders.status, 'scheduled'), lte(reminders.fireAt, now)))
+      .where(
+        and(
+          eq(reminders.status, 'scheduled'),
+          lte(reminders.fireAt, now),
+          isNull(reminders.taskId),
+        ),
+      )
       .orderBy(reminders.fireAt, reminders.id)
       .limit(clampLimit(limit, DEFAULT_DUE_LIMIT));
   };

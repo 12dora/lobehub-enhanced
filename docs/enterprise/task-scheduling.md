@@ -16,7 +16,7 @@
 
 | 步骤     | 行为                                                                                                                                                                              |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cron     | `TaskModel.getScheduledTasks` + `isExecutionTime`（时区 + `lastHeartbeatAt` 去重），到期则 `runScheduleTick`，并发 ≤ 3                                                            |
+| Cron     | `TaskModel.getScheduledTasks` + `isExecutionTime`（时区 + `lastHeartbeatAt` 去重），到期则 `runScheduleTick`，并发 ≤ 3。若 `task.config.reminder.kind === 'reminder'`，tick **不跑 agent**：`ReminderTaskService.fireForTick` 走钉钉工作通知 + 服务号机器人 + 站内铃铛，然后 `TaskModel.updateHeartbeat`。一次性提醒（`once=true`）或 `until` 已过则把任务标 `completed`。 |
 | 心跳     | `automationMode=heartbeat` 且可调度；`lastHeartbeatAt + heartbeatInterval` 已到期、且本进程没有 pending `setTimeout` / 进行中的 tick 时补跑 `runHeartbeatTick`。从未跑过的任务（`lastHeartbeatAt` 为空）不会被扫到；并发与 cron 相同（≤ 3） |
 | Watchdog | 调用与 QStash `/watchdog` 相同的 `runWatchdogScan`：超时 running 任务标 `failed` 并写 brief                                                                                       |
 
@@ -33,5 +33,15 @@
 3. 等最多约 1 分钟，打开该任务的运行记录：应新增 `task_topics` 行，`trigger = 'schedule'`。
 4. 心跳模式：间隔设为允许的最小值（≥ 600 秒），手动跑一次后再重启服务；重启后若已过间隔，应补一次 `trigger = 'heartbeat'` 的 topic，而不会在同一分钟内双跑。从未手动跑过的心跳任务不会在 sweep 里被踢起来。
 5. Watchdog：将某任务置 `running`，把 `lastHeartbeatAt` 改到超过 `heartbeatTimeout` 之前，下一轮扫描后应变 `failed` 并出现 error brief。
+
+## 提醒任务（定时提醒）
+
+定时提醒不再走独立的 `reminderWorker` 调度（该 worker 只扫 `reminders.task_id IS NULL` 的遗留行）。新提醒是普通任务：
+
+- `automationMode='schedule'`，`scheduleTimezone='Asia/Shanghai'`，`status='scheduled'`，`assigneeAgentId` 为空（runner **不会**回填 inbox agent）。
+- `tasks.config.reminder` 标记提醒任务（`kind:'reminder'`、`once`、`until`、`schedule`、`scheduleSummary`、`reminderId`）。
+- cron 由结构化日程生成：一次 `mm HH D M *`、每天 `mm HH * * *`、每周 `mm HH * * d1,d2`（周日=0）、每月 `mm HH d1,d2 * *`。
+- 「3 分钟后」一次提醒依赖 60s 扫描 + `isExecutionTime` 5 分钟容差；发出后必须写 `lastHeartbeatAt`，否则同一窗口会再投。
+- 手动「立即发送 / 运行」走 `ReminderTaskService.fireNow`，返回 `{ topicId: null, reminderFired }`，不创建 `task_topics`。
 
 不在本环境对真实库做联调；以上步骤在部署后的实例上执行。

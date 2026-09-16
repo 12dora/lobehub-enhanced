@@ -3,6 +3,7 @@ import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex } from 'driz
 
 import { idGenerator } from '../utils/idGenerator';
 import { createdAt, timestamptz, updatedAt } from './_helpers';
+import { tasks } from './task';
 import { users } from './user';
 
 /**
@@ -18,7 +19,7 @@ export interface ReminderRepeatRule {
 }
 
 export type ReminderStatus = 'canceled' | 'expired' | 'failed' | 'scheduled' | 'sent';
-export type ReminderSource = 'tool' | 'ui';
+export type ReminderSource = 'task' | 'tool' | 'ui';
 export type ReminderRecipientKind = 'department' | 'user';
 export type ReminderDeliveryStatus = 'failed' | 'sent' | 'skipped';
 
@@ -51,10 +52,20 @@ export const reminders = pgTable(
     canceledAt: timestamptz('canceled_at'),
     source: text('source').$type<ReminderSource>().notNull().default('tool'),
     topicId: text('topic_id'),
+    /**
+     * Linked reminder-task row. Null on legacy reminders fired by reminderWorker.
+     * ON DELETE CASCADE: deleting the task drops the profile + deliveries.
+     */
+    taskId: text('task_id').references(() => tasks.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('reminders_status_fire_at_idx').on(t.status, t.fireAt)],
+  (t) => [
+    index('reminders_status_fire_at_idx').on(t.status, t.fireAt),
+    uniqueIndex('reminders_task_id_unique')
+      .on(t.taskId)
+      .where(sql`${t.taskId} is not null`),
+  ],
 );
 
 export const reminderRecipients = pgTable(

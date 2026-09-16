@@ -25,6 +25,7 @@ import { messageGroups, messages, messagesFiles, messageTranslates } from './mes
 import { chunks, documentChunks, unstructuredChunks } from './rag';
 import { reminderDeliveries, reminderRecipients, reminders } from './reminder';
 import { sessionGroups, sessions } from './session';
+import { tasks } from './task';
 import { threads, topicDocuments, topics } from './topic';
 import { users } from './user';
 import { workspaces } from './workspace';
@@ -462,6 +463,10 @@ export const remindersRelations = relations(reminders, ({ one, many }) => ({
   creator: one(users, {
     fields: [reminders.createdByUserId],
     references: [users.id],
+  }),
+  task: one(tasks, {
+    fields: [reminders.taskId],
+    references: [tasks.id],
   }),
   recipients: many(reminderRecipients),
   deliveries: many(reminderDeliveries),

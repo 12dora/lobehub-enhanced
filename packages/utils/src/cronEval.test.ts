@@ -350,4 +350,42 @@ describe('isExecutionTime', () => {
       ).toBe(false);
     });
   });
+
+  describe('once-cron mm HH D M * (3-minute reminder / 60s sweep / 5 min tolerance)', () => {
+    // One-shot reminder at 17:35 Asia/Shanghai on 16 Sep → cron `35 17 16 9 *`.
+    // Task sweep is 60s with isExecutionTime toleranceMinutes=5. Dedup uses
+    // lastHeartbeatAt as lastExecutedAt so a second tick in the window must not
+    // fire again after the first delivery stamps the heartbeat.
+
+    it('fires within the 5-minute sweep tolerance', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '35 17 16 9 *',
+          currentTime: shanghaiLocal('2026-09-16T17:35:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+
+      expect(
+        isExecutionTime({
+          cronPattern: '35 17 16 9 *',
+          currentTime: shanghaiLocal('2026-09-16T17:38:00'),
+          lastExecutedAt: null,
+          timezone: SHANGHAI,
+        }),
+      ).toBe(true);
+    });
+
+    it('does not fire again after lastHeartbeatAt is set', () => {
+      expect(
+        isExecutionTime({
+          cronPattern: '35 17 16 9 *',
+          currentTime: shanghaiLocal('2026-09-16T17:38:00'),
+          lastExecutedAt: shanghaiLocal('2026-09-16T17:35:00'),
+          timezone: SHANGHAI,
+        }),
+      ).toBe(false);
+    });
+  });
 });

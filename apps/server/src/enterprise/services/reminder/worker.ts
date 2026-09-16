@@ -206,6 +206,71 @@ export const resolveUserIdFromStaffId = async (
   return user?.id ?? null;
 };
 
+interface ReminderFireRuntime {
+  createInbox: (input: {
+    content: string;
+    dedupeKey: string;
+    title: string;
+    userId: string;
+  }) => Promise<void>;
+  getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
+  headText: string;
+  notifyConfigured: boolean;
+  now: Date;
+  recordFire: typeof ReminderModel.recordFire;
+  resolveUserId: (staffId: string) => Promise<string | null>;
+  robotEnabled: boolean;
+  send: typeof sendWorkNotice;
+  sendRobot: typeof sendRobotMessage;
+  subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
+  workNoticeEnabled: boolean;
+}
+
+const resolveFireRuntime = async (
+  db: LobeChatDatabase,
+  deps: ReminderSweepDeps,
+): Promise<ReminderFireRuntime> => {
+  const directory = new DingTalkDirectoryModel(db);
+  const channels = await resolveNotifyChannels(deps);
+  const notifyConfigured = channels.configured;
+  const headText = notifyConfigured
+    ? await (deps.resolveHeadText ?? resolveWorkNoticeHeadText)()
+    : DINGTALK_OA_HEAD_TEXT_FALLBACK;
+
+  return {
+    createInbox:
+      deps.createInboxNotification ??
+      (async (input) => {
+        const model = new NotificationModel(db, input.userId);
+        await model.create({
+          category: REMINDER_NOTIFICATION_CATEGORY,
+          content: input.content,
+          dedupeKey: input.dedupeKey,
+          title: input.title,
+          type: REMINDER_NOTIFICATION_TYPE_RECEIVED,
+        });
+      }),
+    getUsers:
+      deps.getUsers ??
+      (async (staffIds: string[]) => {
+        const rows = await directory.getUsers(staffIds);
+        return rows.map((row) => ({ active: row.active, staffId: row.staffId }));
+      }),
+    headText,
+    now: deps.now ?? new Date(),
+    notifyConfigured,
+    recordFire: deps.recordFire ?? ReminderModel.recordFire,
+    resolveUserId:
+      deps.resolveUserId ?? ((staffId: string) => resolveUserIdFromStaffId(db, staffId)),
+    robotEnabled: channels.robotEnabled,
+    send: deps.sendWorkNotice ?? sendWorkNotice,
+    sendRobot: deps.sendRobotMessage ?? sendRobotMessage,
+    subtreeMemberStaffIds:
+      deps.subtreeMemberStaffIds ?? ((deptId: string) => directory.subtreeMemberStaffIds(deptId)),
+    workNoticeEnabled: channels.workNoticeEnabled,
+  };
+};
+
 const chunkStaffIds = (staffIds: string[], size: number): string[][] => {
   if (staffIds.length === 0) return [];
   const chunks: string[][] = [];
@@ -362,57 +427,14 @@ export const runReminderSweep = async (
     const due = await listDue(db, now, REMINDER_SWEEP_DUE_LIMIT);
     if (due.length === 0) return { counts, lock: lock.result };
 
-    const directory = new DingTalkDirectoryModel(db);
+    const runtime = await resolveFireRuntime(db, { ...deps, now });
     const loadRecipients =
       deps.loadRecipients ?? ((ids: string[]) => loadReminderRecipients(db, ids));
     const recipientsByReminder = await loadRecipients(due.map((row) => row.id));
-    const channels = await resolveNotifyChannels(deps);
-    const notifyConfigured = channels.configured;
-    const headText = notifyConfigured
-      ? await (deps.resolveHeadText ?? resolveWorkNoticeHeadText)()
-      : DINGTALK_OA_HEAD_TEXT_FALLBACK;
-    const send = deps.sendWorkNotice ?? sendWorkNotice;
-    const sendRobot = deps.sendRobotMessage ?? sendRobotMessage;
-    const recordFire = deps.recordFire ?? ReminderModel.recordFire;
-    const getUsers =
-      deps.getUsers ??
-      (async (staffIds: string[]) => {
-        const rows = await directory.getUsers(staffIds);
-        return rows.map((row) => ({ active: row.active, staffId: row.staffId }));
-      });
-    const subtreeMemberStaffIds =
-      deps.subtreeMemberStaffIds ?? ((deptId: string) => directory.subtreeMemberStaffIds(deptId));
-    const resolveUserId =
-      deps.resolveUserId ?? ((staffId: string) => resolveUserIdFromStaffId(db, staffId));
-    const createInbox =
-      deps.createInboxNotification ??
-      (async (input) => {
-        const model = new NotificationModel(db, input.userId);
-        await model.create({
-          category: REMINDER_NOTIFICATION_CATEGORY,
-          content: input.content,
-          dedupeKey: input.dedupeKey,
-          title: input.title,
-          type: REMINDER_NOTIFICATION_TYPE_RECEIVED,
-        });
-      });
 
     for (const reminder of due) {
       try {
-        await fireOneReminder(db, reminder, recipientsByReminder.get(reminder.id) ?? [], {
-          createInbox,
-          getUsers,
-          headText,
-          now,
-          notifyConfigured,
-          recordFire,
-          resolveUserId,
-          robotEnabled: channels.robotEnabled,
-          send,
-          sendRobot,
-          subtreeMemberStaffIds,
-          workNoticeEnabled: channels.workNoticeEnabled,
-        });
+        await fireOneReminder(db, reminder, recipientsByReminder.get(reminder.id) ?? [], runtime);
         counts.fired += 1;
       } catch (error) {
         counts.failed += 1;
@@ -430,26 +452,8 @@ const fireOneReminder = async (
   db: LobeChatDatabase,
   reminder: ReminderItem,
   recipients: ReminderRecipientItem[],
-  deps: {
-    createInbox: (input: {
-      content: string;
-      dedupeKey: string;
-      title: string;
-      userId: string;
-    }) => Promise<void>;
-    getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
-    headText: string;
-    now: Date;
-    notifyConfigured: boolean;
-    recordFire: typeof ReminderModel.recordFire;
-    resolveUserId: (staffId: string) => Promise<string | null>;
-    robotEnabled: boolean;
-    send: typeof sendWorkNotice;
-    sendRobot: typeof sendRobotMessage;
-    subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
-    workNoticeEnabled: boolean;
-  },
-): Promise<void> => {
+  deps: ReminderFireRuntime,
+): Promise<{ deliveries: ReminderFireDeliveryInput[]; reminder: ReminderItem }> => {
   const { activeIds: staffIds, inactiveIds } = await expandStaffIds(recipients, deps);
   const tz = reminder.timezone || REMINDER_DEFAULT_TZ;
   const inboxBody = buildReminderNotice({
@@ -503,19 +507,20 @@ const fireOneReminder = async (
     : null;
   const resolveStatus = (hasActive: boolean) => {
     if (next) return 'scheduled' as const;
+    if (reminder.taskId) return 'sent' as const;
     if (reminder.repeatRule) return 'expired' as const;
     return hasActive ? ('sent' as const) : ('failed' as const);
   };
 
   if (staffIds.length === 0) {
-    await deps.recordFire(db, {
+    const updated = await deps.recordFire(db, {
       deliveries,
       firedAt: deps.now,
       nextFireAt: next,
       reminderId: reminder.id,
       status: resolveStatus(false),
     });
-    return;
+    return { deliveries, reminder: updated };
   }
 
   if (!deps.notifyConfigured) {
@@ -590,7 +595,7 @@ const fireOneReminder = async (
 
   const firedAt = deps.now;
 
-  await deps.recordFire(db, {
+  const updated = await deps.recordFire(db, {
     deliveries,
     firedAt,
     nextFireAt: next,
@@ -613,6 +618,59 @@ const fireOneReminder = async (
       log('inbox notify failed user=%s %O', delivery.userId, error);
     }
   }
+
+  return { deliveries, reminder: updated };
+};
+
+export interface ReminderDeliverResult {
+  failed: number;
+  firedAt: Date;
+  reminder: ReminderItem;
+  sent: number;
+  skipped: number;
+}
+
+const countDeliveries = (
+  deliveries: ReminderFireDeliveryInput[],
+): Pick<ReminderDeliverResult, 'failed' | 'sent' | 'skipped'> => {
+  const counts = { failed: 0, sent: 0, skipped: 0 };
+  for (const delivery of deliveries) {
+    if (
+      delivery.status === 'sent' ||
+      delivery.status === 'failed' ||
+      delivery.status === 'skipped'
+    ) {
+      counts[delivery.status] += 1;
+    }
+  }
+  return counts;
+};
+
+/**
+ * Deliver a single reminder through the same work-notice + robot + inbox path
+ * as the legacy sweep. Used by reminder tasks (tick / 立即发送).
+ */
+export const deliverReminder = async (
+  db: LobeChatDatabase,
+  reminder: ReminderItem,
+  deps: ReminderSweepDeps & { recipients?: ReminderRecipientItem[] } = {},
+): Promise<ReminderDeliverResult> => {
+  const runtime = await resolveFireRuntime(db, deps);
+  const recipients =
+    deps.recipients ??
+    (
+      await (deps.loadRecipients ?? ((ids: string[]) => loadReminderRecipients(db, ids)))([
+        reminder.id,
+      ])
+    ).get(reminder.id) ??
+    [];
+  const { deliveries, reminder: updated } = await fireOneReminder(
+    db,
+    reminder,
+    recipients,
+    runtime,
+  );
+  return { ...countDeliveries(deliveries), firedAt: runtime.now, reminder: updated };
 };
 
 export const isReminderWorkerRuntime = (env: Partial<NodeJS.ProcessEnv> = process.env): boolean => {

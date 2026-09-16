@@ -31,6 +31,7 @@ const reminder = (overrides: Partial<ReminderItem> = {}): ReminderItem =>
     repeatRule: null,
     source: 'tool',
     status: 'scheduled',
+    taskId: null,
     timezone: 'Asia/Shanghai',
     topicId: null,
     updatedAt: new Date('2026-09-16T00:00:00.000Z'),

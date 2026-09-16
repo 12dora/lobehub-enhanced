@@ -5,13 +5,18 @@ import utc from 'dayjs/plugin/utc';
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildReminderCron,
   buildReminderNotice,
+  describeReminderSchedule,
   formatRepeatSummary,
   initialFireAt,
   isDue,
   nextClockTime,
   nextFireAt,
+  nextReminderFireAt,
   resolveOneShotFireAt,
+  scheduleFromLegacy,
+  scheduleToRepeatRule,
 } from './schedule';
 
 dayjs.extend(utc);
@@ -158,6 +163,70 @@ describe('reminder schedule math', () => {
       });
       expect(notice.title).toBe('提醒');
       expect(notice.text).toBe('### 提醒\n交安全报告\n\n09:00（每周三） · 来自 张三');
+    });
+  });
+});
+
+describe('reminder-task cron helpers', () => {
+  it('buildReminderCron maps once / daily / weekly / monthly', () => {
+    expect(buildReminderCron({ date: '2026-09-17', kind: 'once', time: '09:05' })).toBe(
+      '5 9 17 9 *',
+    );
+    expect(buildReminderCron({ kind: 'daily', time: '09:00' })).toBe('0 9 * * *');
+    expect(buildReminderCron({ kind: 'weekly', time: '09:00', weekdays: [1, 3, 7] })).toBe(
+      '0 9 * * 1,3,0',
+    );
+    expect(buildReminderCron({ kind: 'monthly', monthDays: [1, 15], time: '09:00' })).toBe(
+      '0 9 1,15 * *',
+    );
+  });
+
+  it('describeReminderSchedule covers once, weekly, and until', () => {
+    expect(describeReminderSchedule({ date: '2026-09-17', kind: 'once', time: '09:00' })).toBe(
+      '2026-09-17 09:00 一次',
+    );
+    expect(describeReminderSchedule({ kind: 'daily', time: '09:00' })).toBe('每天 09:00');
+    expect(describeReminderSchedule({ kind: 'weekly', time: '09:00', weekdays: [1, 3] })).toBe(
+      '每周一、三 09:00',
+    );
+    expect(describeReminderSchedule({ kind: 'daily', time: '09:00', until: '2026-10-01' })).toBe(
+      '每天 09:00 至 2026-10-01',
+    );
+  });
+
+  it('nextReminderFireAt returns the once instant and the next daily occurrence', () => {
+    const once = nextReminderFireAt(
+      { date: '2026-09-17', kind: 'once', time: '09:00' },
+      at('2026-09-16 15:00:00'),
+    );
+    expect(fmt(once)).toBe('2026-09-17 09:00');
+
+    const daily = nextReminderFireAt({ kind: 'daily', time: '09:00' }, at('2026-09-16 08:00:00'));
+    expect(fmt(daily)).toBe('2026-09-16 09:00');
+  });
+
+  it('scheduleFromLegacy / scheduleToRepeatRule round-trip once and weekly', () => {
+    const once = scheduleFromLegacy(at('2026-09-17 09:00:00'), null);
+    expect(once).toEqual({ date: '2026-09-17', kind: 'once', time: '09:00' });
+    expect(scheduleToRepeatRule(once)).toBeNull();
+
+    const weekly = scheduleFromLegacy(at('2026-09-16 09:00:00'), {
+      freq: 'weekly',
+      time: '09:00',
+      until: '2026-12-01',
+      weekdays: [3],
+    });
+    expect(weekly).toEqual({
+      kind: 'weekly',
+      time: '09:00',
+      until: '2026-12-01',
+      weekdays: [3],
+    });
+    expect(scheduleToRepeatRule(weekly)).toEqual({
+      freq: 'weekly',
+      time: '09:00',
+      until: '2026-12-01',
+      weekdays: [3],
     });
   });
 });

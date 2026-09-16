@@ -1,3 +1,4 @@
+import { isReminderTaskConfig } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
 import { and, eq } from 'drizzle-orm';
@@ -7,6 +8,7 @@ import { TaskModel } from '@/database/models/task';
 import { TaskTopicModel } from '@/database/models/taskTopic';
 import { tasks } from '@/database/schemas';
 import { getServerDB } from '@/database/server';
+import { ReminderTaskService } from '@/server/enterprise/services/reminder/taskReminder';
 
 import { TaskRunnerService } from './index';
 
@@ -70,6 +72,13 @@ export async function runScheduleTick(
   if (task.status === 'paused') {
     log('skip task=%s reason=paused', taskId);
     return { ran: false, reason: 'paused' };
+  }
+
+  if (isReminderTaskConfig(task.config)) {
+    const reminderTasks = new ReminderTaskService(db, userId, wsId);
+    await reminderTasks.fireForTick(taskId, new Date());
+    log('ran reminder task=%s identifier=%s', taskId, task.identifier);
+    return { ran: true, taskIdentifier: task.identifier };
   }
 
   const briefModel = new BriefModel(db, userId, wsId);

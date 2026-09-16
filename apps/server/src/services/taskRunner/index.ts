@@ -2,6 +2,7 @@ import { TaskIdentifier as TaskSkillIdentifier } from '@lobechat/builtin-skills'
 import { BriefIdentifier } from '@lobechat/builtin-tool-brief';
 import { INBOX_SESSION_ID } from '@lobechat/const';
 import type { ExecAgentResult, TaskItem, TaskRunTrigger } from '@lobechat/types';
+import { isReminderTaskConfig } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
 
@@ -11,6 +12,7 @@ import { BriefModel } from '@/database/models/brief';
 import { TaskModel } from '@/database/models/task';
 import { TaskTopicModel } from '@/database/models/taskTopic';
 import type { LobeChatDatabase } from '@/database/type';
+import { ReminderTaskService } from '@/server/enterprise/services/reminder/taskReminder';
 import { AiAgentService } from '@/server/services/aiAgent';
 import { TaskLifecycleService } from '@/server/services/taskLifecycle';
 import {
@@ -39,6 +41,15 @@ export interface RunTaskResult extends ExecAgentResult {
   taskId: string;
   taskIdentifier: string;
 }
+
+export interface ReminderRunTaskResult {
+  reminderFired: { failed: number; firedAt: Date; sent: number; skipped: number };
+  taskId: string;
+  taskIdentifier: string;
+  topicId: null;
+}
+
+export type RunTaskOutcome = ReminderRunTaskResult | RunTaskResult;
 
 /**
  * TaskRunnerService — orchestrates a single Task run.
@@ -69,12 +80,23 @@ export class TaskRunnerService {
     this.taskLifecycle = new TaskLifecycleService(db, userId, workspaceId);
   }
 
-  async runTask(params: RunTaskParams): Promise<RunTaskResult> {
+  async runTask(params: RunTaskParams): Promise<RunTaskOutcome> {
     const { taskId: idOrIdentifier, continueTopicId, extraPrompt, trigger = 'manual' } = params;
 
     const task = await this.taskModel.resolve(idOrIdentifier);
     if (!task) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
+    }
+
+    if (isReminderTaskConfig(task.config)) {
+      const reminderTasks = new ReminderTaskService(this.db, this.userId, this.workspaceId);
+      const reminderFired = await reminderTasks.fireNow(task.id);
+      return {
+        reminderFired,
+        taskId: task.id,
+        taskIdentifier: task.identifier,
+        topicId: null,
+      };
     }
 
     // Track whether *this* invocation transitioned the task to 'running'. The

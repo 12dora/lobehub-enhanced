@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BriefModel } from '@/database/models/brief';
 import { TaskModel } from '@/database/models/task';
 import { TaskTopicModel } from '@/database/models/taskTopic';
+import { ReminderTaskService } from '@/server/enterprise/services/reminder/taskReminder';
 
 import { TaskRunnerService } from './index';
 import { runScheduleTick } from './scheduleTick';
@@ -39,6 +40,10 @@ vi.mock('./index', () => ({
   TaskRunnerService: vi.fn(),
 }));
 
+vi.mock('@/server/enterprise/services/reminder/taskReminder', () => ({
+  ReminderTaskService: vi.fn(),
+}));
+
 describe('runScheduleTick', () => {
   const taskId = 'task-1';
   const userId = 'user-1';
@@ -55,6 +60,7 @@ describe('runScheduleTick', () => {
   const mockRunner = {
     runTask: vi.fn(),
   };
+  const mockFireForTick = vi.fn();
 
   const baseTask = (overrides: Partial<Record<string, unknown>> = {}) => ({
     automationMode: 'schedule',
@@ -75,6 +81,8 @@ describe('runScheduleTick', () => {
     (TaskTopicModel as any).mockImplementation(() => mockTaskTopicModel);
     (BriefModel as any).mockImplementation(() => mockBriefModel);
     (TaskRunnerService as any).mockImplementation(() => mockRunner);
+    (ReminderTaskService as any).mockImplementation(() => ({ fireForTick: mockFireForTick }));
+    mockFireForTick.mockResolvedValue('fired');
   });
 
   it('skips not-found tasks', async () => {
@@ -184,5 +192,28 @@ describe('runScheduleTick', () => {
       excludeTypes: ['error'],
     });
     expect(mockRunner.runTask).not.toHaveBeenCalled();
+  });
+
+  it('fires a reminder task via ReminderTaskService and does not run the agent', async () => {
+    mockSelectTask.mockResolvedValue([
+      baseTask({
+        config: {
+          reminder: {
+            kind: 'reminder',
+            once: true,
+            reminderId: 'rmd_1',
+            schedule: { date: '2026-09-16', kind: 'once', time: '17:35' },
+            scheduleSummary: '2026-09-16 17:35 一次',
+          },
+        },
+      }),
+    ]);
+
+    const outcome = await runScheduleTick(taskId, userId);
+
+    expect(outcome).toEqual({ ran: true, taskIdentifier: 'T-1' });
+    expect(mockFireForTick).toHaveBeenCalledWith(taskId, expect.any(Date));
+    expect(mockRunner.runTask).not.toHaveBeenCalled();
+    expect(mockBriefModel.hasUnresolvedUrgentByTask).not.toHaveBeenCalled();
   });
 });

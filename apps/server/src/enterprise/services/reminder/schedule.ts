@@ -1,3 +1,4 @@
+import type { ReminderScheduleInput } from '@lobechat/types';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -199,4 +200,145 @@ export const buildReminderNotice = (input: {
     text: `### 提醒\n${input.content}\n\n${timeLine}`,
     title: '提醒',
   };
+};
+
+/** ISO weekday 1–7 (Mon=1, Sun=7) → cron weekday (Sun=0). */
+const isoWeekdayToCron = (day: number): number => day % 7;
+
+export const scheduleToRepeatRule = (
+  schedule: ReminderScheduleInput,
+): ReminderRepeatRule | null => {
+  if (schedule.kind === 'once') return null;
+  const rule: ReminderRepeatRule = { freq: schedule.kind, time: schedule.time };
+  const weekdays = uniqueSorted(schedule.weekdays, 1, 7);
+  const monthDays = uniqueSorted(schedule.monthDays, 1, 31);
+  if (weekdays.length > 0) rule.weekdays = weekdays;
+  if (monthDays.length > 0) rule.monthDays = monthDays;
+  if (schedule.until) rule.until = schedule.until;
+  return rule;
+};
+
+/**
+ * Map a structured reminder schedule onto a 5-field cron in Asia/Shanghai.
+ * Once: `mm HH D M *`. Daily: `mm HH * * *`. Weekly: `mm HH * * d1,d2` (Sun=0).
+ * Monthly: `mm HH d1,d2 * *`.
+ */
+export const buildReminderCron = (schedule: ReminderScheduleInput): string => {
+  const parsed = parseClockTime(schedule.time);
+  if (!parsed) {
+    throw new Error(`Invalid reminder time: ${schedule.time}`);
+  }
+  const minute = String(parsed.minute);
+  const hour = String(parsed.hour);
+
+  switch (schedule.kind) {
+    case 'once': {
+      if (!schedule.date) {
+        throw new Error('once schedule requires date');
+      }
+      const parts = schedule.date.split('-');
+      const month = Number.parseInt(parts[1] ?? '', 10);
+      const day = Number.parseInt(parts[2] ?? '', 10);
+      if (!Number.isFinite(month) || !Number.isFinite(day)) {
+        throw new Error(`Invalid reminder date: ${schedule.date}`);
+      }
+      return `${minute} ${hour} ${day} ${month} *`;
+    }
+    case 'daily': {
+      return `${minute} ${hour} * * *`;
+    }
+    case 'weekly': {
+      const weekdays = uniqueSorted(schedule.weekdays, 1, 7);
+      if (weekdays.length === 0) {
+        throw new Error('weekly schedule requires weekdays');
+      }
+      return `${minute} ${hour} * * ${weekdays.map(isoWeekdayToCron).join(',')}`;
+    }
+    case 'monthly': {
+      const monthDays = uniqueSorted(schedule.monthDays, 1, 31);
+      if (monthDays.length === 0) {
+        throw new Error('monthly schedule requires monthDays');
+      }
+      return `${minute} ${hour} ${monthDays.join(',')} * *`;
+    }
+    default: {
+      throw new Error(
+        `Unknown reminder schedule kind: ${(schedule as ReminderScheduleInput).kind}`,
+      );
+    }
+  }
+};
+
+/** Human schedule summary, e.g. `每天 09:00` / `每周一、三 09:00` / `2026-09-17 09:00 一次`. */
+export const describeReminderSchedule = (schedule: ReminderScheduleInput): string => {
+  const time = schedule.time;
+  let summary: string;
+  switch (schedule.kind) {
+    case 'once': {
+      summary = `${schedule.date ?? ''} ${time} 一次`.trim();
+      break;
+    }
+    case 'daily': {
+      summary = `每天 ${time}`;
+      break;
+    }
+    case 'weekly': {
+      const labels = uniqueSorted(schedule.weekdays, 1, 7)
+        .map((day) => WEEKDAY_ZH[day])
+        .filter(Boolean);
+      summary = labels.length === 0 ? `每周 ${time}` : `每周${labels.join('、')} ${time}`;
+      break;
+    }
+    case 'monthly': {
+      summary = `${monthlySummary(schedule.monthDays ?? [])} ${time}`;
+      break;
+    }
+    default: {
+      summary = time;
+    }
+  }
+  if (schedule.until && schedule.kind !== 'once') {
+    return `${summary} 至 ${schedule.until}`;
+  }
+  return summary;
+};
+
+/**
+ * Next planned fire instant in Asia/Shanghai.
+ * Once returns the absolute wall-clock time (even if past — callers reject stale once).
+ * Repeats return the first occurrence strictly after `now`, or null past `until`.
+ */
+export const nextReminderFireAt = (
+  schedule: ReminderScheduleInput,
+  now: Date,
+  tz: string = REMINDER_DEFAULT_TZ,
+): Date | null => {
+  if (schedule.kind === 'once') {
+    if (!schedule.date) return null;
+    return resolveOneShotFireAt({ localDate: schedule.date, time: schedule.time, tz });
+  }
+  const rule = scheduleToRepeatRule(schedule);
+  if (!rule) return null;
+  return nextFireAt(rule, now, tz);
+};
+
+/** Reconstruct a structured schedule from a legacy `fire_at` + `repeat_rule` pair. */
+export const scheduleFromLegacy = (
+  fireAt: Date,
+  repeat?: ReminderRepeatRule | null,
+  tz: string = REMINDER_DEFAULT_TZ,
+): ReminderScheduleInput => {
+  if (!repeat) {
+    const local = dayjs(fireAt).tz(tz);
+    return {
+      date: local.format('YYYY-MM-DD'),
+      kind: 'once',
+      time: local.format('HH:mm'),
+    };
+  }
+  const schedule: ReminderScheduleInput = { kind: repeat.freq, time: repeat.time };
+  if (repeat.weekdays?.length) schedule.weekdays = uniqueSorted(repeat.weekdays, 1, 7);
+  if (repeat.monthDays?.length) schedule.monthDays = uniqueSorted(repeat.monthDays, 1, 31);
+  if (repeat.until) schedule.until = repeat.until;
+  return schedule;
 };

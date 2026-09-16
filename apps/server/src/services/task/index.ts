@@ -10,9 +10,11 @@ import type {
   TaskTopicHandoff,
   WorkspaceData,
 } from '@lobechat/types';
+import { isReminderTaskConfig } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 
 import { AgentModel } from '@/database/models/agent';
+import { ReminderModel } from '@/database/models/reminder';
 import { TaskModel } from '@/database/models/task';
 import { TaskTopicModel } from '@/database/models/taskTopic';
 import { TopicModel } from '@/database/models/topic';
@@ -366,6 +368,17 @@ export class TaskService {
 
     const task = await this.taskModel.updateStatus(resolved.id, status, extra);
     if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
+
+    if (isReminderTaskConfig(task.config) && (status === 'canceled' || status === 'completed')) {
+      const reminderModel = new ReminderModel(this.db, this.userId);
+      const reminder = await reminderModel.findByTaskId(task.id);
+      if (reminder) {
+        await reminderModel.updateProfile(reminder.id, {
+          status: status === 'canceled' ? 'canceled' : 'sent',
+          ...(status === 'canceled' ? { canceledAt: new Date() } : {}),
+        });
+      }
+    }
 
     // Stamp the schedule run-count window each time the user (re)starts a
     // scheduled task. The cron dispatcher itself flips a task running →
