@@ -8,6 +8,10 @@ vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
 }));
 
+vi.mock('@/server/enterprise/services/branding/runtimeBranding', () => ({
+  resolveServerRuntimeBranding: vi.fn(),
+}));
+
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: vi.fn(() => ({
     get: mockRedisGet,
@@ -16,12 +20,17 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
+const { resolveServerRuntimeBranding } =
+  await import('@/server/enterprise/services/branding/runtimeBranding');
 const {
   buildDirectoryReplaceAllInput,
+  buildOaWorkNoticePayload,
   DINGTALK_ASYNCSEND_V2_URL,
   DINGTALK_DEPT_GET_URL,
   DINGTALK_DEPT_LISTSUB_URL,
   DINGTALK_NOTIFY_TOKEN_REDIS_KEY,
+  DINGTALK_OA_HEAD_BGCOLOR,
+  DINGTALK_OA_HEAD_TEXT_FALLBACK,
   DINGTALK_OAPI_GETTOKEN_URL,
   DINGTALK_USER_LIST_URL,
   DINGTALK_WORK_NOTICE_USERID_CHUNK,
@@ -34,6 +43,7 @@ const {
   readNotifyAppFromMessengerConfig,
   readNotifyAppFromProviderRow,
   resetNotifyAppStateForTest,
+  resolveWorkNoticeHeadText,
   sendWorkNotice,
 } = await import('./notifyApp');
 
@@ -51,7 +61,7 @@ const jsonResponse = (body: unknown, status = 200) =>
     text: async () => JSON.stringify(body),
   }) as const;
 
-const tokenFetch = vi.fn(async () =>
+const tokenFetch = vi.fn(async (_input: string | URL, _init?: RequestInit) =>
   jsonResponse({ access_token: 'tok', errcode: 0, expires_in: 7200 }),
 );
 
@@ -220,6 +230,82 @@ describe('sendWorkNotice', () => {
       agent_id: 4_617_854_001,
       msg: { markdown: { text: 'body', title: '提醒' }, msgtype: 'markdown' },
       userid_list: 'staff_1',
+    });
+  });
+
+  it('sends oa with head band, form, and optional message_url', async () => {
+    const result = await sendWorkNotice(
+      {
+        oa: buildOaWorkNoticePayload({
+          author: '张三',
+          content: '交安全报告',
+          form: [
+            { key: '时间', value: '09:00' },
+            { key: '来自', value: '张三' },
+          ],
+          headText: 'AI平台',
+          title: '定时提醒',
+        }),
+        staffIds: ['staff_hyq'],
+      },
+      { fetchImpl },
+    );
+
+    expect(result).toEqual([{ taskId: '99001' }]);
+    const call = fetchImpl.mock.calls.find((entry) => String(entry[0]).includes('/asyncsend_v2'));
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      agent_id: 4_617_854_001,
+      msg: {
+        msgtype: 'oa',
+        oa: {
+          body: {
+            author: '张三',
+            content: '交安全报告',
+            form: [
+              { key: '时间', value: '09:00' },
+              { key: '来自', value: '张三' },
+            ],
+            title: '定时提醒',
+          },
+          head: { bgcolor: DINGTALK_OA_HEAD_BGCOLOR, text: 'AI平台' },
+        },
+      },
+      userid_list: 'staff_hyq',
+    });
+  });
+
+  it('includes message_url on oa for task-owner deep links', async () => {
+    await sendWorkNotice(
+      {
+        oa: buildOaWorkNoticePayload({
+          content: '运行完成',
+          form: [
+            { key: '任务', value: '报表' },
+            { key: '时间', value: '09:00' },
+          ],
+          headText: 'AI 助手',
+          messageUrl: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+          title: '任务已完成一次运行',
+        }),
+        staffIds: ['staff_1'],
+      },
+      { fetchImpl },
+    );
+    const call = fetchImpl.mock.calls.find((entry) => String(entry[0]).includes('/asyncsend_v2'));
+    expect(JSON.parse(String(call?.[1]?.body)).msg).toEqual({
+      msgtype: 'oa',
+      oa: {
+        body: {
+          content: '运行完成',
+          form: [
+            { key: '任务', value: '报表' },
+            { key: '时间', value: '09:00' },
+          ],
+          title: '任务已完成一次运行',
+        },
+        head: { bgcolor: DINGTALK_OA_HEAD_BGCOLOR, text: 'AI 助手' },
+        message_url: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
+      },
     });
   });
 
@@ -433,5 +519,27 @@ describe('buildDirectoryReplaceAllInput', () => {
       leafDeptId: '3',
       leafDeptName: '安环部',
     });
+  });
+});
+
+describe('resolveWorkNoticeHeadText', () => {
+  it('uses the published site title when it is set', async () => {
+    vi.mocked(resolveServerRuntimeBranding).mockResolvedValueOnce({ name: 'AI平台' } as never);
+    expect(await resolveWorkNoticeHeadText()).toBe('AI平台');
+  });
+
+  it(`falls back to ${DINGTALK_OA_HEAD_TEXT_FALLBACK} when the site title is empty`, async () => {
+    vi.mocked(resolveServerRuntimeBranding).mockResolvedValueOnce({ name: '  ' } as never);
+    expect(await resolveWorkNoticeHeadText()).toBe(DINGTALK_OA_HEAD_TEXT_FALLBACK);
+  });
+
+  it(`falls back to ${DINGTALK_OA_HEAD_TEXT_FALLBACK} when the name is the Latin AIHub brand`, async () => {
+    vi.mocked(resolveServerRuntimeBranding).mockResolvedValueOnce({ name: 'AIHub' } as never);
+    expect(await resolveWorkNoticeHeadText()).toBe(DINGTALK_OA_HEAD_TEXT_FALLBACK);
+  });
+
+  it(`falls back to ${DINGTALK_OA_HEAD_TEXT_FALLBACK} when branding resolution throws`, async () => {
+    vi.mocked(resolveServerRuntimeBranding).mockRejectedValueOnce(new Error('offline'));
+    expect(await resolveWorkNoticeHeadText()).toBe(DINGTALK_OA_HEAD_TEXT_FALLBACK);
   });
 });

@@ -28,13 +28,23 @@ import type {
 } from '@/server/enterprise/services/taskScheduling/types';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import { buildDingTalkIdentityEmail } from '@/server/services/messenger/platforms/dingtalk/const';
+import type { DingTalkWorkNoticeOa } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 import {
+  buildOaWorkNoticePayload,
+  DINGTALK_OA_HEAD_TEXT_FALLBACK,
   DINGTALK_WORK_NOTICE_USERID_CHUNK,
   resolveNotifyAppConfig,
+  resolveWorkNoticeHeadText,
   sendWorkNotice,
 } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 
-import { buildReminderNotice, nextFireAt, REMINDER_DEFAULT_TZ } from './schedule';
+import {
+  buildReminderNotice,
+  formatFireClock,
+  formatRepeatSummary,
+  nextFireAt,
+  REMINDER_DEFAULT_TZ,
+} from './schedule';
 
 const log = debug('lobe-server:reminder');
 
@@ -43,6 +53,7 @@ export const REMINDER_SWEEP_LOCK_TTL_SECONDS = 5 * 60;
 export const REMINDER_SWEEP_INTERVAL_MS = 60_000;
 export const REMINDER_SWEEP_DUE_LIMIT = 50;
 export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
+export const REMINDER_OA_BODY_TITLE = '定时提醒';
 
 const noopRelease = async (): Promise<void> => {};
 
@@ -115,6 +126,7 @@ export interface ReminderSweepDeps {
   loadRecipients?: (reminderIds: string[]) => Promise<Map<string, ReminderRecipientItem[]>>;
   now?: Date;
   recordFire?: typeof ReminderModel.recordFire;
+  resolveHeadText?: () => Promise<string>;
   resolveUserId?: (staffId: string) => Promise<string | null>;
   sendWorkNotice?: typeof sendWorkNotice;
   subtreeMemberStaffIds?: (deptId: string) => Promise<string[]>;
@@ -190,7 +202,7 @@ const expandStaffIds = async (
 };
 
 const deliverChunk = async (input: {
-  body: { text: string; title: string };
+  oa: DingTalkWorkNoticeOa;
   send: typeof sendWorkNotice;
   staffIds: string[];
 }): Promise<{
@@ -201,7 +213,7 @@ const deliverChunk = async (input: {
 }> => {
   try {
     const results = await input.send({
-      markdown: input.body,
+      oa: input.oa,
       staffIds: input.staffIds,
     });
     return { staffIds: input.staffIds, status: 'sent', taskId: results[0]?.taskId };
@@ -211,6 +223,28 @@ const deliverChunk = async (input: {
     log('sendWorkNotice failed: %s', failedReason);
     return { failedReason, staffIds: input.staffIds, status: 'failed' };
   }
+};
+
+export const buildReminderWorkNoticeOa = (input: {
+  content: string;
+  creatorName: string;
+  firedAt: Date;
+  headText: string;
+  repeatRule?: ReminderRepeatRule | null;
+  timezone: string;
+}): DingTalkWorkNoticeOa => {
+  const clock = formatFireClock(input.firedAt, input.timezone);
+  const summary = formatRepeatSummary(input.repeatRule ?? null);
+  return buildOaWorkNoticePayload({
+    author: input.creatorName,
+    content: input.content,
+    form: [
+      { key: '时间', value: summary ? `${clock} · ${summary}` : clock },
+      { key: '来自', value: input.creatorName },
+    ],
+    headText: input.headText,
+    title: REMINDER_OA_BODY_TITLE,
+  });
 };
 
 export const runReminderSweep = async (
@@ -237,6 +271,9 @@ export const runReminderSweep = async (
     const isNotifyAppConfigured =
       deps.isNotifyAppConfigured ?? (async () => Boolean(await resolveNotifyAppConfig()));
     const notifyConfigured = await isNotifyAppConfigured();
+    const headText = notifyConfigured
+      ? await (deps.resolveHeadText ?? resolveWorkNoticeHeadText)()
+      : DINGTALK_OA_HEAD_TEXT_FALLBACK;
     const send = deps.sendWorkNotice ?? sendWorkNotice;
     const recordFire = deps.recordFire ?? ReminderModel.recordFire;
     const getUsers =
@@ -267,6 +304,7 @@ export const runReminderSweep = async (
         await fireOneReminder(db, reminder, recipientsByReminder.get(reminder.id) ?? [], {
           createInbox,
           getUsers,
+          headText,
           now,
           notifyConfigured,
           recordFire,
@@ -299,6 +337,7 @@ const fireOneReminder = async (
       userId: string;
     }) => Promise<void>;
     getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
+    headText: string;
     now: Date;
     notifyConfigured: boolean;
     recordFire: typeof ReminderModel.recordFire;
@@ -309,10 +348,18 @@ const fireOneReminder = async (
 ): Promise<void> => {
   const staffIds = await expandStaffIds(recipients, deps);
   const tz = reminder.timezone || REMINDER_DEFAULT_TZ;
-  const body = buildReminderNotice({
+  const inboxBody = buildReminderNotice({
     content: reminder.content,
     creatorName: reminder.creatorName,
     firedAt: deps.now,
+    repeatRule: reminder.repeatRule ?? null,
+    timezone: tz,
+  });
+  const oa = buildReminderWorkNoticeOa({
+    content: reminder.content,
+    creatorName: reminder.creatorName,
+    firedAt: deps.now,
+    headText: deps.headText,
     repeatRule: reminder.repeatRule ?? null,
     timezone: tz,
   });
@@ -338,7 +385,7 @@ const fireOneReminder = async (
     }
   } else {
     for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
-      const result = await deliverChunk({ body, send: deps.send, staffIds: chunk });
+      const result = await deliverChunk({ oa, send: deps.send, staffIds: chunk });
       for (const staffId of result.staffIds) {
         deliveries.push({
           failedReason: result.failedReason ?? null,
@@ -368,9 +415,9 @@ const fireOneReminder = async (
     if (delivery.status !== 'sent' || !delivery.userId) continue;
     try {
       await deps.createInbox({
-        content: body.text,
+        content: inboxBody.text,
         dedupeKey,
-        title: body.title,
+        title: inboxBody.title,
         userId: delivery.userId,
       });
     } catch (error) {

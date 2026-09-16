@@ -48,11 +48,11 @@ export interface DingTalkDirectoryReplaceAllInput {
   users: NewDingTalkDirectoryUser[];
 }
 
-interface DirectoryDeptIdRow {
+interface DirectoryDeptIdRow extends Record<string, unknown> {
   dept_id: string;
 }
 
-interface DirectoryStaffIdRow {
+interface DirectoryStaffIdRow extends Record<string, unknown> {
   staff_id: string;
 }
 

@@ -50,18 +50,9 @@
 
 进程内 `dingtalkDirectorySyncWorker` 在启动 60 s 后跑一次，之后每小时走一遍部门树（`topapi/v2/department/listsub` 从部门 `1` 开始，根部门名用 `topapi/v2/department/get`）和部门成员（`topapi/v2/user/list`，cursor 分页，每页 100）。结果写入 `dingtalk_departments` / `dingtalk_directory_users` / `dingtalk_user_departments`（拼音列用 `pinyinFull` / `pinyinInitials`）。未配置通知应用时跳过。管理端「立即同步」走同一套逻辑（Redis 锁 `messenger:dingtalk:directory-sync-lock`）。状态在 Redis `messenger:dingtalk:directory-status`（无 TTL）：`idle` / `running` / `ok` / `error`，含部门数、人员数、上次同步时间。
 
-### 工作通知去重
+### 工作通知格式（OA）
 
-钉钉对同一用户、同一自然日的**相同工作通知正文**会去重，后发的会被吞掉。因此提醒正文必须带发送时刻与设置人，使每天每条提醒都独一无二：
-
-```
-### 提醒
-{content}
-
-{HH:mm} · 来自 {creatorName}
-```
-
-标题为「提醒」。周期提醒在时间后附加「（每周三）」这类摘要。收件人卡片不带深链按钮；`reminder_deliveries.provider_task_id` 记录接口返回的 `task_id`。任务生命周期推送在通知应用已配置时用 `action_card`（有 `actionUrl` 时 `single_url`）或 markdown，并把 `notification_deliveries.provider_message_id` 写成该 `task_id`。
+钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`（`head.bgcolor` 固定 `FF2E7CF6`；`head.text` 为管理端通用设置的站点标题，未设置时为「AI 助手」）：`{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<定时提醒 | 任务事件标题>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，`body.title` 为「定时提醒」，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」；任务生命周期推送的 form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录接口返回的 `task_id`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径，机器人 `oToMessages/batchSend` 仅在未配置通知应用时用于任务推送。
 
 ## 手工绑定
 

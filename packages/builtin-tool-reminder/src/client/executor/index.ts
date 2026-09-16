@@ -9,11 +9,52 @@ import type {
   CancelReminderParams,
   CreateReminderParams,
   ListRemindersParams,
+  ReceivedReminderView,
+  ReminderView,
   SearchDirectoryParams,
 } from '../../types';
-import { ReminderApiName } from '../../types';
+import { isNeedsConfirmationResult, ReminderApiName } from '../../types';
 
 const log = debug('lobe-reminder:executor');
+
+const toClientReminderStatus = (value: string | undefined) => {
+  switch (value) {
+    case 'canceled':
+    case 'expired':
+    case 'failed':
+    case 'scheduled':
+    case 'sent': {
+      return value;
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const toReminderView = (row: {
+  content: string;
+  creatorName: string;
+  fireAt: Date | string;
+  id: string;
+  recipients?: ReminderView['recipients'];
+  repeat?: ReminderView['repeat'];
+  repeatRule?: ReminderView['repeat'];
+  status?: string | null;
+}): ReminderView => ({
+  content: row.content,
+  creatorName: row.creatorName,
+  fireAt: row.fireAt,
+  id: row.id,
+  recipients: row.recipients,
+  repeat: row.repeat ?? row.repeatRule ?? undefined,
+  status: row.status ?? undefined,
+});
+
+const requireResult = <T>(value: T | undefined, message: string): T => {
+  if (value === undefined) throw new Error(message);
+  return value;
+};
 
 const loadReminderService = async (): Promise<IReminderService> => {
   // R2 owns src/services/reminder.ts (searchDirectory / create / listCreated /
@@ -22,10 +63,30 @@ const loadReminderService = async (): Promise<IReminderService> => {
   const { reminderService } = await import('@/services/reminder');
   return {
     cancel: (id) => reminderService.cancel(id),
-    create: (input) => reminderService.create(input),
-    listCreated: (opts) => reminderService.listCreated(opts),
-    listReceived: (opts) => reminderService.listReceived(opts),
-    searchDirectory: (q, kind) => reminderService.searchDirectory(q, kind),
+    create: async (input) => {
+      const result = requireResult(
+        await reminderService.create(input),
+        'Create reminder returned no result',
+      );
+      if (isNeedsConfirmationResult(result)) {
+        return { audience: result.audience, needsConfirmation: true };
+      }
+      return toReminderView(result);
+    },
+    listCreated: async (opts) => {
+      const rows = await reminderService.listCreated({
+        limit: opts?.limit,
+        status: toClientReminderStatus(opts?.status),
+      });
+      return (rows ?? []).map(toReminderView);
+    },
+    listReceived: async (opts): Promise<ReceivedReminderView[]> =>
+      (await reminderService.listReceived(opts)) ?? [],
+    searchDirectory: async (q, kind) =>
+      requireResult(
+        await reminderService.searchDirectory({ kind, q }),
+        'Search directory returned no result',
+      ),
   };
 };
 

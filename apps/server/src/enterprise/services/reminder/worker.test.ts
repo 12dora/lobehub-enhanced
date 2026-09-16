@@ -57,6 +57,7 @@ describe('runReminderSweep', () => {
   const subtreeMemberStaffIds = vi.fn();
   const loadRecipients = vi.fn();
   const isNotifyAppConfigured = vi.fn();
+  const resolveHeadText = vi.fn();
 
   const run = () =>
     runReminderSweep({} as any, {
@@ -68,6 +69,7 @@ describe('runReminderSweep', () => {
       loadRecipients,
       now: new Date('2026-09-16T01:00:00.000Z'),
       recordFire,
+      resolveHeadText,
       resolveUserId,
       sendWorkNotice: send,
       subtreeMemberStaffIds,
@@ -85,6 +87,7 @@ describe('runReminderSweep', () => {
     subtreeMemberStaffIds.mockResolvedValue(['staff_a', 'staff_b', 'staff_inactive']);
     loadRecipients.mockResolvedValue(new Map([['rem_1', [recipient({})]]]));
     isNotifyAppConfigured.mockResolvedValue(true);
+    resolveHeadText.mockResolvedValue('AI平台');
   });
 
   it('fans out a department, dedupes staffIds, and skips inactive users', async () => {
@@ -116,6 +119,19 @@ describe('runReminderSweep', () => {
     expect(send).toHaveBeenCalledTimes(1);
     const sentIds = [...(send.mock.calls[0][0].staffIds as string[])].sort();
     expect(sentIds).toEqual(['staff_a', 'staff_b']);
+    expect(send.mock.calls[0][0].oa).toEqual({
+      body: {
+        author: '张三',
+        content: '交安全报告',
+        form: [
+          { key: '时间', value: '09:00' },
+          { key: '来自', value: '张三' },
+        ],
+        title: '定时提醒',
+      },
+      head: { bgcolor: 'FF2E7CF6', text: 'AI平台' },
+    });
+    expect(send.mock.calls[0][0]).not.toHaveProperty('markdown');
     const deliveries = recordFire.mock.calls[0][1].deliveries;
     expect(deliveries.map((row: { staffId: string }) => row.staffId).sort()).toEqual([
       'staff_a',
@@ -187,5 +203,37 @@ describe('runReminderSweep', () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(recordFire.mock.calls[0][1].deliveries).toEqual([]);
+  });
+
+  it('appends the repeat summary on the 时间 form value', async () => {
+    listDue.mockResolvedValue([
+      reminder({
+        repeatRule: { freq: 'weekly', time: '09:00', weekdays: [3] },
+      }),
+    ]);
+
+    await run();
+
+    expect(send.mock.calls[0][0].oa.body.form).toEqual([
+      { key: '时间', value: '09:00 · 每周三' },
+      { key: '来自', value: '张三' },
+    ]);
+    expect(send.mock.calls[0][0].oa).not.toHaveProperty('messageUrl');
+  });
+
+  it('resolves the site-title head text once per sweep', async () => {
+    listDue.mockResolvedValue([reminder(), reminder({ id: 'rem_2' })]);
+    loadRecipients.mockResolvedValue(
+      new Map([
+        ['rem_1', [recipient({})]],
+        ['rem_2', [recipient({ id: 'rr_2', reminderId: 'rem_2' })]],
+      ]),
+    );
+
+    await run();
+
+    expect(resolveHeadText).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].oa.head.text).toBe('AI平台');
+    expect(send.mock.calls[1][0].oa.head.text).toBe('AI平台');
   });
 });

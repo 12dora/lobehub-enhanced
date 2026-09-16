@@ -3,6 +3,7 @@ import debug from 'debug';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
 import { pinyinFieldsFromFullName } from '@/database/utils/pinyin';
+import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 const log = debug('lobe-server:messenger:dingtalk:notify-app');
@@ -21,6 +22,10 @@ export const DINGTALK_WORK_NOTICE_USERID_CHUNK = 100;
 export const DINGTALK_USER_LIST_PAGE_SIZE = 100;
 export const DINGTALK_DIRECTORY_ROOT_DEPT_ID = '1';
 export const DINGTALK_NOTIFY_APP_FETCH_TIMEOUT_MS = 15_000;
+/** OA head band (ARGB). Other Easy apps use their own colour so the band identifies the sender. */
+export const DINGTALK_OA_HEAD_BGCOLOR = 'FF2E7CF6';
+/** OA `head.text` when the published site title is empty or the Latin "AIHub" brand. */
+export const DINGTALK_OA_HEAD_TEXT_FALLBACK = 'AI 助手';
 
 export type DingTalkNotifyFetch = (
   input: string | URL,
@@ -45,9 +50,29 @@ export interface DingTalkWorkNoticeActionCard {
   title: string;
 }
 
+export interface DingTalkWorkNoticeOaFormItem {
+  key: string;
+  value: string;
+}
+
+export interface DingTalkWorkNoticeOaBody {
+  author?: string;
+  content: string;
+  form: DingTalkWorkNoticeOaFormItem[];
+  title: string;
+}
+
+export interface DingTalkWorkNoticeOa {
+  body: DingTalkWorkNoticeOaBody;
+  head: { bgcolor: string; text: string };
+  /** Absolute deep link (https / dingtalk). Reminders omit this. */
+  messageUrl?: string;
+}
+
 export type SendWorkNoticeInput =
   | { actionCard: DingTalkWorkNoticeActionCard; staffIds: string[] }
-  | { markdown: DingTalkWorkNoticeMarkdown; staffIds: string[] };
+  | { markdown: DingTalkWorkNoticeMarkdown; staffIds: string[] }
+  | { oa: DingTalkWorkNoticeOa; staffIds: string[] };
 
 export interface SendWorkNoticeResult {
   taskId: string;
@@ -201,6 +226,51 @@ export const readNotifyAppFromProviderRow = (row: {
 export const resolveNotifyAppConfig = async (): Promise<DingTalkNotifyAppConfig | null> => {
   const config = await getMessengerDingTalkConfig();
   return readNotifyAppFromMessengerConfig(config);
+};
+
+const normalizeBrandKey = (name: string): string => name.replaceAll(/\s+/g, '').toLowerCase();
+
+/** Built-in Latin product names — never use these alone as OA `head.text`. */
+const LATIN_BRAND_HEAD_KEYS = new Set(['aihub', 'lobehub', 'lobechat']);
+
+/**
+ * OA `head.text`: published platform branding name (login / 通用设置 site title)
+ * when set and non-empty, else 「AI 助手」. Never the Latin brand "AIHub" alone.
+ */
+export const resolveWorkNoticeHeadText = async (): Promise<string> => {
+  try {
+    const branding = await resolveServerRuntimeBranding();
+    const name = branding.name?.trim();
+    if (!name || LATIN_BRAND_HEAD_KEYS.has(normalizeBrandKey(name))) {
+      return DINGTALK_OA_HEAD_TEXT_FALLBACK;
+    }
+    return name;
+  } catch (error) {
+    log('resolveWorkNoticeHeadText failed: %O', error);
+    return DINGTALK_OA_HEAD_TEXT_FALLBACK;
+  }
+};
+
+export const buildOaWorkNoticePayload = (input: {
+  author?: string;
+  content: string;
+  form: DingTalkWorkNoticeOaFormItem[];
+  headText: string;
+  messageUrl?: string;
+  title: string;
+}): DingTalkWorkNoticeOa => {
+  const author = emptyToNull(input.author);
+  const messageUrl = emptyToNull(input.messageUrl) ?? undefined;
+  return {
+    body: {
+      content: input.content,
+      form: input.form,
+      title: input.title,
+      ...(author ? { author } : {}),
+    },
+    head: { bgcolor: DINGTALK_OA_HEAD_BGCOLOR, text: input.headText },
+    ...(messageUrl ? { messageUrl } : {}),
+  };
 };
 
 const doFetch: DingTalkNotifyFetch = (input, init) => globalThis.fetch(input, init);
@@ -509,6 +579,20 @@ const chunkIds = (ids: string[], size: number): string[][] => {
 };
 
 const buildWorkNoticeMsg = (input: SendWorkNoticeInput): Record<string, unknown> => {
+  if ('oa' in input) {
+    const { oa } = input;
+    const payload: Record<string, unknown> = {
+      body: {
+        content: oa.body.content,
+        form: oa.body.form,
+        title: oa.body.title,
+        ...(oa.body.author ? { author: oa.body.author } : {}),
+      },
+      head: { bgcolor: oa.head.bgcolor, text: oa.head.text },
+    };
+    if (oa.messageUrl) payload.message_url = oa.messageUrl;
+    return { msgtype: 'oa', oa: payload };
+  }
   if ('actionCard' in input) {
     const { actionCard } = input;
     return {

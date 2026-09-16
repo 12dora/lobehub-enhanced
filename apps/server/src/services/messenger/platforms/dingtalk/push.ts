@@ -10,7 +10,12 @@ import type { MessengerPushMessage, MessengerPushProvider, MessengerPushResult }
 import { registerMessengerPushProvider } from '../../push';
 import { resolveDingTalkBrandingDisplayName } from './branding';
 import { DINGTALK_CORP_ID_KEY, formatDingTalkViewInBrandingLabel } from './const';
-import { readNotifyAppFromMessengerConfig, sendWorkNotice } from './notifyApp';
+import {
+  buildOaWorkNoticePayload,
+  readNotifyAppFromMessengerConfig,
+  resolveWorkNoticeHeadText,
+  sendWorkNotice,
+} from './notifyApp';
 import { incrementDingTalkDailyCounter } from './redis';
 import { resolveDingTalkStaffId } from './resolveStaffId';
 
@@ -130,6 +135,38 @@ const wrapDingTalkPushButtonUrl = async (
   return buildDingTalkOpenAppUrl({ agentId, corpId, url: httpsSso });
 };
 
+const SHANGHAI_TZ = 'Asia/Shanghai';
+
+const formatShanghaiClock = (date: Date): string =>
+  new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    hourCycle: 'h23',
+    minute: '2-digit',
+    timeZone: SHANGHAI_TZ,
+  }).format(date);
+
+const taskNameFromPushMessage = (title: string, markdown: string): string => {
+  const bold = /^\*\*(.+?)\*\*/.exec(markdown.trim());
+  if (bold?.[1]?.trim()) return bold[1].trim();
+  const sep = title.lastIndexOf(' · ');
+  if (sep >= 0) {
+    const rest = title.slice(sep + 3).trim();
+    if (rest) return rest;
+  }
+  return title;
+};
+
+const clockFromMarkdownOrNow = (markdown: string, now: Date): string => {
+  const match = /(\d{2}:\d{2})\s*$/.exec(markdown);
+  return match?.[1] ?? formatShanghaiClock(now);
+};
+
+const oaMessageUrl = (url: string | null): string | undefined => {
+  if (!url) return undefined;
+  if (/^https?:\/\//i.test(url) || url.startsWith('dingtalk://')) return url;
+  return undefined;
+};
+
 class DingTalkMessengerPushProvider implements MessengerPushProvider {
   readonly platform = 'dingtalk' as const;
 
@@ -156,25 +193,17 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
         : null;
       const notifyApp = readNotifyAppFromMessengerConfig(config);
       if (notifyApp) {
-        const sent = wrappedUrl
-          ? await sendWorkNotice(
-              {
-                actionCard: {
-                  markdown,
-                  singleTitle: formatDingTalkViewInBrandingLabel(
-                    await resolveDingTalkBrandingDisplayName(),
-                  ),
-                  singleUrl: wrappedUrl,
-                  title,
-                },
-                staffIds: [staffId],
-              },
-              { config: notifyApp },
-            )
-          : await sendWorkNotice(
-              { markdown: { text: markdown, title }, staffIds: [staffId] },
-              { config: notifyApp },
-            );
+        const oa = buildOaWorkNoticePayload({
+          content: markdown,
+          form: [
+            { key: '任务', value: taskNameFromPushMessage(title, markdown) },
+            { key: '时间', value: clockFromMarkdownOrNow(markdown, new Date()) },
+          ],
+          headText: await resolveWorkNoticeHeadText(),
+          messageUrl: oaMessageUrl(wrappedUrl),
+          title,
+        });
+        const sent = await sendWorkNotice({ oa, staffIds: [staffId] }, { config: notifyApp });
         await incrementDingTalkDailyCounter('pushes');
         return { providerMessageId: sent[0]?.taskId, status: 'sent' };
       }
