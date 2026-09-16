@@ -473,11 +473,14 @@ export const createDingTalkReplySink = async (
 
   const sink: AgentReplySink = {
     onComplete: async (content, extras) => {
+      // Whitespace-only is not a real answer — recall/finalize still run,
+      // but markdown send no-ops on falsy text instead of a blank bubble.
+      const text = content.trim() ? content : '';
       if (mode === 'card') {
-        await finalizeCard(content);
+        await finalizeCard(text);
       } else {
         await recallThinking();
-        await sendDingTalkMarkdown(threadId, content);
+        await sendDingTalkMarkdown(threadId, text);
       }
       if (extras?.attachments?.length) {
         await sendOutboundAttachments(threadId, extras.attachments);

@@ -75,6 +75,18 @@ const readErrorBody = async (
   }
 };
 
+/**
+ * DingTalk recall may return HTTP 200 with `failedResult: { [processQueryKey]: reason }`
+ * (e.g. `notRevoke.all.messages`) instead of a non-OK status or `code`. Treat
+ * that as a failed recall without throwing so callers can still send the answer.
+ */
+const recallFailedResultKeys = (data: unknown): string[] => {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  const failedResult = (data as Record<string, unknown>).failedResult;
+  if (!failedResult || typeof failedResult !== 'object' || Array.isArray(failedResult)) return [];
+  return Object.keys(failedResult as Record<string, unknown>);
+};
+
 const throwApiError = async (method: string, path: string, response: Response): Promise<never> => {
   const body = await readErrorBody(response);
   const code = body.code ?? `http_${response.status}`;
@@ -309,19 +321,21 @@ export class DingTalkApiClient {
     const keys = params.processQueryKeys.filter(Boolean);
     if (keys.length === 0) return;
 
-    if (params.openConversationId) {
-      await this.call('POST', '/v1.0/robot/groupMessages/recall', {
-        openConversationId: params.openConversationId,
-        processQueryKeys: keys,
-        robotCode: params.robotCode,
-      });
-      return;
-    }
+    const data = params.openConversationId
+      ? await this.call('POST', '/v1.0/robot/groupMessages/recall', {
+          openConversationId: params.openConversationId,
+          processQueryKeys: keys,
+          robotCode: params.robotCode,
+        })
+      : await this.call('POST', '/v1.0/robot/otoMessages/batchRecall', {
+          processQueryKeys: keys,
+          robotCode: params.robotCode,
+        });
 
-    await this.call('POST', '/v1.0/robot/otoMessages/batchRecall', {
-      processQueryKeys: keys,
-      robotCode: params.robotCode,
-    });
+    const failedKeys = recallFailedResultKeys(data);
+    if (failedKeys.length > 0) {
+      console.warn('DingTalk recall failedResult keys=%O', failedKeys);
+    }
   }
 
   async downloadMessageFile(params: DingTalkDownloadFileParams): Promise<DingTalkDownloadedFile> {

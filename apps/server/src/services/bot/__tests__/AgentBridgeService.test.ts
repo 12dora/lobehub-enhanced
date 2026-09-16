@@ -531,6 +531,90 @@ describe('AgentBridgeService', () => {
       );
     });
 
+    it('completes the DingTalk sink on empty local-mode completion', async () => {
+      mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+      const onCompleteHook = vi.fn();
+      mockExecAgent.mockImplementation(
+        async (opts: {
+          hooks?: Array<{ handler?: (event: unknown) => Promise<void>; id?: string }>;
+        }) => {
+          const completion = opts.hooks?.find((hook) => hook.id === 'bot-completion');
+          await completion?.handler?.({
+            lastAssistantContent: '',
+            reason: 'completed',
+          });
+          return {
+            assistantMessageId: 'assistant-msg-1',
+            createdAt: new Date().toISOString(),
+            operationId: 'op-1',
+            topicId: 'topic-1',
+          };
+        },
+      );
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: onCompleteHook,
+        onError: vi.fn(),
+        onPartial: vi.fn(),
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: 'dingtalk:cid' } as any,
+        client,
+        replySink,
+      });
+
+      expect(onCompleteHook).toHaveBeenCalledWith('', expect.anything());
+      expect(thread.post).not.toHaveBeenCalled();
+    });
+
+    it('completes the DingTalk sink with empty string for whitespace-only content', async () => {
+      mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+      const onCompleteHook = vi.fn();
+      mockExecAgent.mockImplementation(
+        async (opts: {
+          hooks?: Array<{ handler?: (event: unknown) => Promise<void>; id?: string }>;
+        }) => {
+          const completion = opts.hooks?.find((hook) => hook.id === 'bot-completion');
+          await completion?.handler?.({
+            lastAssistantContent: '  \n',
+            reason: 'completed',
+          });
+          return {
+            assistantMessageId: 'assistant-msg-1',
+            createdAt: new Date().toISOString(),
+            operationId: 'op-1',
+            topicId: 'topic-1',
+          };
+        },
+      );
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: onCompleteHook,
+        onError: vi.fn(),
+        onPartial: vi.fn(),
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: 'dingtalk:cid' } as any,
+        client,
+        replySink,
+      });
+
+      expect(onCompleteHook).toHaveBeenCalledWith('', expect.anything());
+      expect(thread.post).not.toHaveBeenCalled();
+    });
+
     it('forwards resumeToolResult to execAgent', async () => {
       const service = new AgentBridgeService(FAKE_DB, USER_ID);
       const thread = createThread({ topicId: 'topic-1' });

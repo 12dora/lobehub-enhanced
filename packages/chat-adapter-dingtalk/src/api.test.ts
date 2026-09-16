@@ -268,6 +268,34 @@ describe('DingTalkApiClient', () => {
         robotCode: 'r',
       });
     });
+
+    it('logs warn and does not throw when recall returns 200 with failedResult', async () => {
+      withToken();
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ failedResult: { 'pqk-1': 'notRevoke.all.messages' } }),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await expect(
+        client.recallMessage({ processQueryKeys: ['pqk-1'], robotCode: 'r' }),
+      ).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith('DingTalk recall failedResult keys=%O', ['pqk-1']);
+      warn.mockRestore();
+    });
+
+    it('does not warn when recall 200 has an empty failedResult', async () => {
+      withToken();
+      fetchMock.mockResolvedValueOnce(jsonResponse({ failedResult: {} }));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await expect(
+        client.recallMessage({ processQueryKeys: ['pqk-1'], robotCode: 'r' }),
+      ).resolves.toBeUndefined();
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
   });
 
   describe('extractProcessQueryKey', () => {

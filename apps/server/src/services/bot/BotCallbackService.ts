@@ -480,12 +480,26 @@ export class BotCallbackService {
       const hasAttachments = !!attachments?.length;
       // Always complete the sink so the thinking placeholder is replaced even
       // when the model returned no text (`reason` is `done` or `completed`).
-      await dingtalkSink.onComplete?.(lastAssistantContent ?? '', {
+      // Pass `''` for whitespace-only content so markdown send no-ops after
+      // recall instead of posting a blank bubble.
+      await dingtalkSink.onComplete?.(hasText ? (lastAssistantContent ?? '') : '', {
         attachments: hasAttachments ? attachments : undefined,
       });
       if (!hasText && !hasAttachments) {
         log('handleCompletion: dingtalk sink completed with empty body');
       }
+      return;
+    }
+
+    // DingTalk cannot edit, and a missing sink means this process already
+    // delivered (or never ran `onStart`). Falling through to generic
+    // createMessage would duplicate the answer on webhook retry.
+    if (platformThreadId.startsWith('dingtalk:')) {
+      log(
+        'handleCompletion: dingtalk reply sink missing, skipping generic delivery for %s reason=%s',
+        platformThreadId,
+        reason,
+      );
       return;
     }
 

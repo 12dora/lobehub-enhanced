@@ -1381,6 +1381,44 @@ describe('BotCallbackService', () => {
     expect(mockEditMessage).not.toHaveBeenCalled();
   });
 
+  it('skips generic DingTalk delivery when the reply sink is missing', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(undefined);
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '答案',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        type: 'completion',
+      }),
+    );
+
+    expect(mockCreateMessage).not.toHaveBeenCalled();
+    expect(mockEditMessage).not.toHaveBeenCalled();
+  });
+
+  it('completes the DingTalk sink with empty string for whitespace-only content', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '\n  ',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        type: 'completion',
+      }),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith('', expect.anything());
+    expect(mockCreateMessage).not.toHaveBeenCalled();
+    expect(mockEditMessage).not.toHaveBeenCalled();
+  });
+
   it('prefixes DingTalk auto titles with DINGTALK_TOPIC_TITLE_PREFIX when the body omits topicTitlePrefix', async () => {
     const { DINGTALK_TOPIC_TITLE_PREFIX } =
       await import('@/server/services/messenger/platforms/dingtalk/const');

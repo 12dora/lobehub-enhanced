@@ -1527,18 +1527,27 @@ export class AgentBridgeService {
                   );
                   const hasText = !!lastAssistantContent;
                   const hasAttachments = !!lastChunkAttachments?.length;
+                  // Whitespace-only bodies are not real answers. Pass `''` so
+                  // DingTalk recall/finalize still run and markdown send no-ops
+                  // instead of posting a blank bubble.
+                  const sinkContent = lastAssistantContent?.trim() ? lastAssistantContent : '';
 
-                  if (replySink?.onComplete && (hasText || hasAttachments)) {
+                  // Always complete the sink so the thinking placeholder is
+                  // recalled/finalized even when the model returned no text
+                  // (`reason` is `done` or `completed`).
+                  if (replySink?.onComplete) {
                     try {
-                      await replySink.onComplete(lastAssistantContent ?? '', {
-                        attachments: event.attachments as AgentReplySinkAttachment[] | undefined,
+                      await replySink.onComplete(sinkContent, {
+                        attachments: hasAttachments
+                          ? (event.attachments as AgentReplySinkAttachment[] | undefined)
+                          : undefined,
                       });
                     } catch (error) {
                       log('executeWithCallback[local]: replySink.onComplete failed: %O', error);
                     }
                     log(
                       'executeWithCallback[local]: sink response (%d chars, %d attachments)',
-                      lastAssistantContent?.length ?? 0,
+                      sinkContent.length,
                       lastChunkAttachments?.length ?? 0,
                     );
                     resolve({
@@ -1547,7 +1556,7 @@ export class AgentBridgeService {
                       topicId: resolvedTopicId,
                     });
 
-                    if (resolvedTopicId && prompt && lastAssistantContent) {
+                    if (resolvedTopicId && prompt && sinkContent) {
                       const topicModel = new TopicModel(this.db, this.userId, this.workspaceId);
                       topicModel
                         .findById(resolvedTopicId)

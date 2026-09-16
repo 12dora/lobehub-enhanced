@@ -45,8 +45,12 @@ vi.mock('@/server/services/bot/platforms/dingtalk/sendAttachments', () => ({
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
-const { DingTalkCardUnavailableError, dtmdSendMessageUrl, getDingTalkSession } =
-  await import('@lobechat/chat-adapter-dingtalk');
+const {
+  DingTalkCardUnavailableError,
+  dtmdSendMessageUrl,
+  getDingTalkSession,
+  isSessionWebhookLive,
+} = await import('@lobechat/chat-adapter-dingtalk');
 const { sendDingTalkAttachments } =
   await import('@/server/services/bot/platforms/dingtalk/sendAttachments');
 const {
@@ -92,16 +96,36 @@ beforeEach(() => {
   recallMessage.mockResolvedValue(undefined);
   vi.mocked(getDingTalkSession).mockReset();
   vi.mocked(getDingTalkSession).mockReturnValue(undefined);
+  vi.mocked(isSessionWebhookLive).mockReturnValue(false);
   mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
 });
 
 describe('DingTalk AI-card reply sink', () => {
   it('falls back to text when card create fails', async () => {
     create.mockRejectedValueOnce(new DingTalkCardUnavailableError('card down'));
+    const order: string[] = [];
+    sendOtoMessage.mockImplementation(async (params: { msgParam: string }) => {
+      const text = (JSON.parse(params.msgParam) as { text: string }).text;
+      order.push(text === DINGTALK_THINKING_REPLY ? 'thinking' : 'answer');
+      return { processQueryKey: 'pqk-1' };
+    });
+    recallMessage.mockImplementation(async () => {
+      order.push('recall');
+    });
     const sink = await createDingTalkReplySink('dingtalk:cid');
     await sink?.onStart?.();
     await sink?.onComplete?.('final markdown');
     expect(finalize).not.toHaveBeenCalled();
+    expect(order).toEqual(['thinking', 'recall', 'answer']);
+    expect(recallMessage).toHaveBeenCalledWith({
+      openConversationId: undefined,
+      processQueryKeys: ['pqk-1'],
+      robotCode: 'robot',
+    });
+    const answerParam = JSON.parse(
+      (sendOtoMessage.mock.calls[1] as [{ msgParam: string }])[0].msgParam,
+    ) as { text: string };
+    expect(answerParam.text).toBe('final markdown');
   });
 
   it('finalizes the card with error text so it is never left open', async () => {
@@ -194,6 +218,46 @@ describe('DingTalk markdown thinking placeholder', () => {
       processQueryKeys: ['pqk-g1'],
       robotCode: 'robot',
     });
+  });
+
+  it('sends recallable thinking via robot API even when the session webhook is live', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    vi.mocked(isSessionWebhookLive).mockReturnValue(true);
+    vi.mocked(getDingTalkSession).mockReturnValue({
+      sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+    } as any);
+
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+
+    expect(sendBySessionWebhook).not.toHaveBeenCalled();
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    const thinkingParam = JSON.parse(
+      (sendOtoMessage.mock.calls[0] as [{ msgParam: string }])[0].msgParam,
+    ) as { text: string };
+    expect(thinkingParam.text).toBe(DINGTALK_THINKING_REPLY);
+
+    await sink?.onComplete?.('最终回答');
+    expect(recallMessage).toHaveBeenCalledWith({
+      openConversationId: undefined,
+      processQueryKeys: ['pqk-1'],
+      robotCode: 'robot',
+    });
+    // Answer is not recallable, so it may use the live session webhook.
+    expect(sendBySessionWebhook).toHaveBeenCalled();
+  });
+
+  it('recalls thinking and does not post a whitespace-only answer', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await sink?.onComplete?.('\n  ');
+    expect(recallMessage).toHaveBeenCalledWith({
+      openConversationId: undefined,
+      processQueryKeys: ['pqk-1'],
+      robotCode: 'robot',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
   });
 });
 
