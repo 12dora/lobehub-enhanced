@@ -66,7 +66,7 @@ const ReminderRecipients = memo<ReminderRecipientsProps>(
           </Tag>
         ))}
         {overflow.length > 0 && (
-          <Tooltip title={overflow.join('，')}>
+          <Tooltip title={overflow.join(t('reminderList.repeat.separator'))}>
             <Tag size={'small'}>
               {t('reminderList.recipients.more', { count: overflow.length })}
             </Tag>

@@ -137,11 +137,16 @@ describe('DingTalkDirectoryModel', () => {
     it('matches 胡玉琴A by name, full pinyin, prefix, and initials', async () => {
       for (const q of ['胡玉琴A', '胡玉', 'huyuqina', 'huyuqin', 'hyqa', 'hyq']) {
         const result = await model.search(q);
-        expect(
-          result.users.map((row) => row.staffId),
-          q,
-        ).toEqual(expect.arrayContaining(['staff_hyq_a', 'staff_hyq_b']));
+        expect(result.users.map((row) => row.staffId).sort(), q).toEqual([
+          'staff_hyq_a',
+          'staff_hyq_b',
+        ]);
       }
+    });
+
+    it('does not match initials by contains (yqa is not a prefix of hyqa)', async () => {
+      const result = await model.search('yqa');
+      expect(result.users).toEqual([]);
     });
 
     it('returns both same-name users with different dept paths', async () => {

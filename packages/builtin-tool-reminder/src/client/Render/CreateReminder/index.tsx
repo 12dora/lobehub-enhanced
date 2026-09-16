@@ -57,7 +57,7 @@ export const CreateReminderRender = memo<
 
   if (!reminder) return null;
 
-  const repeatSummary = formatRepeatSummary(reminder.repeat, tChat);
+  const repeatSummary = formatRepeatSummary(reminder.repeat ?? reminder.repeatRule, tChat);
 
   return (
     <ReminderCard

@@ -11,6 +11,7 @@ import SearchDirectoryRender from './SearchDirectory';
  * the payload shape; the components below take `BuiltinRenderProps`).
  */
 export interface ReminderRenderProps {
+  audience?: Array<{ deptId: string; memberCount: number; name: string }>;
   hits?: {
     departments?: Array<{
       deptId: string;
@@ -25,9 +26,7 @@ export interface ReminderRenderProps {
       staffId: string;
     }>;
   };
-  needsConfirmation?: {
-    audience: Array<{ deptId: string; memberCount: number; name: string }>;
-  };
+  needsConfirmation?: boolean;
   reminder?: {
     content: string;
     creatorName: string;
@@ -40,6 +39,10 @@ export interface ReminderRenderProps {
       memberCount?: number | null;
     }>;
     repeat?: {
+      freq: 'daily' | 'monthly' | 'weekly';
+      time: string;
+    } | null;
+    repeatRule?: {
       freq: 'daily' | 'monthly' | 'weekly';
       time: string;
     } | null;

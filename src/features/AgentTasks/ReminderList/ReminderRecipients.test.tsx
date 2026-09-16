@@ -75,6 +75,10 @@ describe('ReminderRecipients', () => {
     expect(chips).toHaveLength(7);
     expect(chips.at(-1)?.textContent).toBe('+3');
     expect(chips[5]).toHaveTextContent('@员工5 · 安环部');
+    expect(screen.getByText('+3').parentElement).toHaveAttribute(
+      'data-tooltip',
+      '@员工6 · 安环部、@员工7 · 安环部、@员工8 · 安环部',
+    );
   });
 
   it('honours a custom chip limit', () => {

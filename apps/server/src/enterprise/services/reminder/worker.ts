@@ -53,6 +53,7 @@ export const REMINDER_SWEEP_LOCK_TTL_SECONDS = 5 * 60;
 export const REMINDER_SWEEP_INTERVAL_MS = 60_000;
 export const REMINDER_SWEEP_DUE_LIMIT = 50;
 export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
+export const INACTIVE_DELIVERY_REASON = 'inactive';
 export const REMINDER_OA_BODY_TITLE = '定时提醒';
 
 const noopRelease = async (): Promise<void> => {};
@@ -177,8 +178,9 @@ const expandStaffIds = async (
     getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
     subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
   },
-): Promise<string[]> => {
-  const staffIds = new Set<string>();
+): Promise<{ activeIds: string[]; inactiveIds: string[] }> => {
+  const activeIds = new Set<string>();
+  const inactiveIds = new Set<string>();
   const directIds: string[] = [];
 
   for (const recipient of recipients) {
@@ -186,19 +188,23 @@ const expandStaffIds = async (
       directIds.push(recipient.staffId);
     } else if (recipient.kind === 'department' && recipient.deptId) {
       const members = await deps.subtreeMemberStaffIds(recipient.deptId);
-      for (const staffId of members) staffIds.add(staffId);
+      for (const staffId of members) activeIds.add(staffId);
     }
   }
 
   if (directIds.length > 0) {
     const users = await deps.getUsers([...new Set(directIds)]);
-    const active = new Set(users.filter((user) => user.active).map((user) => user.staffId));
+    const byId = new Map(users.map((user) => [user.staffId, user]));
     for (const staffId of directIds) {
-      if (active.has(staffId)) staffIds.add(staffId);
+      const user = byId.get(staffId);
+      if (user?.active) activeIds.add(staffId);
+      else inactiveIds.add(staffId);
     }
   }
 
-  return [...staffIds];
+  for (const staffId of activeIds) inactiveIds.delete(staffId);
+
+  return { activeIds: [...activeIds], inactiveIds: [...inactiveIds] };
 };
 
 const deliverChunk = async (input: {
@@ -346,7 +352,7 @@ const fireOneReminder = async (
     subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
   },
 ): Promise<void> => {
-  const staffIds = await expandStaffIds(recipients, deps);
+  const { activeIds: staffIds, inactiveIds } = await expandStaffIds(recipients, deps);
   const tz = reminder.timezone || REMINDER_DEFAULT_TZ;
   const inboxBody = buildReminderNotice({
     content: reminder.content,
@@ -365,13 +371,39 @@ const fireOneReminder = async (
   });
   const userIds = new Map<string, string>();
   await Promise.all(
-    staffIds.map(async (staffId) => {
+    [...staffIds, ...inactiveIds].map(async (staffId) => {
       const userId = await deps.resolveUserId(staffId);
       if (userId) userIds.set(staffId, userId);
     }),
   );
 
-  const deliveries: ReminderFireDeliveryInput[] = [];
+  const deliveries: ReminderFireDeliveryInput[] = inactiveIds.map((staffId) => ({
+    failedReason: INACTIVE_DELIVERY_REASON,
+    providerTaskId: null,
+    staffId,
+    status: 'skipped' as const,
+    userId: userIds.get(staffId) ?? null,
+  }));
+
+  const next = reminder.repeatRule
+    ? nextFireAt(reminder.repeatRule as ReminderRepeatRule, deps.now, tz)
+    : null;
+  const resolveStatus = (hasActive: boolean) => {
+    if (next) return 'scheduled' as const;
+    if (reminder.repeatRule) return 'expired' as const;
+    return hasActive ? ('sent' as const) : ('failed' as const);
+  };
+
+  if (staffIds.length === 0) {
+    await deps.recordFire(db, {
+      deliveries,
+      firedAt: deps.now,
+      nextFireAt: next,
+      reminderId: reminder.id,
+      status: resolveStatus(false),
+    });
+    return;
+  }
 
   if (!deps.notifyConfigured) {
     for (const staffId of staffIds) {
@@ -399,15 +431,13 @@ const fireOneReminder = async (
   }
 
   const firedAt = deps.now;
-  const next = reminder.repeatRule
-    ? nextFireAt(reminder.repeatRule as ReminderRepeatRule, firedAt, tz)
-    : null;
 
   await deps.recordFire(db, {
     deliveries,
     firedAt,
     nextFireAt: next,
     reminderId: reminder.id,
+    status: resolveStatus(true),
   });
 
   const dedupeKey = `reminder:${reminder.id}:${firedAt.toISOString()}`;

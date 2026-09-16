@@ -16,7 +16,7 @@ const log = debug('lobe-server:messenger:dingtalk:directory-sync');
 
 export const DINGTALK_DIRECTORY_STATUS_KEY = 'messenger:dingtalk:directory-status';
 export const DINGTALK_DIRECTORY_SYNC_LOCK_KEY = 'messenger:dingtalk:directory-sync-lock';
-export const DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS = 10 * 60;
+export const DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS = 30 * 60;
 export const DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS = 60_000;
 export const DINGTALK_DIRECTORY_SYNC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -273,6 +273,8 @@ export const runGuardedDirectorySync = async (
 let started = false;
 let bootTimer: ReturnType<typeof setTimeout> | undefined;
 let interval: ReturnType<typeof setInterval> | undefined;
+
+export const isDingTalkDirectorySyncWorkerStarted = (): boolean => started;
 
 export const isDingTalkDirectorySyncWorkerRuntime = (
   env: Partial<NodeJS.ProcessEnv> = process.env,

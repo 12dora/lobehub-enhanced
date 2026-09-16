@@ -29,10 +29,17 @@ const CreatedReminderItem = memo<CreatedReminderItemProps>(({ onCancel, reminder
     () => formatRepeatSummary(reminder.repeatRule, t),
     [reminder.repeatRule, t],
   );
-  const fireAt = formatReminderTime(
-    reminder.fireAt,
-    reminder.timezone || DEFAULT_REMINDER_TIMEZONE,
-  );
+  const isScheduled = reminder.status === 'scheduled';
+  const sentLike =
+    reminder.status === 'sent' || reminder.status === 'failed' || reminder.status === 'expired';
+  const timeValue = isScheduled
+    ? reminder.fireAt
+    : (reminder.lastFiredAt ?? (sentLike ? reminder.fireAt : null));
+  const fireAt = formatReminderTime(timeValue, reminder.timezone || DEFAULT_REMINDER_TIMEZONE);
+  const showFireAt = Boolean(timeValue);
+  const fireAtLabel = isScheduled
+    ? t('reminderList.field.nextFire')
+    : t('reminderList.field.sentAt');
 
   const handleConfirm = useCallback(async () => {
     setCanceling(true);
@@ -48,7 +55,7 @@ const CreatedReminderItem = memo<CreatedReminderItemProps>(({ onCancel, reminder
       <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>
         <Flexbox horizontal align={'center'} gap={8} style={{ minWidth: 0 }} wrap={'wrap'}>
           <ReminderStatusTag status={reminder.status} />
-          <Text fontSize={13}>{`${t('reminderList.field.nextFire')} ${fireAt}`}</Text>
+          {showFireAt && <Text fontSize={13}>{`${fireAtLabel} ${fireAt}`}</Text>}
           {repeatSummary && (
             <Text fontSize={12} type={'secondary'}>
               {`${t('reminderList.field.repeat')} ${repeatSummary}`}

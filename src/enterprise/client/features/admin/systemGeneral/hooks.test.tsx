@@ -9,6 +9,8 @@ import type {
 } from '@/enterprise/client/services/adminSystem';
 
 import {
+  directoryStatusRefreshInterval,
+  IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS,
   useAdminBrowserProfile,
   useAdminBrowserProfileOptions,
   useAdminInfraSettings,
@@ -152,5 +154,16 @@ describe('useInfraDependencyProbe', () => {
       message: 'unreachable',
       ok: false,
     });
+  });
+});
+
+describe('directoryStatusRefreshInterval', () => {
+  it('polls only while the directory sync is running', () => {
+    expect(directoryStatusRefreshInterval({ state: 'running' })).toBe(
+      IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS,
+    );
+    expect(directoryStatusRefreshInterval({ state: 'ok' })).toBe(0);
+    expect(directoryStatusRefreshInterval({ state: 'error' })).toBe(0);
+    expect(directoryStatusRefreshInterval(undefined)).toBe(0);
   });
 });

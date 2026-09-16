@@ -119,7 +119,7 @@ CREATE INDEX IF NOT EXISTS "dingtalk_directory_users_name_pinyin_initials_idx" O
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "dingtalk_user_departments_dept_id_idx" ON "dingtalk_user_departments" USING btree ("dept_id");
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "reminder_deliveries_staff_id_fired_at_idx" ON "reminder_deliveries" USING btree ("staff_id","fired_at");
+CREATE INDEX IF NOT EXISTS "reminder_deliveries_staff_id_fired_at_idx" ON "reminder_deliveries" USING btree ("staff_id","fired_at" DESC);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "reminder_deliveries_reminder_id_idx" ON "reminder_deliveries" USING btree ("reminder_id");
 --> statement-breakpoint

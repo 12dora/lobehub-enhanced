@@ -208,15 +208,13 @@ const notifyService = (overrides: Partial<ImConnectorNotifyAppService> = {}) =>
   ({
     directoryStatus: vi.fn().mockResolvedValue(directoryStatus()),
     syncDirectory: vi.fn().mockResolvedValue(directoryStatus()),
-    testNotifyApp: vi
-      .fn()
-      .mockResolvedValue({
-        errorCode: null,
-        errorMessage: null,
-        latencyMs: 90,
-        ok: true,
-        robotName: null,
-      }),
+    testNotifyApp: vi.fn().mockResolvedValue({
+      errorCode: null,
+      errorMessage: null,
+      latencyMs: 90,
+      ok: true,
+      robotName: null,
+    }),
     ...overrides,
   }) as unknown as ImConnectorNotifyAppService & {
     directoryStatus: ReturnType<typeof vi.fn>;
@@ -772,6 +770,29 @@ describe('DingTalkConnectorCard', () => {
       );
     });
 
+    it('toasts an error when syncDirectory returns state error', async () => {
+      const notify = notifyService({
+        syncDirectory: vi
+          .fn()
+          .mockResolvedValue(directoryStatus({ lastError: 'errcode 60011', state: 'error' })),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'),
+        ).toBeTruthy(),
+      );
+
+      fireEvent.click(screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'));
+
+      await waitFor(() => expect(notify.syncDirectory).toHaveBeenCalledTimes(1));
+      expect(mocks.toastSuccess).not.toHaveBeenCalled();
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'systemGeneral.imConnectors.notifyApp.directory.error:errcode 60011',
+      );
+    });
+
     it('will not queue a second sync while one is already running', async () => {
       const notify = notifyService({
         directoryStatus: vi.fn().mockResolvedValue(directoryStatus({ state: 'running' })),
@@ -790,6 +811,19 @@ describe('DingTalkConnectorCard', () => {
 
       fireEvent.click(screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'));
       expect(notify.syncDirectory).not.toHaveBeenCalled();
+    });
+
+    it('shows a load-failed line when the directory status query fails', async () => {
+      const notify = notifyService({
+        directoryStatus: vi.fn().mockRejectedValue(new Error('boom')),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('systemGeneral.imConnectors.notifyApp.directory.loadFailed'),
+        ).toBeTruthy(),
+      );
     });
 
     it('reports a failed sync in the admin’s own words', async () => {

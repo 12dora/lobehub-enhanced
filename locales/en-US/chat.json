@@ -647,7 +647,7 @@
   "reminderList.recipients.user": "@{{name}} · {{dept}}",
   "reminderList.recipients.userOnly": "@{{name}}",
   "reminderList.repeat.daily": "Daily at {{time}}",
-  "reminderList.repeat.monthly": "Monthly on day {{days}} at {{time}}",
+  "reminderList.repeat.monthly": "Monthly on days {{days}} at {{time}}",
   "reminderList.repeat.separator": ", ",
   "reminderList.repeat.weekly": "Weekly on {{days}} at {{time}}",
   "reminderList.retry": "Retry",

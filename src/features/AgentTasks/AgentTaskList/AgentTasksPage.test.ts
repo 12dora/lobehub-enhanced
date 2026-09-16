@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
-import { getTaskCreateActionBehavior } from './AgentTasksPage';
+import {
+  getTaskCreateActionBehavior,
+  shouldRenderTaskListControls,
+  shouldRenderTasksEmptyHero,
+} from './AgentTasksPage';
 import { shouldRenderTaskAgentPanelToggle } from './taskAgentPanelToggle';
 
 describe('AgentTasksPage', () => {
+  describe('shouldRenderTaskListControls', () => {
+    it('hides filter/create/group config on the reminder surface', () => {
+      expect(shouldRenderTaskListControls('reminders')).toBe(false);
+      expect(shouldRenderTaskListControls('tasks')).toBe(true);
+    });
+  });
+
+  describe('shouldRenderTasksEmptyHero', () => {
+    it('does not show the empty-task hero on the reminder surface', () => {
+      expect(shouldRenderTasksEmptyHero('reminders', true)).toBe(false);
+      expect(shouldRenderTasksEmptyHero('tasks', true)).toBe(true);
+      expect(shouldRenderTasksEmptyHero('tasks', false)).toBe(false);
+    });
+  });
+
   describe('getTaskCreateActionBehavior', () => {
     it('should allow workspace viewers to reopen the collapsed inline entry in list view', () => {
       expect(

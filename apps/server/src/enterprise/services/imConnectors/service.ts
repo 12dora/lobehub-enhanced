@@ -7,6 +7,7 @@ import type { LobeChatDatabase, Transaction } from '@/database/type';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import {
+  invalidateNotifyAppToken,
   probeNotifyAppToken,
   readNotifyAppFromProviderRow,
 } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
@@ -32,7 +33,7 @@ import {
 } from '../../contracts/adminImConnectors';
 import { AUDIT_ACTION } from '../audit/auditActionCatalog';
 import type { DingTalkDirectoryStatus } from '../dingtalkDirectory/sync';
-import { readDingTalkDirectoryStatus, syncDingTalkDirectory } from '../dingtalkDirectory/sync';
+import { readDingTalkDirectoryStatus, runGuardedDirectorySync } from '../dingtalkDirectory/sync';
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
 import { PlatformAuditService } from '../platformAudit';
 import {
@@ -336,6 +337,7 @@ export class ImConnectorsAdminService {
     });
 
     invalidateMessengerConfigCache('dingtalk');
+    await invalidateNotifyAppToken();
 
     const row = await SystemBotProviderModel.findByPlatform(this.db, input.platform, gateKeeper);
     return toView(this.db, input.platform, row);
@@ -368,7 +370,11 @@ export class ImConnectorsAdminService {
 
   syncDirectory = async (): Promise<DingTalkDirectoryStatus> => {
     try {
-      await syncDingTalkDirectory(this.db);
+      const result = await runGuardedDirectorySync(this.db);
+      if (result === null) {
+        const status = await readDingTalkDirectoryStatus(this.db);
+        return { ...status, state: 'running' };
+      }
     } catch (error) {
       console.error('[admin.imConnectors.syncDirectory] failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',

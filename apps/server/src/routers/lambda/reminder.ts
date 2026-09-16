@@ -3,7 +3,11 @@ import { z } from 'zod';
 
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
-import { ReminderService, ReminderServiceError } from '@/server/enterprise/services/reminder';
+import {
+  REMINDER_NOT_FOUND,
+  ReminderService,
+  ReminderServiceError,
+} from '@/server/enterprise/services/reminder';
 
 const reminderProcedure = authedProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
@@ -36,7 +40,10 @@ const repeatSchema = z
 const mapError = (error: unknown, procedure: string): never => {
   if (error instanceof TRPCError) throw error;
   if (error instanceof ReminderServiceError) {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: error.code });
+    throw new TRPCError({
+      code: error.code === REMINDER_NOT_FOUND ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.code,
+    });
   }
   console.error(`[reminder:${procedure}]`, error);
   throw new TRPCError({

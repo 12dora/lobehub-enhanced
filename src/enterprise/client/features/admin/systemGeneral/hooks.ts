@@ -39,7 +39,11 @@ const DOCUMENT_RENDER_STATUS_REFRESH_MS = 15_000;
 const IM_CONNECTOR_STATUS_REFRESH_MS = 20_000;
 
 /** Only while a sync is running: a full directory pass takes seconds, not minutes. */
-const IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS = 10_000;
+export const IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS = 10_000;
+
+export const directoryStatusRefreshInterval = (
+  data?: Pick<AdminImConnectorDirectoryStatus, 'state'> | null,
+): number => (data?.state === 'running' ? IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS : 0);
 
 export const useAdminBrowserProfile = (enabled: boolean, service: AdminBrowserProfileService) =>
   useClientDataSWR(buildAdminBrowserProfileKey(enabled), () => service.getBrowserProfile(), {
@@ -152,8 +156,7 @@ export const useAdminImConnectorDirectoryStatus = (
     () => service.directoryStatus(),
     {
       keepPreviousData: true,
-      refreshInterval: (data?: AdminImConnectorDirectoryStatus) =>
-        data?.state === 'running' ? IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS : 0,
+      refreshInterval: directoryStatusRefreshInterval,
       refreshWhenHidden: false,
       revalidateOnFocus: false,
     },

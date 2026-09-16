@@ -187,5 +187,33 @@ describe('ReminderModel', () => {
 
       expect(updated.status).toBe('expired');
     });
+
+    it('marks a one-shot failed when status is passed and does not insert on a lost CAS', async () => {
+      const created = await createSample();
+      const firedAt = new Date('2026-09-17T01:00:01.000Z');
+
+      const failed = await ReminderModel.recordFire(serverDB, {
+        deliveries: [{ failedReason: 'inactive', staffId: 'staff_hyq_a', status: 'skipped' }],
+        firedAt,
+        nextFireAt: null,
+        reminderId: created.id,
+        status: 'failed',
+      });
+      expect(failed.status).toBe('failed');
+      expect(failed.firedCount).toBe(1);
+
+      await expect(
+        ReminderModel.recordFire(serverDB, {
+          deliveries: [{ staffId: 'staff_other', status: 'sent' }],
+          firedAt: new Date('2026-09-17T01:00:02.000Z'),
+          nextFireAt: null,
+          reminderId: created.id,
+        }),
+      ).rejects.toThrow(/not scheduled/);
+
+      const deliveries = await serverDB.select().from(reminderDeliveries);
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]).toMatchObject({ staffId: 'staff_hyq_a', status: 'skipped' });
+    });
   });
 });

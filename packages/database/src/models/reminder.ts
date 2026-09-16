@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, lte } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 
 import type {
   NewReminderDelivery,
@@ -68,6 +68,8 @@ export interface ReminderRecordFireInput {
   firedAt: Date;
   nextFireAt: Date | null;
   reminderId: string;
+  /** Overrides the one-shot `sent` / recurring `expired` default (e.g. all recipients inactive). */
+  status?: ReminderStatus;
 }
 
 const DEFAULT_LIST_LIMIT = 50;
@@ -185,11 +187,13 @@ export class ReminderModel {
     return row;
   };
 
-  hideReceived = async (deliveryId: string, staffId: string): Promise<void> => {
-    await this.db
+  hideReceived = async (deliveryId: string, staffId: string): Promise<boolean> => {
+    const rows = await this.db
       .update(reminderDeliveries)
       .set({ hiddenByRecipient: true })
-      .where(and(eq(reminderDeliveries.id, deliveryId), eq(reminderDeliveries.staffId, staffId)));
+      .where(and(eq(reminderDeliveries.id, deliveryId), eq(reminderDeliveries.staffId, staffId)))
+      .returning({ id: reminderDeliveries.id });
+    return rows.length > 0;
   };
 
   static listDue = async (
@@ -210,6 +214,35 @@ export class ReminderModel {
     input: ReminderRecordFireInput,
   ): Promise<ReminderItem> => {
     return db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(reminders)
+        .where(eq(reminders.id, input.reminderId))
+        .limit(1);
+
+      if (!existing) {
+        throw new Error(`Reminder not found: ${input.reminderId}`);
+      }
+
+      const nextStatus: ReminderStatus = input.nextFireAt
+        ? 'scheduled'
+        : (input.status ?? (existing.repeatRule ? 'expired' : 'sent'));
+
+      const [updated] = await tx
+        .update(reminders)
+        .set({
+          ...(input.nextFireAt ? { fireAt: input.nextFireAt } : {}),
+          firedCount: sql`${reminders.firedCount} + 1`,
+          lastFiredAt: input.firedAt,
+          status: nextStatus,
+        })
+        .where(and(eq(reminders.id, input.reminderId), eq(reminders.status, 'scheduled')))
+        .returning();
+
+      if (!updated) {
+        throw new Error(`Reminder not scheduled: ${input.reminderId}`);
+      }
+
       if (input.deliveries.length > 0) {
         const values: NewReminderDelivery[] = input.deliveries.map((delivery) => ({
           failedReason: delivery.failedReason ?? null,
@@ -223,33 +256,6 @@ export class ReminderModel {
         }));
         await tx.insert(reminderDeliveries).values(values);
       }
-
-      const [existing] = await tx
-        .select()
-        .from(reminders)
-        .where(eq(reminders.id, input.reminderId))
-        .limit(1);
-
-      if (!existing) {
-        throw new Error(`Reminder not found: ${input.reminderId}`);
-      }
-
-      const nextStatus: ReminderStatus = input.nextFireAt
-        ? 'scheduled'
-        : existing.repeatRule
-          ? 'expired'
-          : 'sent';
-
-      const [updated] = await tx
-        .update(reminders)
-        .set({
-          fireAt: input.nextFireAt ?? existing.fireAt,
-          firedCount: existing.firedCount + 1,
-          lastFiredAt: input.firedAt,
-          status: nextStatus,
-        })
-        .where(eq(reminders.id, input.reminderId))
-        .returning();
 
       return updated;
     });

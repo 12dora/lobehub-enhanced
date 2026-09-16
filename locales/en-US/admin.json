@@ -3309,6 +3309,7 @@
   "systemGeneral.imConnectors.hints.pushEnabled": "Deliver task reminders to linked employees.",
   "systemGeneral.imConnectors.hints.robotCode": "From the robot page of the app; it is usually the same as the Client ID.",
   "systemGeneral.imConnectors.notifyApp.directory.error": "Last sync failed: {{message}}",
+  "systemGeneral.imConnectors.notifyApp.directory.loadFailed": "Could not load directory status. Try again.",
   "systemGeneral.imConnectors.notifyApp.directory.never": "Not synced yet",
   "systemGeneral.imConnectors.notifyApp.directory.summary": "Directory: {{departments}} departments · {{users}} members · last synced {{time}}",
   "systemGeneral.imConnectors.notifyApp.directory.sync": "Sync now",

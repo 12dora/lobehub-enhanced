@@ -22,6 +22,7 @@ vi.mock('@/server/enterprise/services/reminder', () => {
     }
   }
   return {
+    REMINDER_NOT_FOUND: 'REMINDER_NOT_FOUND',
     ReminderService: vi.fn(() => ({
       cancel: mockCancel,
       create: mockCreate,
@@ -85,5 +86,14 @@ describe('reminderRouter', () => {
     mockSearchDirectory.mockResolvedValueOnce({ ambiguous: false, departments: [], users: [] });
     await createCaller().searchDirectory({ kind: 'user', q: '胡玉琴' });
     expect(mockSearchDirectory).toHaveBeenCalledWith('胡玉琴', 'user');
+  });
+
+  it('cancel maps REMINDER_NOT_FOUND to NOT_FOUND', async () => {
+    const { ReminderServiceError } = await import('@/server/enterprise/services/reminder');
+    mockCancel.mockRejectedValueOnce(new ReminderServiceError('REMINDER_NOT_FOUND'));
+    await expect(createCaller().cancel({ id: 'missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'REMINDER_NOT_FOUND',
+    });
   });
 });

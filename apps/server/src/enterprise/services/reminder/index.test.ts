@@ -49,8 +49,14 @@ vi.mock('./worker', () => ({
   stopReminderWorkerForTest: vi.fn(),
 }));
 
-const { ReminderService, ReminderServiceError, REMINDER_TIME_PAST, REMINDER_RECIPIENT_UNKNOWN } =
-  await import('./index');
+const {
+  REMINDER_CONTENT_EMPTY,
+  REMINDER_NOT_FOUND,
+  REMINDER_RECIPIENT_UNKNOWN,
+  REMINDER_TIME_PAST,
+  ReminderService,
+  ReminderServiceError,
+} = await import('./index');
 
 const futureIso = () => new Date(Date.now() + 60 * 60_000).toISOString();
 
@@ -63,6 +69,7 @@ describe('ReminderService', () => {
     mockGetDepartment.mockResolvedValue(undefined);
     mockSubtreeMemberStaffIds.mockResolvedValue([]);
     mockCreate.mockResolvedValue({ id: 'rem_1', recipients: [] });
+    mockHideReceived.mockResolvedValue(true);
     mockResolveStaffId.mockResolvedValue('staff_me');
   });
 
@@ -180,5 +187,32 @@ describe('ReminderService', () => {
     const service = new ReminderService({} as any, 'user_1');
     await expect(service.listReceived()).resolves.toEqual([]);
     expect(mockListReceived).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty content with REMINDER_CONTENT_EMPTY', async () => {
+    const service = new ReminderService({} as any, 'user_1');
+    await expect(
+      service.create({
+        content: '   ',
+        fireAt: futureIso(),
+        recipients: [{ kind: 'user', staffId: 'staff_hyq' }],
+      }),
+    ).rejects.toMatchObject({ code: REMINDER_CONTENT_EMPTY });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('hideReceived fails when the caller has no DingTalk staff id', async () => {
+    mockResolveStaffId.mockResolvedValue(null);
+    const service = new ReminderService({} as any, 'user_1');
+    await expect(service.hideReceived('del_1')).rejects.toMatchObject({ code: REMINDER_NOT_FOUND });
+    expect(mockHideReceived).not.toHaveBeenCalled();
+  });
+
+  it('hideReceived fails when no delivery row matches', async () => {
+    mockHideReceived.mockResolvedValue(false);
+    const service = new ReminderService({} as any, 'user_1');
+    await expect(service.hideReceived('del_missing')).rejects.toMatchObject({
+      code: REMINDER_NOT_FOUND,
+    });
   });
 });

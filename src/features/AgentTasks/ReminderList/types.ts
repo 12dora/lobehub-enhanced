@@ -40,6 +40,7 @@ export interface CreatedReminderView {
   creatorName: string;
   fireAt: Date | string;
   id: string;
+  lastFiredAt?: Date | string | null;
   recipients?: ReminderRecipientView[];
   repeatRule?: ReminderRepeatRule | null;
   status: ReminderStatus;

@@ -18,8 +18,10 @@ const removeImConnectorBinding = vi.hoisted(() => vi.fn());
 const listImConnectorBindings = vi.hoisted(() => vi.fn());
 const readDingTalkDirectoryStatus = vi.hoisted(() => vi.fn());
 const syncDingTalkDirectory = vi.hoisted(() => vi.fn());
+const runGuardedDirectorySync = vi.hoisted(() => vi.fn());
 const probeNotifyAppToken = vi.hoisted(() => vi.fn());
 const readNotifyAppFromProviderRow = vi.hoisted(() => vi.fn());
+const invalidateNotifyAppToken = vi.hoisted(() => vi.fn());
 const getImConnectorStats = vi.hoisted(() =>
   vi.fn(async () => ({ linkedUsers: 2, messages7d: 7, pushes7d: 1 })),
 );
@@ -81,10 +83,12 @@ vi.mock('./status', () => ({
 
 vi.mock('../dingtalkDirectory/sync', () => ({
   readDingTalkDirectoryStatus,
+  runGuardedDirectorySync,
   syncDingTalkDirectory,
 }));
 
 vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
+  invalidateNotifyAppToken,
   probeNotifyAppToken,
   readNotifyAppFromProviderRow,
 }));
@@ -178,6 +182,8 @@ describe('ImConnectorsAdminService', () => {
       users: 9,
     });
     syncDingTalkDirectory.mockResolvedValue({ departments: 2, durationMs: 12, users: 9 });
+    runGuardedDirectorySync.mockResolvedValue({ departments: 2, durationMs: 12, users: 9 });
+    invalidateNotifyAppToken.mockResolvedValue(undefined);
     probeNotifyAppToken.mockResolvedValue({
       errorCode: null,
       errorMessage: null,
@@ -228,6 +234,7 @@ describe('ImConnectorsAdminService', () => {
     ).toBeUndefined();
     expect(SystemBotProviderModel.upsertByPlatform).not.toHaveBeenCalled();
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
+    expect(invalidateNotifyAppToken).toHaveBeenCalled();
   });
 
   it('replaces the secret through upsertByPlatform', async () => {
@@ -300,6 +307,7 @@ describe('ImConnectorsAdminService', () => {
       }),
     );
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
+    expect(invalidateNotifyAppToken).toHaveBeenCalled();
   });
 
   it('rejects enabling without a stored or replaced secret', async () => {
@@ -658,12 +666,27 @@ describe('ImConnectorsAdminService', () => {
     });
   });
 
-  it('syncDirectory runs sync then returns the status', async () => {
+  it('syncDirectory runs the guarded lock then returns the status', async () => {
     const db = createDb();
     const service = new ImConnectorsAdminService(db);
     await expect(service.syncDirectory()).resolves.toMatchObject({ state: 'ok', users: 9 });
-    expect(syncDingTalkDirectory).toHaveBeenCalledWith(db);
+    expect(runGuardedDirectorySync).toHaveBeenCalledWith(db);
+    expect(syncDingTalkDirectory).not.toHaveBeenCalled();
     expect(readDingTalkDirectoryStatus).toHaveBeenCalledWith(db);
+  });
+
+  it('syncDirectory returns running when the directory lock is held', async () => {
+    runGuardedDirectorySync.mockResolvedValueOnce(null);
+    readDingTalkDirectoryStatus.mockResolvedValueOnce({
+      departments: 2,
+      lastError: null,
+      lastRunAt: '2026-09-16T04:00:00.000Z',
+      state: 'ok',
+      users: 9,
+    });
+    const service = new ImConnectorsAdminService(createDb());
+    await expect(service.syncDirectory()).resolves.toMatchObject({ state: 'running' });
+    expect(syncDingTalkDirectory).not.toHaveBeenCalled();
   });
 
   it('testNotifyApp uses stored notify credentials when the form omits them', async () => {

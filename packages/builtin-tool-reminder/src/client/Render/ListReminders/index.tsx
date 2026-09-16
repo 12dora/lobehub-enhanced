@@ -54,7 +54,7 @@ export const ListRemindersRender = memo<
   const { t } = useTranslation('plugin');
 
   const scope = pluginState?.scope === 'received' ? 'received' : 'created';
-  const rows = parseRows(content);
+  const rows = pluginState?.items ?? parseRows(content);
   const count = pluginState?.count ?? rows.length;
   const visible = rows.slice(0, MINI_LIST_LIMIT);
   const overflow = Math.max(count - visible.length, 0);

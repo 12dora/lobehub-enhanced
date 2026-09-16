@@ -50,6 +50,7 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
 
     const directory = useAdminImConnectorDirectoryStatus(true, service);
     const status = directory.data;
+    const directoryError = directory.error;
     const { mutate } = directory;
 
     const [testing, setTesting] = useState(false);
@@ -85,11 +86,21 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
           authMethod,
           mapErrorKey: () => 'systemGeneral.imConnectors.notifyApp.directory.syncFailed',
           run: async () => {
-            await service.syncDirectory();
+            const result = await service.syncDirectory();
             // The mutation answers with the status it reached, but a sync that is still running
             // keeps changing: the counters come from the polled read rather than from this answer.
             await mutate();
-            toast.success(t('systemGeneral.imConnectors.notifyApp.directory.synced'));
+            if (result.state === 'ok') {
+              toast.success(t('systemGeneral.imConnectors.notifyApp.directory.synced'));
+            } else {
+              toast.error(
+                result.lastError
+                  ? t('systemGeneral.imConnectors.notifyApp.directory.error', {
+                      message: result.lastError,
+                    })
+                  : t('systemGeneral.imConnectors.notifyApp.directory.syncFailed'),
+              );
+            }
           },
         });
       } finally {
@@ -173,7 +184,18 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
         ) : null}
 
         <div className={styles.notifyRow}>
-          <Text type="secondary">{directoryLine}</Text>
+          {directoryError && !status ? (
+            <>
+              <Text type="danger">
+                {t('systemGeneral.imConnectors.notifyApp.directory.loadFailed')}
+              </Text>
+              <Button size="small" onClick={() => void mutate()}>
+                {t('systemGeneral.retry')}
+              </Button>
+            </>
+          ) : (
+            <Text type="secondary">{directoryLine}</Text>
+          )}
           {status?.state === 'error' && status.lastError ? (
             <Text type="danger">
               {t('systemGeneral.imConnectors.notifyApp.directory.error', {

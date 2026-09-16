@@ -82,6 +82,8 @@ export interface ReminderView {
   id: string;
   recipients?: ReminderRecipientView[];
   repeat?: ReminderRepeatRule | null;
+  /** Alias used by DB / tRPC rows; prefer `repeat`. */
+  repeatRule?: ReminderRepeatRule | null;
   status?: string;
 }
 
@@ -118,6 +120,7 @@ export interface ReceivedReminderView {
 
 export interface ListRemindersState {
   count: number;
+  items?: Array<ReceivedReminderView | ReminderView>;
   scope: 'created' | 'received';
   success: boolean;
 }

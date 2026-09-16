@@ -21,10 +21,13 @@ const mocks = vi.hoisted(() => ({
   cancel: vi.fn(),
   created: [] as unknown[],
   createdError: undefined as unknown,
+  createdLoading: false,
   hideReceived: vi.fn(),
   listCreated: vi.fn(),
   listReceived: vi.fn(),
   received: [] as unknown[],
+  receivedError: undefined as unknown,
+  receivedLoading: false,
   refreshCreated: vi.fn(),
   refreshReceived: vi.fn(),
   toast: { error: vi.fn(), success: vi.fn() },
@@ -51,8 +54,8 @@ vi.mock('@/libs/swr', () => ({
 
     return {
       data: isCreated ? mocks.created : mocks.received,
-      error: isCreated ? mocks.createdError : undefined,
-      isLoading: false,
+      error: isCreated ? mocks.createdError : mocks.receivedError,
+      isLoading: isCreated ? mocks.createdLoading : mocks.receivedLoading,
       mutate: isCreated ? mocks.refreshCreated : mocks.refreshReceived,
     };
   },
@@ -93,7 +96,12 @@ vi.mock('antd', () => ({
   }) => (
     <span>
       {children}
-      <button type="button" onClick={onConfirm}>
+      <button
+        type="button"
+        onClick={() => {
+          void Promise.resolve(onConfirm?.()).catch(() => undefined);
+        }}
+      >
         {`confirm:${String(okText)}`}
       </button>
     </span>
@@ -119,6 +127,7 @@ const createdFixture: CreatedReminderView[] = [
     creatorName: '张伟',
     fireAt: '2026-09-10T01:00:00.000Z',
     id: 'rmd_2',
+    lastFiredAt: '2026-09-10T01:00:00.000Z',
     recipients: [],
     repeatRule: null,
     status: 'sent',
@@ -140,6 +149,9 @@ beforeEach(() => {
   mocks.created = createdFixture;
   mocks.received = receivedFixture;
   mocks.createdError = undefined;
+  mocks.receivedError = undefined;
+  mocks.createdLoading = false;
+  mocks.receivedLoading = false;
   mocks.listCreated.mockResolvedValue(createdFixture);
   mocks.listReceived.mockResolvedValue(receivedFixture);
   mocks.cancel.mockResolvedValue(undefined);
@@ -162,6 +174,7 @@ describe('ReminderList', () => {
     expect(screen.getByText('待发送')).toBeInTheDocument();
     expect(screen.getByText('已发送')).toBeInTheDocument();
     expect(screen.getByText('下次发送 2026-09-23 09:00')).toBeInTheDocument();
+    expect(screen.getByText('发送时间 2026-09-10 09:00')).toBeInTheDocument();
     expect(screen.getByText('周期 每周三 09:00')).toBeInTheDocument();
     expect(screen.getByText('@胡玉琴A · 安环部')).toBeInTheDocument();
     expect(screen.getByText('@安环部 · 12 人')).toBeInTheDocument();
@@ -227,5 +240,24 @@ describe('ReminderList', () => {
     expect(screen.getByText('加载定时提醒失败')).toBeInTheDocument();
     fireEvent.click(screen.getByText('重试'));
     expect(mocks.refreshCreated).toHaveBeenCalled();
+  });
+
+  it('shows a skeleton while the created list is loading', () => {
+    mocks.created = undefined as unknown as typeof mocks.created;
+    mocks.createdLoading = true;
+
+    render(<ReminderList />);
+
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
+  });
+
+  it('shows a retry affordance when the received section fails', () => {
+    mocks.receivedError = new Error('boom');
+
+    render(<ReminderList />);
+
+    expect(screen.getByText('加载定时提醒失败')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('重试'));
+    expect(mocks.refreshReceived).toHaveBeenCalled();
   });
 });

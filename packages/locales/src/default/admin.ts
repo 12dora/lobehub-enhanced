@@ -2392,6 +2392,8 @@ export default {
   'systemGeneral.imConnectors.notifyApp.directory.syncFailed':
     'Could not sync the directory. Try again.',
   'systemGeneral.imConnectors.notifyApp.directory.error': 'Last sync failed: {{message}}',
+  'systemGeneral.imConnectors.notifyApp.directory.loadFailed':
+    'Could not load directory status. Try again.',
   // 绑定用户 — which AIHub account a DingTalk user pushes to. Signing in through DingTalk binds
   // the account automatically; every other account (local / break-glass) is bound here by hand.
   'systemGeneral.imConnectors.bindings.bind': 'Bind user',

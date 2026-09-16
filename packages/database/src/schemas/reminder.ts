@@ -111,7 +111,7 @@ export const reminderDeliveries = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
-    index('reminder_deliveries_staff_id_fired_at_idx').on(t.staffId, t.firedAt),
+    index('reminder_deliveries_staff_id_fired_at_idx').on(t.staffId, t.firedAt.desc()),
     index('reminder_deliveries_reminder_id_idx').on(t.reminderId),
   ],
 );

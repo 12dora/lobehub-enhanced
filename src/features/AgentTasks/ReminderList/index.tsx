@@ -89,8 +89,9 @@ const ReminderList = memo(() => {
         await reminderService.cancel(id);
         toast.success(t('reminderList.toast.canceled'));
         await refreshCreated();
-      } catch {
+      } catch (error) {
         toast.error(t('reminderList.toast.cancelFailed'));
+        throw error;
       }
     },
     [refreshCreated, t],
@@ -102,8 +103,9 @@ const ReminderList = memo(() => {
         await reminderService.hideReceived(deliveryId);
         toast.success(t('reminderList.toast.deleted'));
         await refreshReceived();
-      } catch {
+      } catch (error) {
         toast.error(t('reminderList.toast.deleteFailed'));
+        throw error;
       }
     },
     [refreshReceived, t],

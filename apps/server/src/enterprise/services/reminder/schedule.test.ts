@@ -87,6 +87,12 @@ describe('reminder schedule math', () => {
       expect(fmt(next)).toBe('2026-10-07 09:00');
     });
 
+    it('advances Wednesday to Friday then Friday to Monday for Mon/Wed/Fri', () => {
+      const rule = { freq: 'weekly' as const, time: '09:00', weekdays: [1, 3, 5] };
+      expect(fmt(nextFireAt(rule, at('2026-09-16 09:00:00'), TZ))).toBe('2026-09-18 09:00');
+      expect(fmt(nextFireAt(rule, at('2026-09-18 09:00:00'), TZ))).toBe('2026-09-21 09:00');
+    });
+
     it('fires later today when the weekday still matches', () => {
       expect(
         fmt(

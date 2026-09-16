@@ -20,7 +20,20 @@ export const reminderRuntime: ServerRuntimeRegistration = {
     // R2 owns ReminderService. Loaded lazily so unit tests can inject a mock
     // via createReminderRuntime without requiring the service module.
     const { ReminderService } = await import('@/server/enterprise/services/reminder');
-    return createReminderRuntime(new ReminderService(serverDB, userId) as IReminderService);
+    const service = new ReminderService(serverDB, userId);
+    return createReminderRuntime({
+      cancel: (id) => service.cancel(id),
+      create: async (input) => {
+        const result = await service.create(input);
+        if ('needsConfirmation' in result && result.needsConfirmation) {
+          return result;
+        }
+        return result;
+      },
+      listCreated: (opts) => service.listCreated(opts),
+      listReceived: (opts) => service.listReceived(opts),
+      searchDirectory: (q, kind) => service.searchDirectory(q, kind),
+    });
   },
   identifier: ReminderIdentifier,
 };

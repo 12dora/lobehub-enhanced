@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockRedisGet = vi.fn();
 const mockRedisSet = vi.fn();
+const mockRedisDel = vi.fn();
 
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock('@/server/enterprise/services/branding/runtimeBranding', () => ({
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: vi.fn(() => ({
+    del: mockRedisDel,
     get: mockRedisGet,
     set: mockRedisSet,
   })),
@@ -37,6 +39,7 @@ const {
   DingTalkNotifyAppError,
   fetchDirectoryReplaceAllInput,
   getNotifyAppToken,
+  invalidateNotifyAppToken,
   listDepartments,
   listDeptUsers,
   probeNotifyAppToken,
@@ -70,6 +73,7 @@ beforeEach(() => {
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({ notifyApp: NOTIFY_APP } as never);
   mockRedisGet.mockReset().mockResolvedValue(null);
   mockRedisSet.mockReset().mockResolvedValue('OK');
+  mockRedisDel.mockReset().mockResolvedValue(1);
   tokenFetch
     .mockReset()
     .mockImplementation(async () =>
@@ -130,6 +134,26 @@ describe('getNotifyAppToken', () => {
     const token = await getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 });
     expect(token).toBe('cached');
     expect(tokenFetch).not.toHaveBeenCalled();
+  });
+
+  it('hydrates memory from Redis expiresAt and refetches after that instant', async () => {
+    mockRedisGet.mockResolvedValue(
+      JSON.stringify({ appKey: NOTIFY_APP.appKey, expiresAt: 2_000, token: 'cached' }),
+    );
+    await expect(getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 })).resolves.toBe('cached');
+    expect(tokenFetch).not.toHaveBeenCalled();
+
+    mockRedisGet.mockResolvedValueOnce(null);
+    await expect(getNotifyAppToken({ fetchImpl: tokenFetch, now: 2_000 })).resolves.toBe('tok');
+    expect(tokenFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidateNotifyAppToken drops memory so the next call refetches', async () => {
+    await getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 });
+    await invalidateNotifyAppToken();
+    expect(mockRedisDel).toHaveBeenCalledWith(DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+    await getNotifyAppToken({ fetchImpl: tokenFetch, now: 2_000 });
+    expect(tokenFetch).toHaveBeenCalledTimes(2);
   });
 
   it('throws with errcode/errmsg when gettoken fails', async () => {
@@ -272,6 +296,40 @@ describe('sendWorkNotice', () => {
       },
       userid_list: 'staff_hyq',
     });
+  });
+
+  it('evicts a cached token and retries once on asyncsend 40014', async () => {
+    let gettoken = 0;
+    let asyncsend = 0;
+    fetchImpl.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/gettoken')) {
+        gettoken += 1;
+        return jsonResponse({
+          access_token: gettoken === 1 ? 'stale' : 'fresh',
+          errcode: 0,
+          expires_in: 7200,
+        });
+      }
+      if (url.includes('/asyncsend_v2')) {
+        asyncsend += 1;
+        if (asyncsend === 1) {
+          return jsonResponse({ errcode: 40014, errmsg: '不合法的access_token' });
+        }
+        return jsonResponse({ errcode: 0, task_id: 77 });
+      }
+      return jsonResponse({ errcode: 1, errmsg: 'unexpected' }, 400);
+    });
+
+    await expect(
+      sendWorkNotice(
+        { markdown: { text: 'body', title: '提醒' }, staffIds: ['staff_1'] },
+        { fetchImpl },
+      ),
+    ).resolves.toEqual([{ taskId: '77' }]);
+    expect(asyncsend).toBe(2);
+    expect(gettoken).toBe(2);
+    expect(mockRedisDel).toHaveBeenCalledWith(DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
   });
 
   it('includes message_url on oa for task-owner deep links', async () => {
@@ -453,6 +511,44 @@ describe('directory fetch', () => {
       cursor: 0,
       size: 100,
     });
+  });
+
+  it('treats numeric has_more as more pages and stops when next_cursor does not move', async () => {
+    const paging = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      if (url.includes('/gettoken')) {
+        return jsonResponse({ access_token: 'tok', errcode: 0, expires_in: 7200 });
+      }
+      if (url.startsWith(DINGTALK_USER_LIST_URL) && body.cursor === 0) {
+        return jsonResponse({
+          errcode: 0,
+          result: {
+            has_more: 1,
+            list: [{ name: 'A', userid: 'a' }],
+            next_cursor: 20,
+          },
+        });
+      }
+      if (url.startsWith(DINGTALK_USER_LIST_URL)) {
+        return jsonResponse({
+          errcode: 0,
+          result: {
+            has_more: 1,
+            list: [{ name: 'B', userid: 'b' }],
+            next_cursor: 20,
+          },
+        });
+      }
+      return jsonResponse({ errcode: 1, errmsg: 'unexpected' }, 400);
+    });
+
+    const users = await listDeptUsers('3', { fetchImpl: paging });
+    expect(users.map((user) => user.staffId)).toEqual(['a', 'b']);
+    const userListCalls = paging.mock.calls.filter((entry) =>
+      String(entry[0]).startsWith(DINGTALK_USER_LIST_URL),
+    );
+    expect(userListCalls).toHaveLength(2);
   });
 
   it('maps replaceAll input: pinyin, path_names (root 1 skipped), leaf dept = longest path', async () => {

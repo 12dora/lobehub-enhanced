@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReminderItem, ReminderRecipientItem } from '@/database/schemas/reminder';
 
-import { NOTIFY_APP_NOT_CONFIGURED, runReminderSweep } from './worker';
+import { INACTIVE_DELIVERY_REASON, NOTIFY_APP_NOT_CONFIGURED, runReminderSweep } from './worker';
 
 const acquired = {
   release: vi.fn(async () => {}),
@@ -202,7 +202,78 @@ describe('runReminderSweep', () => {
     await run();
 
     expect(send).not.toHaveBeenCalled();
-    expect(recordFire.mock.calls[0][1].deliveries).toEqual([]);
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      {
+        failedReason: INACTIVE_DELIVERY_REASON,
+        providerTaskId: null,
+        staffId: 'staff_hyq',
+        status: 'skipped',
+        userId: null,
+      },
+    ]);
+    expect(recordFire.mock.calls[0][1].status).toBe('failed');
+    expect(recordFire.mock.calls[0][1].nextFireAt).toBeNull();
+  });
+
+  it('advances a recurring reminder when every recipient is inactive', async () => {
+    listDue.mockResolvedValue([
+      reminder({
+        repeatRule: { freq: 'daily', time: '09:00' },
+      }),
+    ]);
+    getUsers.mockResolvedValue([{ active: false, staffId: 'staff_hyq' }]);
+
+    await run();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      expect.objectContaining({
+        failedReason: INACTIVE_DELIVERY_REASON,
+        staffId: 'staff_hyq',
+        status: 'skipped',
+      }),
+    ]);
+    expect(recordFire.mock.calls[0][1].status).toBe('scheduled');
+    expect(recordFire.mock.calls[0][1].nextFireAt).toEqual(new Date('2026-09-17T01:00:00.000Z'));
+  });
+
+  it('skips the sweep when the lock is held', async () => {
+    const result = await runReminderSweep({} as any, {
+      acquireLock: async () => ({ release: vi.fn(), result: 'held' as const }),
+      listDue,
+      recordFire,
+      sendWorkNotice: send,
+    });
+    expect(result).toEqual({ counts: { failed: 0, fired: 0, skipped: 0 }, lock: 'held' });
+    expect(listDue).not.toHaveBeenCalled();
+    expect(recordFire).not.toHaveBeenCalled();
+  });
+
+  it('chunks more than 100 staffIds and still records the first chunk when the second send fails', async () => {
+    const staffIds = Array.from({ length: 101 }, (_, index) => `staff_${index}`);
+    loadRecipients.mockResolvedValue(
+      new Map([
+        ['rem_1', staffIds.map((staffId, index) => recipient({ id: `rr_${index}`, staffId }))],
+      ]),
+    );
+    getUsers.mockResolvedValue(staffIds.map((staffId) => ({ active: true, staffId })));
+    send
+      .mockResolvedValueOnce([{ taskId: 'task_ok' }])
+      .mockRejectedValueOnce(new Error('chunk boom'));
+
+    await run();
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0][0].staffIds).toHaveLength(100);
+    expect(send.mock.calls[1][0].staffIds).toHaveLength(1);
+    const deliveries = recordFire.mock.calls[0][1].deliveries as Array<{
+      staffId: string;
+      status: string;
+    }>;
+    expect(deliveries).toHaveLength(101);
+    expect(deliveries.filter((row) => row.status === 'sent')).toHaveLength(100);
+    expect(deliveries.filter((row) => row.status === 'failed')).toHaveLength(1);
+    expect(recordFire).toHaveBeenCalledTimes(1);
   });
 
   it('appends the repeat summary on the 时间 form value', async () => {

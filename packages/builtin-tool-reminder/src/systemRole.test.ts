@@ -22,9 +22,10 @@ describe('reminder systemRole', () => {
     expect(systemPrompt).toContain('提前');
   });
 
-  it('maps 每周/每天 to repeat and relays department confirmation', () => {
+  it('maps 每周/每天/每月 to repeat and relays department confirmation', () => {
     expect(systemPrompt).toContain('每周');
     expect(systemPrompt).toContain('每天');
+    expect(systemPrompt).toContain('每月');
     expect(systemPrompt).toContain('needsConfirmation');
     expect(systemPrompt).toContain('30');
   });

@@ -155,6 +155,21 @@ export const resetNotifyAppStateForTest = (): void => {
   memoryToken = null;
 };
 
+const isInvalidAccessTokenErrcode = (errcode: unknown): boolean =>
+  errcode === 40014 || errcode === '40014';
+
+/** Drop the in-process + Redis notify-app token so the next gettoken refetch is forced. */
+export const invalidateNotifyAppToken = async (): Promise<void> => {
+  memoryToken = null;
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return;
+  try {
+    await redis.del(DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+  } catch (error) {
+    log('invalidateNotifyAppToken failed: %O', error);
+  }
+};
+
 const emptyToNull = (value: string | null | undefined): string | null => {
   if (!value) return null;
   const trimmed = value.trim();
@@ -377,7 +392,7 @@ const fetchOapiGettoken = async (
   return { expiresAt: now + ttlMs, token };
 };
 
-const readRedisToken = async (appKey: string, now: number): Promise<string | null> => {
+const readRedisToken = async (appKey: string, now: number): Promise<NotifyTokenCache | null> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return null;
   try {
@@ -389,7 +404,7 @@ const readRedisToken = async (appKey: string, now: number): Promise<string | nul
     const token = pickTrimmedString(parsed.token);
     const expiresAt = typeof parsed.expiresAt === 'number' ? parsed.expiresAt : 0;
     if (!token || expiresAt <= now) return null;
-    return token;
+    return { appKey, expiresAt, token };
   } catch (error) {
     log('readRedisToken failed: %O', error);
     return null;
@@ -435,12 +450,8 @@ export const getNotifyAppToken = async (params?: {
     }
     const redisToken = await readRedisToken(config.appKey, now);
     if (redisToken) {
-      memoryToken = {
-        appKey: config.appKey,
-        expiresAt: now + DINGTALK_NOTIFY_TOKEN_CACHE_MS,
-        token: redisToken,
-      };
-      return redisToken;
+      memoryToken = redisToken;
+      return redisToken.token;
     }
   }
 
@@ -546,6 +557,31 @@ const oapiPost = async (
   return throwIfOapiFailed(url, response.ok, response.status, parsed);
 };
 
+const oapiPostWithTokenRetry = async (
+  url: string,
+  body: Record<string, unknown>,
+  ctx: {
+    config: DingTalkNotifyAppConfig;
+    fetchImpl: DingTalkNotifyFetch;
+    tokenRef: { current: string };
+  },
+): Promise<Record<string, unknown>> => {
+  try {
+    return await oapiPost(url, ctx.tokenRef.current, body, ctx.fetchImpl);
+  } catch (error) {
+    if (!(error instanceof DingTalkNotifyAppError) || !isInvalidAccessTokenErrcode(error.errcode)) {
+      throw error;
+    }
+    await invalidateNotifyAppToken();
+    ctx.tokenRef.current = await getNotifyAppToken({
+      config: ctx.config,
+      fetchImpl: ctx.fetchImpl,
+      skipCache: true,
+    });
+    return oapiPost(url, ctx.tokenRef.current, body, ctx.fetchImpl);
+  }
+};
+
 const parseAgentId = (agentId: string): number => {
   const numeric = Number(agentId);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -630,21 +666,20 @@ export const sendWorkNotice = async (
   if (staffIds.length === 0) return [];
 
   const fetchImpl = params?.fetchImpl ?? doFetch;
-  const token = await getNotifyAppToken({ config, fetchImpl });
+  const tokenRef = { current: await getNotifyAppToken({ config, fetchImpl }) };
   const agentId = parseAgentId(config.agentId);
   const msg = buildWorkNoticeMsg(input);
   const results: SendWorkNoticeResult[] = [];
 
   for (const chunk of chunkIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
-    const record = await oapiPost(
+    const record = await oapiPostWithTokenRetry(
       DINGTALK_ASYNCSEND_V2_URL,
-      token,
       {
         agent_id: agentId,
         msg,
         userid_list: chunk.join(','),
       },
-      fetchImpl,
+      { config, fetchImpl, tokenRef },
     );
     const taskIdRaw = record.task_id ?? record.taskId;
     const taskId =
@@ -714,13 +749,12 @@ export const listDepartments = async (params?: {
     );
   }
   const fetchImpl = params?.fetchImpl ?? doFetch;
-  const token = await getNotifyAppToken({ config, fetchImpl });
+  const tokenRef = { current: await getNotifyAppToken({ config, fetchImpl }) };
 
-  const rootRecord = await oapiPost(
+  const rootRecord = await oapiPostWithTokenRetry(
     DINGTALK_DEPT_GET_URL,
-    token,
     { dept_id: Number(DINGTALK_DIRECTORY_ROOT_DEPT_ID), language: 'zh_CN' },
-    fetchImpl,
+    { config, fetchImpl, tokenRef },
   );
   const root = mapDepartmentRecord(rootRecord.result) ?? {
     deptId: DINGTALK_DIRECTORY_ROOT_DEPT_ID,
@@ -736,11 +770,10 @@ export const listDepartments = async (params?: {
 
   while (queue.length > 0) {
     const deptId = queue.shift()!;
-    const record = await oapiPost(
+    const record = await oapiPostWithTokenRetry(
       DINGTALK_DEPT_LISTSUB_URL,
-      token,
       { dept_id: Number(deptId) },
-      fetchImpl,
+      { config, fetchImpl, tokenRef },
     );
     const children = Array.isArray(record.result) ? record.result : [];
     for (const child of children) {
@@ -770,21 +803,20 @@ export const listDeptUsers = async (
     );
   }
   const fetchImpl = params?.fetchImpl ?? doFetch;
-  const token = await getNotifyAppToken({ config, fetchImpl });
+  const tokenRef = { current: await getNotifyAppToken({ config, fetchImpl }) };
   const users: DingTalkRawDeptUser[] = [];
   let cursor = 0;
 
   for (;;) {
-    const record = await oapiPost(
+    const record = await oapiPostWithTokenRetry(
       DINGTALK_USER_LIST_URL,
-      token,
       {
         cursor,
         dept_id: Number(deptId),
         language: 'zh_CN',
         size: DINGTALK_USER_LIST_PAGE_SIZE,
       },
-      fetchImpl,
+      { config, fetchImpl, tokenRef },
     );
     const result = isRecord(record.result) ? record.result : {};
     const list = Array.isArray(result.list) ? result.list : [];
@@ -792,10 +824,14 @@ export const listDeptUsers = async (
       const mapped = mapDeptUserRecord(item);
       if (mapped) users.push(mapped);
     }
-    const hasMore = result.has_more === true;
+    const hasMore =
+      result.has_more === true ||
+      result.has_more === 1 ||
+      result.has_more === '1' ||
+      result.has_more === 'true';
     const nextCursor =
       typeof result.next_cursor === 'number' ? result.next_cursor : Number(result.next_cursor);
-    if (!hasMore || !Number.isFinite(nextCursor)) break;
+    if (!hasMore || !Number.isFinite(nextCursor) || nextCursor === cursor) break;
     cursor = nextCursor;
   }
 

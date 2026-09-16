@@ -28,8 +28,10 @@ const {
   acquireDirectorySyncLock,
   DINGTALK_DIRECTORY_STATUS_KEY,
   DINGTALK_DIRECTORY_SYNC_LOCK_KEY,
+  DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS,
   ensureDingTalkDirectorySyncWorkerStarted,
   isDingTalkDirectorySyncWorkerRuntime,
+  isDingTalkDirectorySyncWorkerStarted,
   readDingTalkDirectoryStatus,
   runGuardedDirectorySync,
   stopDingTalkDirectorySyncWorkerForTest,
@@ -195,9 +197,10 @@ describe('acquireDirectorySyncLock', () => {
       DINGTALK_DIRECTORY_SYNC_LOCK_KEY,
       expect.any(String),
       'EX',
-      expect.any(Number),
+      DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS,
       'NX',
     );
+    expect(DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS).toBeGreaterThanOrEqual(30 * 60);
   });
 });
 
@@ -214,8 +217,16 @@ describe('runGuardedDirectorySync', () => {
 
 describe('ensureDingTalkDirectorySyncWorkerStarted', () => {
   it('does not start without DATABASE_URL', () => {
-    expect(isDingTalkDirectorySyncWorkerRuntime({ DATABASE_URL: undefined })).toBe(false);
-    ensureDingTalkDirectorySyncWorkerStarted();
-    expect(vi.mocked(getServerDB)).not.toHaveBeenCalled();
+    const previous = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    try {
+      expect(isDingTalkDirectorySyncWorkerRuntime({ DATABASE_URL: undefined })).toBe(false);
+      ensureDingTalkDirectorySyncWorkerStarted();
+      expect(isDingTalkDirectorySyncWorkerStarted()).toBe(false);
+      expect(vi.mocked(getServerDB)).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previous;
+    }
   });
 });

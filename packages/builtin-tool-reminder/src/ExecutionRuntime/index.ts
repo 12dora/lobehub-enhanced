@@ -67,6 +67,18 @@ const formatRecipient = (recipient: NonNullable<ReminderView['recipients']>[numb
   return `@${recipient.displayName}${dept}`;
 };
 
+const toReminderView = (
+  row: ReminderView & { repeatRule?: ReminderView['repeat'] },
+): ReminderView => ({
+  content: row.content,
+  creatorName: row.creatorName,
+  fireAt: row.fireAt,
+  id: row.id,
+  recipients: row.recipients,
+  repeat: row.repeat ?? row.repeatRule ?? null,
+  status: row.status,
+});
+
 const hasAmbiguousUsers = (users: DirectoryUserHit[], flagged?: boolean): boolean => {
   if (flagged) return true;
   const counts = new Map<string, number>();
@@ -179,21 +191,22 @@ export class ReminderExecutionRuntime {
         };
       }
 
-      const recipients = (result.recipients ?? []).map(formatRecipient).join('、') || '（无）';
+      const reminder = toReminderView(result);
+      const recipients = (reminder.recipients ?? []).map(formatRecipient).join('、') || '（无）';
       const state: CreateReminderState = {
         needsConfirmation: false,
-        reminder: result,
+        reminder,
         success: true,
       };
       return {
         content: [
           '已创建定时提醒',
           `- 收件人: ${recipients}`,
-          `- 时间: ${formatFireAt(result.fireAt)}`,
-          `- 周期: ${formatRepeat(result.repeat)}`,
-          `- 内容: ${result.content}`,
-          `- id: ${result.id}`,
-          `- 设置人: ${result.creatorName}`,
+          `- 时间: ${formatFireAt(reminder.fireAt)}`,
+          `- 周期: ${formatRepeat(reminder.repeat)}`,
+          `- 内容: ${reminder.content}`,
+          `- id: ${reminder.id}`,
+          `- 设置人: ${reminder.creatorName}`,
         ].join('\n'),
         state,
         success: true,
@@ -220,7 +233,7 @@ export class ReminderExecutionRuntime {
       const scope = args.scope === 'received' ? 'received' : 'created';
       if (scope === 'received') {
         const items = await this.service.listReceived();
-        const state: ListRemindersState = { count: items.length, scope, success: true };
+        const state: ListRemindersState = { count: items.length, items, scope, success: true };
         return {
           content: JSON.stringify({ items, scope }, null, 2),
           state,
@@ -228,8 +241,8 @@ export class ReminderExecutionRuntime {
         };
       }
 
-      const items = await this.service.listCreated();
-      const state: ListRemindersState = { count: items.length, scope, success: true };
+      const items = (await this.service.listCreated()).map(toReminderView);
+      const state: ListRemindersState = { count: items.length, items, scope, success: true };
       return {
         content: JSON.stringify({ items, scope }, null, 2),
         state,

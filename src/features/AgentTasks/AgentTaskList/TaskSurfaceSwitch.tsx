@@ -40,6 +40,7 @@ const TaskSurfaceSwitch = memo<TaskSurfaceSwitchProps>(({ onChange, value }) => 
 
   return (
     <Segmented
+      aria-label={t('reminderList.tab.reminders')}
       options={options}
       size={'small'}
       value={value}

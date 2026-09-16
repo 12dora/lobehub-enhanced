@@ -101,6 +101,25 @@ describe('CreateReminderRender', () => {
     expect(screen.getByText('张伟')).toBeTruthy();
   });
 
+  it('reads repeatRule when the payload has no repeat alias', () => {
+    const state: CreateReminderState = {
+      needsConfirmation: false,
+      reminder: {
+        content: '周三例会材料准备',
+        creatorName: '张伟',
+        fireAt: '2026-09-23T01:00:00.000Z',
+        id: 'rmd_1',
+        recipients: [{ deptName: '安环部', displayName: '胡玉琴A', kind: 'user' }],
+        repeatRule: { freq: 'weekly', time: '09:00', weekdays: [3] },
+      },
+      success: true,
+    };
+
+    render(<CreateReminderRender {...renderProps(emptyCreateArgs, state)} />);
+
+    expect(screen.getByText('每周三 09:00')).toBeTruthy();
+  });
+
   it('renders the confirmation notice with department member counts', () => {
     const state: CreateReminderState = {
       audience: [
@@ -211,6 +230,25 @@ describe('ListRemindersRender', () => {
 
     expect(screen.getByText('我收到的提醒')).toBeTruthy();
     expect(screen.getByText('暂无定时提醒')).toBeTruthy();
+  });
+
+  it('renders rows from pluginState.items when content is not JSON', () => {
+    render(
+      <ListRemindersRender
+        {...renderProps(
+          {} satisfies ListRemindersParams,
+          {
+            count: 1,
+            items: [{ content: '例会材料', fireAt: '2026-09-23T01:00:00.000Z', id: 'rmd_1' }],
+            scope: 'created',
+            success: true,
+          } satisfies ListRemindersState,
+          '已创建定时提醒',
+        )}
+      />,
+    );
+
+    expect(screen.getByText('2026-09-23 09:00 · 例会材料')).toBeTruthy();
   });
 });
 

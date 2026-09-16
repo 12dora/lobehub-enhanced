@@ -26538,7 +26538,7 @@
             {
               "expression": "fired_at",
               "isExpression": false,
-              "asc": true,
+              "asc": false,
               "nulls": "last"
             }
           ],

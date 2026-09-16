@@ -40,6 +40,12 @@ interface TaskCreateActionBehaviorParams {
   viewMode: TaskViewMode;
 }
 
+export const shouldRenderTaskListControls = (surface: TaskSurface): boolean =>
+  surface !== 'reminders';
+
+export const shouldRenderTasksEmptyHero = (surface: TaskSurface, isEmptyHero: boolean): boolean =>
+  surface !== 'reminders' && isEmptyHero;
+
 export const getTaskCreateActionBehavior = ({
   canCreateTask,
   inlineCollapsed,
@@ -144,8 +150,8 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
   // The task-only view controls hide while 定时提醒 is the active surface.
   const headerActions = (
     <Flexbox horizontal align={'center'} gap={4}>
-      {!isReminderSurface && !agentId && <TaskListVisibilityFilter />}
-      {!isReminderSurface && (inlineCollapsed || viewMode === 'kanban') && (
+      {shouldRenderTaskListControls(surface) && !agentId && <TaskListVisibilityFilter />}
+      {shouldRenderTaskListControls(surface) && (inlineCollapsed || viewMode === 'kanban') && (
         <ActionIcon
           disabled={createActionBehavior.disabled}
           icon={Plus}
@@ -154,7 +160,9 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
           onClick={handleCreateTask}
         />
       )}
-      {!isReminderSurface && <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />}
+      {shouldRenderTaskListControls(surface) && (
+        <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />
+      )}
       <ReminderSettingsButton />
       <InboxButton />
       {showTaskAgentPanelToggle && (
@@ -189,7 +197,7 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
       )}
       {isReminderSurface ? (
         <ReminderList />
-      ) : isEmptyHero ? (
+      ) : shouldRenderTasksEmptyHero(surface, isEmptyHero) ? (
         <EmptyState agentId={agentId} />
       ) : viewMode === 'kanban' ? (
         <Flexbox flex={1} style={{ overflowX: 'auto', overflowY: 'hidden' }}>

@@ -118,4 +118,37 @@ describe('createReminderRuntime', () => {
     expect(result.content).toContain('交安全报告');
     expect(result.content).toContain('rem-1');
   });
+
+  it('maps repeatRule onto repeat so the weekly summary is not 一次性', async () => {
+    const create = vi.fn().mockResolvedValue({
+      content: '交安全报告',
+      creatorName: '张三',
+      fireAt,
+      id: 'rem-1',
+      recipients: [
+        {
+          deptName: '安环部',
+          displayName: '胡玉琴A',
+          kind: 'user',
+          staffId: 'staff-1',
+        },
+      ],
+      repeatRule: { freq: 'weekly', time: '09:00', weekdays: [3] },
+    });
+    const runtime = createReminderRuntime(makeService({ create }));
+
+    const result = await runtime.createReminder({
+      content: '交安全报告',
+      fireAt,
+      recipients: [{ kind: 'user', staffId: 'staff-1' }],
+      repeat: { freq: 'weekly', time: '09:00', weekdays: [3] },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('每周三 09:00');
+    expect(result.content).not.toContain('一次性');
+    expect(result.state).toMatchObject({
+      reminder: { id: 'rem-1', repeat: { freq: 'weekly', time: '09:00', weekdays: [3] } },
+    });
+  });
 });

@@ -37,11 +37,16 @@ const log = debug('lobe-server:reminder');
 
 export const REMINDER_TIME_PAST = 'REMINDER_TIME_PAST';
 export const REMINDER_RECIPIENT_UNKNOWN = 'REMINDER_RECIPIENT_UNKNOWN';
+export const REMINDER_CONTENT_EMPTY = 'REMINDER_CONTENT_EMPTY';
+export const REMINDER_NOT_FOUND = 'REMINDER_NOT_FOUND';
 export const REMINDER_FIRE_AT_LEAD_MS = 30_000;
 export const REMINDER_LARGE_AUDIENCE_THRESHOLD = 30;
 
 export type ReminderServiceErrorCode =
-  typeof REMINDER_RECIPIENT_UNKNOWN | typeof REMINDER_TIME_PAST;
+  | typeof REMINDER_CONTENT_EMPTY
+  | typeof REMINDER_NOT_FOUND
+  | typeof REMINDER_RECIPIENT_UNKNOWN
+  | typeof REMINDER_TIME_PAST;
 
 export class ReminderServiceError extends Error {
   readonly code: ReminderServiceErrorCode;
@@ -174,7 +179,7 @@ export class ReminderService {
 
     const content = input.content.trim();
     if (!content) {
-      throw new ReminderServiceError(REMINDER_RECIPIENT_UNKNOWN, 'Reminder content is required');
+      throw new ReminderServiceError(REMINDER_CONTENT_EMPTY, 'Reminder content is required');
     }
 
     const snapshots = await this.resolveRecipientSnapshots(input.recipients);
@@ -218,12 +223,22 @@ export class ReminderService {
     return this.model.listReceived({ limit: opts?.limit, staffId });
   };
 
-  cancel = async (id: string) => this.model.cancel(id);
+  cancel = async (id: string) => {
+    try {
+      return await this.model.cancel(id);
+    } catch (error) {
+      if (error instanceof Error && /not found/i.test(error.message)) {
+        throw new ReminderServiceError(REMINDER_NOT_FOUND);
+      }
+      throw error;
+    }
+  };
 
   hideReceived = async (deliveryId: string): Promise<void> => {
     const staffId = await resolveDingTalkStaffId(this.db, this.userId);
-    if (!staffId) return;
-    await this.model.hideReceived(deliveryId, staffId);
+    if (!staffId) throw new ReminderServiceError(REMINDER_NOT_FOUND);
+    const hidden = await this.model.hideReceived(deliveryId, staffId);
+    if (!hidden) throw new ReminderServiceError(REMINDER_NOT_FOUND);
   };
 
   private resolveRecipientSnapshots = async (

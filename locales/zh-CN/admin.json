@@ -3309,6 +3309,7 @@
   "systemGeneral.imConnectors.hints.pushEnabled": "向已绑定员工推送任务提醒。",
   "systemGeneral.imConnectors.hints.robotCode": "取自应用的机器人页面，通常与 Client ID 相同。",
   "systemGeneral.imConnectors.notifyApp.directory.error": "上次同步失败：{{message}}",
+  "systemGeneral.imConnectors.notifyApp.directory.loadFailed": "无法加载通讯录状态，请重试。",
   "systemGeneral.imConnectors.notifyApp.directory.never": "尚未同步",
   "systemGeneral.imConnectors.notifyApp.directory.summary": "通讯录：部门 {{departments}} · 人员 {{users}} · 上次同步 {{time}}",
   "systemGeneral.imConnectors.notifyApp.directory.sync": "立即同步",
