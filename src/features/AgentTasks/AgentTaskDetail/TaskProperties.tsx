@@ -1,4 +1,4 @@
-import type { TaskPriority, TaskStatus } from '@lobechat/types';
+import { isReminderTaskConfig, type TaskPriority, type TaskStatus } from '@lobechat/types';
 import { Block, Text } from '@lobehub/ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -51,6 +51,11 @@ const TaskProperties = memo(() => {
   const automationMode = useTaskStore(taskDetailSelectors.activeTaskAutomationMode);
   const schedulePattern = useTaskStore(taskDetailSelectors.activeTaskSchedulePattern);
   const scheduleTimezone = useTaskStore(taskDetailSelectors.activeTaskScheduleTimezone);
+  // A reminder task owns its schedule through the reminder panel (and the body
+  // the assistant re-interprets), so the cron editor must not be reachable here.
+  const isReminder = useTaskStore((s) =>
+    isReminderTaskConfig(taskDetailSelectors.activeTaskDetail(s)?.config),
+  );
 
   if (!taskId) return null;
 
@@ -95,9 +100,8 @@ const TaskProperties = memo(() => {
         </Block>
       </TaskPriorityTag>
 
-      <TaskScheduleConfig>
+      {isReminder ? (
         <Block
-          clickable
           horizontal
           align="center"
           gap={10}
@@ -113,7 +117,27 @@ const TaskProperties = memo(() => {
             scheduleTimezone={scheduleTimezone}
           />
         </Block>
-      </TaskScheduleConfig>
+      ) : (
+        <TaskScheduleConfig>
+          <Block
+            clickable
+            horizontal
+            align="center"
+            gap={10}
+            paddingBlock={4}
+            paddingInline={8}
+            variant={'borderless'}
+          >
+            <TaskTriggerTag
+              automationMode={automationMode}
+              heartbeatInterval={heartbeatInterval}
+              mode="inline"
+              schedulePattern={schedulePattern}
+              scheduleTimezone={scheduleTimezone}
+            />
+          </Block>
+        </TaskScheduleConfig>
+      )}
     </Block>
   );
 });

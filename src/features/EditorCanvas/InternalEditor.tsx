@@ -104,6 +104,7 @@ const InternalEditor = memo<InternalEditorProps>(
     editor,
     extraPlugins,
     floatingToolbar = true,
+    mentionOption,
     onContentChange,
     onInit,
     onPressEnter,
@@ -313,6 +314,7 @@ const InternalEditor = memo<InternalEditorProps>(
           content={''}
           editable={editable && !disabled}
           editor={editor}
+          mentionOption={mentionOption}
           placeholder={finalPlaceholder}
           plugins={plugins}
           slashOption={slashItems ? { items: slashItems } : undefined}

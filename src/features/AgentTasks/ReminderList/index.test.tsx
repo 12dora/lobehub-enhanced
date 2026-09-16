@@ -1,16 +1,17 @@
 /**
  * @vitest-environment happy-dom
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import zhChat from '../../../../locales/zh-CN/chat.json';
 import ReminderList from './index';
-import type { CreatedReminderView, ReceivedReminderView } from './types';
+import type { CreatedReminderRow, ReceivedReminderRow } from './types';
 
 const dict = zhChat as Record<string, string>;
 
+/** Real zh-CN copy so a renamed/missing key fails here instead of shipping. */
 const translate = (key: string, options?: Record<string, unknown>) => {
   const raw = dict[key];
   if (raw === undefined) throw new Error(`missing zh-CN chat key: ${key}`);
@@ -22,9 +23,11 @@ const mocks = vi.hoisted(() => ({
   created: [] as unknown[],
   createdError: undefined as unknown,
   createdLoading: false,
+  fireNow: vi.fn(),
   hideReceived: vi.fn(),
   listCreated: vi.fn(),
   listReceived: vi.fn(),
+  navigate: vi.fn(),
   received: [] as unknown[],
   receivedError: undefined as unknown,
   receivedLoading: false,
@@ -40,6 +43,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/services/reminder', () => ({
   reminderService: {
     cancel: mocks.cancel,
+    fireNow: mocks.fireNow,
     hideReceived: mocks.hideReceived,
     listCreated: mocks.listCreated,
     listReceived: mocks.listReceived,
@@ -48,7 +52,7 @@ vi.mock('@/services/reminder', () => ({
 
 /** Resolve SWR synchronously from the fixtures, but still run the fetcher. */
 vi.mock('@/libs/swr', () => ({
-  useClientDataSWR: (key: string[], fetcher: () => Promise<unknown>) => {
+  useClientDataSWR: (key: unknown[], fetcher: () => Promise<unknown>) => {
     fetcher();
     const isCreated = key[0] === 'reminder:listCreated';
 
@@ -61,88 +65,155 @@ vi.mock('@/libs/swr', () => ({
   },
 }));
 
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+
+vi.mock('../shared/taskDetailPath', () => ({
+  useNavigateToTaskDetail: () => mocks.navigate,
+}));
+
 vi.mock('@/features/WideScreenContainer', () => ({
   default: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@lobehub/ui', () => ({
-  Block: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  Tooltip: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   toast: mocks.toast,
+  Tooltip: ({ children, title }: { children?: ReactNode; title?: ReactNode }) => (
+    <span data-tooltip={String(title)}>{children}</span>
+  ),
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
-  Button: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
+  Button: ({
+    children,
+    onClick,
+  }: {
+    children?: ReactNode;
+    disabled?: boolean;
+    onClick?: () => void;
+  }) => (
     <button type="button" onClick={onClick}>
       {children}
     </button>
+  ),
+  Checkbox: ({
+    checked,
+    children,
+    onChange,
+  }: {
+    checked?: boolean;
+    children?: ReactNode;
+    onChange?: (next: boolean) => void;
+  }) => (
+    <label>
+      <input checked={!!checked} type="checkbox" onChange={() => onChange?.(!checked)} />
+      {children}
+    </label>
+  ),
+  Segmented: ({
+    onChange,
+    options,
+    value,
+  }: {
+    onChange?: (next: string) => void;
+    options: { label: string; value: string }[];
+    value?: string;
+  }) => (
+    <div>
+      {options.map((option) => (
+        <button
+          data-active={option.value === value}
+          key={option.value}
+          type="button"
+          onClick={() => onChange?.(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   ),
   Skeleton: () => <span data-testid="skeleton" />,
   Tag: ({ children }: { children?: ReactNode }) => <span data-testid="chip">{children}</span>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 
-/** Popconfirm collapses to an inline "confirm" button in tests. */
-vi.mock('antd', () => ({
-  Popconfirm: ({
-    children,
-    okText,
-    onConfirm,
-  }: {
-    children?: ReactNode;
-    okText?: ReactNode;
-    onConfirm?: () => void;
-  }) => (
-    <span>
-      {children}
-      <button
-        type="button"
-        onClick={() => {
-          void Promise.resolve(onConfirm?.()).catch(() => undefined);
-        }}
-      >
-        {`confirm:${String(okText)}`}
-      </button>
-    </span>
-  ),
-}));
+/** Keep the real antd `Table`; collapse `Popconfirm` to an inline confirm button. */
+vi.mock('antd', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
 
-const createdFixture: CreatedReminderView[] = [
+  return {
+    ...actual,
+    Popconfirm: ({
+      children,
+      okText,
+      onConfirm,
+    }: {
+      children?: ReactNode;
+      okText?: ReactNode;
+      onConfirm?: () => void;
+    }) => (
+      <span>
+        {children}
+        <button
+          type="button"
+          onClick={() => {
+            void Promise.resolve(onConfirm?.()).catch(() => undefined);
+          }}
+        >
+          {`confirm:${String(okText)}`}
+        </button>
+      </span>
+    ),
+  };
+});
+
+const createdFixture: CreatedReminderRow[] = [
   {
     content: '周三例会材料准备',
-    creatorName: '张伟',
-    fireAt: '2026-09-23T01:00:00.000Z',
-    id: 'rmd_1',
+    firedCount: 3,
+    lastDelivery: { failed: 1, firedAt: '2026-09-16T01:00:00.000Z', sent: 2, skipped: 0 },
+    lastFiredAt: '2026-09-16T01:00:00.000Z',
+    nextFireAt: '2026-09-23T01:00:00.000Z',
     recipients: [
       { deptName: '安环部', displayName: '胡玉琴A', kind: 'user', staffId: 'u1' },
       { deptId: 'd1', displayName: '安环部', kind: 'department', memberCount: 12 },
     ],
-    repeatRule: { freq: 'weekly', time: '09:00', weekdays: [3] },
+    reminderId: 'rmd_1',
+    scheduleSummary: '每周三 09:00',
     status: 'scheduled',
-    timezone: 'Asia/Shanghai',
+    taskId: 'task_1',
+    taskIdentifier: 'RMD-1',
   },
   {
-    content: '已经发出的提醒',
-    creatorName: '张伟',
-    fireAt: '2026-09-10T01:00:00.000Z',
-    id: 'rmd_2',
+    content: '已经结束的提醒',
+    firedCount: 1,
     lastFiredAt: '2026-09-10T01:00:00.000Z',
+    nextFireAt: null,
     recipients: [],
-    repeatRule: null,
+    reminderId: 'rmd_2',
+    scheduleSummary: '2026-09-10 09:00 一次',
+    status: 'completed',
+    taskId: 'task_2',
+    taskIdentifier: 'RMD-2',
+  },
+];
+
+const receivedFixture: ReceivedReminderRow[] = [
+  {
+    content: '提交月度安全报告',
+    creatorName: '李娜',
+    failedReason: null,
+    firedAt: '2026-09-16T01:00:00.000Z',
+    id: 'dlv_1',
+    reminderId: 'rmd_9',
+    robotFailedReason: '机器人未绑定',
+    robotStatus: 'failed',
     status: 'sent',
   },
 ];
 
-const receivedFixture: ReceivedReminderView[] = [
-  {
-    content: '提交月度安全报告',
-    creatorName: '李娜',
-    firedAt: '2026-09-16T01:00:00.000Z',
-    id: 'dlv_1',
-    reminderId: 'rmd_9',
-  },
-];
+const showReceived = () => fireEvent.click(screen.getByText('我收到的'));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -156,63 +227,73 @@ beforeEach(() => {
   mocks.listReceived.mockResolvedValue(receivedFixture);
   mocks.cancel.mockResolvedValue(undefined);
   mocks.hideReceived.mockResolvedValue(undefined);
+  mocks.fireNow.mockResolvedValue({
+    failed: 1,
+    firedAt: '2026-09-16T02:00:00.000Z',
+    sent: 2,
+    skipped: 0,
+  });
 });
 
-describe('ReminderList', () => {
-  it('loads both sections through the reminder service', () => {
+describe('ReminderList 我发起的', () => {
+  it('loads the created reminders and renders one row per reminder task', () => {
     render(<ReminderList />);
 
-    expect(mocks.listCreated).toHaveBeenCalled();
-    expect(mocks.listReceived).toHaveBeenCalled();
-    expect(screen.getByText('我发起的')).toBeInTheDocument();
-    expect(screen.getByText('我收到的')).toBeInTheDocument();
+    expect(mocks.listCreated).toHaveBeenCalledWith({ includeFinished: false });
+    expect(screen.getByText('周三例会材料准备')).toBeInTheDocument();
+    expect(screen.getByText('已经结束的提醒')).toBeInTheDocument();
+    expect(screen.getByText('每周三 09:00')).toBeInTheDocument();
+    expect(screen.getByText('09-23 09:00')).toBeInTheDocument();
+    expect(screen.getByText('09-16 09:00')).toBeInTheDocument();
+    expect(screen.getByText('已发 2 · 失败 1 · 跳过 0')).toBeInTheDocument();
+    expect(screen.getByText('进行中')).toBeInTheDocument();
+    expect(screen.getByText('已完成')).toBeInTheDocument();
   });
 
-  it('renders a created reminder with status, next fire time, repeat and chips', () => {
+  it('renders recipient chips and a dash for a missing next fire', () => {
     render(<ReminderList />);
 
-    expect(screen.getByText('待发送')).toBeInTheDocument();
-    expect(screen.getByText('已发送')).toBeInTheDocument();
-    expect(screen.getByText('下次发送 2026-09-23 09:00')).toBeInTheDocument();
-    expect(screen.getByText('发送时间 2026-09-10 09:00')).toBeInTheDocument();
-    expect(screen.getByText('周期 每周三 09:00')).toBeInTheDocument();
-    expect(screen.getByText('@胡玉琴A · 安环部')).toBeInTheDocument();
-    expect(screen.getByText('@安环部 · 12 人')).toBeInTheDocument();
-    expect(screen.getAllByText('设置人 张伟')).toHaveLength(2);
+    expect(screen.getByText('胡玉琴A · 安环部')).toBeInTheDocument();
+    expect(screen.getByText('安环部 · 12 人')).toBeInTheDocument();
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0);
   });
 
-  it('renders a received reminder with its send time and creator', () => {
+  it('opens the task detail page from the content cell', () => {
     render(<ReminderList />);
 
-    expect(screen.getByText('提交月度安全报告')).toBeInTheDocument();
-    expect(screen.getByText('发送时间 2026-09-16 09:00')).toBeInTheDocument();
-    expect(screen.getByText('来自 李娜')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('周三例会材料准备'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith('RMD-1');
   });
 
-  it('offers 取消提醒 only for a scheduled reminder and refreshes after confirming', async () => {
+  it('offers 立即发送 / 取消提醒 only for a scheduled reminder', () => {
     render(<ReminderList />);
 
-    const confirmButtons = screen.getAllByText('confirm:取消提醒');
-    expect(confirmButtons).toHaveLength(1);
+    expect(screen.getAllByText('confirm:立即发送')).toHaveLength(1);
+    expect(screen.getAllByText('confirm:取消提醒')).toHaveLength(1);
+  });
 
-    fireEvent.click(confirmButtons[0]);
+  it('fires a reminder now and refreshes the table', async () => {
+    render(<ReminderList />);
 
-    await waitFor(() => expect(mocks.cancel).toHaveBeenCalledWith('rmd_1'));
+    fireEvent.click(screen.getByText('confirm:立即发送'));
+
+    await waitFor(() => expect(mocks.fireNow).toHaveBeenCalledWith('task_1'));
+    expect(mocks.toast.success).toHaveBeenCalledWith('已发 2 · 失败 1 · 跳过 0');
     expect(mocks.refreshCreated).toHaveBeenCalled();
-    expect(mocks.toast.success).toHaveBeenCalledWith('提醒已取消');
   });
 
-  it('hides a received reminder and refreshes after confirming', async () => {
+  it('cancels a reminder and refreshes the table', async () => {
     render(<ReminderList />);
 
-    fireEvent.click(screen.getByText('confirm:删除'));
+    fireEvent.click(screen.getByText('confirm:取消提醒'));
 
-    await waitFor(() => expect(mocks.hideReceived).toHaveBeenCalledWith('dlv_1'));
-    expect(mocks.refreshReceived).toHaveBeenCalled();
-    expect(mocks.toast.success).toHaveBeenCalledWith('提醒已删除');
+    await waitFor(() => expect(mocks.cancel).toHaveBeenCalledWith('task_1'));
+    expect(mocks.toast.success).toHaveBeenCalledWith('提醒已取消');
+    expect(mocks.refreshCreated).toHaveBeenCalled();
   });
 
-  it('surfaces a failed cancel as an error toast', async () => {
+  it('surfaces a failed cancel as an error toast without refreshing', async () => {
     mocks.cancel.mockRejectedValue(new Error('nope'));
 
     render(<ReminderList />);
@@ -222,42 +303,89 @@ describe('ReminderList', () => {
     expect(mocks.refreshCreated).not.toHaveBeenCalled();
   });
 
-  it('shows both empty states when there is nothing to list', () => {
+  it('asks for finished reminders when 显示已结束 is checked', () => {
+    render(<ReminderList />);
+
+    fireEvent.click(screen.getByText('显示已结束'));
+
+    expect(mocks.listCreated).toHaveBeenCalledWith({ includeFinished: true });
+  });
+
+  it('shows the empty state when there is no reminder', () => {
     mocks.created = [];
-    mocks.received = [];
 
     render(<ReminderList />);
 
     expect(screen.getByText('暂无定时提醒')).toBeInTheDocument();
-    expect(screen.getByText('暂无收到的提醒')).toBeInTheDocument();
   });
 
-  it('shows a retry affordance when a section fails to load', () => {
+  it('shows a skeleton while loading and a retry when the load fails', () => {
+    mocks.created = undefined as unknown as typeof mocks.created;
+    mocks.createdLoading = true;
+
+    const { unmount } = render(<ReminderList />);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
+    unmount();
+
+    mocks.createdLoading = false;
     mocks.createdError = new Error('boom');
 
     render(<ReminderList />);
-
     expect(screen.getByText('加载定时提醒失败')).toBeInTheDocument();
     fireEvent.click(screen.getByText('重试'));
     expect(mocks.refreshCreated).toHaveBeenCalled();
   });
+});
 
-  it('shows a skeleton while the created list is loading', () => {
-    mocks.created = undefined as unknown as typeof mocks.created;
-    mocks.createdLoading = true;
-
+describe('ReminderList 我收到的', () => {
+  it('renders one row per delivery with its channels', () => {
     render(<ReminderList />);
+    showReceived();
 
-    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
+    expect(mocks.listReceived).toHaveBeenCalled();
+    expect(screen.getByText('提交月度安全报告')).toBeInTheDocument();
+    expect(screen.getByText('09-16 09:00')).toBeInTheDocument();
+    expect(screen.getByText('李娜')).toBeInTheDocument();
+
+    const workNotice = screen.getByText('工作通知');
+    expect(workNotice.closest('[data-tooltip]')).toHaveAttribute(
+      'data-tooltip',
+      '工作通知、已发送',
+    );
+
+    const robot = screen.getByText('机器人');
+    expect(robot.closest('[data-tooltip]')).toHaveAttribute(
+      'data-tooltip',
+      '机器人、发送失败、机器人未绑定',
+    );
   });
 
-  it('shows a retry affordance when the received section fails', () => {
+  it('hides a received reminder and refreshes the table', async () => {
+    render(<ReminderList />);
+    showReceived();
+
+    fireEvent.click(screen.getByText('confirm:删除'));
+
+    await waitFor(() => expect(mocks.hideReceived).toHaveBeenCalledWith('dlv_1'));
+    expect(mocks.toast.success).toHaveBeenCalledWith('提醒已删除');
+    expect(mocks.refreshReceived).toHaveBeenCalled();
+  });
+
+  it('shows the empty state and the retry affordance', () => {
+    mocks.received = [];
+
+    const { unmount } = render(<ReminderList />);
+    showReceived();
+    expect(screen.getByText('暂无收到的提醒')).toBeInTheDocument();
+    unmount();
+
     mocks.receivedError = new Error('boom');
 
     render(<ReminderList />);
-
-    expect(screen.getByText('加载定时提醒失败')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('重试'));
+    showReceived();
+    const error = screen.getByText('加载定时提醒失败');
+    expect(error).toBeInTheDocument();
+    fireEvent.click(within(error.parentElement as HTMLElement).getByText('重试'));
     expect(mocks.refreshReceived).toHaveBeenCalled();
   });
 });

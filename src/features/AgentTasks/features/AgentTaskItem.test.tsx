@@ -107,9 +107,10 @@ vi.mock('./useTaskItemContextMenu', () => ({
   useTaskItemContextMenu: () => ({ items: [], onContextMenu: vi.fn() }),
 }));
 
-const createTask = (assigneeAgentId?: string | null) =>
+const createTask = (assigneeAgentId?: string | null, config?: unknown) =>
   ({
     assigneeAgentId,
+    config,
     createdAt: new Date('2026-05-18T00:00:00.000Z'),
     identifier: 'T-22',
     name: 'Hourly trend update',
@@ -117,6 +118,10 @@ const createTask = (assigneeAgentId?: string | null) =>
     status: 'scheduled',
     updatedAt: new Date('2026-05-18T00:00:00.000Z'),
   }) as any;
+
+const REMINDER_CONFIG = {
+  reminder: { kind: 'reminder', once: false, reminderId: 'rmd_1', scheduleSummary: '每天 09:00' },
+};
 
 describe('AgentTaskItem', () => {
   beforeEach(() => {
@@ -210,5 +215,20 @@ describe('AgentTaskItem', () => {
     fireEvent.click(screen.getAllByTestId('subtask-progress')[0]);
 
     expect(mocks.navigate).toHaveBeenCalledWith('/task/T-23');
+  });
+
+  it('tags a reminder task so it reads apart from a plain scheduled task', () => {
+    render(<AgentTaskItem task={createTask('agt_owner', REMINDER_CONFIG)} />);
+
+    expect(screen.getByText('taskReminder.tag')).toBeTruthy();
+    // The reminder tag replaces the generic 「已排期」 badge.
+    expect(screen.queryByText('Scheduled')).toBeNull();
+  });
+
+  it('leaves a plain scheduled task untagged', () => {
+    render(<AgentTaskItem task={createTask('agt_owner')} />);
+
+    expect(screen.queryByText('taskReminder.tag')).toBeNull();
+    expect(screen.getByText('Scheduled')).toBeTruthy();
   });
 });

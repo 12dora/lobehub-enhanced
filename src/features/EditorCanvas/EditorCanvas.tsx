@@ -17,6 +17,12 @@ import InternalEditor from './InternalEditor';
  */
 type EditorPlugins = Parameters<typeof Editor>[0]['plugins'];
 
+/**
+ * `@` mention menu config (items + markdown serialisation). Opt-in: the editor
+ * only registers the `@` trigger when `items` is provided.
+ */
+export type EditorMentionOption = Parameters<typeof Editor>[0]['mentionOption'];
+
 interface UnsavedChangesGuardOptions {
   /**
    * Whether to enable unsaved-changes guard for route navigation and browser unload.
@@ -83,6 +89,12 @@ export interface EditorCanvasProps {
    * Whether to show the floating toolbar. Defaults to true.
    */
   floatingToolbar?: boolean;
+
+  /**
+   * `@` mention menu for the editor. Omitted by default, which leaves the `@`
+   * trigger unregistered (plain typing only).
+   */
+  mentionOption?: EditorMentionOption;
 
   /**
    * Content change handler

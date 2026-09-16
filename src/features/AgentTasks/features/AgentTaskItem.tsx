@@ -1,5 +1,6 @@
-import type { TaskStatus } from '@lobechat/types';
+import { isReminderTaskConfig, type TaskStatus } from '@lobechat/types';
 import { Block, ContextMenuTrigger, Flexbox, Icon, Text, Tooltip } from '@lobehub/ui';
+import { Tag } from '@lobehub/ui/base-ui';
 import { cssVar } from 'antd-style';
 import { LockIcon } from 'lucide-react';
 import { memo, useCallback } from 'react';
@@ -79,8 +80,18 @@ const AgentTaskItem = memo<TaskItemProps>(({ task, routeScope = 'agent', variant
     [navigate, routeScope],
   );
 
+  // A reminder task is armed as a scheduled task, so it would otherwise read as a
+  // plain 「已排期」 row; the ⏰ tag is what tells the two apart at a glance.
+  const isReminder = isReminderTaskConfig(task.config);
+
+  const reminderBadge = isReminder ? (
+    <Tag size={'small'} style={{ flex: 'none' }}>
+      {tChat('taskReminder.tag')}
+    </Tag>
+  ) : null;
+
   const scheduledBadge =
-    status === 'scheduled' ? (
+    !isReminder && status === 'scheduled' ? (
       <Block
         horizontal
         align={'center'}
@@ -122,6 +133,7 @@ const AgentTaskItem = memo<TaskItemProps>(({ task, routeScope = 'agent', variant
           {task.identifier}
         </Text>
       )}
+      {reminderBadge}
       {scheduledBadge}
       <TaskSubtaskProgressTag
         currentIdentifier={task.identifier}
@@ -176,6 +188,7 @@ const AgentTaskItem = memo<TaskItemProps>(({ task, routeScope = 'agent', variant
             <Text ellipsis style={{ minWidth: 0 }} weight={500}>
               {hasName ? task.name : task.identifier}
             </Text>
+            {reminderBadge}
             {scheduledBadge}
             <TaskSubtaskProgressTag
               currentIdentifier={task.identifier}

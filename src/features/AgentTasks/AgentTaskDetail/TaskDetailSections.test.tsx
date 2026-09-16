@@ -7,7 +7,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TaskDetailSections from './TaskDetailSections';
 
-const mocks = vi.hoisted(() => ({ isMobile: true }));
+const mocks = vi.hoisted(() => ({
+  isMobile: true,
+  taskState: {
+    activeTaskId: 'T-1',
+    taskDetailMap: { 'T-1': { config: {}, identifier: 'T-1', status: 'backlog' } } as Record<
+      string,
+      unknown
+    >,
+  },
+}));
+
+const reminderConfig = {
+  reminder: {
+    kind: 'reminder',
+    once: false,
+    reminderId: 'rmd_1',
+    scheduleSummary: '每天 09:00',
+  },
+};
 
 vi.mock('@lobehub/ui', () => ({
   Flexbox: ({
@@ -29,6 +47,10 @@ vi.mock('@/hooks/useIsMobile', () => ({
   useIsMobile: () => mocks.isMobile,
 }));
 
+vi.mock('@/store/task', () => ({
+  useTaskStore: (selector: any) => selector(mocks.taskState),
+}));
+
 vi.mock('./TaskActivities', () => ({ default: () => <div data-testid="task-activities" /> }));
 vi.mock('./TaskArtifacts', () => ({ default: () => <div data-testid="task-artifacts" /> }));
 vi.mock('./TaskDetailAssignee', () => ({ default: () => <div data-testid="task-assignee" /> }));
@@ -42,6 +64,7 @@ vi.mock('./TaskParentBar', () => ({ default: () => <div data-testid="task-parent
 vi.mock('./TaskProperties', () => ({ default: () => <div data-testid="task-properties" /> }));
 vi.mock('./TaskSubtasks', () => ({ default: () => <div data-testid="task-subtasks" /> }));
 vi.mock('./TaskVerifyConfig', () => ({ default: () => <div data-testid="task-verify" /> }));
+vi.mock('./TaskReminderPanel', () => ({ default: () => <div data-testid="task-reminder" /> }));
 
 const documentOrder = (a: Element, b: Element) =>
   a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
@@ -49,6 +72,7 @@ const documentOrder = (a: Element, b: Element) =>
 describe('TaskDetailSections layout', () => {
   beforeEach(() => {
     mocks.isMobile = true;
+    mocks.taskState.taskDetailMap = { 'T-1': { config: {}, identifier: 'T-1', status: 'backlog' } };
   });
 
   it('stacks the properties panel below the title on mobile', () => {
@@ -87,5 +111,49 @@ describe('TaskDetailSections layout', () => {
     expect(documentOrder(runAction, properties)).toBeTruthy();
     expect(properties.parentElement?.dataset.horizontal).toBe('true');
     expect(documentOrder(title, properties)).toBeTruthy();
+  });
+});
+
+describe('TaskDetailSections reminder branch', () => {
+  beforeEach(() => {
+    mocks.isMobile = false;
+    mocks.taskState.taskDetailMap = {
+      'T-1': { config: reminderConfig, identifier: 'T-1', status: 'scheduled' },
+    };
+  });
+
+  it('swaps the agent-run controls for the reminder panel', () => {
+    render(<TaskDetailSections />);
+
+    expect(screen.getByTestId('task-reminder')).toBeTruthy();
+    // Nothing that belongs to an agent run survives on a reminder task.
+    expect(screen.queryByTestId('task-assignee')).toBeNull();
+    expect(screen.queryByTestId('task-model')).toBeNull();
+    expect(screen.queryByTestId('task-verify')).toBeNull();
+    expect(screen.queryByTestId('task-run-action')).toBeNull();
+    // The body editor and the shared sections stay.
+    expect(screen.getByTestId('task-instruction')).toBeTruthy();
+    expect(screen.getByTestId('task-properties')).toBeTruthy();
+  });
+
+  it('renders the reminder panel above the body on mobile too', () => {
+    mocks.isMobile = true;
+    render(<TaskDetailSections />);
+
+    const panel = screen.getByTestId('task-reminder');
+    const instruction = screen.getByTestId('task-instruction');
+
+    expect(documentOrder(panel, instruction)).toBeTruthy();
+  });
+
+  it('keeps the agent-run controls on a normal task', () => {
+    mocks.taskState.taskDetailMap = {
+      'T-1': { config: {}, identifier: 'T-1', status: 'backlog' },
+    };
+    render(<TaskDetailSections />);
+
+    expect(screen.queryByTestId('task-reminder')).toBeNull();
+    expect(screen.getByTestId('task-assignee')).toBeTruthy();
+    expect(screen.getByTestId('task-verify')).toBeTruthy();
   });
 });

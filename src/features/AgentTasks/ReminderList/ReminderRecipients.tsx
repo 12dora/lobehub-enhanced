@@ -8,13 +8,13 @@ import { useTranslation } from 'react-i18next';
 
 import type { ReminderRecipientView } from './types';
 
-/** Chips beyond this count collapse into a single `+N` chip. */
-export const REMINDER_RECIPIENT_CHIP_LIMIT = 6;
+/** Chips beyond this count collapse into a single `+N` chip in a table cell. */
+export const REMINDER_RECIPIENT_CHIP_LIMIT = 3;
 
 /**
  * Chip label for one recipient:
- * - user: `@胡玉琴A · 安环部` (the dot is dropped when the user has no department)
- * - department: `@安环部 · 12 人`
+ * - user: `胡玉琴A · 安环部` (the dot is dropped when the user has no department)
+ * - department: `安环部 · 12 人` (the count is dropped when unknown)
  */
 export const buildRecipientLabel = (
   recipient: ReminderRecipientView,
@@ -23,8 +23,10 @@ export const buildRecipientLabel = (
   const name = recipient.displayName;
 
   if (recipient.kind === 'department') {
-    const count = recipient.memberCount ?? 0;
-    return t('reminderList.recipients.department', { count, name });
+    const count = recipient.memberCount;
+    return count === null || count === undefined
+      ? t('reminderList.recipients.departmentOnly', { name })
+      : t('reminderList.recipients.department', { count, name });
   }
 
   const dept = recipient.deptName?.trim();
@@ -42,7 +44,8 @@ interface ReminderRecipientsProps {
 
 /**
  * Recipient chips of a reminder. Departments carry their member count so the
- * creator can see how wide an audience a single chip stands for.
+ * creator can see how wide an audience a single chip stands for; everything
+ * past `max` collapses into `+N`, whose tooltip lists every recipient.
  */
 const ReminderRecipients = memo<ReminderRecipientsProps>(
   ({ max = REMINDER_RECIPIENT_CHIP_LIMIT, recipients }) => {
@@ -56,7 +59,7 @@ const ReminderRecipients = memo<ReminderRecipientsProps>(
     if (labels.length === 0) return null;
 
     const visible = labels.slice(0, max);
-    const overflow = labels.slice(max);
+    const overflowCount = labels.length - visible.length;
 
     return (
       <Flexbox horizontal align={'center'} gap={4} wrap={'wrap'}>
@@ -65,11 +68,9 @@ const ReminderRecipients = memo<ReminderRecipientsProps>(
             {label}
           </Tag>
         ))}
-        {overflow.length > 0 && (
-          <Tooltip title={overflow.join(t('reminderList.repeat.separator'))}>
-            <Tag size={'small'}>
-              {t('reminderList.recipients.more', { count: overflow.length })}
-            </Tag>
+        {overflowCount > 0 && (
+          <Tooltip title={labels.join(t('reminderList.recipients.separator'))}>
+            <Tag size={'small'}>{t('reminderList.recipients.more', { count: overflowCount })}</Tag>
           </Tooltip>
         )}
       </Flexbox>

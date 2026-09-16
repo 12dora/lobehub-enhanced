@@ -48,36 +48,42 @@ const department = (name: string, memberCount: number): ReminderRecipientView =>
 });
 
 describe('ReminderRecipients', () => {
-  it('renders a user chip as `@name · dept`', () => {
+  it('renders a user chip as `name · dept`', () => {
     render(<ReminderRecipients recipients={[user('胡玉琴A', '安环部')]} />);
 
-    expect(screen.getByTestId('chip')).toHaveTextContent('@胡玉琴A · 安环部');
+    expect(screen.getByTestId('chip')).toHaveTextContent('胡玉琴A · 安环部');
   });
 
   it('drops the separator when the user has no department', () => {
     render(<ReminderRecipients recipients={[user('胡玉琴A')]} />);
 
-    expect(screen.getByTestId('chip').textContent).toBe('@胡玉琴A');
+    expect(screen.getByTestId('chip').textContent).toBe('胡玉琴A');
   });
 
   it('renders a department chip with its member count', () => {
     render(<ReminderRecipients recipients={[department('安环部', 12)]} />);
 
-    expect(screen.getByTestId('chip')).toHaveTextContent('@安环部 · 12 人');
+    expect(screen.getByTestId('chip')).toHaveTextContent('安环部 · 12 人');
   });
 
-  it('collapses everything after the sixth chip into `+N`', () => {
-    const recipients = Array.from({ length: 9 }, (_, index) => user(`员工${index}`, '安环部'));
+  it('renders a department chip without a count when the count is unknown', () => {
+    render(<ReminderRecipients recipients={[{ displayName: '安环部', kind: 'department' }]} />);
+
+    expect(screen.getByTestId('chip').textContent).toBe('安环部');
+  });
+
+  it('collapses everything after the third chip into `+N` listing all recipients', () => {
+    const recipients = Array.from({ length: 5 }, (_, index) => user(`员工${index}`, '安环部'));
 
     render(<ReminderRecipients recipients={recipients} />);
 
     const chips = screen.getAllByTestId('chip');
-    expect(chips).toHaveLength(7);
-    expect(chips.at(-1)?.textContent).toBe('+3');
-    expect(chips[5]).toHaveTextContent('@员工5 · 安环部');
-    expect(screen.getByText('+3').parentElement).toHaveAttribute(
+    expect(chips).toHaveLength(4);
+    expect(chips.at(-1)?.textContent).toBe('+2');
+    expect(chips[2]).toHaveTextContent('员工2 · 安环部');
+    expect(screen.getByText('+2').parentElement).toHaveAttribute(
       'data-tooltip',
-      '@员工6 · 安环部、@员工7 · 安环部、@员工8 · 安环部',
+      '员工0 · 安环部、员工1 · 安环部、员工2 · 安环部、员工3 · 安环部、员工4 · 安环部',
     );
   });
 
