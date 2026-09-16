@@ -30,6 +30,8 @@ describe('ReminderManifest', () => {
     expect(create?.parameters.properties.recipients.maxItems).toBe(50);
     expect(create?.parameters.properties.recipients.minItems).toBe(1);
     expect(create?.parameters.properties.schedule.required).toEqual(['kind', 'time']);
+    expect(create?.parameters.properties.schedule.description).toContain('Omit unused fields');
+    expect(create?.parameters.properties.title.maxLength).toBe(12);
     expect(create?.parameters.properties.schedule.properties.kind.enum).toEqual([
       'daily',
       'monthly',

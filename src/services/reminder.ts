@@ -17,6 +17,7 @@ class ReminderService {
     createdByAgentId?: string;
     recipients: string[];
     schedule: ReminderScheduleInput;
+    title?: string;
     topicId?: string;
   }) => {
     return lambdaClient.reminder.create.mutate(params);

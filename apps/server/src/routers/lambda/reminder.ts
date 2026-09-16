@@ -108,6 +108,7 @@ export const reminderRouter = router({
           createdByAgentId: z.string().optional(),
           recipients: reminderRecipientsSchema,
           schedule: reminderScheduleSchema,
+          title: z.string().trim().max(12).optional(),
           topicId: z.string().optional(),
         })
         .strict(),

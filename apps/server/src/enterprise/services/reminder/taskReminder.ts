@@ -59,8 +59,13 @@ import {
   scheduleToRepeatRule,
   validateReminderSchedule,
 } from './schedule';
+import { normalizeReminderClockTime } from './scheduleSchema';
 import type { ReminderDeliverResult, ReminderSweepDeps } from './worker';
-import { deliverReminder as defaultDeliverReminder } from './worker';
+import {
+  deliverReminder as defaultDeliverReminder,
+  reminderSummaryTitle,
+  reminderTitleFromContent,
+} from './worker';
 
 export {
   REMINDER_CONTENT_EMPTY,
@@ -104,6 +109,7 @@ const REMINDER_SCHEDULE_SCHEMA = {
           { type: 'null' },
         ],
       },
+      title: { description: '一句话概括提醒内容，不超过12字', type: 'string' },
     },
     required: ['schedule'],
     type: 'object' as const,
@@ -162,6 +168,8 @@ export interface CreateReminderTaskInput {
   createdByAgentId?: string | null;
   recipients: RecipientQuery[];
   schedule: ReminderScheduleInput;
+  /** Optional ≤12-char summary used as the task name and DingTalk push title. */
+  title?: string;
   topicId?: string | null;
 }
 
@@ -194,13 +202,18 @@ export interface ReminderTaskServiceDeps {
   deliverReminder?: (
     db: LobeChatDatabase,
     reminder: ReminderItem,
-    deps?: ReminderSweepDeps & { recipients?: ReminderProfile['recipients'] },
+    deps?: ReminderSweepDeps & { recipients?: ReminderProfile['recipients']; title?: string },
   ) => Promise<ReminderDeliverResult>;
   interpretSchedule?: (input: {
     body: string;
     currentSchedule: ReminderScheduleInput;
     now: Date;
   }) => Promise<ReminderScheduleInput | null>;
+  interpretTitle?: (input: {
+    body: string;
+    currentSchedule: ReminderScheduleInput;
+    now: Date;
+  }) => Promise<string | null | undefined>;
 }
 
 const creatorDisplayName = (
@@ -219,7 +232,7 @@ const creatorDisplayName = (
   return '用户';
 };
 
-const titleFromContent = (content: string): string => content.trim().slice(0, 40);
+const titleFromContent = (content: string): string => reminderTitleFromContent(content);
 
 const shanghaiDate = (now: Date): string => dayjs(now).tz(REMINDER_DEFAULT_TZ).format('YYYY-MM-DD');
 
@@ -249,8 +262,10 @@ const parseLlmSchedule = (raw: unknown): ReminderScheduleInput | null => {
   const obj = raw as Record<string, unknown>;
   const kind = obj.kind;
   if (kind !== 'once' && kind !== 'daily' && kind !== 'weekly' && kind !== 'monthly') return null;
-  if (typeof obj.time !== 'string' || !parseClockTime(obj.time)) return null;
-  const schedule: ReminderScheduleInput = { kind, time: obj.time };
+  if (typeof obj.time !== 'string') return null;
+  const time = normalizeReminderClockTime(obj.time);
+  if (!parseClockTime(time)) return null;
+  const schedule: ReminderScheduleInput = { kind, time };
   if (typeof obj.date === 'string' && DATE_RE.test(obj.date)) schedule.date = obj.date;
   if (typeof obj.until === 'string' && DATE_RE.test(obj.until)) schedule.until = obj.until;
   if (Array.isArray(obj.weekdays)) {
@@ -271,6 +286,12 @@ const parseLlmSchedule = (raw: unknown): ReminderScheduleInput | null => {
   if (kind === 'weekly' && !schedule.weekdays?.length) return null;
   if (kind === 'monthly' && !schedule.monthDays?.length) return null;
   return schedule;
+};
+
+const parseLlmTitle = (raw: unknown): string | undefined => {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed ? reminderTitleFromContent(trimmed) : undefined;
 };
 
 const deptQualifierMatches = (
@@ -339,6 +360,7 @@ export class ReminderTaskService {
   private readonly deliver: NonNullable<ReminderTaskServiceDeps['deliverReminder']>;
   private readonly directory: DingTalkDirectoryModel;
   private readonly interpretScheduleFn?: ReminderTaskServiceDeps['interpretSchedule'];
+  private readonly interpretTitleFn?: ReminderTaskServiceDeps['interpretTitle'];
   private readonly reminderModel: ReminderModel;
   private readonly taskModel: TaskModel;
 
@@ -353,6 +375,7 @@ export class ReminderTaskService {
     this.taskModel = new TaskModel(db, userId, workspaceId);
     this.deliver = deps.deliverReminder ?? defaultDeliverReminder;
     this.interpretScheduleFn = deps.interpretSchedule;
+    this.interpretTitleFn = deps.interpretTitle;
   }
 
   resolveRecipients = async (queries: RecipientQuery[]): Promise<ResolveOutcome> => {
@@ -459,7 +482,7 @@ export class ReminderTaskService {
         context: { scheduler: { scheduleStartedAt: now.toISOString() } },
         createdByAgentId: input.createdByAgentId ?? null,
         instruction,
-        name: titleFromContent(content),
+        name: reminderSummaryTitle(input.title, content),
         schedulePattern: cron,
         scheduleTimezone: REMINDER_TIMEZONE,
         status: 'scheduled',
@@ -517,18 +540,20 @@ export class ReminderTaskService {
     const now = new Date();
     let schedule = currentSchedule;
     let scheduleChanged = false;
+    let interpretedTitle: string | undefined;
     try {
-      const interpreted = await this.interpretSchedule({
+      const interpreted = await this.interpretReminder({
         body: input.instruction,
         currentSchedule,
         now,
       });
-      if (interpreted && !schedulesEqual(interpreted, currentSchedule)) {
-        const invalid = validateReminderSchedule(interpreted);
+      interpretedTitle = interpreted.title;
+      if (interpreted.schedule && !schedulesEqual(interpreted.schedule, currentSchedule)) {
+        const invalid = validateReminderSchedule(interpreted.schedule);
         if (invalid) {
           log('LLM schedule invalid (%s), keeping current', invalid);
         } else {
-          schedule = interpreted;
+          schedule = interpreted.schedule;
           scheduleChanged = true;
         }
       }
@@ -560,10 +585,13 @@ export class ReminderTaskService {
       until: schedule.until ?? null,
     };
 
-    const previousAutoTitle = titleFromContent(
-      stripReminderMentions(task.instruction ?? '') || reminder.content,
-    );
-    const namePatch = task.name === previousAutoTitle ? { name: titleFromContent(content) } : {};
+    const previousBody = stripReminderMentions(task.instruction ?? '') || reminder.content;
+    const previousAutoTitle = titleFromContent(previousBody);
+    const bodyChanged = content !== previousBody;
+    const namePatch =
+      bodyChanged && task.name === previousAutoTitle
+        ? { name: reminderSummaryTitle(interpretedTitle, content) }
+        : {};
 
     const updatedTask = await this.taskModel.update(task.id, {
       config: { ...previousConfig, reminder: reminderConfig },
@@ -719,6 +747,11 @@ export class ReminderTaskService {
 
     if (reminder.status !== 'scheduled') return 'skipped';
 
+    // `isExecutionTime` tolerates a few minutes around the cron minute in BOTH directions, so a
+    // reminder set for 19:28 would fire on the 19:25 sweep. Never deliver before the occurrence.
+    const occurrence = reminderOccurrenceStart(config.schedule, now);
+    if (now.getTime() < occurrence.getTime()) return 'skipped';
+
     if (
       task.schedulePattern &&
       task.lastHeartbeatAt &&
@@ -778,6 +811,7 @@ export class ReminderTaskService {
         now: input.now,
         persistMode: 'deliveries',
         recipients: input.reminder.recipients,
+        title: input.task.name,
       });
     } catch (error) {
       log('deliver after claim failed reminder=%s %O', claimed.id, error);
@@ -854,12 +888,19 @@ export class ReminderTaskService {
     return task;
   };
 
-  private interpretSchedule = async (input: {
+  private interpretReminder = async (input: {
     body: string;
     currentSchedule: ReminderScheduleInput;
     now: Date;
-  }): Promise<ReminderScheduleInput | null> => {
-    if (this.interpretScheduleFn) return this.interpretScheduleFn(input);
+  }): Promise<{ schedule: ReminderScheduleInput | null; title?: string }> => {
+    if (this.interpretScheduleFn || this.interpretTitleFn) {
+      return {
+        schedule: this.interpretScheduleFn ? await this.interpretScheduleFn(input) : null,
+        title: this.interpretTitleFn
+          ? ((await this.interpretTitleFn(input)) ?? undefined)
+          : undefined,
+      };
+    }
 
     const systemAgent = new SystemAgentService(this.db, this.userId, this.workspaceId);
     const { model, provider, ...effortParams } = await systemAgent.getTaskModelConfig('topic');
@@ -876,6 +917,7 @@ export class ReminderTaskService {
       '从正文中识别时间表达并输出结构化日程。若正文没有时间表达，schedule 返回 null（保留当前日程）。',
       '时区一律 Asia/Shanghai。「每天/每周/每月」对应 daily/weekly/monthly；否则为 once（下一次出现的日期+时间）。',
       'weekly.weekdays 为 1-7（周一=1）。monthly.monthDays 为 1-31。time 为 HH:mm。once.date 与 until 为 YYYY-MM-DD。',
+      '若正文内容变了，可同时给出 title（≤12字摘要，如 每日例会 / 提交周报）；没有把握则省略 title。',
     ].join('\n');
 
     const modelRuntime = await initModelRuntimeFromDB(
@@ -893,9 +935,12 @@ export class ReminderTaskService {
       },
       { metadata: { trigger: 'reminder_schedule' } },
     );
-    const schedule = (result as { schedule?: unknown } | null)?.schedule;
-    if (schedule === null || schedule === undefined) return null;
-    return parseLlmSchedule(schedule);
+    const payload = result as { schedule?: unknown; title?: unknown } | null;
+    const schedule = payload?.schedule;
+    return {
+      schedule: schedule === null || schedule === undefined ? null : parseLlmSchedule(schedule),
+      title: parseLlmTitle(payload?.title),
+    };
   };
 
   private resolveOneQuery = async (

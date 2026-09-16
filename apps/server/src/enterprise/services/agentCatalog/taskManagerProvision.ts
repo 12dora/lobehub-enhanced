@@ -36,10 +36,13 @@ export const PLATFORM_TASK_MANAGER_MEMBER_SLUG = BUILTIN_AGENT_SLUGS.taskAgent;
 export const DEFAULT_TASK_MANAGER_DISPLAY_NAME_ZH = '任务助手';
 export const DEFAULT_TASK_MANAGER_DISPLAY_NAME_EN = 'Task Agent';
 
-const builtinTaskManagerTitleFor = (locale?: string) =>
-  (locale ?? '').toLowerCase().startsWith('zh')
-    ? DEFAULT_TASK_MANAGER_DISPLAY_NAME_ZH
-    : DEFAULT_TASK_MANAGER_DISPLAY_NAME_EN;
+const builtinTaskManagerTitleFor = (locale?: string) => {
+  const tag = (locale ?? '').trim().toLowerCase();
+  // Empty DEFAULT_LANG (and omitted locale) must not fall through to English: the product
+  // language is Chinese, matching the inbox seed's branding / builtin Chinese default.
+  if (!tag || tag.startsWith('zh')) return DEFAULT_TASK_MANAGER_DISPLAY_NAME_ZH;
+  return DEFAULT_TASK_MANAGER_DISPLAY_NAME_EN;
+};
 
 /**
  * Global assignment that makes `task-manager` eligible for runtime overlay: enabled + active

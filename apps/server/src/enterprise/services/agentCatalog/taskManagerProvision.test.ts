@@ -76,6 +76,20 @@ describe('buildTaskManagerSeed', () => {
     expect(seed.config.avatar).toBe('/avatars/lobe-ai.png');
   });
 
+  it('defaults to 任务助手 when locale is empty or omitted (DEFAULT_LANG=)', async () => {
+    stubPublishedDefault();
+
+    await expect(buildTaskManagerSeed(db)).resolves.toMatchObject({
+      config: { displayName: DEFAULT_TASK_MANAGER_DISPLAY_NAME_ZH },
+    });
+    await expect(buildTaskManagerSeed(db, { locale: '' })).resolves.toMatchObject({
+      config: { displayName: DEFAULT_TASK_MANAGER_DISPLAY_NAME_ZH },
+    });
+    await expect(buildTaskManagerSeed(db, { locale: '   ' })).resolves.toMatchObject({
+      config: { displayName: DEFAULT_TASK_MANAGER_DISPLAY_NAME_ZH },
+    });
+  });
+
   it('throws when the published catalog cannot pin the default model', async () => {
     getProviderByKey.mockResolvedValue(undefined);
     getLatestPublishedProviderRevision.mockResolvedValue(undefined);

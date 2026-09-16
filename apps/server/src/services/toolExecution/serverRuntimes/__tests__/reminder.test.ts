@@ -153,6 +153,60 @@ describe('reminderRuntime.factory', () => {
     });
   });
 
+  it('normalises empty unused schedule fields and missing time into a clear tool error', async () => {
+    const runtime = await reminderRuntime.factory({
+      agentId: 'agent-1',
+      serverDB: {},
+      topicId: 'topic-1',
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+    } as never);
+
+    const result = await runtime.createReminder({
+      content: '交安全报告',
+      recipients: ['胡玉琴A'],
+      schedule: {
+        date: '2026-09-16',
+        kind: 'once',
+        monthDays: [],
+        time: '',
+        until: '',
+        weekdays: [],
+      } as never,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('schedule.time');
+    expect(result.content).toContain('"serverNow"');
+    expect(mockCreateReminderTask).not.toHaveBeenCalled();
+  });
+
+  it('forwards an optional title into createReminderTask', async () => {
+    const runtime = await reminderRuntime.factory({
+      agentId: 'agent-1',
+      serverDB: {},
+      topicId: 'topic-1',
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+    } as never);
+
+    await runtime.createReminder({
+      content: '交安全报告',
+      recipients: ['胡玉琴A'],
+      schedule: onceSchedule,
+      title: '交安全报告',
+    });
+
+    expect(mockCreateReminderTask).toHaveBeenCalledWith({
+      content: '交安全报告',
+      createdByAgentId: 'agent-1',
+      recipients: ['胡玉琴A'],
+      schedule: onceSchedule,
+      title: '交安全报告',
+      topicId: 'topic-1',
+    });
+  });
+
   it('rejects kind-specific invalid schedules before calling ReminderTaskService', async () => {
     const runtime = await reminderRuntime.factory({
       agentId: 'agent-1',

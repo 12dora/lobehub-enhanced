@@ -58,7 +58,7 @@
 
 | 表 | 角色 |
 | --- | --- |
-| `tasks` | 提醒任务。`config.reminder.kind='reminder'`，`schedule_timezone='Asia/Shanghai'`，`status='scheduled'`，`assignee_agent_id` 为空。`instruction` 第一行是 `@姓名·部门` mention，空行后是正文。`name` 为正文前 40 字。 |
+| `tasks` | 提醒任务。`config.reminder.kind='reminder'`，`schedule_timezone='Asia/Shanghai'`，`status='scheduled'`，`assignee_agent_id` 为空。`instruction` 第一行是 `@姓名·部门` mention，空行后是正文。`name` 为 ≤12 字摘要（工具 `title`，缺省取正文首行）。 |
 | `reminders` | 提醒档案：正文（不含 mention 行）、`repeat_rule`、下次 `fire_at`、投递计数。新行 `source='task'` 且 `task_id` 指向任务（`ON DELETE CASCADE`，`task_id` 非空唯一）。`status` 与任务对齐：`scheduled` / `sent`（任务 completed）/ `canceled`。 |
 | `reminder_recipients` / `reminder_deliveries` | 不变，仍按 `reminder_id`。`listReceived`（我收到的）继续读投递行。 |
 
@@ -68,7 +68,7 @@ Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTas
 
 ### 工作通知格式（OA）
 
-钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`。`head.bgcolor` 固定 `FF2E7CF6`（色带标识应用）；`head.text` 仍发送管理端通用设置的站点标题（未设置时为「AI 助手」），但钉钉工作通知会把 `oa.head.text` **改写成服务号在开放平台登记的应用名**，因此调用方身份写在 `body.title`：`<站点标题或「AI 助手」> · <通知种类>`。载荷形如 `{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<站点标题> · <定时提醒 | 运行完成 | 运行失败 | 等待处理 | 任务完成>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，`body.title` 为 `<站点标题> · 定时提醒`，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」。任务生命周期推送的 `body.title` 为 `<站点标题> ·` 加短事件名（运行完成 / 运行失败 / 等待处理 / 任务完成，各不超过 12 字；原先较长的推送标题与说明放在 `content`，任务名在 form「任务」），form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录工作通知的 `task_id`。`reminder_deliveries` 另有 `robot_message_id` / `robot_status` / `robot_failed_reason` 记录服务号机器人投递；任务推送的机器人结果只记日志，不改 `notification_deliveries`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径。未配置通知应用时，任务推送回退到对话机器人 `oToMessages/batchSend`。
+钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`。`head.bgcolor` 固定 `FF2E7CF6`（色带标识应用）；`head.text` 仍发送管理端通用设置的站点标题（未设置时为「AI 助手」），但钉钉工作通知会把 `oa.head.text` **改写成服务号在开放平台登记的应用名**，因此调用方身份写在 `body.title`。定时提醒的 `body.title`（以及服务号机器人 markdown 标题、站内 `reminder.received` 通知标题）为 `<站点标题> · <创建者姓名>提醒你：<摘要>`，摘要不超过 12 字（例：`AI平台 · 胡玉琴A提醒你：每日例会`）。任务生命周期推送的 `body.title` 仍为 `<站点标题> ·` 加短事件名（运行完成 / 运行失败 / 等待处理 / 任务完成，各不超过 12 字；原先较长的推送标题与说明放在 `content`，任务名在 form「任务」）。载荷形如 `{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<站点标题> · <创建者>提醒你：<摘要>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」。任务生命周期推送 form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录工作通知的 `task_id`。`reminder_deliveries` 另有 `robot_message_id` / `robot_status` / `robot_failed_reason` 记录服务号机器人投递；任务推送的机器人结果只记日志，不改 `notification_deliveries`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径。未配置通知应用时，任务推送回退到对话机器人 `oToMessages/batchSend`。
 
 ## 手工绑定
 

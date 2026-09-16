@@ -70,6 +70,16 @@ vi.mock('./worker', () => ({
   deliverReminder: (...args: unknown[]) => mockDeliverReminder(...args),
   ensureReminderWorkerStarted: vi.fn(),
   isReminderWorkerRuntime: vi.fn(),
+  reminderSummaryTitle: (title: string | null | undefined, content: string) => {
+    const trimmed = title?.trim();
+    if (trimmed) return trimmed.slice(0, 12);
+    const line = content.trim().split(/\r?\n/, 1)[0] ?? '';
+    return line.slice(0, 12);
+  },
+  reminderTitleFromContent: (content: string) => {
+    const line = content.trim().split(/\r?\n/, 1)[0] ?? '';
+    return line.slice(0, 12);
+  },
   REMINDER_SWEEP_INTERVAL_MS: 60_000,
   runReminderSweep: vi.fn(),
   stopReminderWorker: vi.fn(),
@@ -308,6 +318,26 @@ describe('ReminderTaskService', () => {
       );
     });
 
+    it('uses the optional title as the task name and truncates content fallback to 12 chars', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
+
+      await service().createReminderTask({
+        content: '这是超过十二字的提醒正文内容',
+        recipients: ['胡玉琴A'],
+        schedule: futureOnce(),
+        title: '每日例会',
+      });
+      expect(mockTaskCreate.mock.calls[0][0].name).toBe('每日例会');
+
+      mockTaskCreate.mockClear();
+      await service().createReminderTask({
+        content: '这是超过十二字的提醒正文内容',
+        recipients: ['胡玉琴A'],
+        schedule: futureOnce(),
+      });
+      expect(mockTaskCreate.mock.calls[0][0].name).toBe('这是超过十二字的提醒正文');
+    });
+
     it('rejects a once fire time in the past', async () => {
       mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
 
@@ -395,6 +425,23 @@ describe('ReminderTaskService', () => {
       );
     });
 
+    it('does not fire before the occurrence even inside the cron tolerance window', async () => {
+      mockTaskFindById.mockResolvedValue(reminderTask);
+      mockFindByTaskId.mockResolvedValue(profile);
+      // schedule is 2026-09-16 09:00 Asia/Shanghai; the sweep runs at 08:57:20
+      const early = new Date('2026-09-16T00:57:20.000Z');
+
+      const outcome = await service({ deliverReminder: mockDeliverReminder }).fireForTick(
+        'task_1',
+        early,
+      );
+
+      expect(outcome).toBe('skipped');
+      expect(mockClaimFireSlot).not.toHaveBeenCalled();
+      expect(mockDeliverReminder).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    });
+
     it('delivers a once reminder, stamps heartbeat, and completes the task', async () => {
       mockTaskFindById.mockResolvedValue(reminderTask);
       mockFindByTaskId.mockResolvedValue(profile);
@@ -407,6 +454,11 @@ describe('ReminderTaskService', () => {
       expect(outcome).toBe('fired');
       expect(mockClaimFireSlot).toHaveBeenCalledOnce();
       expect(mockDeliverReminder).toHaveBeenCalledOnce();
+      expect(mockDeliverReminder).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ title: '测试一下' }),
+      );
       expect(mockUpdateStatus).toHaveBeenCalledWith('task_1', 'completed', { completedAt: now });
     });
 
@@ -706,6 +758,23 @@ describe('ReminderTaskService', () => {
       });
 
       expect(mockTaskUpdate.mock.calls[0][1].name).toBeUndefined();
+    });
+
+    it('uses the LLM title when the body changed and the user did not rename the task', async () => {
+      mockTaskResolve.mockResolvedValue(scheduledTask);
+      mockFindByTaskId.mockResolvedValue(scheduledProfile);
+      mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
+      mockUpdateProfile.mockResolvedValue(scheduledProfile);
+
+      await service({
+        interpretSchedule: async () => null,
+        interpretTitle: async () => '提交周报',
+      }).saveReminderTask({
+        instruction: '@胡玉琴A·外贸组\n\n请提交本周工作周报',
+        taskId: 'task_1',
+      });
+
+      expect(mockTaskUpdate.mock.calls[0][1].name).toBe('提交周报');
     });
   });
 

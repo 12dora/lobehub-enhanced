@@ -50,6 +50,8 @@ export interface CreateReminderParams {
   content: string;
   recipients: string[];
   schedule: ReminderScheduleInput;
+  /** ≤12-char summary used as the task name and DingTalk push title. */
+  title?: string;
 }
 
 export interface ClarificationCandidate {

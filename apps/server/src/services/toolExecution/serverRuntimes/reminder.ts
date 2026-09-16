@@ -6,6 +6,7 @@ import {
 import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder/manifest';
 
 import {
+  formatReminderScheduleParseError,
   reminderRecipientsSchema,
   reminderScheduleSchema,
 } from '@/server/enterprise/services/reminder/scheduleSchema';
@@ -35,12 +36,15 @@ export const reminderRuntime: ServerRuntimeRegistration = {
       cancel: (taskId) => tasks.cancel(taskId),
       create: (input) => {
         const recipients = reminderRecipientsSchema.parse(input.recipients);
-        const schedule = reminderScheduleSchema.parse(input.schedule);
+        const parsed = reminderScheduleSchema.safeParse(input.schedule);
+        if (!parsed.success) {
+          throw new Error(formatReminderScheduleParseError(parsed.error));
+        }
         return tasks.createReminderTask({
           ...input,
           createdByAgentId: input.createdByAgentId ?? agentId ?? null,
           recipients,
-          schedule,
+          schedule: parsed.data,
           topicId: input.topicId ?? topicId ?? null,
         });
       },

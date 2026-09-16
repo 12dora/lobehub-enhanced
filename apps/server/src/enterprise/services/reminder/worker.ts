@@ -60,11 +60,34 @@ export const REMINDER_SWEEP_DUE_LIMIT = 50;
 export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
 export const CHANNEL_DISABLED = NOTIFY_CHANNEL_DISABLED;
 export const INACTIVE_DELIVERY_REASON = 'inactive';
-export const REMINDER_OA_BODY_TITLE = '定时提醒';
+/** Push / task-name summary cap (tool `title` and content fallback). */
+export const REMINDER_TITLE_MAX_CHARS = 12;
 
-/** DingTalk overwrites `oa.head.text` with the 服务号 name; app identity lives in `body.title`. */
-export const formatReminderOaBodyTitle = (headText: string): string =>
-  `${headText} · ${REMINDER_OA_BODY_TITLE}`;
+/** First line of the reminder body, trimmed to the push-title budget. */
+export const reminderTitleFromContent = (content: string): string => {
+  const line = content.trim().split(/\r?\n/, 1)[0] ?? '';
+  return line.slice(0, REMINDER_TITLE_MAX_CHARS);
+};
+
+export const reminderSummaryTitle = (title: string | null | undefined, content: string): string => {
+  const trimmed = title?.trim();
+  if (trimmed) return trimmed.slice(0, REMINDER_TITLE_MAX_CHARS);
+  return reminderTitleFromContent(content);
+};
+
+/** Kind segment of the push title: `<创建者>提醒你：<摘要>`. */
+export const formatReminderPushKind = (creatorName: string, summary: string): string =>
+  `${creatorName}提醒你：${summary}`;
+
+/**
+ * DingTalk overwrites `oa.head.text` with the 服务号 name; app identity lives in `body.title`.
+ * Format: `<站点标题> · <创建者>提醒你：<摘要>`.
+ */
+export const formatReminderOaBodyTitle = (
+  headText: string,
+  summary: string,
+  creatorName: string,
+): string => `${headText} · ${formatReminderPushKind(creatorName, summary)}`;
 
 const noopRelease = async (): Promise<void> => {};
 
@@ -377,6 +400,7 @@ export const buildReminderWorkNoticeOa = (input: {
   headText: string;
   repeatRule?: ReminderRepeatRule | null;
   timezone: string;
+  title: string;
 }): DingTalkWorkNoticeOa => {
   const clock = formatFireClock(input.firedAt, input.timezone);
   const summary = formatRepeatSummary(input.repeatRule ?? null);
@@ -388,7 +412,7 @@ export const buildReminderWorkNoticeOa = (input: {
       { key: '来自', value: input.creatorName },
     ],
     headText: input.headText,
-    title: formatReminderOaBodyTitle(input.headText),
+    title: formatReminderOaBodyTitle(input.headText, input.title, input.creatorName),
   });
 };
 
@@ -399,6 +423,7 @@ export const buildReminderRobotMarkdown = (input: {
   headText: string;
   repeatRule?: ReminderRepeatRule | null;
   timezone: string;
+  title: string;
 }): { text: string; title: string } => {
   const clock = formatFireClock(input.firedAt, input.timezone);
   const summary = formatRepeatSummary(input.repeatRule ?? null);
@@ -409,7 +434,7 @@ export const buildReminderRobotMarkdown = (input: {
     content: input.content,
     footer,
     headText: input.headText,
-    kind: REMINDER_OA_BODY_TITLE,
+    kind: formatReminderPushKind(input.creatorName, input.title),
   });
 };
 
@@ -456,9 +481,12 @@ const fireOneReminder = async (
   reminder: ReminderItem,
   recipients: ReminderRecipientItem[],
   deps: ReminderFireRuntime,
+  options: { title?: string } = {},
 ): Promise<{ deliveries: ReminderFireDeliveryInput[]; reminder: ReminderItem }> => {
   const { activeIds: staffIds, inactiveIds } = await expandStaffIds(recipients, deps);
   const tz = reminder.timezone || REMINDER_DEFAULT_TZ;
+  const summaryTitle = reminderSummaryTitle(options.title, reminder.content);
+  const inboxTitle = formatReminderOaBodyTitle(deps.headText, summaryTitle, reminder.creatorName);
   const inboxBody = buildReminderNotice({
     content: reminder.content,
     creatorName: reminder.creatorName,
@@ -473,6 +501,7 @@ const fireOneReminder = async (
     headText: deps.headText,
     repeatRule: reminder.repeatRule ?? null,
     timezone: tz,
+    title: summaryTitle,
   });
   const robotMarkdown = buildReminderRobotMarkdown({
     content: reminder.content,
@@ -481,6 +510,7 @@ const fireOneReminder = async (
     headText: deps.headText,
     repeatRule: reminder.repeatRule ?? null,
     timezone: tz,
+    title: summaryTitle,
   });
   const userIds = new Map<string, string>();
   await Promise.all(
@@ -643,7 +673,7 @@ const fireOneReminder = async (
       await deps.createInbox({
         content: inboxBody.text,
         dedupeKey,
-        title: inboxBody.title,
+        title: inboxTitle,
         userId: delivery.userId,
       });
     } catch (error) {
@@ -685,7 +715,7 @@ const countDeliveries = (
 export const deliverReminder = async (
   db: LobeChatDatabase,
   reminder: ReminderItem,
-  deps: ReminderSweepDeps & { recipients?: ReminderRecipientItem[] } = {},
+  deps: ReminderSweepDeps & { recipients?: ReminderRecipientItem[]; title?: string } = {},
 ): Promise<ReminderDeliverResult> => {
   const runtime = await resolveFireRuntime(db, deps);
   const recipients =
@@ -701,6 +731,7 @@ export const deliverReminder = async (
     reminder,
     recipients,
     runtime,
+    { title: deps.title },
   );
   return { ...countDeliveries(deliveries), firedAt: runtime.now, reminder: updated };
 };

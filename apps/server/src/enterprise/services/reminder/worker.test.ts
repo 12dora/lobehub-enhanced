@@ -10,6 +10,7 @@ import {
   formatReminderOaBodyTitle,
   INACTIVE_DELIVERY_REASON,
   NOTIFY_APP_NOT_CONFIGURED,
+  reminderTitleFromContent,
   runReminderSweep,
 } from './worker';
 
@@ -139,7 +140,7 @@ describe('runReminderSweep', () => {
           { key: '时间', value: '09:00' },
           { key: '来自', value: '张三' },
         ],
-        title: 'AI平台 · 定时提醒',
+        title: 'AI平台 · 张三提醒你：交安全报告',
       },
       head: { bgcolor: 'FF2E7CF6', text: 'AI平台' },
     });
@@ -148,8 +149,8 @@ describe('runReminderSweep', () => {
     const robotIds = [...(sendRobot.mock.calls[0][0].staffIds as string[])].sort();
     expect(robotIds).toEqual(['staff_a', 'staff_b']);
     expect(sendRobot.mock.calls[0][0].markdown).toEqual({
-      text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 来自 张三',
-      title: 'AI平台 · 定时提醒',
+      text: '### AI平台 · 张三提醒你：交安全报告\n\n交安全报告\n\n09:00 · 来自 张三',
+      title: 'AI平台 · 张三提醒你：交安全报告',
     });
     const deliveries = recordFire.mock.calls[0][1].deliveries;
     expect(deliveries.map((row: { staffId: string }) => row.staffId).sort()).toEqual([
@@ -215,7 +216,7 @@ describe('runReminderSweep', () => {
     expect(createInbox).toHaveBeenCalledWith(
       expect.objectContaining({
         dedupeKey: 'reminder:rem_1:2026-09-16T01:00:00.000Z',
-        title: '提醒',
+        title: 'AI平台 · 张三提醒你：交安全报告',
         userId: 'user_mapped',
       }),
     );
@@ -322,11 +323,11 @@ describe('runReminderSweep', () => {
       { key: '时间', value: '09:00 · 每周三' },
       { key: '来自', value: '张三' },
     ]);
-    expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 定时提醒');
+    expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 张三提醒你：交安全报告');
     expect(send.mock.calls[0][0].oa).not.toHaveProperty('messageUrl');
     expect(sendRobot.mock.calls[0][0].markdown).toEqual({
-      text: '### AI平台 · 定时提醒\n\n交安全报告\n\n09:00 · 每周三 · 来自 张三',
-      title: 'AI平台 · 定时提醒',
+      text: '### AI平台 · 张三提醒你：交安全报告\n\n交安全报告\n\n09:00 · 每周三 · 来自 张三',
+      title: 'AI平台 · 张三提醒你：交安全报告',
     });
   });
 
@@ -344,8 +345,8 @@ describe('runReminderSweep', () => {
     expect(resolveHeadText).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].oa.head.text).toBe('AI平台');
     expect(send.mock.calls[1][0].oa.head.text).toBe('AI平台');
-    expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 定时提醒');
-    expect(send.mock.calls[1][0].oa.body.title).toBe('AI平台 · 定时提醒');
+    expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 张三提醒你：交安全报告');
+    expect(send.mock.calls[1][0].oa.body.title).toBe('AI平台 · 张三提醒你：交安全报告');
   });
 
   it('still sends head.text while putting the site title in body.title', async () => {
@@ -354,7 +355,7 @@ describe('runReminderSweep', () => {
     await run();
 
     expect(send.mock.calls[0][0].oa.head).toEqual({ bgcolor: 'FF2E7CF6', text: 'AI 助手' });
-    expect(send.mock.calls[0][0].oa.body.title).toBe('AI 助手 · 定时提醒');
+    expect(send.mock.calls[0][0].oa.body.title).toBe('AI 助手 · 张三提醒你：交安全报告');
   });
 
   it('creates inbox when the robot succeeds even if the work notice fails', async () => {
@@ -519,9 +520,24 @@ describe('runReminderSweep', () => {
 });
 
 describe('formatReminderOaBodyTitle', () => {
-  it('prefixes 定时提醒 with the site title', () => {
-    expect(formatReminderOaBodyTitle('AI平台')).toBe('AI平台 · 定时提醒');
-    expect(formatReminderOaBodyTitle('AI 助手')).toBe('AI 助手 · 定时提醒');
+  it('prefixes the creator+summary kind with the site title', () => {
+    expect(formatReminderOaBodyTitle('AI平台', '每日例会', '胡玉琴A')).toBe(
+      'AI平台 · 胡玉琴A提醒你：每日例会',
+    );
+    expect(formatReminderOaBodyTitle('AI 助手', '交安全报告', '张三')).toBe(
+      'AI 助手 · 张三提醒你：交安全报告',
+    );
+  });
+
+  it('truncates a legacy content fallback to 12 chars', () => {
+    expect(reminderTitleFromContent('这是超过十二字的提醒正文内容')).toBe('这是超过十二字的提醒正文');
+    expect(
+      formatReminderOaBodyTitle(
+        'AI平台',
+        reminderTitleFromContent('这是超过十二字的提醒正文内容'),
+        '张三',
+      ),
+    ).toBe('AI平台 · 张三提醒你：这是超过十二字的提醒正文');
   });
 });
 
@@ -570,6 +586,39 @@ describe('deliverReminder persistMode deliveries', () => {
         ]),
       );
       expect(result.failed).toBe(1);
+    } finally {
+      insert.mockRestore();
+    }
+  });
+
+  it('uses the passed title in the OA body instead of truncating content', async () => {
+    const insert = vi.spyOn(ReminderModel, 'insertDeliveries').mockResolvedValue(undefined);
+    const send = vi.fn().mockResolvedValue([{ taskId: 'task_1' }]);
+    const sendRobot = vi.fn().mockResolvedValue([{ processQueryKey: 'pqk_1' }]);
+
+    try {
+      await deliverReminder(
+        {} as never,
+        reminder({ content: '每日例会 9:00 在三楼会议室', taskId: 'task_1' }),
+        {
+          createInboxNotification: vi.fn(),
+          getUsers: async () => [{ active: true, staffId: 'staff_hyq' }],
+          isNotifyAppConfigured: async () => true,
+          isNotifyRobotEnabled: async () => true,
+          isWorkNoticeEnabled: async () => true,
+          now: new Date('2026-09-16T01:00:00.000Z'),
+          persistMode: 'deliveries',
+          recipients: [recipient({})],
+          resolveHeadText: async () => 'AI平台',
+          resolveUserId: async () => null,
+          sendRobotMessage: sendRobot,
+          sendWorkNotice: send,
+          title: '每日例会',
+        },
+      );
+
+      expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 张三提醒你：每日例会');
+      expect(sendRobot.mock.calls[0][0].markdown.title).toBe('AI平台 · 张三提醒你：每日例会');
     } finally {
       insert.mockRestore();
     }

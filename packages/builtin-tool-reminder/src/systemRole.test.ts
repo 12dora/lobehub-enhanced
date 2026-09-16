@@ -20,6 +20,8 @@ describe('reminder systemRole', () => {
     expect(systemPrompt).toContain('姓名 · 部门');
     expect(systemPrompt).toContain('needs_confirmation');
     expect(systemPrompt).not.toContain('必须先调用 searchDirectory');
+    expect(systemPrompt).toContain('title');
+    expect(systemPrompt).toContain('空字符串');
   });
 
   it('interprets times in Asia/Shanghai using serverNow', () => {

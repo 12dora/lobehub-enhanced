@@ -9,7 +9,7 @@ const scheduleSchema = {
   additionalProperties: false,
   properties: {
     date: {
-      description: 'YYYY-MM-DD in Asia/Shanghai. Required when kind is once.',
+      description: 'YYYY-MM-DD in Asia/Shanghai. Required when kind is once. Omit when unused.',
       type: 'string',
     },
     kind: {
@@ -18,20 +18,21 @@ const scheduleSchema = {
       type: 'string',
     },
     monthDays: {
-      description: 'Day-of-month numbers 1-31. Used when kind is monthly.',
+      description: 'Day-of-month numbers 1-31. Used when kind is monthly. Omit when unused.',
       items: { type: 'number' },
       type: 'array',
     },
     time: {
-      description: 'Send time HH:mm in Asia/Shanghai.',
+      description:
+        'Send time HH:mm in Asia/Shanghai. Always required; do not send an empty string.',
       type: 'string',
     },
     until: {
-      description: 'Inclusive end date YYYY-MM-DD for repeating reminders.',
+      description: 'Inclusive end date YYYY-MM-DD for repeating reminders. Omit when unused.',
       type: 'string',
     },
     weekdays: {
-      description: 'Weekdays 1-7 (Monday=1). Used when kind is weekly.',
+      description: 'Weekdays 1-7 (Monday=1). Used when kind is weekly. Omit when unused.',
       items: { type: 'number' },
       type: 'array',
     },
@@ -67,8 +68,13 @@ export const ReminderManifest: BuiltinToolManifest = {
           },
           schedule: {
             description:
-              'once requires date+time; daily/weekly/monthly for 每天/每周/每月. Otherwise once at the next occurrence.',
+              'once requires date+time; daily/weekly/monthly for 每天/每周/每月. Otherwise once at the next occurrence. Omit unused fields (do not send empty strings or empty arrays).',
             ...scheduleSchema,
+          },
+          title: {
+            description: '一句话概括提醒内容，如 每日例会 / 提交周报。最多 12 字。',
+            maxLength: 12,
+            type: 'string',
           },
         },
         required: ['recipients', 'content', 'schedule'],
