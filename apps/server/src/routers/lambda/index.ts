@@ -82,6 +82,7 @@ export const lambdaRouter = router({
   pushToken: lazyRouter(() => import('./pushToken').then((m) => m.pushTokenRouter)),
   ragEval: moduleRouter('knowledgeBase', () => import('./ragEval').then((m) => m.ragEvalRouter)),
   recent: lazyRouter(() => import('./recent').then((m) => m.recentRouter)),
+  reminder: lazyRouter(() => import('./reminder').then((m) => m.reminderRouter)),
   search: lazyRouter(() => import('./search').then((m) => m.searchRouter)),
   session: lazyRouter(() => import('./session').then((m) => m.sessionRouter)),
   sessionGroup: lazyRouter(() => import('./sessionGroup').then((m) => m.sessionGroupRouter)),

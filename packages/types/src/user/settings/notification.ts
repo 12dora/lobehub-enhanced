@@ -22,16 +22,26 @@ export const TASK_NOTIFICATION_TYPES = [
 ] as const;
 export type TaskNotificationType = (typeof TASK_NOTIFICATION_TYPES)[number];
 
+/**
+ * Notification category for timed reminders (定时提醒). Producer: `ReminderService`
+ * sweep (`apps/server/src/enterprise/services/reminder`). Types are the
+ * `notifications.type` values and the keys under `items.reminder`. Missing = enabled.
+ */
+export const REMINDER_NOTIFICATION_CATEGORY = 'reminder' as const;
+export const REMINDER_NOTIFICATION_TYPE_RECEIVED = 'reminder.received' as const;
+export const REMINDER_NOTIFICATION_TYPES = [REMINDER_NOTIFICATION_TYPE_RECEIVED] as const;
+export type ReminderNotificationType = (typeof REMINDER_NOTIFICATION_TYPES)[number];
+
+/** Default per-type prefs for the reminder category. Missing = enabled. */
+export const REMINDER_NOTIFICATION_DEFAULT_ITEMS = {
+  [REMINDER_NOTIFICATION_TYPE_RECEIVED]: true,
+} as const;
+
 /** Delivery channels persisted in `notification_deliveries.channel`. */
 export type NotificationDeliveryChannel = 'email' | 'inbox' | 'push' | 'dingtalk';
 
 /** Lifecycle status persisted in `notification_deliveries.status`. */
-export type NotificationDeliveryStatus =
-  | 'delivered'
-  | 'failed'
-  | 'pending'
-  | 'sent'
-  | 'skipped';
+export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'pending' | 'sent' | 'skipped';
 
 export interface NotificationSettings {
   /**

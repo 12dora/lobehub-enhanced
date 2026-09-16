@@ -1,0 +1,430 @@
+import { randomUUID } from 'node:crypto';
+
+import {
+  REMINDER_NOTIFICATION_CATEGORY,
+  REMINDER_NOTIFICATION_TYPE_RECEIVED,
+} from '@lobechat/types';
+import debug from 'debug';
+import { inArray } from 'drizzle-orm';
+
+import { getServerDB } from '@/database/core/db-adaptor';
+import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
+import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
+import { NotificationModel } from '@/database/models/notification';
+import type { ReminderFireDeliveryInput } from '@/database/models/reminder';
+import { ReminderModel } from '@/database/models/reminder';
+import { UserModel } from '@/database/models/user';
+import type {
+  ReminderItem,
+  ReminderRecipientItem,
+  ReminderRepeatRule,
+} from '@/database/schemas/reminder';
+import { reminderRecipients } from '@/database/schemas/reminder';
+import type { LobeChatDatabase } from '@/database/type';
+import { RELEASE_SWEEP_LOCK_SCRIPT } from '@/server/enterprise/services/taskScheduling/lock';
+import type {
+  SweepLockHandle,
+  SweepLockResult,
+} from '@/server/enterprise/services/taskScheduling/types';
+import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
+import { buildDingTalkIdentityEmail } from '@/server/services/messenger/platforms/dingtalk/const';
+import {
+  DINGTALK_WORK_NOTICE_USERID_CHUNK,
+  resolveNotifyAppConfig,
+  sendWorkNotice,
+} from '@/server/services/messenger/platforms/dingtalk/notifyApp';
+
+import { buildReminderNotice, nextFireAt, REMINDER_DEFAULT_TZ } from './schedule';
+
+const log = debug('lobe-server:reminder');
+
+export const REMINDER_SWEEP_LOCK_KEY = 'reminder:sweep-lock';
+export const REMINDER_SWEEP_LOCK_TTL_SECONDS = 5 * 60;
+export const REMINDER_SWEEP_INTERVAL_MS = 60_000;
+export const REMINDER_SWEEP_DUE_LIMIT = 50;
+export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
+
+const noopRelease = async (): Promise<void> => {};
+
+const lockHandle = (
+  result: SweepLockResult,
+  release: SweepLockHandle['release'],
+): SweepLockHandle => ({ release, result });
+
+export const acquireReminderSweepLock = async (): Promise<SweepLockHandle> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) {
+    console.warn('[reminder] Redis unavailable; running sweep without a cross-replica lock');
+    return lockHandle('unavailable', noopRelease);
+  }
+
+  const token = randomUUID();
+
+  try {
+    const result = await redis.set(
+      REMINDER_SWEEP_LOCK_KEY,
+      token,
+      'EX',
+      REMINDER_SWEEP_LOCK_TTL_SECONDS,
+      'NX',
+    );
+    if (result !== 'OK') {
+      log('lock held by another replica, skip sweep');
+      return lockHandle('held', noopRelease);
+    }
+  } catch (error) {
+    console.warn('[reminder] Redis lock failed; running sweep anyway', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+    return lockHandle('unavailable', noopRelease);
+  }
+
+  return lockHandle('acquired', async () => {
+    try {
+      await redis.eval(RELEASE_SWEEP_LOCK_SCRIPT, 1, REMINDER_SWEEP_LOCK_KEY, token);
+    } catch (error) {
+      console.warn('[reminder] Redis lock release failed', {
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+  });
+};
+
+export interface ReminderSweepCounts {
+  failed: number;
+  fired: number;
+  skipped: number;
+}
+
+export interface ReminderSweepResult {
+  counts: ReminderSweepCounts;
+  lock: SweepLockResult;
+}
+
+export interface ReminderSweepDeps {
+  acquireLock?: () => Promise<SweepLockHandle>;
+  createInboxNotification?: (input: {
+    content: string;
+    dedupeKey: string;
+    title: string;
+    userId: string;
+  }) => Promise<void>;
+  getUsers?: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
+  isNotifyAppConfigured?: () => Promise<boolean>;
+  listDue?: typeof ReminderModel.listDue;
+  loadRecipients?: (reminderIds: string[]) => Promise<Map<string, ReminderRecipientItem[]>>;
+  now?: Date;
+  recordFire?: typeof ReminderModel.recordFire;
+  resolveUserId?: (staffId: string) => Promise<string | null>;
+  sendWorkNotice?: typeof sendWorkNotice;
+  subtreeMemberStaffIds?: (deptId: string) => Promise<string[]>;
+}
+
+const emptyCounts = (): ReminderSweepCounts => ({ failed: 0, fired: 0, skipped: 0 });
+
+export const loadReminderRecipients = async (
+  db: LobeChatDatabase,
+  reminderIds: string[],
+): Promise<Map<string, ReminderRecipientItem[]>> => {
+  const byReminder = new Map<string, ReminderRecipientItem[]>();
+  if (reminderIds.length === 0) return byReminder;
+  const rows = await db
+    .select()
+    .from(reminderRecipients)
+    .where(inArray(reminderRecipients.reminderId, reminderIds));
+  for (const row of rows) {
+    const list = byReminder.get(row.reminderId) ?? [];
+    list.push(row);
+    byReminder.set(row.reminderId, list);
+  }
+  return byReminder;
+};
+
+export const resolveUserIdFromStaffId = async (
+  db: LobeChatDatabase,
+  staffId: string,
+): Promise<string | null> => {
+  const link = await MessengerAccountLinkModel.findByPlatformUser(db, 'dingtalk', staffId, '');
+  if (link?.userId) return link.userId;
+  const user = await UserModel.findByEmail(db, buildDingTalkIdentityEmail(staffId));
+  return user?.id ?? null;
+};
+
+const chunkStaffIds = (staffIds: string[], size: number): string[][] => {
+  if (staffIds.length === 0) return [];
+  const chunks: string[][] = [];
+  for (let index = 0; index < staffIds.length; index += size) {
+    chunks.push(staffIds.slice(index, index + size));
+  }
+  return chunks;
+};
+
+const expandStaffIds = async (
+  recipients: ReminderRecipientItem[],
+  deps: {
+    getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
+    subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
+  },
+): Promise<string[]> => {
+  const staffIds = new Set<string>();
+  const directIds: string[] = [];
+
+  for (const recipient of recipients) {
+    if (recipient.kind === 'user' && recipient.staffId) {
+      directIds.push(recipient.staffId);
+    } else if (recipient.kind === 'department' && recipient.deptId) {
+      const members = await deps.subtreeMemberStaffIds(recipient.deptId);
+      for (const staffId of members) staffIds.add(staffId);
+    }
+  }
+
+  if (directIds.length > 0) {
+    const users = await deps.getUsers([...new Set(directIds)]);
+    const active = new Set(users.filter((user) => user.active).map((user) => user.staffId));
+    for (const staffId of directIds) {
+      if (active.has(staffId)) staffIds.add(staffId);
+    }
+  }
+
+  return [...staffIds];
+};
+
+const deliverChunk = async (input: {
+  body: { text: string; title: string };
+  send: typeof sendWorkNotice;
+  staffIds: string[];
+}): Promise<{
+  failedReason?: string;
+  staffIds: string[];
+  status: 'failed' | 'sent';
+  taskId?: string;
+}> => {
+  try {
+    const results = await input.send({
+      markdown: input.body,
+      staffIds: input.staffIds,
+    });
+    return { staffIds: input.staffIds, status: 'sent', taskId: results[0]?.taskId };
+  } catch (error) {
+    const failedReason =
+      error instanceof Error && error.message ? error.message.slice(0, 500) : 'send_failed';
+    log('sendWorkNotice failed: %s', failedReason);
+    return { failedReason, staffIds: input.staffIds, status: 'failed' };
+  }
+};
+
+export const runReminderSweep = async (
+  db: LobeChatDatabase,
+  deps: ReminderSweepDeps = {},
+): Promise<ReminderSweepResult> => {
+  const lock = await (deps.acquireLock ?? acquireReminderSweepLock)();
+  if (lock.result === 'held') {
+    return { counts: emptyCounts(), lock: lock.result };
+  }
+
+  const counts = emptyCounts();
+  const now = deps.now ?? new Date();
+
+  try {
+    const listDue = deps.listDue ?? ReminderModel.listDue;
+    const due = await listDue(db, now, REMINDER_SWEEP_DUE_LIMIT);
+    if (due.length === 0) return { counts, lock: lock.result };
+
+    const directory = new DingTalkDirectoryModel(db);
+    const loadRecipients =
+      deps.loadRecipients ?? ((ids: string[]) => loadReminderRecipients(db, ids));
+    const recipientsByReminder = await loadRecipients(due.map((row) => row.id));
+    const isNotifyAppConfigured =
+      deps.isNotifyAppConfigured ?? (async () => Boolean(await resolveNotifyAppConfig()));
+    const notifyConfigured = await isNotifyAppConfigured();
+    const send = deps.sendWorkNotice ?? sendWorkNotice;
+    const recordFire = deps.recordFire ?? ReminderModel.recordFire;
+    const getUsers =
+      deps.getUsers ??
+      (async (staffIds: string[]) => {
+        const rows = await directory.getUsers(staffIds);
+        return rows.map((row) => ({ active: row.active, staffId: row.staffId }));
+      });
+    const subtreeMemberStaffIds =
+      deps.subtreeMemberStaffIds ?? ((deptId: string) => directory.subtreeMemberStaffIds(deptId));
+    const resolveUserId =
+      deps.resolveUserId ?? ((staffId: string) => resolveUserIdFromStaffId(db, staffId));
+    const createInbox =
+      deps.createInboxNotification ??
+      (async (input) => {
+        const model = new NotificationModel(db, input.userId);
+        await model.create({
+          category: REMINDER_NOTIFICATION_CATEGORY,
+          content: input.content,
+          dedupeKey: input.dedupeKey,
+          title: input.title,
+          type: REMINDER_NOTIFICATION_TYPE_RECEIVED,
+        });
+      });
+
+    for (const reminder of due) {
+      try {
+        await fireOneReminder(db, reminder, recipientsByReminder.get(reminder.id) ?? [], {
+          createInbox,
+          getUsers,
+          now,
+          notifyConfigured,
+          recordFire,
+          resolveUserId,
+          send,
+          subtreeMemberStaffIds,
+        });
+        counts.fired += 1;
+      } catch (error) {
+        counts.failed += 1;
+        log('fire failed reminder=%s %O', reminder.id, error);
+      }
+    }
+
+    return { counts, lock: lock.result };
+  } finally {
+    await lock.release();
+  }
+};
+
+const fireOneReminder = async (
+  db: LobeChatDatabase,
+  reminder: ReminderItem,
+  recipients: ReminderRecipientItem[],
+  deps: {
+    createInbox: (input: {
+      content: string;
+      dedupeKey: string;
+      title: string;
+      userId: string;
+    }) => Promise<void>;
+    getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
+    now: Date;
+    notifyConfigured: boolean;
+    recordFire: typeof ReminderModel.recordFire;
+    resolveUserId: (staffId: string) => Promise<string | null>;
+    send: typeof sendWorkNotice;
+    subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
+  },
+): Promise<void> => {
+  const staffIds = await expandStaffIds(recipients, deps);
+  const tz = reminder.timezone || REMINDER_DEFAULT_TZ;
+  const body = buildReminderNotice({
+    content: reminder.content,
+    creatorName: reminder.creatorName,
+    firedAt: deps.now,
+    repeatRule: reminder.repeatRule ?? null,
+    timezone: tz,
+  });
+  const userIds = new Map<string, string>();
+  await Promise.all(
+    staffIds.map(async (staffId) => {
+      const userId = await deps.resolveUserId(staffId);
+      if (userId) userIds.set(staffId, userId);
+    }),
+  );
+
+  const deliveries: ReminderFireDeliveryInput[] = [];
+
+  if (!deps.notifyConfigured) {
+    for (const staffId of staffIds) {
+      deliveries.push({
+        failedReason: NOTIFY_APP_NOT_CONFIGURED,
+        providerTaskId: null,
+        staffId,
+        status: 'skipped',
+        userId: userIds.get(staffId) ?? null,
+      });
+    }
+  } else {
+    for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
+      const result = await deliverChunk({ body, send: deps.send, staffIds: chunk });
+      for (const staffId of result.staffIds) {
+        deliveries.push({
+          failedReason: result.failedReason ?? null,
+          providerTaskId: result.taskId ?? null,
+          staffId,
+          status: result.status,
+          userId: userIds.get(staffId) ?? null,
+        });
+      }
+    }
+  }
+
+  const firedAt = deps.now;
+  const next = reminder.repeatRule
+    ? nextFireAt(reminder.repeatRule as ReminderRepeatRule, firedAt, tz)
+    : null;
+
+  await deps.recordFire(db, {
+    deliveries,
+    firedAt,
+    nextFireAt: next,
+    reminderId: reminder.id,
+  });
+
+  const dedupeKey = `reminder:${reminder.id}:${firedAt.toISOString()}`;
+  for (const delivery of deliveries) {
+    if (delivery.status !== 'sent' || !delivery.userId) continue;
+    try {
+      await deps.createInbox({
+        content: body.text,
+        dedupeKey,
+        title: body.title,
+        userId: delivery.userId,
+      });
+    } catch (error) {
+      log('inbox notify failed user=%s %O', delivery.userId, error);
+    }
+  }
+};
+
+export const isReminderWorkerRuntime = (env: Partial<NodeJS.ProcessEnv> = process.env): boolean => {
+  if (!env.DATABASE_URL) return false;
+  if (env.VERCEL === '1' || Boolean(env.VERCEL_ENV)) return false;
+  if (env.NEXT_RUNTIME === 'edge') return false;
+  if (env.AWS_LAMBDA_FUNCTION_NAME) return false;
+  return true;
+};
+
+let started = false;
+let timer: ReturnType<typeof setInterval> | undefined;
+
+export const isReminderWorkerStarted = (): boolean => started;
+
+export const ensureReminderWorkerStarted = (deps: ReminderSweepDeps = {}): void => {
+  if (started) return;
+  if (!isReminderWorkerRuntime()) {
+    log('skip start: missing DATABASE_URL or serverless host');
+    return;
+  }
+
+  started = true;
+  const tick = () => {
+    void (async () => {
+      const db = await getServerDB();
+      await runReminderSweep(db, deps);
+    })().catch((error) => {
+      console.error('[reminder] sweep failed', {
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+    });
+  };
+
+  tick();
+  timer = setInterval(tick, REMINDER_SWEEP_INTERVAL_MS);
+  timer.unref();
+  log('started interval=%dms', REMINDER_SWEEP_INTERVAL_MS);
+};
+
+export const stopReminderWorker = (): void => {
+  started = false;
+  if (timer) {
+    clearInterval(timer);
+    timer = undefined;
+  }
+};
+
+export const stopReminderWorkerForTest = (): void => {
+  stopReminderWorker();
+};

@@ -9,6 +9,7 @@ export default {
   'billboard.menuLabel': 'Announcements',
   'category.billing': 'Billing',
   'category.generation': 'Generation',
+  'category.reminder': 'Reminders',
   'category.schedule': 'Scheduled tasks',
   'category.system': 'System',
   'category.task': 'Tasks',
@@ -31,6 +32,7 @@ export default {
   'inbox.markAllRead': 'Mark all as read',
   'inbox.title': 'Notifications',
   'inbox.viewDetail': 'View details',
+  'reminder.received.title': 'Reminder',
   'storage_overage_cap_reached':
     'Your storage pay-as-you-go monthly cap of ${{monthlyCap}} has been reached. Estimated charges this cycle are ${{estimatedCycleCharge}}. New uploads beyond your included storage will be blocked until the next billing cycle or until you increase the cap.',
   'storage_overage_cap_reached_title': 'Storage pay-as-you-go cap reached',

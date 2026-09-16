@@ -101,6 +101,11 @@ import {
   PageAgentStreamings,
 } from '@lobechat/builtin-tool-page-agent/client';
 import {
+  ReminderInspectors,
+  ReminderManifest,
+  ReminderRenders,
+} from '@lobechat/builtin-tool-reminder/client';
+import {
   RemoteDeviceManifest,
   RemoteDeviceRenders,
 } from '@lobechat/builtin-tool-remote-device/client';
@@ -187,6 +192,7 @@ export const registerBuiltinToolSurfaces = (): void => {
     [MessageManifest.identifier]: MessageRenders as Record<string, BuiltinRender>,
     [NotebookIdentifier]: NotebookRenders,
     [PageAgentManifest.identifier]: PageAgentRenders as Record<string, BuiltinRender>,
+    [ReminderManifest.identifier]: ReminderRenders as Record<string, BuiltinRender>,
     [RemoteDeviceManifest.identifier]: RemoteDeviceRenders as Record<string, BuiltinRender>,
     [SkillStoreManifest.identifier]: SkillStoreRenders as Record<string, BuiltinRender>,
     [SkillsManifest.identifier]: SkillsRenders as Record<string, BuiltinRender>,
@@ -239,6 +245,7 @@ export const registerBuiltinToolSurfaces = (): void => {
     >,
     [SkillStoreManifest.identifier]: SkillStoreInspectors as Record<string, BuiltinInspector>,
     [SkillsManifest.identifier]: SkillsInspectors as Record<string, BuiltinInspector>,
+    [ReminderManifest.identifier]: ReminderInspectors as Record<string, BuiltinInspector>,
     [TaskManifest.identifier]: TaskInspectors as Record<string, BuiltinInspector>,
     [WebBrowsingManifest.identifier]: WebBrowsingInspectors as Record<string, BuiltinInspector>,
     [WebOnboardingManifest.identifier]: WebOnboardingInspectors as Record<string, BuiltinInspector>,

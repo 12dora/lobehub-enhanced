@@ -34,6 +34,7 @@ import { MemoryIdentifier } from '@lobechat/builtin-tool-memory/manifest';
 import { MessageToolIdentifier } from '@lobechat/builtin-tool-message/manifest';
 import { NotebookIdentifier } from '@lobechat/builtin-tool-notebook/manifest';
 import { PageAgentIdentifier } from '@lobechat/builtin-tool-page-agent/manifest';
+import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder/manifest';
 import { RemoteDeviceIdentifier } from '@lobechat/builtin-tool-remote-device/manifest';
 import { SELF_FEEDBACK_INTENT_IDENTIFIER } from '@lobechat/builtin-tool-self-iteration/manifest';
 import { SkillMaintainerIdentifier } from '@lobechat/builtin-tool-skill-maintainer/manifest';
@@ -127,6 +128,7 @@ const SERVER_RUNTIME_REGISTRATIONS: ServerRuntimeRegistration[] = [
   ),
   lazyRuntime(BriefIdentifier, async () => (await import('./brief')).briefRuntime),
   lazyRuntime(TaskIdentifier, async () => (await import('./task')).taskRuntime),
+  lazyRuntime(ReminderIdentifier, async () => (await import('./reminder')).reminderRuntime),
   lazyRuntime(
     TopicReferenceIdentifier,
     async () => (await import('./topicReference')).topicReferenceRuntime,

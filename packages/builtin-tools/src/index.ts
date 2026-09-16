@@ -22,6 +22,7 @@ import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { MemoryManifest } from '@lobechat/builtin-tool-memory';
 import { MessageManifest } from '@lobechat/builtin-tool-message';
 import { PageAgentManifest } from '@lobechat/builtin-tool-page-agent';
+import { ReminderManifest } from '@lobechat/builtin-tool-reminder';
 import { RemoteDeviceManifest } from '@lobechat/builtin-tool-remote-device';
 import { selfFeedbackIntentManifest } from '@lobechat/builtin-tool-self-iteration';
 import { SkillMaintainerManifest } from '@lobechat/builtin-tool-skill-maintainer';
@@ -53,6 +54,7 @@ export const defaultToolIds = [
   AgentDocumentsManifest.identifier,
   DocumentPagesManifest.identifier,
   TaskManifest.identifier,
+  ReminderManifest.identifier,
   LobeAgentManifest.identifier,
 ];
 
@@ -349,6 +351,11 @@ const builtinToolRegistry: LobeBuiltinTool[] = [
   {
     identifier: TaskManifest.identifier,
     manifest: TaskManifest,
+    type: 'builtin',
+  },
+  {
+    identifier: ReminderManifest.identifier,
+    manifest: ReminderManifest,
     type: 'builtin',
   },
   {
