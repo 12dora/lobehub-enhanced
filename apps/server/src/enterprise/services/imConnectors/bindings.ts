@@ -63,7 +63,9 @@ export class ImConnectorBindingUserNotFoundError extends Error {
   }
 }
 
-export interface ImConnectorBindingUpsertBeforeDiff {
+// Type alias (not interface): audit `beforeDiff` is typed `Record<string, unknown>`, and only
+// aliases are assignable to an index-signature type.
+export type ImConnectorBindingUpsertBeforeDiff = {
   displaced: {
     boundVia: ImConnectorBindingBoundVia;
     platformUserId: string | null;
@@ -76,7 +78,7 @@ export interface ImConnectorBindingUpsertBeforeDiff {
   previousPlatformUserId: string | null;
   previousPlatformUsername: string | null;
   previousSource: ImConnectorBindingSource | null;
-}
+};
 
 export interface ImConnectorBindingUpsertResult {
   beforeDiff: ImConnectorBindingUpsertBeforeDiff | null;
