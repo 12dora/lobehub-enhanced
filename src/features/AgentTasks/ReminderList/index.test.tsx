@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import zhChat from '../../../../locales/zh-CN/chat.json';
 import ReminderList from './index';
+import type * as SwrKeysModule from './swrKeys';
 import type { CreatedReminderRow, ReceivedReminderRow } from './types';
 
 const dict = zhChat as Record<string, string>;
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   hideReceived: vi.fn(),
   listCreated: vi.fn(),
   listReceived: vi.fn(),
+  mutateReminderLists: vi.fn(),
   navigate: vi.fn(),
   received: [] as unknown[],
   receivedError: undefined as unknown,
@@ -63,6 +65,12 @@ vi.mock('@/libs/swr', () => ({
       mutate: isCreated ? mocks.refreshCreated : mocks.refreshReceived,
     };
   },
+}));
+
+vi.mock('./swrKeys', async (importOriginal) => ({
+  ...(await importOriginal<typeof SwrKeysModule>()),
+  // The real one needs the SWR provider; assert the invalidation instead.
+  mutateReminderLists: mocks.mutateReminderLists,
 }));
 
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
@@ -227,6 +235,7 @@ beforeEach(() => {
   mocks.listReceived.mockResolvedValue(receivedFixture);
   mocks.cancel.mockResolvedValue(undefined);
   mocks.hideReceived.mockResolvedValue(undefined);
+  mocks.mutateReminderLists.mockResolvedValue(undefined);
   mocks.fireNow.mockResolvedValue({
     failed: 1,
     firedAt: '2026-09-16T02:00:00.000Z',
@@ -239,7 +248,8 @@ describe('ReminderList 我发起的', () => {
   it('loads the created reminders and renders one row per reminder task', () => {
     render(<ReminderList />);
 
-    expect(mocks.listCreated).toHaveBeenCalledWith({ includeFinished: false });
+    // The router caps limit at 200; the tables ask for the whole set.
+    expect(mocks.listCreated).toHaveBeenCalledWith({ includeFinished: false, limit: 200 });
     expect(screen.getByText('周三例会材料准备')).toBeInTheDocument();
     expect(screen.getByText('已经结束的提醒')).toBeInTheDocument();
     expect(screen.getByText('每周三 09:00')).toBeInTheDocument();
@@ -280,7 +290,7 @@ describe('ReminderList 我发起的', () => {
 
     await waitFor(() => expect(mocks.fireNow).toHaveBeenCalledWith('task_1'));
     expect(mocks.toast.success).toHaveBeenCalledWith('已发 2 · 失败 1 · 跳过 0');
-    expect(mocks.refreshCreated).toHaveBeenCalled();
+    expect(mocks.mutateReminderLists).toHaveBeenCalled();
   });
 
   it('cancels a reminder and refreshes the table', async () => {
@@ -290,7 +300,7 @@ describe('ReminderList 我发起的', () => {
 
     await waitFor(() => expect(mocks.cancel).toHaveBeenCalledWith('task_1'));
     expect(mocks.toast.success).toHaveBeenCalledWith('提醒已取消');
-    expect(mocks.refreshCreated).toHaveBeenCalled();
+    expect(mocks.mutateReminderLists).toHaveBeenCalled();
   });
 
   it('surfaces a failed cancel as an error toast without refreshing', async () => {
@@ -300,7 +310,7 @@ describe('ReminderList 我发起的', () => {
     fireEvent.click(screen.getByText('confirm:取消提醒'));
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('取消提醒失败'));
-    expect(mocks.refreshCreated).not.toHaveBeenCalled();
+    expect(mocks.mutateReminderLists).not.toHaveBeenCalled();
   });
 
   it('asks for finished reminders when 显示已结束 is checked', () => {
@@ -308,7 +318,7 @@ describe('ReminderList 我发起的', () => {
 
     fireEvent.click(screen.getByText('显示已结束'));
 
-    expect(mocks.listCreated).toHaveBeenCalledWith({ includeFinished: true });
+    expect(mocks.listCreated).toHaveBeenCalledWith({ includeFinished: true, limit: 200 });
   });
 
   it('shows the empty state when there is no reminder', () => {
@@ -342,7 +352,7 @@ describe('ReminderList 我收到的', () => {
     render(<ReminderList />);
     showReceived();
 
-    expect(mocks.listReceived).toHaveBeenCalled();
+    expect(mocks.listReceived).toHaveBeenCalledWith({ limit: 200 });
     expect(screen.getByText('提交月度安全报告')).toBeInTheDocument();
     expect(screen.getByText('09-16 09:00')).toBeInTheDocument();
     expect(screen.getByText('李娜')).toBeInTheDocument();
@@ -360,6 +370,17 @@ describe('ReminderList 我收到的', () => {
     );
   });
 
+  it('renders no channel tag for a channel the delivery never used', () => {
+    mocks.received = [{ ...receivedFixture[0], robotFailedReason: null, robotStatus: null }];
+
+    render(<ReminderList />);
+    showReceived();
+
+    expect(screen.getByText('工作通知')).toBeInTheDocument();
+    // `robotStatus` is absent on the live payload — a 未发送 机器人 tag would be a lie.
+    expect(screen.queryByText('机器人')).toBeNull();
+  });
+
   it('hides a received reminder and refreshes the table', async () => {
     render(<ReminderList />);
     showReceived();
@@ -368,7 +389,7 @@ describe('ReminderList 我收到的', () => {
 
     await waitFor(() => expect(mocks.hideReceived).toHaveBeenCalledWith('dlv_1'));
     expect(mocks.toast.success).toHaveBeenCalledWith('提醒已删除');
-    expect(mocks.refreshReceived).toHaveBeenCalled();
+    expect(mocks.mutateReminderLists).toHaveBeenCalled();
   });
 
   it('shows the empty state and the retry affordance', () => {

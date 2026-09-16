@@ -17,11 +17,11 @@ import {
   ReminderTableError,
   ReminderTableSkeleton,
 } from './ReminderTableStates';
+import { mutateReminderLists, receivedRemindersKey, REMINDER_LIST_LIMIT } from './swrKeys';
 import type { ReceivedReminderRow, ReminderDeliveryStatus } from './types';
 
 const STATUS_LABEL_KEY = {
   failed: 'reminderList.channel.status.failed',
-  none: 'reminderList.channel.status.none',
   sent: 'reminderList.channel.status.sent',
   skipped: 'reminderList.channel.status.skipped',
 } as const;
@@ -39,15 +39,25 @@ interface ChannelTagProps {
   status?: ReminderDeliveryStatus | null;
 }
 
-/** One delivery channel of a received reminder; the tooltip carries the failure reason. */
+/**
+ * One delivery channel of a received reminder; the tooltip carries the failure
+ * reason.
+ *
+ * A channel with NO status was not attempted for this delivery (and older rows
+ * simply do not report the 服务号 robot at all) — render nothing rather than a
+ * 未发送 tag, which would claim a send that never existed.
+ */
 const ChannelTag = memo<ChannelTagProps>(({ label, reason, status }) => {
   const { t } = useTranslation('chat');
-  const statusLabel = t(STATUS_LABEL_KEY[status ?? 'none']);
   const separator = t('reminderList.recipients.separator');
+
+  if (!status) return null;
+
+  const statusLabel = t(STATUS_LABEL_KEY[status]);
 
   return (
     <Tooltip title={[label, statusLabel, reason || undefined].filter(Boolean).join(separator)}>
-      <Tag color={status ? STATUS_COLOR[status] : undefined} size={'small'}>
+      <Tag color={STATUS_COLOR[status]} size={'small'}>
         {label}
       </Tag>
     </Tooltip>
@@ -66,8 +76,12 @@ const ReceivedReminderTable = memo(() => {
   const [pendingId, setPendingId] = useState<string | null>(null);
 
   const { data, error, isLoading, mutate } = useClientDataSWR<ReceivedReminderRow[]>(
-    ['reminder:listReceived'],
-    () => reminderService.listReceived() as unknown as Promise<ReceivedReminderRow[]>,
+    receivedRemindersKey(),
+    () =>
+      // Router maximum — see `CreatedReminderTable`.
+      reminderService.listReceived({ limit: REMINDER_LIST_LIMIT }) as unknown as Promise<
+        ReceivedReminderRow[]
+      >,
   );
 
   const handleDelete = useCallback(
@@ -76,14 +90,14 @@ const ReceivedReminderTable = memo(() => {
       try {
         await reminderService.hideReceived(row.id);
         toast.success(t('reminderList.toast.deleted'));
-        await mutate();
+        await mutateReminderLists();
       } catch {
         toast.error(t('reminderList.toast.deleteFailed'));
       } finally {
         setPendingId(null);
       }
     },
-    [mutate, t],
+    [t],
   );
 
   const columns: TableColumnsType<ReceivedReminderRow> = useMemo(
@@ -117,20 +131,24 @@ const ReceivedReminderTable = memo(() => {
       },
       {
         key: 'channel',
-        render: (_: unknown, row) => (
-          <Flexbox horizontal align={'center'} gap={4}>
-            <ChannelTag
-              label={t('reminderList.channel.workNotice')}
-              reason={row.failedReason}
-              status={row.status}
-            />
-            <ChannelTag
-              label={t('reminderList.channel.robot')}
-              reason={row.robotFailedReason}
-              status={row.robotStatus}
-            />
-          </Flexbox>
-        ),
+        render: (_: unknown, row) => {
+          if (!row.status && !row.robotStatus) return EMPTY_CELL;
+
+          return (
+            <Flexbox horizontal align={'center'} gap={4}>
+              <ChannelTag
+                label={t('reminderList.channel.workNotice')}
+                reason={row.failedReason}
+                status={row.status}
+              />
+              <ChannelTag
+                label={t('reminderList.channel.robot')}
+                reason={row.robotFailedReason}
+                status={row.robotStatus}
+              />
+            </Flexbox>
+          );
+        },
         title: t('reminderList.column.channel'),
         width: 160,
       },

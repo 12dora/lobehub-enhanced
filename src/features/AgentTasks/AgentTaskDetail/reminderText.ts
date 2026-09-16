@@ -40,14 +40,18 @@ export const parseReminderRecipients = (instruction?: string | null): ReminderRe
   }));
 };
 
-/** Chip label: `姓名 · 部门` for a person, the bare name for a department. */
-export const formatReminderRecipientChip = (
-  recipient: ReminderRecipientChip,
-  t: TFunction<'chat'>,
-): string =>
-  recipient.dept
-    ? t('taskReminder.recipient.user', { dept: recipient.dept, name: recipient.name })
-    : recipient.name;
+type WeekdayNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+/** ISO weekday (1 = Monday) → locale key, typed so `t()` needs no `as never`. */
+const WEEKDAY_KEYS = {
+  1: 'taskReminder.weekday.1',
+  2: 'taskReminder.weekday.2',
+  3: 'taskReminder.weekday.3',
+  4: 'taskReminder.weekday.4',
+  5: 'taskReminder.weekday.5',
+  6: 'taskReminder.weekday.6',
+  7: 'taskReminder.weekday.7',
+} as const satisfies Record<WeekdayNumber, string>;
 
 /**
  * Human text for a structured schedule, e.g. `每天 09:00` / `每周一、三 09:00`.
@@ -74,7 +78,12 @@ export const formatReminderScheduleInput = (
 
     case 'weekly': {
       const days = (schedule.weekdays ?? [])
-        .map((day) => t(`taskReminder.weekday.${day}` as never))
+        .map((day) => {
+          const key = WEEKDAY_KEYS[day as WeekdayNumber];
+          // Out-of-range day (bad server payload): print the number rather than
+          // a raw i18n key.
+          return key ? t(key) : String(day);
+        })
         .join(separator);
       return t('taskReminder.schedule.weekly', { days, time });
     }
@@ -90,7 +99,7 @@ export const formatReminderScheduleInput = (
  * decision), so a delivery timestamp reads the same for every viewer no matter
  * what the browser's own timezone is.
  */
-export const formatReminderTimestamp = (value?: string | null): string => {
+export const formatReminderTimestamp = (value?: Date | number | string | null): string => {
   if (!value) return '';
   const time = dayjs(value);
   if (!time.isValid()) return '';

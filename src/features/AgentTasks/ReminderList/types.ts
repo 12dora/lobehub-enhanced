@@ -67,8 +67,8 @@ export interface ReceivedReminderRow {
   reminderId: string;
   /** 服务号 robot failure detail. */
   robotFailedReason?: string | null;
-  /** 服务号 robot outcome; null when the channel was not used. */
+  /** 服务号 robot outcome; null/absent when the channel was not used. */
   robotStatus?: ReminderDeliveryStatus | null;
-  /** DingTalk work-notice outcome. */
-  status: ReminderDeliveryStatus;
+  /** DingTalk work-notice outcome; null/absent when the channel was not used. */
+  status?: ReminderDeliveryStatus | null;
 }

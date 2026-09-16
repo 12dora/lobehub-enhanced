@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatReminderRecipientChip,
   formatReminderScheduleInput,
   formatReminderTimestamp,
   parseReminderRecipients,
@@ -38,15 +37,6 @@ describe('parseReminderRecipients', () => {
   });
 });
 
-describe('formatReminderRecipientChip', () => {
-  it('labels a person with the department and a department with its bare name', () => {
-    expect(formatReminderRecipientChip({ dept: '外贸组', name: '胡玉琴A' }, t)).toContain(
-      'taskReminder.recipient.user',
-    );
-    expect(formatReminderRecipientChip({ name: '安环部' }, t)).toBe('安环部');
-  });
-});
-
 describe('formatReminderScheduleInput', () => {
   it('renders each schedule kind with its own key', () => {
     expect(formatReminderScheduleInput({ kind: 'daily', time: '09:00' }, t)).toBe(
@@ -58,6 +48,10 @@ describe('formatReminderScheduleInput', () => {
     expect(
       formatReminderScheduleInput({ kind: 'monthly', monthDays: [1, 15], time: '09:00' }, t),
     ).toContain('taskReminder.schedule.monthly');
+    // An out-of-range weekday prints the number, never a raw i18n key.
+    expect(
+      formatReminderScheduleInput({ kind: 'weekly', time: '09:00', weekdays: [0, 1] }, t),
+    ).toContain('"days":"0');
     expect(
       formatReminderScheduleInput({ date: '2026-09-17', kind: 'once', time: '09:00' }, t),
     ).toContain('2026-09-17');

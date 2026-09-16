@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
       }),
     },
     message: { error: vi.fn(), success: vi.fn() },
+    mutateReminderLists: vi.fn(),
     refreshTaskDetail: vi.fn(),
     refreshTaskList: vi.fn(),
     saveTask: vi.fn(),
@@ -126,6 +127,10 @@ vi.mock('@/services/reminder', () => ({
   reminderService: { saveTask: mocks.saveTask, searchDirectory: vi.fn() },
 }));
 
+vi.mock('../ReminderList/swrKeys', () => ({
+  mutateReminderLists: mocks.mutateReminderLists,
+}));
+
 // The `@` picker drags in the real `@lobehub/editor` bundle; it has its own
 // coverage and nothing here depends on it.
 vi.mock('./useReminderMentionOptions', () => ({
@@ -152,6 +157,7 @@ describe('TaskInstruction — reminder save flow', () => {
     mocks.refreshTaskDetail.mockResolvedValue(undefined);
     mocks.refreshTaskList.mockResolvedValue(undefined);
     mocks.updateTask.mockResolvedValue(undefined);
+    mocks.mutateReminderLists.mockResolvedValue(undefined);
     mocks.taskState.taskDetailMap = { 'T-7': reminderDetail };
   });
 
@@ -290,6 +296,95 @@ describe('TaskInstruction — reminder save flow', () => {
     expect((screen.getByText('taskReminder.instruction.save') as HTMLButtonElement).disabled).toBe(
       false,
     );
+  });
+
+  it('refuses an empty body with an explicit error', async () => {
+    mocks.documents.markdown = '   ';
+
+    render(<TaskInstruction />);
+    fireEvent.click(screen.getByTestId('type'));
+    clickSave();
+
+    await waitFor(() =>
+      expect(mocks.message.error).toHaveBeenCalledWith('taskReminder.error.contentEmpty'),
+    );
+    expect(mocks.saveTask).not.toHaveBeenCalled();
+    // The draft stays dirty so the body is not silently lost.
+    expect((screen.getByText('taskReminder.instruction.save') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('strips the editor zero-width space so every mention is sent', async () => {
+    mocks.documents.markdown = '@胡玉琴A·外贸组\uFEFF@邵军军·业务部\n\n每日例会';
+    mocks.saveTask.mockResolvedValue({ interpretation: {}, status: 'saved' });
+
+    render(<TaskInstruction />);
+    fireEvent.click(screen.getByTestId('type'));
+    clickSave();
+
+    await waitFor(() =>
+      expect(mocks.saveTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instruction: '@胡玉琴A·外贸组 @邵军军·业务部\n\n每日例会',
+        }),
+      ),
+    );
+  });
+
+  it('reports a recipient-less body instead of failing silently', async () => {
+    // What the server answers when the body carries no mention at all.
+    mocks.saveTask.mockResolvedValue({ ambiguous: [], status: 'needs_clarification', unknown: [] });
+
+    render(<TaskInstruction />);
+    fireEvent.click(screen.getByTestId('type'));
+    clickSave();
+
+    await waitFor(() =>
+      expect(mocks.message.error).toHaveBeenCalledWith('taskReminder.recipients.empty'),
+    );
+    expect(screen.queryByTestId('clarify-alert')).toBeNull();
+    expect((screen.getByText('taskReminder.instruction.save') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('maps REMINDER_TIME_PAST to its own toast', async () => {
+    mocks.saveTask.mockRejectedValue(new Error('REMINDER_TIME_PAST'));
+
+    render(<TaskInstruction />);
+    fireEvent.click(screen.getByTestId('type'));
+    clickSave();
+
+    await waitFor(() =>
+      expect(mocks.message.error).toHaveBeenCalledWith('taskReminder.error.timePast'),
+    );
+  });
+
+  it('never clears the draft on an unexpected result shape', async () => {
+    mocks.saveTask.mockResolvedValue({ status: 'something_else' });
+
+    render(<TaskInstruction />);
+    fireEvent.click(screen.getByTestId('type'));
+    clickSave();
+
+    await waitFor(() =>
+      expect(mocks.message.error).toHaveBeenCalledWith('taskReminder.instruction.saveFailed'),
+    );
+    expect(mocks.message.success).not.toHaveBeenCalled();
+    expect((screen.getByText('taskReminder.instruction.save') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('revalidates the reminder tables after a successful save', async () => {
+    mocks.saveTask.mockResolvedValue({ interpretation: {}, status: 'saved' });
+
+    render(<TaskInstruction />);
+    fireEvent.click(screen.getByTestId('type'));
+    clickSave();
+
+    await waitFor(() => expect(mocks.mutateReminderLists).toHaveBeenCalled());
   });
 
   it('restores the persisted body when the draft is discarded', () => {

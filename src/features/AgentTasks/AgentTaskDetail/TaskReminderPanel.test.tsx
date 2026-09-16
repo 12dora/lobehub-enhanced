@@ -11,13 +11,46 @@ const mocks = vi.hoisted(() => ({
   cancel: vi.fn(),
   fireNow: vi.fn(),
   message: { error: vi.fn(), success: vi.fn() },
+  mutateReminderLists: vi.fn(),
   refreshTaskDetail: vi.fn(),
   refreshTaskList: vi.fn(),
+  row: undefined as unknown,
   taskState: {
     activeTaskId: 'T-7',
     taskDetailMap: {} as Record<string, unknown>,
   },
 }));
+
+/** The `reminder.listCreated` row of this task (next fire, counts, recipients). */
+const serverRow = {
+  content: '每日例会 9:00 在三楼会议室',
+  firedCount: 3,
+  lastDelivery: { failed: 1, firedAt: '2026-09-16T01:00:00.000Z', sent: 2, skipped: 0 },
+  lastFiredAt: '2026-09-16T01:00:00.000Z',
+  nextFireAt: '2026-09-17T01:00:00.000Z',
+  recipients: [
+    {
+      deptName: '外贸组',
+      deptPath: '公司/外贸组',
+      displayName: '胡玉琴A',
+      kind: 'user' as const,
+      staffId: 's1',
+    },
+    {
+      deptId: 'd1',
+      deptName: '安环部',
+      deptPath: '公司/安环部',
+      displayName: '安环部',
+      kind: 'department' as const,
+      memberCount: 12,
+    },
+  ],
+  reminderId: 'rmd_1',
+  scheduleSummary: '每天 09:00',
+  status: 'scheduled' as const,
+  taskId: 'task_1',
+  taskIdentifier: 'T-7',
+};
 
 const reminderTask = (overrides: Record<string, unknown> = {}) => ({
   config: {
@@ -42,6 +75,7 @@ vi.mock('@lobehub/ui', () => ({
     <div {...props}>{children}</div>
   ),
   Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Tooltip: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -88,6 +122,14 @@ vi.mock('@/services/reminder', () => ({
   reminderService: { cancel: mocks.cancel, fireNow: mocks.fireNow },
 }));
 
+vi.mock('../ReminderList/swrKeys', () => ({
+  mutateReminderLists: mocks.mutateReminderLists,
+}));
+
+vi.mock('../ReminderList/useReminderTaskRow', () => ({
+  useReminderTaskRow: () => ({ row: mocks.row }),
+}));
+
 vi.mock('@/store/task', () => ({
   useTaskStore: (selector: any) =>
     selector({
@@ -109,6 +151,8 @@ describe('TaskReminderPanel', () => {
       skipped: 0,
     });
     mocks.cancel.mockResolvedValue({ success: true });
+    mocks.mutateReminderLists.mockResolvedValue(undefined);
+    mocks.row = serverRow;
     mocks.taskState.taskDetailMap = { 'T-7': reminderTask() };
   });
 
@@ -122,20 +166,36 @@ describe('TaskReminderPanel', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('shows recipients, schedule, end date and the last delivery', () => {
+  it('shows the server recipients, schedule, end date, next fire and the last delivery', () => {
     render(<TaskReminderPanel />);
 
     const chips = screen.getAllByTestId('chip').map((chip) => chip.textContent);
-    // Person keeps its department; a department mention is a bare name.
-    expect(chips.some((chip) => chip?.includes('胡玉琴A'))).toBe(true);
-    expect(chips).toContain('安环部');
+    // Person keeps its department; a department carries its member count.
+    expect(chips.some((chip) => chip?.includes('胡玉琴A') && chip?.includes('外贸组'))).toBe(true);
+    expect(chips.some((chip) => chip?.includes('安环部') && chip?.includes('12'))).toBe(true);
 
     expect(screen.getByText('每天 09:00')).toBeTruthy();
     expect(screen.getByText('2026-12-31')).toBeTruthy();
+    // 下次发送 from the server row, 上次发送 with its delivery counts.
+    expect(screen.getByText('2026-09-17 09:00')).toBeTruthy();
     expect(screen.getByText('2026-09-16 09:00')).toBeTruthy();
+    expect(screen.getByText((text) => text.includes('reminderList.delivery.counts'))).toBeTruthy();
+  });
+
+  it('previews the mention line while the server row is missing', () => {
+    mocks.row = undefined;
+
+    render(<TaskReminderPanel />);
+
+    const chips = screen.getAllByTestId('chip').map((chip) => chip.textContent);
+    expect(chips.some((chip) => chip?.includes('胡玉琴A'))).toBe(true);
+    expect(chips.some((chip) => chip?.includes('安环部'))).toBe(true);
+    // No next fire is known without the row.
+    expect(screen.getByText('taskReminder.nextFire.none')).toBeTruthy();
   });
 
   it('falls back to 尚未发送 when the reminder never fired', () => {
+    mocks.row = { ...serverRow, lastDelivery: null, lastFiredAt: null };
     mocks.taskState.taskDetailMap = { 'T-7': reminderTask({ heartbeat: undefined }) };
 
     render(<TaskReminderPanel />);
@@ -164,6 +224,8 @@ describe('TaskReminderPanel', () => {
     await waitFor(() => expect(mocks.cancel).toHaveBeenCalledWith('T-7'));
     expect(mocks.message.success).toHaveBeenCalledWith('taskReminder.cancel.success');
     await waitFor(() => expect(mocks.refreshTaskDetail).toHaveBeenCalledWith('T-7'));
+    // The 定时提醒 tables are revalidated too.
+    await waitFor(() => expect(mocks.mutateReminderLists).toHaveBeenCalled());
   });
 
   it('hides both actions and shows a status tag once the reminder is canceled', () => {

@@ -1,9 +1,12 @@
 import type { IEditor } from '@lobehub/editor';
-import { INSERT_MENTION_COMMAND } from '@lobehub/editor';
+import debug from 'debug';
+import { $createTextNode, $insertNodes } from 'lexical';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { reminderService } from '@/services/reminder';
+
+const log = debug('agent-tasks:reminder-mention');
 
 type DirectorySearch = Awaited<ReturnType<typeof reminderService.searchDirectory>>;
 
@@ -15,30 +18,56 @@ interface MentionSearch {
 
 interface MentionMenuItem {
   description?: string;
+  disabled?: boolean;
   key: string;
   label: string;
   metadata?: Record<string, unknown>;
-  onSelect: (editor: IEditor) => void;
+  onSelect?: (editor: IEditor) => void;
 }
 
 /**
- * The inserted mention node carries the FULL token (`@姓名·部门`) as its label,
- * not just the name. `@lobehub/editor` serialises a mention to markdown through
- * the plugin's `markdownWriter` when one is registered and falls back to the raw
- * label otherwise — carrying the `@` in the label makes both paths emit exactly
- * the token `parseReminderMentions` expects, so the picker can never silently
- * produce a body the server reads as "no recipients".
+ * The canonical body token for a recipient: `@姓名·部门` (person) or `@部门名`.
+ * It is what `parseReminderMentions` (server + client) reads back.
  */
 export const buildReminderMentionToken = (name: string, dept?: string | null): string =>
   dept ? `@${name}·${dept}` : `@${name}`;
 
 /**
+ * Insert a picked recipient as PLAIN TEXT, followed by a real space.
+ *
+ * Deliberately not `INSERT_MENTION_COMMAND`: that inserts a MentionNode plus a
+ * CursorNode whose text is U+FEFF, so two adjacent picks serialise to
+ * `@a·x` + U+FEFF + `@b·y`. The mention grammar requires a token to start at the
+ * beginning of the text or after whitespace (and U+FEFF is not whitespace), so
+ * every recipient after the first would be silently dropped on save. The
+ * plugin-level `markdownWriter` cannot fix that either — `registerMarkdownWriter`
+ * is first-wins and `ReactMentionPlugin` is already registered without one by
+ * `createChatInputRichPlugins`.
+ *
+ * The trailing space also closes the `@` trigger, so the menu does not re-open
+ * on the token that was just inserted.
+ */
+const insertMentionToken = (editor: IEditor, token: string) => {
+  const lexicalEditor = editor.getLexicalEditor();
+  if (!lexicalEditor) return;
+
+  // `onSelect` already runs inside a Lexical update (the slash plugin removes
+  // the typed query there); a nested update is merged into the same batch.
+  lexicalEditor.update(() => {
+    const node = $createTextNode(`${token} `);
+    $insertNodes([node]);
+    node.selectEnd();
+  });
+};
+
+/**
  * `@` picker for the reminder task body, backed by the DingTalk directory
  * mirror (`reminder.searchDirectory`). Typing `@胡` offers 「胡玉琴A · 外贸组」
- * and inserting writes the plain token `@胡玉琴A·外贸组` into the markdown.
+ * and inserting writes the plain token `@胡玉琴A·外贸组 ` into the body.
  *
- * Returns `undefined` when disabled so non-reminder editors keep no `@` menu at
- * all (the Editor only registers the trigger when `items` is present).
+ * Returns `undefined` when disabled so non-reminder (or read-only) editors keep
+ * no `@` menu at all — the Editor only registers the trigger when `items` is
+ * present.
  */
 export const useReminderMentionOptions = (enabled: boolean) => {
   const { t } = useTranslation('chat');
@@ -56,9 +85,17 @@ export const useReminderMentionOptions = (enabled: boolean) => {
         try {
           result = await reminderService.searchDirectory({ q: query });
         } catch (error) {
-          console.error('[useReminderMentionOptions] searchDirectory failed:', error);
-          return [];
+          log('searchDirectory failed: %O', error);
+          // An empty menu would read as 「查无此人」; say the lookup failed.
+          return [
+            {
+              disabled: true,
+              key: 'reminder-mention-error',
+              label: t('taskReminder.mention.searchFailed'),
+            },
+          ];
         }
+        if (!result) return [];
         cacheRef.current.set(query, result);
       }
 
@@ -71,12 +108,7 @@ export const useReminderMentionOptions = (enabled: boolean) => {
           label: user.leafDeptName
             ? t('taskReminder.mention.user', { dept: user.leafDeptName, name: user.name })
             : user.name,
-          onSelect: (editor: IEditor) => {
-            editor.dispatchCommand(INSERT_MENTION_COMMAND, {
-              label: token,
-              metadata: { kind: 'user', staffId: user.staffId },
-            });
-          },
+          onSelect: (editor: IEditor) => insertMentionToken(editor, token),
         } satisfies MentionMenuItem;
       });
 
@@ -90,12 +122,7 @@ export const useReminderMentionOptions = (enabled: boolean) => {
             count: department.memberCount ?? 0,
             name: department.name,
           }),
-          onSelect: (editor: IEditor) => {
-            editor.dispatchCommand(INSERT_MENTION_COMMAND, {
-              label: token,
-              metadata: { deptId: department.deptId, kind: 'department' },
-            });
-          },
+          onSelect: (editor: IEditor) => insertMentionToken(editor, token),
         } satisfies MentionMenuItem;
       });
 
@@ -104,15 +131,5 @@ export const useReminderMentionOptions = (enabled: boolean) => {
     [t],
   );
 
-  // A trailing space keeps two picked recipients apart: the mention grammar only
-  // matches a token at a line start or after whitespace.
-  const markdownWriter = useCallback(
-    (mention: { label?: string }) => `${mention?.label ?? ''} `,
-    [],
-  );
-
-  return useMemo(
-    () => (enabled ? { items: loadItems, markdownWriter } : undefined),
-    [enabled, loadItems, markdownWriter],
-  );
+  return useMemo(() => (enabled ? { items: loadItems } : undefined), [enabled, loadItems]);
 };

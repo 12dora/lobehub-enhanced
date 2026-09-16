@@ -5,6 +5,7 @@ import { Block, Flexbox } from '@lobehub/ui';
 import { Button, Tag, Text } from '@lobehub/ui/base-ui';
 import { App, Popconfirm } from 'antd';
 import { cssVar } from 'antd-style';
+import debug from 'debug';
 import type { ReactNode } from 'react';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,19 +14,13 @@ import { reminderService } from '@/services/reminder';
 import { useTaskStore } from '@/store/task';
 import { taskDetailSelectors } from '@/store/task/selectors';
 
-import {
-  formatReminderRecipientChip,
-  formatReminderTimestamp,
-  parseReminderRecipients,
-} from './reminderText';
+import ReminderRecipients from '../ReminderList/ReminderRecipients';
+import { mutateReminderLists } from '../ReminderList/swrKeys';
+import type { ReminderRecipientView } from '../ReminderList/types';
+import { useReminderTaskRow } from '../ReminderList/useReminderTaskRow';
+import { formatReminderTimestamp, parseReminderRecipients } from './reminderText';
 
-/** `fireNow` result — typed locally so the panel does not depend on the router's inferred shape. */
-interface FireNowResult {
-  failed: number;
-  firedAt: string;
-  sent: number;
-  skipped: number;
-}
+const log = debug('agent-tasks:reminder-panel');
 
 interface FieldRowProps {
   children: ReactNode;
@@ -50,8 +45,10 @@ FieldRow.displayName = 'ReminderFieldRow';
  * INSTEAD OF the schedule / assignee / verify / model sections: a reminder never
  * runs an agent, so none of those controls mean anything for it.
  *
- * Recipients are read back from the mention line of the body — the body is the
- * single source of truth the user edits, and the server re-interprets it on save.
+ * Recipients, next/last delivery come from the server row (`reminder.listCreated`);
+ * the mention line of the body is only the fallback preview while that row loads
+ * or right after an edit, since the body is what the user actually edits and the
+ * server re-interprets it on save.
  */
 const TaskReminderPanel = memo(() => {
   const { t } = useTranslation('chat');
@@ -68,20 +65,38 @@ const TaskReminderPanel = memo(() => {
   const reminder = isReminderTaskConfig(config) ? config.reminder : undefined;
   const instruction = detail?.instruction;
   const status = detail?.status;
-  const lastSentAt = detail?.heartbeat?.lastAt;
 
-  const recipients = useMemo(() => parseReminderRecipients(instruction), [instruction]);
+  // The server row carries what the task record cannot: the next planned fire
+  // time, the last delivery counts and the RESOLVED recipients (departments
+  // with their member count).
+  const { row } = useReminderTaskRow(taskId);
+  const lastSentAt = row?.lastFiredAt ?? detail?.heartbeat?.lastAt;
+
+  const recipients = useMemo<ReminderRecipientView[]>(() => {
+    if (row?.recipients && row.recipients.length > 0) return row.recipients;
+
+    // Fallback for a body that was just edited (or a row that has not loaded
+    // yet): the mention line is the draft's own view of the recipients, minus
+    // the department member counts the directory resolves.
+    return parseReminderRecipients(instruction).map((chip) => ({
+      deptName: chip.dept ?? null,
+      displayName: chip.name,
+      kind: chip.dept ? 'user' : 'department',
+    }));
+  }, [instruction, row?.recipients]);
 
   const refresh = useCallback(async () => {
     if (taskId) await refreshTaskDetail(taskId);
     await refreshTaskList().catch(() => {});
+    // 定时提醒 tables live on their own SWR caches — keep them in step.
+    await mutateReminderLists().catch(() => {});
   }, [refreshTaskDetail, refreshTaskList, taskId]);
 
   const handleFireNow = useCallback(async () => {
     if (!taskId) return;
     setFiring(true);
     try {
-      const result = (await reminderService.fireNow(taskId)) as FireNowResult;
+      const result = await reminderService.fireNow(taskId);
       message.success(
         t('taskReminder.fireNow.success', {
           failed: result?.failed ?? 0,
@@ -91,7 +106,7 @@ const TaskReminderPanel = memo(() => {
       );
       await refresh();
     } catch (error) {
-      console.error('[TaskReminderPanel] fireNow failed:', error);
+      log('fireNow failed: %O', error);
       message.error(t('taskReminder.fireNow.failed'));
     } finally {
       setFiring(false);
@@ -106,7 +121,7 @@ const TaskReminderPanel = memo(() => {
       message.success(t('taskReminder.cancel.success'));
       await refresh();
     } catch (error) {
-      console.error('[TaskReminderPanel] cancel failed:', error);
+      log('cancel failed: %O', error);
       message.error(t('taskReminder.cancel.failed'));
     } finally {
       setCanceling(false);
@@ -117,6 +132,9 @@ const TaskReminderPanel = memo(() => {
 
   const isFinished = status === 'canceled' || status === 'completed';
   const until = reminder.until ?? reminder.schedule?.until;
+  // A finished reminder has no next fire even if the profile still carries one.
+  const nextFireAt = isFinished ? undefined : row?.nextFireAt;
+  const lastDelivery = row?.lastDelivery;
 
   return (
     <Block data-testid={'task-reminder-panel'} gap={12} padding={16} variant={'outlined'}>
@@ -166,13 +184,7 @@ const TaskReminderPanel = memo(() => {
             {t('taskReminder.recipients.empty')}
           </Text>
         ) : (
-          <Flexbox horizontal align={'center'} gap={4} wrap={'wrap'}>
-            {recipients.map((recipient, index) => (
-              <Tag key={`${recipient.name}-${recipient.dept ?? ''}-${index}`} size={'small'}>
-                {formatReminderRecipientChip(recipient, t)}
-              </Tag>
-            ))}
-          </Flexbox>
+          <ReminderRecipients max={recipients.length} recipients={recipients} />
         )}
       </FieldRow>
 
@@ -186,10 +198,31 @@ const TaskReminderPanel = memo(() => {
         </FieldRow>
       )}
 
-      <FieldRow label={t('taskReminder.field.lastSent')}>
-        <Text fontSize={13} type={lastSentAt ? undefined : 'secondary'}>
-          {lastSentAt ? formatReminderTimestamp(lastSentAt) : t('taskReminder.lastSent.never')}
+      <FieldRow label={t('taskReminder.field.nextFire')}>
+        <Text fontSize={13} type={nextFireAt ? undefined : 'secondary'}>
+          {nextFireAt ? formatReminderTimestamp(nextFireAt) : t('taskReminder.nextFire.none')}
         </Text>
+      </FieldRow>
+
+      <FieldRow label={t('taskReminder.field.lastSent')}>
+        {lastSentAt ? (
+          <Flexbox gap={2}>
+            <Text fontSize={13}>{formatReminderTimestamp(lastSentAt)}</Text>
+            {!!lastDelivery && (
+              <Text fontSize={12} type={'secondary'}>
+                {t('reminderList.delivery.counts', {
+                  failed: lastDelivery.failed,
+                  sent: lastDelivery.sent,
+                  skipped: lastDelivery.skipped,
+                })}
+              </Text>
+            )}
+          </Flexbox>
+        ) : (
+          <Text fontSize={13} type={'secondary'}>
+            {t('taskReminder.lastSent.never')}
+          </Text>
+        )}
       </FieldRow>
 
       <Text fontSize={12} style={{ color: cssVar.colorTextTertiary }}>

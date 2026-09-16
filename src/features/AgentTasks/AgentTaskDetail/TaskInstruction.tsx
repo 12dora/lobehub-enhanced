@@ -1,9 +1,10 @@
-import { isReminderTaskConfig, type ReminderScheduleInput } from '@lobechat/types';
+import { isReminderTaskConfig } from '@lobechat/types';
 import { useEditor } from '@lobehub/editor/react';
 import { Flexbox } from '@lobehub/ui';
 import { ActionIcon, Alert, Button, Tag, Text } from '@lobehub/ui/base-ui';
 import { App } from 'antd';
 import { cssVar } from 'antd-style';
+import debug from 'debug';
 import { Paperclip } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,10 +19,38 @@ import { reminderService } from '@/services/reminder';
 import { useTaskStore } from '@/store/task';
 import { taskDetailSelectors } from '@/store/task/selectors';
 
+import { mutateReminderLists } from '../ReminderList/swrKeys';
 import { formatReminderScheduleInput, replaceReminderMentionToken } from './reminderText';
 import { useReminderMentionOptions } from './useReminderMentionOptions';
 
+const log = debug('agent-tasks:reminder-instruction');
+
 const DEBOUNCE_MS = 300;
+
+/**
+ * Zero-width no-break space. The editor writes one into the markdown for every
+ * CursorNode it keeps next to an inline node, and it is NOT whitespace for the
+ * mention grammar — left in place it glues two recipients into one unparsable
+ * token. Stripping it on save is the last line of defence behind the picker,
+ * which inserts plain text (see `useReminderMentionOptions`).
+ */
+const ZERO_WIDTH_NO_BREAK_SPACE = '\uFEFF';
+
+/** Server error codes (`TRPCError.message`) that deserve their own toast. */
+const SAVE_ERROR_KEYS = {
+  REMINDER_CONTENT_EMPTY: 'taskReminder.error.contentEmpty',
+  REMINDER_SCHEDULE_INVALID: 'taskReminder.error.scheduleInvalid',
+  REMINDER_TIME_PAST: 'taskReminder.error.timePast',
+} as const;
+
+type SaveErrorKey = (typeof SAVE_ERROR_KEYS)[keyof typeof SAVE_ERROR_KEYS];
+
+const saveErrorKey = (error: unknown): SaveErrorKey | undefined => {
+  if (!error || typeof error !== 'object') return undefined;
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== 'string') return undefined;
+  return SAVE_ERROR_KEYS[message as keyof typeof SAVE_ERROR_KEYS];
+};
 
 // Stable lock RPC binding for the task resource.
 const taskLockClient: EditLockClient = {
@@ -32,11 +61,13 @@ const taskLockClient: EditLockClient = {
   },
 };
 
+/** One candidate of an ambiguous name, as `resolveRecipients` reports it. */
 interface AmbiguousCandidate {
+  deptId?: string;
   deptPath: string;
   leafDeptName: string;
   name: string;
-  staffId: string;
+  staffId?: string;
 }
 
 interface Clarification {
@@ -44,20 +75,8 @@ interface Clarification {
   unknown: string[];
 }
 
-/**
- * `reminder.saveTask` result — declared locally (and loosely) so the editor keeps
- * compiling against a stable shape instead of the router's inferred one.
- */
-interface SaveTaskResult {
-  ambiguous?: { candidates: AmbiguousCandidate[]; query: string }[];
-  interpretation?: {
-    recipients?: unknown[];
-    schedule?: ReminderScheduleInput;
-    scheduleChanged?: boolean;
-  };
-  status: 'needs_clarification' | 'saved';
-  unknown?: string[];
-}
+/** `reminder.saveTask`, bound to the router's own output (`undefined` on error). */
+type SaveTaskResult = NonNullable<Awaited<ReturnType<typeof reminderService.saveTask>>>;
 
 const TaskInstruction = memo(() => {
   const { t } = useTranslation('chat');
@@ -78,7 +97,6 @@ const TaskInstruction = memo(() => {
   // interpretation (mentions → recipients, wording → schedule) and re-arms the
   // cron, so it has to be an explicit, user-triggered action.
   const isReminder = isReminderTaskConfig(taskConfig);
-  const mentionOption = useReminderMentionOptions(isReminder && canEditTask);
 
   // Collaborative edit lock for workspace tasks (same model as pages): read-only
   // when another member is editing; acquired implicitly on the first edit.
@@ -104,6 +122,10 @@ const TaskInstruction = memo(() => {
   // Read-only until the lock resolves, so the user can't start typing on a task
   // that turns out to be locked and get bounced mid-edit.
   const editable = canEditTask && !lock.lockedByOther && !lock.pending;
+  // The `@` picker follows the editor: no menu while another member holds the
+  // lock (or it is still being peeked), so `@` can never insert into a body the
+  // user is not allowed to change.
+  const mentionOption = useReminderMentionOptions(isReminder && editable);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   // Skip save when the serialized state matches the last persisted snapshot —
@@ -156,7 +178,7 @@ const TaskInstruction = memo(() => {
 
       const markdown = String(editor.getDocument('markdown') ?? '');
       updateTask(taskId, { editorData: json, instruction: markdown }).catch((e) => {
-        console.error('[TaskInstruction] Failed to save:', e);
+        log('failed to autosave: %O', e);
       });
     }, DEBOUNCE_MS);
   }, [editable, editor, isReminder, taskId, updateTask]);
@@ -167,7 +189,7 @@ const TaskInstruction = memo(() => {
     try {
       write();
     } catch (error) {
-      console.error('[TaskInstruction] Failed to rewrite the document:', error);
+      log('failed to rewrite the document: %O', error);
     } finally {
       setTimeout(() => {
         programmaticRef.current = false;
@@ -178,19 +200,41 @@ const TaskInstruction = memo(() => {
   const handleSave = useCallback(async () => {
     if (!editor || !taskId) return;
     const json = editor.getDocument('json') as unknown;
-    const markdown = String(editor.getDocument('markdown') ?? '').trim();
-    if (!markdown) return;
+    const markdown = String(editor.getDocument('markdown') ?? '')
+      .replaceAll(ZERO_WIDTH_NO_BREAK_SPACE, ' ')
+      .trim();
+    // An empty body would be rejected by the router's `instruction.min(1)` with
+    // a generic failure; say what is wrong instead of a silent no-op.
+    if (!markdown) {
+      message.error(t('taskReminder.error.contentEmpty'));
+      return;
+    }
 
     setSaving(true);
     try {
-      const result = (await reminderService.saveTask({
+      const result: SaveTaskResult | undefined = await reminderService.saveTask({
         editorData: json,
         instruction: markdown,
         taskId,
-      })) as SaveTaskResult;
+      });
 
       if (result?.status === 'needs_clarification') {
-        setClarification({ ambiguous: result.ambiguous ?? [], unknown: result.unknown ?? [] });
+        const ambiguous = result.ambiguous ?? [];
+        const unknown = result.unknown ?? [];
+
+        setClarification({ ambiguous, unknown });
+        // Zero resolved recipients with nothing to disambiguate = the body has
+        // no mention line at all, and the Alert below would render empty.
+        if (ambiguous.length === 0 && unknown.length === 0) {
+          message.error(t('taskReminder.recipients.empty'));
+        }
+        return;
+      }
+
+      // Only a real `saved` clears the draft — anything else is a failure we do
+      // not understand, and reporting it as 「已保存」 would lose the edit.
+      if (result?.status !== 'saved') {
+        message.error(t('taskReminder.instruction.saveFailed'));
         return;
       }
 
@@ -198,17 +242,20 @@ const TaskInstruction = memo(() => {
       setDirty(false);
       message.success(
         t('taskReminder.instruction.saved', {
-          count: result?.interpretation?.recipients?.length ?? 0,
+          count: result.interpretation?.recipients?.length ?? 0,
           schedule:
-            formatReminderScheduleInput(result?.interpretation?.schedule, t) ||
+            formatReminderScheduleInput(result.interpretation?.schedule, t) ||
             t('taskReminder.instruction.scheduleUnchanged'),
         }),
       );
       await refreshTaskDetail(taskId);
       await refreshTaskList().catch(() => {});
+      // The 定时提醒 tables read their own SWR caches; a save re-interprets
+      // recipients and the schedule, so they are stale until revalidated.
+      await mutateReminderLists().catch(() => {});
     } catch (error) {
-      console.error('[TaskInstruction] Failed to save the reminder:', error);
-      message.error(t('taskReminder.instruction.saveFailed'));
+      log('save failed: %O', error);
+      message.error(t(saveErrorKey(error) ?? 'taskReminder.instruction.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -284,7 +331,7 @@ const TaskInstruction = memo(() => {
                   </Text>
                   {entry.candidates.map((candidate) => (
                     <Tag
-                      key={candidate.staffId}
+                      key={candidate.staffId ?? `${candidate.name}-${candidate.deptPath}`}
                       size={'small'}
                       style={{ cursor: 'pointer' }}
                       onClick={() => handlePickCandidate(entry.query, candidate)}
@@ -299,7 +346,9 @@ const TaskInstruction = memo(() => {
               ))}
               {clarification.unknown.length > 0 && (
                 <Text fontSize={12}>
-                  {t('taskReminder.clarify.unknown', { names: clarification.unknown.join('、') })}
+                  {t('taskReminder.clarify.unknown', {
+                    names: clarification.unknown.join(t('taskReminder.schedule.separator')),
+                  })}
                 </Text>
               )}
             </Flexbox>

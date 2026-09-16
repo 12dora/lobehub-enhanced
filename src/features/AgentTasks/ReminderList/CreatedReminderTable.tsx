@@ -21,6 +21,7 @@ import {
   ReminderTableError,
   ReminderTableSkeleton,
 } from './ReminderTableStates';
+import { createdRemindersKey, mutateReminderLists, REMINDER_LIST_LIMIT } from './swrKeys';
 import type { CreatedReminderRow } from './types';
 
 interface CreatedReminderTableProps {
@@ -40,9 +41,14 @@ const CreatedReminderTable = memo<CreatedReminderTableProps>(({ includeFinished 
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
 
   const { data, error, isLoading, mutate } = useClientDataSWR<CreatedReminderRow[]>(
-    ['reminder:listCreated', includeFinished],
+    createdRemindersKey(includeFinished),
     () =>
-      reminderService.listCreated({ includeFinished }) as unknown as Promise<CreatedReminderRow[]>,
+      // The router caps `limit` at 200; asking for the maximum keeps the
+      // client-side pagination honest instead of paging a silent 50-row slice.
+      reminderService.listCreated({
+        includeFinished,
+        limit: REMINDER_LIST_LIMIT,
+      }) as unknown as Promise<CreatedReminderRow[]>,
   );
 
   const handleOpen = useCallback(
@@ -56,14 +62,14 @@ const CreatedReminderTable = memo<CreatedReminderTableProps>(({ includeFinished 
       try {
         await reminderService.cancel(row.taskId);
         toast.success(t('reminderList.toast.canceled'));
-        await mutate();
+        await mutateReminderLists();
       } catch {
         toast.error(t('reminderList.toast.cancelFailed'));
       } finally {
         setPendingTaskId(null);
       }
     },
-    [mutate, t],
+    [t],
   );
 
   const handleFireNow = useCallback(
@@ -78,14 +84,14 @@ const CreatedReminderTable = memo<CreatedReminderTableProps>(({ includeFinished 
             skipped: result?.skipped ?? 0,
           }),
         );
-        await mutate();
+        await mutateReminderLists();
       } catch {
         toast.error(t('reminderList.toast.fireFailed'));
       } finally {
         setPendingTaskId(null);
       }
     },
-    [mutate, t],
+    [t],
   );
 
   const columns: TableColumnsType<CreatedReminderRow> = useMemo(
