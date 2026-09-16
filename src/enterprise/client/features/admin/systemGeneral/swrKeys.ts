@@ -5,6 +5,7 @@ export const ADMIN_SYSTEM_SANDBOX_SETTINGS_KEY = 'admin.system.getSandboxSetting
 export const ADMIN_SYSTEM_DOCUMENT_RENDER_SETTINGS_KEY = 'admin.system.getDocumentRenderSettings';
 export const ADMIN_SYSTEM_DOCUMENT_RENDER_STATUS_KEY = 'admin.system.getDocumentRenderStatus';
 export const ADMIN_IM_CONNECTORS_KEY = 'admin.imConnectors.list';
+export const ADMIN_IM_CONNECTOR_BINDINGS_KEY = 'admin.imConnectors.bindings.list';
 
 export const buildAdminBrowserProfileKey = (enabled: boolean) =>
   enabled ? ([ADMIN_BROWSER_PROFILE_KEY] as const) : null;
@@ -26,3 +27,10 @@ export const buildAdminDocumentRenderStatusKey = (enabled: boolean) =>
 
 export const buildAdminImConnectorsKey = (enabled: boolean) =>
   enabled ? ([ADMIN_IM_CONNECTORS_KEY] as const) : null;
+
+/**
+ * The search term is part of the key: the list is server-filtered, so a different `q` is a
+ * different resource rather than a client-side view of one cached answer.
+ */
+export const buildAdminImConnectorBindingsKey = (enabled: boolean, platform: string, q: string) =>
+  enabled ? ([ADMIN_IM_CONNECTOR_BINDINGS_KEY, platform, q] as const) : null;

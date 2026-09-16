@@ -14,9 +14,11 @@ import { adminImConnectorsService } from '@/enterprise/client/services/adminImCo
 import { useAdminImConnectors } from '../hooks';
 import { infraSettingsStyles as cardStyles } from '../styles';
 import { DingTalkConnectorCard } from './DingTalkConnectorCard';
-import type { ImConnectorMutationService } from './service';
+import type { ImConnectorBindingsService, ImConnectorMutationService } from './service';
 
 export interface ImConnectorsTabProps {
+  /** Injectable for tests. */
+  bindingsService?: ImConnectorBindingsService;
   /** SYSTEM_OPERATE — the cards stay readable without it, but nothing can be written. */
   canOperate: boolean;
   /** SYSTEM_READ and the tab being the active one: an unseen tab asks the server for nothing. */
@@ -31,11 +33,13 @@ const renderCard = (
   canOperate: boolean,
   onSaved: () => Promise<void>,
   mutationService?: ImConnectorMutationService,
+  bindingsService?: ImConnectorBindingsService,
 ) => {
   switch (item.platform) {
     case 'dingtalk': {
       return (
         <DingTalkConnectorCard
+          bindingsService={bindingsService}
           canOperate={canOperate}
           key={item.platform}
           service={mutationService}
@@ -57,7 +61,13 @@ const renderCard = (
  * admin provisioning the robot for the first time finds the same card an operator later edits.
  */
 export const ImConnectorsTab = memo<ImConnectorsTabProps>(
-  ({ canOperate, enabled, mutationService, readService = adminImConnectorsService }) => {
+  ({
+    bindingsService,
+    canOperate,
+    enabled,
+    mutationService,
+    readService = adminImConnectorsService,
+  }) => {
     const { t } = useTranslation('admin');
     const connectors = useAdminImConnectors(enabled, readService);
     const { mutate } = connectors;
@@ -92,7 +102,9 @@ export const ImConnectorsTab = memo<ImConnectorsTabProps>(
 
     return (
       <div className={cardStyles.grid} style={{ gridTemplateColumns: '1fr' }}>
-        {items.map((item) => renderCard(item, canOperate, onSaved, mutationService))}
+        {items.map((item) =>
+          renderCard(item, canOperate, onSaved, mutationService, bindingsService),
+        )}
       </div>
     );
   },

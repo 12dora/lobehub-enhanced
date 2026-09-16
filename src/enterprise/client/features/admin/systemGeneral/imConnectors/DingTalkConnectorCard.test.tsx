@@ -109,6 +109,14 @@ vi.mock('../../primitives/runAdminMutation', () => ({
   runAdminMutation: (options: { run: () => Promise<void> }) => mocks.runAdminMutation(options),
 }));
 
+// The 绑定用户 list has its own suite (BindingsSection.test.tsx); here it only has to be mounted
+// with what the card is responsible for handing it.
+vi.mock('./BindingsSection', () => ({
+  BindingsSection: ({ canOperate, platform }: { canOperate: boolean; platform: string }) => (
+    <div data-can-operate={String(canOperate)} data-platform={platform} data-testid="bindings" />
+  ),
+}));
+
 const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorView => ({
   agentId: null,
   aiCardTemplateId: null,
@@ -165,6 +173,18 @@ describe('DingTalkConnectorCard', () => {
     expect(screen.getByText(/systemGeneral.imConnectors.stats.linkedUsers:3/)).toBeTruthy();
     expect(screen.getByText(/systemGeneral.imConnectors.stats.messages7d:12/)).toBeTruthy();
     expect(screen.getByText(/systemGeneral.imConnectors.stats.pushes7d:4/)).toBeTruthy();
+  });
+
+  it('carries the counters into the 绑定用户 list that explains them', () => {
+    render(<DingTalkConnectorCard canOperate={false} view={view()} />);
+
+    const section = screen.getByTestId('bindings');
+    expect(section.getAttribute('data-platform')).toBe('dingtalk');
+    // The list stays readable without SYSTEM_OPERATE; only its write affordances go.
+    expect(section.getAttribute('data-can-operate')).toBe('false');
+    // …and it sits under the counters, which is the number it explains.
+    const stats = screen.getByText(/systemGeneral.imConnectors.stats.linkedUsers:3/);
+    expect(stats.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('explains a failed connection through the last error', () => {

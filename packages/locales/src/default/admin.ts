@@ -2372,6 +2372,46 @@ export default {
   'systemGeneral.imConnectors.test.errors.missing_credentials': 'Fill in the credentials first.',
   'systemGeneral.imConnectors.test.errors.unknown': 'Connection test failed.',
   'systemGeneral.imConnectors.errors.idleHours': 'Enter a whole number between 1 and 720.',
+  // 绑定用户 — which AIHub account a DingTalk user pushes to. Signing in through DingTalk binds
+  // the account automatically; every other account (local / break-glass) is bound here by hand.
+  'systemGeneral.imConnectors.bindings.bind': 'Bind user',
+  'systemGeneral.imConnectors.bindings.bindFailed': 'Could not bind this user. Try again.',
+  'systemGeneral.imConnectors.bindings.bound': 'User bound',
+  'systemGeneral.imConnectors.bindings.columns.actions': 'Actions',
+  'systemGeneral.imConnectors.bindings.columns.createdAt': 'Bound at',
+  'systemGeneral.imConnectors.bindings.columns.platformUser': 'DingTalk user',
+  'systemGeneral.imConnectors.bindings.columns.source': 'Source',
+  'systemGeneral.imConnectors.bindings.columns.user': 'AIHub user',
+  'systemGeneral.imConnectors.bindings.conflict':
+    'This DingTalk user is already bound to {{name}}.',
+  'systemGeneral.imConnectors.bindings.conflictTitle': 'DingTalk user already bound',
+  'systemGeneral.imConnectors.bindings.empty': 'No users are bound yet.',
+  'systemGeneral.imConnectors.bindings.emptySearch': 'No binding matches this search.',
+  'systemGeneral.imConnectors.bindings.fields.platformUserId': 'DingTalk user ID',
+  'systemGeneral.imConnectors.bindings.fields.platformUsername': 'DingTalk name (optional)',
+  'systemGeneral.imConnectors.bindings.fields.user': 'AIHub user',
+  'systemGeneral.imConnectors.bindings.hint':
+    'Reminders reach the AIHub account bound to a DingTalk user. Accounts that signed in with DingTalk are bound automatically; bind the others here.',
+  'systemGeneral.imConnectors.bindings.hints.platformUserId':
+    'The userid from the DingTalk contacts directory.',
+  'systemGeneral.imConnectors.bindings.hints.platformUsername':
+    'Left empty, the name is read from DingTalk when the connector has credentials.',
+  'systemGeneral.imConnectors.bindings.hints.user':
+    'The account whose task reminders are pushed to DingTalk.',
+  'systemGeneral.imConnectors.bindings.loadFailed': 'Could not load the bound users.',
+  'systemGeneral.imConnectors.bindings.loading': 'Loading…',
+  'systemGeneral.imConnectors.bindings.rebind': 'Rebind',
+  'systemGeneral.imConnectors.bindings.search': 'Search an AIHub user or a DingTalk ID',
+  'systemGeneral.imConnectors.bindings.source.auto': 'Automatic',
+  'systemGeneral.imConnectors.bindings.source.manual': 'Manual',
+  'systemGeneral.imConnectors.bindings.submit': 'Bind',
+  'systemGeneral.imConnectors.bindings.title': 'Bound users',
+  'systemGeneral.imConnectors.bindings.unbind': 'Unbind',
+  'systemGeneral.imConnectors.bindings.unbindConfirm':
+    'DingTalk reminders will stop reaching {{user}}. The binding with DingTalk user {{platformUser}} is removed.',
+  'systemGeneral.imConnectors.bindings.unbindFailed': 'Could not unbind this user. Try again.',
+  'systemGeneral.imConnectors.bindings.unbindTitle': 'Unbind this user?',
+  'systemGeneral.imConnectors.bindings.unbound': 'User unbound',
   'systemGeneral.objectStorage.title': 'Object storage',
   'systemGeneral.objectStorage.fields.endpoint': 'Endpoint',
   'systemGeneral.objectStorage.placeholders.endpoint': 'https://s3.example.com',

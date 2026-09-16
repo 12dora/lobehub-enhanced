@@ -2,12 +2,21 @@ import type { z } from 'zod';
 
 import { lambdaClient } from '@/libs/trpc/client';
 import type {
+  AdminImConnectorBindingItem,
+  AdminImConnectorBindingsListInput,
+  AdminImConnectorBindingsListOutput,
+  AdminImConnectorBindingsRemoveInput,
+  AdminImConnectorBindingsRemoveOutput,
+  AdminImConnectorBindingsUpsertInput,
+  AdminImConnectorBindingsUpsertOutput,
   AdminImConnectorGetInput,
   adminImConnectorListOutputSchema,
   AdminImConnectorTestInput,
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
+  ImConnectorBindingSource,
+  ImConnectorPlatform,
 } from '@/server/enterprise/contracts/adminImConnectors';
 
 export type AdminImConnectorList = z.infer<typeof adminImConnectorListOutputSchema>;
@@ -30,7 +39,26 @@ export interface AdminImConnectorsMutationService {
   upsert: (input: AdminImConnectorUpsertInput) => Promise<AdminImConnectorView>;
 }
 
-export type AdminImConnectorsService = AdminImConnectorsMutationService &
+/**
+ * Manual account bindings. Separate from the connector row itself: an administrator binds a
+ * DingTalk corp user to an AIHub account so reminders reach an account that never signed in
+ * through DingTalk (a local or break-glass account, most of all). `listBindings` needs SYSTEM_READ,
+ * the two writes SYSTEM_OPERATE.
+ */
+export interface AdminImConnectorsBindingsService {
+  listBindings: (
+    input: AdminImConnectorBindingsListInput,
+  ) => Promise<AdminImConnectorBindingsListOutput>;
+  removeBinding: (
+    input: AdminImConnectorBindingsRemoveInput,
+  ) => Promise<AdminImConnectorBindingsRemoveOutput>;
+  upsertBinding: (
+    input: AdminImConnectorBindingsUpsertInput,
+  ) => Promise<AdminImConnectorBindingsUpsertOutput>;
+}
+
+export type AdminImConnectorsService = AdminImConnectorsBindingsService &
+  AdminImConnectorsMutationService &
   AdminImConnectorsReadService;
 
 class AdminImConnectorsServiceImpl implements AdminImConnectorsService {
@@ -38,19 +66,37 @@ class AdminImConnectorsServiceImpl implements AdminImConnectorsService {
 
   list = () => lambdaClient.admin.imConnectors.list.query();
 
+  listBindings = (input: AdminImConnectorBindingsListInput) =>
+    lambdaClient.admin.imConnectors.bindings.list.query(input);
+
+  removeBinding = (input: AdminImConnectorBindingsRemoveInput) =>
+    lambdaClient.admin.imConnectors.bindings.remove.mutate(input);
+
   test = (input: AdminImConnectorTestInput) => lambdaClient.admin.imConnectors.test.mutate(input);
 
   upsert = (input: AdminImConnectorUpsertInput) =>
     lambdaClient.admin.imConnectors.upsert.mutate(input);
+
+  upsertBinding = (input: AdminImConnectorBindingsUpsertInput) =>
+    lambdaClient.admin.imConnectors.bindings.upsert.mutate(input);
 }
 
 export const adminImConnectorsService: AdminImConnectorsService =
   new AdminImConnectorsServiceImpl();
 
 export type {
+  AdminImConnectorBindingItem,
+  AdminImConnectorBindingsListInput,
+  AdminImConnectorBindingsListOutput,
+  AdminImConnectorBindingsRemoveInput,
+  AdminImConnectorBindingsRemoveOutput,
+  AdminImConnectorBindingsUpsertInput,
+  AdminImConnectorBindingsUpsertOutput,
   AdminImConnectorGetInput,
   AdminImConnectorTestInput,
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
+  ImConnectorBindingSource,
+  ImConnectorPlatform,
 };

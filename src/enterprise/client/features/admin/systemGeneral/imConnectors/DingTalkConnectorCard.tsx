@@ -12,13 +12,14 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 import { InfraField, InfraSwitchRow } from '../infra/InfraField';
 import { infraFormStyles as formStyles } from '../infra/styles';
 import { infraSettingsStyles as cardStyles } from '../styles';
+import { BindingsSection } from './BindingsSection';
 import { ConnectorSecretField } from './ConnectorSecretField';
 import {
   formatConnectorTime,
   IM_CONNECTOR_IDLE_HOURS_MAX,
   IM_CONNECTOR_IDLE_HOURS_MIN,
 } from './draft';
-import type { ImConnectorMutationService } from './service';
+import type { ImConnectorBindingsService, ImConnectorMutationService } from './service';
 import { imConnectorStyles as styles } from './styles';
 import { useImConnectorEditor } from './useImConnectorEditor';
 
@@ -37,6 +38,8 @@ const STATUS_PRESENTATION: Record<
 const TEST_ERROR_CODES = new Set(['auth_failed', 'missing_credentials', 'network', 'unknown']);
 
 export interface DingTalkConnectorCardProps {
+  /** Injectable for tests. */
+  bindingsService?: ImConnectorBindingsService;
   /** SYSTEM_OPERATE. Without it the card renders the same readings, but nothing can be written. */
   canOperate: boolean;
   onSaved?: () => Promise<void> | void;
@@ -53,7 +56,7 @@ export interface DingTalkConnectorCardProps {
  * for the first time fills them in together.
  */
 export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
-  ({ canOperate, onSaved, service, view }) => {
+  ({ bindingsService, canOperate, onSaved, service, view }) => {
     const { t } = useTranslation('admin');
     const editor = useImConnectorEditor({ canOperate, onSaved, service, view });
     const { draft, errors } = editor;
@@ -358,6 +361,14 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
               </div>
             ) : null}
           </div>
+
+          {/* Last, under the counter it explains: 已绑定员工 is the length of this list. */}
+          <BindingsSection
+            canOperate={canOperate}
+            platform={view.platform}
+            service={bindingsService}
+            onChanged={onSaved}
+          />
         </div>
       </section>
     );

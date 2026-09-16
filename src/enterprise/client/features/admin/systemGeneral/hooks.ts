@@ -2,7 +2,11 @@
 
 import { useCallback, useRef, useState } from 'react';
 
-import type { AdminImConnectorsReadService } from '@/enterprise/client/services/adminImConnectors';
+import type {
+  AdminImConnectorsBindingsService,
+  AdminImConnectorsReadService,
+  ImConnectorPlatform,
+} from '@/enterprise/client/services/adminImConnectors';
 import type {
   AdminBrowserProfileService,
   AdminDocumentRenderSettingsService,
@@ -19,6 +23,7 @@ import {
   buildAdminBrowserProfileOptionsKey,
   buildAdminDocumentRenderSettingsKey,
   buildAdminDocumentRenderStatusKey,
+  buildAdminImConnectorBindingsKey,
   buildAdminImConnectorsKey,
   buildAdminInfraSettingsKey,
   buildAdminSandboxSettingsKey,
@@ -106,6 +111,24 @@ export const useAdminImConnectors = (enabled: boolean, service: AdminImConnector
     refreshWhenHidden: false,
     revalidateOnFocus: false,
   });
+
+/**
+ * Manual + auto account bindings for one IM platform, filtered server-side by `q`.
+ *
+ * Not polled: unlike the connector status this list only changes when an administrator writes it
+ * (or someone links their account from IM), and the card revalidates it after every write.
+ */
+export const useAdminImConnectorBindings = (
+  enabled: boolean,
+  platform: ImConnectorPlatform,
+  q: string,
+  service: AdminImConnectorsBindingsService,
+) =>
+  useClientDataSWR(
+    buildAdminImConnectorBindingsKey(enabled, platform, q),
+    () => service.listBindings({ platform, ...(q.length > 0 ? { q } : {}) }),
+    { keepPreviousData: true, revalidateOnFocus: false },
+  );
 
 export interface InfraProbeState {
   busy: Partial<Record<AdminSystemInfraDependency, boolean>>;
