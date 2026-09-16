@@ -138,13 +138,17 @@ describe('messengerService', () => {
   it('mirrorWebTurn forwards mutate params', async () => {
     messenger.mirrorWebTurn.mutate.mockResolvedValueOnce({ success: true });
     await messengerService.mirrorWebTurn({
+      assistantMessage: 'asst text',
       assistantMessageId: 'a1',
       topicId: 'tpc-1',
+      userMessage: 'user text',
       userMessageId: 'u1',
     });
     expect(messenger.mirrorWebTurn.mutate).toHaveBeenCalledWith({
+      assistantMessage: 'asst text',
       assistantMessageId: 'a1',
       topicId: 'tpc-1',
+      userMessage: 'user text',
       userMessageId: 'u1',
     });
   });

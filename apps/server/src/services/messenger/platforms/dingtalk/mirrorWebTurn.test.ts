@@ -47,12 +47,20 @@ vi.mock('./queue', () => ({
   isDingTalkThreadBusy: (...args: unknown[]) => mockIsDingTalkThreadBusy(...args),
 }));
 
+const mockGetAgentRuntimeRedisClient = vi.fn(() => null);
+
+vi.mock('@/server/modules/AgentRuntime/redis', () => ({
+  getAgentRuntimeRedisClient: (...args: unknown[]) => mockGetAgentRuntimeRedisClient(...args),
+}));
+
 vi.mock('@/server/services/agentRuntime/CompletionLifecycle', () => ({
   extractTextFromMessage: (message: { content?: unknown } | undefined) =>
     typeof message?.content === 'string' ? message.content : undefined,
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
+const { TopicModel } = await import('@/database/models/topic');
+const { MessageModel } = await import('@/database/models/message');
 const { mirrorWebTurnToDingTalk } = await import('./mirrorWebTurn');
 
 const CONFIG = {
@@ -87,6 +95,7 @@ beforeEach(() => {
   mockMessageFindById.mockResolvedValue(undefined);
   mockResolveDingTalkStaffId.mockResolvedValue('staff_resolved');
   mockIsDingTalkThreadBusy.mockResolvedValue(false);
+  mockGetAgentRuntimeRedisClient.mockReturnValue(null);
   sendOtoMessage.mockResolvedValue({ processQueryKey: 'pqk-1' });
   sendGroupMessage.mockResolvedValue({ processQueryKey: 'pqk-g1' });
 });
@@ -262,7 +271,7 @@ describe('mirrorWebTurnToDingTalk', () => {
     expect(combined).toContain('z'.repeat(100));
   });
 
-  it('reads final texts from the messages table when ids are given', async () => {
+  it('prefers non-empty DB text over caller text when ids are given', async () => {
     mockMessageFindById.mockImplementation(async (id: string) => {
       if (id === 'msg-user') return { content: 'db user', id: 'msg-user' };
       if (id === 'msg-asst') return { content: 'db assistant', id: 'msg-asst' };
@@ -285,5 +294,124 @@ describe('mirrorWebTurnToDingTalk', () => {
     expect(text).toContain('db assistant');
     expect(text).not.toContain('caller user');
     expect(text).not.toContain('caller assistant');
+  });
+
+  it('uses caller text when the DB row is the LOADING_FLAT placeholder', async () => {
+    mockMessageFindById.mockImplementation(async (id: string) => {
+      if (id === 'msg-user') return { content: '...', id: 'msg-user' };
+      if (id === 'msg-asst') return { content: '...', id: 'msg-asst' };
+      return undefined;
+    });
+
+    await mirrorWebTurnToDingTalk({
+      assistantMessage: 'caller assistant',
+      assistantMessageId: 'msg-asst',
+      db,
+      topicId: 'tpc-1',
+      userId: 'user-1',
+      userMessage: 'caller user',
+      userMessageId: 'msg-user',
+    });
+
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    const text = parseOtoText(sendOtoMessage.mock.calls[0]);
+    expect(text).toContain('> caller user');
+    expect(text).toContain('caller assistant');
+    expect(TopicModel).toHaveBeenCalledWith(db, 'user-1', undefined);
+    expect(MessageModel).toHaveBeenCalledWith(db, 'user-1', undefined);
+  });
+
+  it('uses caller text when the DB row is missing or empty', async () => {
+    mockMessageFindById.mockResolvedValue(undefined);
+
+    await mirrorWebTurnToDingTalk({
+      assistantMessage: 'caller assistant',
+      assistantMessageId: 'msg-asst',
+      db,
+      topicId: 'tpc-1',
+      userId: 'user-1',
+      userMessage: 'caller user',
+      userMessageId: 'msg-user',
+    });
+
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    const text = parseOtoText(sendOtoMessage.mock.calls[0]);
+    expect(text).toContain('> caller user');
+    expect(text).toContain('caller assistant');
+  });
+
+  it('skips when the user-message row trigger is bot even if caller text is used', async () => {
+    mockMessageFindById.mockImplementation(async (id: string) => {
+      if (id === 'msg-user') {
+        return { content: '...', id: 'msg-user', metadata: { trigger: 'bot' } };
+      }
+      return { content: 'asst', id: 'msg-asst' };
+    });
+
+    await mirrorWebTurnToDingTalk({
+      assistantMessage: 'caller assistant',
+      assistantMessageId: 'msg-asst',
+      db,
+      topicId: 'tpc-1',
+      userId: 'user-1',
+      userMessage: 'caller user',
+      userMessageId: 'msg-user',
+    });
+
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('constructs TopicModel and MessageModel with the topic workspaceId', async () => {
+    mockMessageFindById.mockResolvedValue({ content: 'from db' });
+
+    await mirrorWebTurnToDingTalk({
+      assistantMessageId: 'msg-asst',
+      db,
+      topicId: 'tpc-1',
+      userId: 'user-1',
+      userMessageId: 'msg-user',
+      workspaceId: 'ws-9',
+    });
+
+    expect(TopicModel).toHaveBeenCalledWith(db, 'user-1', 'ws-9');
+    expect(MessageModel).toHaveBeenCalledWith(db, 'user-1', 'ws-9');
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send when another mirror already holds the Redis NX lock', async () => {
+    mockGetAgentRuntimeRedisClient.mockReturnValue({
+      del: vi.fn(),
+      set: vi.fn().mockResolvedValue(null),
+    });
+
+    await mirrorWebTurnToDingTalk({
+      assistantMessage: 'answer',
+      db,
+      topicId: 'tpc-1',
+      userId: 'user-1',
+      userMessage: 'hello',
+    });
+
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('stops remaining chunks when the inbound thread becomes busy mid-send', async () => {
+    mockIsDingTalkThreadBusy
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const assistant = `${'x'.repeat(10_000)}\n\n${'y'.repeat(10_000)}\n\n${'z'.repeat(10_000)}`;
+
+    await mirrorWebTurnToDingTalk({
+      assistantMessage: assistant,
+      db,
+      topicId: 'tpc-1',
+      userId: 'user-1',
+      userMessage: 'q',
+    });
+
+    expect(sendOtoMessage.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(sendOtoMessage.mock.calls.length).toBeLessThan(3);
   });
 });

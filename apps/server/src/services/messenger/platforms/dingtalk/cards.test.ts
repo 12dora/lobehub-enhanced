@@ -497,4 +497,14 @@ describe('sendDingTalkMarkdown staffId override', () => {
     const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as { text: string };
     expect(param.text).toBe('hello from web');
   });
+
+  it('stops sending remaining chunks when beforeChunk returns false', async () => {
+    const beforeChunk = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const body = `${'x'.repeat(10_000)}\n\n${'y'.repeat(10_000)}\n\n${'z'.repeat(10_000)}`;
+
+    await sendDingTalkMarkdown('dingtalk:cid', body, { beforeChunk, staffId: 'staff_1' });
+
+    expect(beforeChunk).toHaveBeenCalled();
+    expect(sendOtoMessage.mock.calls.length).toBe(1);
+  });
 });

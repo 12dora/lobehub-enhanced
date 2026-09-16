@@ -615,8 +615,10 @@ describe('buildRunLifecycle.completeRun — DingTalk web-turn mirror gating', ()
     await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
 
     expect(messengerServiceMock.mirrorWebTurn).toHaveBeenCalledWith({
+      assistantMessage: 'a',
       assistantMessageId: 'asst-1',
       topicId: 't1',
+      userMessage: 'q',
       userMessageId: 'u1',
     });
   });
@@ -642,11 +644,95 @@ describe('buildRunLifecycle.completeRun — DingTalk web-turn mirror gating', ()
     expect(messengerServiceMock.mirrorWebTurn).not.toHaveBeenCalled();
   });
 
-  it('does not call for an ordinary topic without DingTalk origin metadata', async () => {
-    const { get } = makeStore();
+  it('does not call for a loaded ordinary topic without DingTalk origin metadata', async () => {
+    const { get, store } = makeStore();
+    store.topicDataMap = {
+      [topicMapKey({ agentId: 'a1' })]: {
+        items: [{ id: 't1', metadata: { approvalMode: 'manual' } }],
+      },
+    } as any;
 
     await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
 
     expect(messengerServiceMock.mirrorWebTurn).not.toHaveBeenCalled();
+  });
+
+  it('still calls the lambda when the topic is not loaded locally', async () => {
+    const { get, store } = makeStore();
+    store.messagesMap = {
+      [messageMapKey(CONTEXT)]: [
+        { content: 'q', id: 'u1', role: 'user' },
+        { content: 'a', id: 'asst-1', parentId: 'u1', role: 'assistant' },
+      ],
+    } as any;
+
+    await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantMessage: 'a',
+        assistantMessageId: 'asst-1',
+        topicId: 't1',
+        userMessage: 'q',
+        userMessageId: 'u1',
+      }),
+    );
+  });
+
+  it('finds DingTalk metadata in the adapter agent bucket when the active bucket is empty', async () => {
+    const { get, store } = makeStore();
+    store.activeAgentId = 'other';
+    seedDingTalkTopic(store);
+
+    await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ topicId: 't1', userMessageId: 'u1' }),
+    );
+  });
+
+  it('does not call for an in-topic thread run', async () => {
+    const { get, store } = makeStore();
+    seedDingTalkTopic(store);
+
+    await buildRunLifecycle(get, {
+      context: { ...CONTEXT, threadId: 'thr-1' },
+      parentMessageId: 'u1',
+      parentMessageType: 'user',
+      runId: OP,
+      runScope: 'top_level',
+      runtimeType: 'client',
+    }).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).not.toHaveBeenCalled();
+  });
+
+  it('passes the nearest user message as fallback on regenerate', async () => {
+    const { get, store } = makeStore();
+    seedDingTalkTopic(store);
+    store.messagesMap = {
+      [messageMapKey(CONTEXT)]: [
+        { content: 'orig q', id: 'u1', role: 'user' },
+        { content: 'old a', id: 'asst-old', parentId: 'u1', role: 'assistant' },
+        { content: 'new a', id: 'asst-1', parentId: 'asst-old', role: 'assistant' },
+      ],
+    } as any;
+
+    await buildRunLifecycle(get, {
+      context: CONTEXT,
+      parentMessageId: 'asst-old',
+      parentMessageType: 'assistant',
+      runId: OP,
+      runScope: 'top_level',
+      runtimeType: 'client',
+    }).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).toHaveBeenCalledWith({
+      assistantMessage: 'new a',
+      assistantMessageId: 'asst-1',
+      topicId: 't1',
+      userMessage: 'orig q',
+      userMessageId: 'u1',
+    });
   });
 });

@@ -811,4 +811,46 @@ describe('CompletionLifecycle.dispatchHooks — DingTalk web-turn mirror', () =>
 
     expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
   });
+
+  it('does not call the mirror for a sub-agent operation', async () => {
+    await prepare().dispatchHooks(
+      'op-1',
+      {
+        ...doneState,
+        metadata: { ...doneState.metadata, isSubAgent: true },
+      },
+      'done',
+    );
+
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+  });
+
+  it('does not call the mirror for an in-topic thread operation', async () => {
+    await prepare().dispatchHooks(
+      'op-1',
+      {
+        ...doneState,
+        metadata: { ...doneState.metadata, threadId: 'thr-1' },
+      },
+      'done',
+    );
+
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+  });
+
+  it('does not call the mirror when the user message trigger is bot without botContext', async () => {
+    await prepare().dispatchHooks(
+      'op-1',
+      {
+        messages: [
+          { content: 'bot question', id: 'msg-user', metadata: { trigger: 'bot' }, role: 'user' },
+          { content: 'web answer', id: 'msg-asst', role: 'assistant' },
+        ],
+        metadata: { topicId: 'tpc-1', userId: 'user-1' },
+      },
+      'done',
+    );
+
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+  });
 });

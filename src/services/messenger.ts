@@ -58,8 +58,10 @@ class MessengerService {
    * topic back into the 1:1 robot chat. Fire-and-forget at the caller.
    */
   mirrorWebTurn = async (params: {
+    assistantMessage?: string;
     assistantMessageId?: string;
     topicId: string;
+    userMessage?: string;
     userMessageId?: string;
   }) => {
     return lambdaClient.messenger.mirrorWebTurn.mutate(params);

@@ -593,14 +593,18 @@ describe('messengerRouter.availablePlatforms', () => {
 });
 
 describe('messengerRouter.mirrorWebTurn', () => {
+  const createTopicSelectDb = (rows: Array<{ id: string; workspaceId: string | null }>) => {
+    const selectBuilder = createSelectBuilder(rows);
+    return { select: vi.fn(() => selectBuilder), selectBuilder };
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetServerDB.mockResolvedValue({ kind: 'server-db' });
     mockMirrorWebTurnToDingTalk.mockResolvedValue(undefined);
   });
 
-  it('rejects when the topic is not owned by the caller', async () => {
-    mockTopicFindById.mockResolvedValueOnce(undefined);
+  it('rejects with NOT_FOUND when the topic belongs to another user', async () => {
+    mockGetServerDB.mockResolvedValue(createTopicSelectDb([]));
 
     const caller = createCaller(await createContextInner({ userId: 'user-1' }));
 
@@ -612,15 +616,43 @@ describe('messengerRouter.mirrorWebTurn', () => {
       }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+    expect(mockTopicFindById).not.toHaveBeenCalled();
   });
 
   it('calls the service when the topic belongs to the caller', async () => {
-    mockTopicFindById.mockResolvedValueOnce({ id: 'tpc-1' });
+    mockGetServerDB.mockResolvedValue(createTopicSelectDb([{ id: 'tpc-1', workspaceId: null }]));
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const result = await caller.mirrorWebTurn({
+      assistantMessage: 'asst text',
+      assistantMessageId: 'a1',
+      topicId: 'tpc-1',
+      userMessage: 'user text',
+      userMessageId: 'u1',
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(mockMirrorWebTurnToDingTalk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantMessage: 'asst text',
+        assistantMessageId: 'a1',
+        topicId: 'tpc-1',
+        userId: 'user-1',
+        userMessage: 'user text',
+        userMessageId: 'u1',
+        workspaceId: undefined,
+      }),
+    );
+    expect(mockTopicFindById).not.toHaveBeenCalled();
+  });
+
+  it('mirrors a workspace topic owned by the caller and forwards workspaceId', async () => {
+    mockGetServerDB.mockResolvedValue(createTopicSelectDb([{ id: 'tpc-ws', workspaceId: 'ws-1' }]));
 
     const caller = createCaller(await createContextInner({ userId: 'user-1' }));
     const result = await caller.mirrorWebTurn({
       assistantMessageId: 'a1',
-      topicId: 'tpc-1',
+      topicId: 'tpc-ws',
       userMessageId: 'u1',
     });
 
@@ -628,10 +660,12 @@ describe('messengerRouter.mirrorWebTurn', () => {
     expect(mockMirrorWebTurnToDingTalk).toHaveBeenCalledWith(
       expect.objectContaining({
         assistantMessageId: 'a1',
-        topicId: 'tpc-1',
+        topicId: 'tpc-ws',
         userId: 'user-1',
         userMessageId: 'u1',
+        workspaceId: 'ws-1',
       }),
     );
+    expect(mockTopicFindById).not.toHaveBeenCalled();
   });
 });

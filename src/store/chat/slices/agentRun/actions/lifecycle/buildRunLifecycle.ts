@@ -1,5 +1,5 @@
 import type { AgentState } from '@lobechat/agent-runtime';
-import { isDesktop } from '@lobechat/const';
+import { isDesktop, LOADING_FLAT } from '@lobechat/const';
 import type { ConversationContext, UIChatMessage } from '@lobechat/types';
 import debug from 'debug';
 
@@ -106,6 +106,30 @@ const findCompletionAssistantMessageId = (
       ? parentMessage.id
       : undefined)
   );
+};
+
+const findMirrorUserMessage = (
+  messages: UIChatMessage[],
+  parentMessageId: string,
+  parentMessageType: 'user' | 'assistant' | 'tool',
+): UIChatMessage | undefined => {
+  const messagesById = new Map(messages.map((message) => [message.id, message]));
+  if (parentMessageType === 'user') return messagesById.get(parentMessageId);
+
+  let current = messagesById.get(parentMessageId);
+  const visited = new Set<string>();
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    if (current.role === 'user') return current;
+    current = current.parentId ? messagesById.get(current.parentId) : undefined;
+  }
+  return messages.findLast((message) => message.role === 'user');
+};
+
+const storeMessageText = (message: UIChatMessage | undefined): string | undefined => {
+  if (typeof message?.content !== 'string') return undefined;
+  if (!message.content.trim() || message.content === LOADING_FLAT) return undefined;
+  return message.content;
 };
 
 /**
@@ -324,9 +348,15 @@ export const buildRunLifecycle = (
         if (disposition !== 'success') return;
         if (!topicId) return;
 
-        const topic = topicSelectors.getTopicById(topicId)(get());
+        const topic =
+          topicSelectors.getTopicByIdInScope(topicId, { agentId, groupId })(get()) ??
+          topicSelectors.getTopicById(topicId)(get());
         const metadata = topic?.metadata;
+        // Loaded non-DingTalk topics stay local (zero request). A miss still
+        // calls the lambda so a switched-agent / other-bucket row isn't dropped
+        // — the server no-ops when the topic isn't DingTalk-originated.
         if (
+          topic &&
           metadata?.bot?.platform !== 'dingtalk' &&
           metadata?.messenger?.platform !== 'dingtalk'
         ) {
@@ -334,21 +364,25 @@ export const buildRunLifecycle = (
         }
 
         const finalMessages = get().messagesMap[messageKey] || [];
+        const dbMessages = get().dbMessagesMap[messageKey] || [];
         const assistantMessageId =
           findCompletionAssistantMessageId(finalMessages, parentMessageId, parentMessageType) ??
-          findCompletionAssistantMessageId(
-            get().dbMessagesMap[messageKey] || [],
-            parentMessageId,
-            parentMessageType,
-          ) ??
+          findCompletionAssistantMessageId(dbMessages, parentMessageId, parentMessageType) ??
           event.assistantMessageId;
-        const userMessageId = parentMessageType === 'user' ? parentMessageId : undefined;
+        const userMessage =
+          findMirrorUserMessage(finalMessages, parentMessageId, parentMessageType) ??
+          findMirrorUserMessage(dbMessages, parentMessageId, parentMessageType);
+        const assistantMessage =
+          finalMessages.find((message) => message.id === assistantMessageId) ??
+          dbMessages.find((message) => message.id === assistantMessageId);
 
         void Promise.resolve(
           messengerService.mirrorWebTurn({
+            assistantMessage: storeMessageText(assistantMessage),
             assistantMessageId,
             topicId,
-            userMessageId,
+            userMessage: storeMessageText(userMessage),
+            userMessageId: userMessage?.id,
           }),
         ).catch((error: unknown) => {
           console.error('[completeRun] DingTalk web-turn mirror failed:', error);

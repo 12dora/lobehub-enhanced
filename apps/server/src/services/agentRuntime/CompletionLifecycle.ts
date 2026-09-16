@@ -701,10 +701,13 @@ export class CompletionLifecycle {
    * After a successful web (or hetero) turn, mirror the turn into the original
    * DingTalk 1:1 chat when the topic started there. Fire-and-forget; inbound
    * DingTalk runs (`botContext.platform === 'dingtalk'`) are skipped so the
-   * reply sink is not double-posted.
+   * reply sink is not double-posted. Nested sub-agent / in-topic thread ops
+   * are skipped the same way the client `completeRun` gate does.
    */
   private scheduleDingTalkWebTurnMirror(operationId: string, state: any, metadata: any): void {
     if (metadata?.botContext?.platform === 'dingtalk') return;
+    if (metadata?.isSubAgent) return;
+    if (metadata?.threadId) return;
 
     const topicId = typeof metadata?.topicId === 'string' ? metadata.topicId : undefined;
     const userId =
@@ -718,6 +721,7 @@ export class CompletionLifecycle {
     const userMeta =
       lastUserMessage && isRecord(lastUserMessage.metadata) ? lastUserMessage.metadata : undefined;
     const userMessageTrigger = typeof userMeta?.trigger === 'string' ? userMeta.trigger : undefined;
+    if (userMessageTrigger === 'bot') return;
 
     void mirrorWebTurnToDingTalk({
       assistantMessage: extractTextFromMessage(lastAssistantMessage),

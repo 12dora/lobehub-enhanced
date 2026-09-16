@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { withScopedPermission } from '@/business/server/trpc-middlewares/rbacPermission';
@@ -20,9 +20,8 @@ import {
 import type { DecryptedMessengerInstallation } from '@/database/models/messengerInstallation';
 import { MessengerInstallationModel } from '@/database/models/messengerInstallation';
 import { RbacModel } from '@/database/models/rbac';
-import { TopicModel } from '@/database/models/topic';
 import { WorkspaceModel } from '@/database/models/workspace';
-import { agents, users } from '@/database/schemas';
+import { agents, topics, users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 import { authedProcedure, publicProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
@@ -133,7 +132,6 @@ const messengerProcedure = authedProcedure.use(serverDatabase).use(async (opts) 
       // single pre-scoped instance.
       getAgentService: (workspaceId?: string | null) =>
         new AgentService(ctx.serverDB, ctx.userId, workspaceId ?? undefined),
-      topicModel: new TopicModel(ctx.serverDB, ctx.userId),
     },
   });
 });
@@ -529,30 +527,42 @@ export const messengerRouter = router({
 
   /**
    * Client-runtime completion hook: mirror a finished web turn of a
-   * DingTalk-originated topic back into the 1:1 robot chat. Ownership is
-   * the caller's — `TopicModel.findById` is user-scoped. The service no-ops
-   * for non-DingTalk / group / inbound topics.
+   * DingTalk-originated topic back into the 1:1 robot chat. Ownership is the
+   * caller's topic row (`id` + `userId`) in any workspace — never the ambient
+   * `X-Workspace-Id`. The service no-ops for non-DingTalk / group / inbound.
    */
   mirrorWebTurn: messengerProcedure
     .input(
       z.object({
+        assistantMessage: z.string().optional(),
         assistantMessageId: z.string().optional(),
         topicId: z.string().min(1),
+        userMessage: z.string().optional(),
         userMessageId: z.string().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const topic = await ctx.topicModel.findById(input.topicId);
+      // Bypass TopicModel.findById: that helper is workspace-scoped (personal
+      // = `workspace_id IS NULL`). DingTalk `/切换` into a workspace agent
+      // stamps `workspace_id`; a web continue must still see the row.
+      const [topic] = await ctx.serverDB
+        .select({ id: topics.id, workspaceId: topics.workspaceId })
+        .from(topics)
+        .where(and(eq(topics.id, input.topicId), eq(topics.userId, ctx.userId)))
+        .limit(1);
       if (!topic) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Topic not found' });
       }
 
       await mirrorWebTurnToDingTalk({
+        assistantMessage: input.assistantMessage,
         assistantMessageId: input.assistantMessageId,
         db: ctx.serverDB,
         topicId: input.topicId,
         userId: ctx.userId,
+        userMessage: input.userMessage,
         userMessageId: input.userMessageId,
+        workspaceId: topic.workspaceId ?? undefined,
       });
 
       return { success: true };

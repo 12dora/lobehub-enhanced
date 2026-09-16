@@ -123,7 +123,7 @@ const recallDingTalkMessage = async (
 export const sendDingTalkMarkdown = async (
   threadId: string,
   text: string,
-  options?: { recallable?: boolean; staffId?: string },
+  options?: { beforeChunk?: () => Promise<boolean>; recallable?: boolean; staffId?: string },
 ): Promise<string | undefined> => {
   if (!text) return;
   const config = await getMessengerDingTalkConfig();
@@ -135,6 +135,10 @@ export const sendDingTalkMarkdown = async (
   const chunks = chunkMarkdown(text);
   let processQueryKey: string | undefined;
   for (const chunk of chunks) {
+    if (options?.beforeChunk && !(await options.beforeChunk())) {
+      log('sendDingTalkMarkdown aborted before chunk threadId=%s', threadId);
+      break;
+    }
     const title = markdownTitle(chunk);
     const body =
       isGroup && staffId && !chunk.includes(`@${staffId}`) ? `@${staffId} ${chunk}` : chunk;
