@@ -198,7 +198,7 @@ export const adminImConnectorUpsertInputSchema = z
     selectCardTemplateId: z.string().trim().max(200).nullable(),
   })
   .strict();
-export type AdminImConnectorUpsertInput = z.infer<typeof adminImConnectorUpsertInputSchema>;
+export type AdminImConnectorUpsertInput = z.input<typeof adminImConnectorUpsertInputSchema>;
 
 /** Test with explicit values (unsaved form) or the stored row when a field is omitted. */
 export const adminImConnectorTestInputSchema = z

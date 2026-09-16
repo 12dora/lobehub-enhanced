@@ -17,10 +17,10 @@ const log = debug('lobe-server:messenger:push');
 export type MessengerPushPlatform = 'dingtalk';
 
 export interface MessengerPushMessage {
-  /** Absolute or app-relative URL ("/task/<id>") rendered as the primary action. */
-  actionUrl?: string;
   /** Label for `actionUrl`; the provider uses its own default when omitted. */
   actionLabel?: string;
+  /** Absolute or app-relative URL ("/task/<id>") rendered as the primary action. */
+  actionUrl?: string;
   /** Markdown body (provider converts to its dialect; DingTalk = sampleMarkdown / ActionCard). */
   markdown: string;
   /** Short title (notification headline / card title). */
@@ -31,6 +31,7 @@ export type MessengerPushSkipReason =
   | 'platform_unavailable'
   | 'platform_disabled'
   | 'push_disabled'
+  | 'channel_disabled'
   | 'user_not_mapped';
 
 export type MessengerPushResult =
@@ -46,11 +47,11 @@ export interface MessengerPushProvider {
    * convention), honour the connector's `enabled` / `pushEnabled` flags, increment the daily
    * `messenger:<platform>:counter:pushes:<YYYY-MM-DD>` Redis counter on success, and never throw.
    */
-  pushToUser(params: {
+  pushToUser: (params: {
     db: LobeChatDatabase;
     message: MessengerPushMessage;
     userId: string;
-  }): Promise<MessengerPushResult>;
+  }) => Promise<MessengerPushResult>;
 }
 
 const providers = new Map<MessengerPushPlatform, MessengerPushProvider>();
