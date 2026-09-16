@@ -459,3 +459,5 @@ export interface TaskDetailData {
   /** Owning workspace; null for personal (non-workspace) tasks. */
   workspaceId?: string | null;
 }
+
+export * from './reminder';

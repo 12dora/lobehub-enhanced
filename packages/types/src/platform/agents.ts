@@ -16,7 +16,15 @@ export const PLATFORM_AGENT_GLOBAL_TARGET_ID = '__global__' as const;
 /** Stable system identity for the existing internal `inbox` Agent. */
 export const PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY = 'default-inbox' as const;
 
-export type PlatformAgentSystemKey = typeof PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY;
+/** Stable system identity for the builtin task-page assistant (`task-agent` slug, 任务助手). */
+export const PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY = 'task-manager' as const;
+
+export const PLATFORM_AGENT_SYSTEM_KEYS = [
+  PLATFORM_AGENT_DEFAULT_INBOX_SYSTEM_KEY,
+  PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
+] as const;
+
+export type PlatformAgentSystemKey = (typeof PLATFORM_AGENT_SYSTEM_KEYS)[number];
 
 /**
  * Namespace prefix for a platform Agent's stable list-item identity. Local Agent ids
