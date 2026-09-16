@@ -15,6 +15,7 @@ import type {
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
+  ImConnectorBindingBoundVia,
   ImConnectorBindingSource,
   ImConnectorPlatform,
 } from '@/server/enterprise/contracts/adminImConnectors';
@@ -97,6 +98,7 @@ export type {
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
+  ImConnectorBindingBoundVia,
   ImConnectorBindingSource,
   ImConnectorPlatform,
 };

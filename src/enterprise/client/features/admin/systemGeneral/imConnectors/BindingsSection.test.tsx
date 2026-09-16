@@ -10,6 +10,7 @@ import type { ImConnectorBindingsService } from './service';
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
+  mutate: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
@@ -155,9 +156,15 @@ vi.mock('../../primitives/runAdminMutation', () => ({
   },
 }));
 
-/** Minimal SWR stand-in: runs the real fetcher, so the injected service is exercised. */
+/**
+ * Minimal SWR stand-in: runs the real fetcher, so the injected service is exercised, and keeps a
+ * registry of mounted keys so the global `mutate(matcher)` the section uses actually revalidates
+ * — an exact-key stand-in would hide the very bug the matcher exists for.
+ */
 vi.mock('@/libs/swr', async () => {
   const { useCallback, useEffect, useRef, useState } = await import('react');
+
+  const subscribers = new Set<{ key: unknown; load: () => Promise<void> }>();
 
   const useClientDataSWR = (key: unknown, fetcher: () => Promise<unknown>) => {
     const [state, setState] = useState<{ data?: unknown; error?: unknown }>({});
@@ -168,15 +175,24 @@ vi.mock('@/libs/swr', async () => {
     const load = useCallback(async () => {
       if (!serialized) return;
       try {
-        setState({ data: await fetcherRef.current() });
+        const data = await fetcherRef.current();
+        setState({ data });
       } catch (error) {
-        setState({ error });
+        // `keepPreviousData` is on for this list, so a failed fetch still has the previous
+        // answer in hand — that is exactly when an error surface gated on `!data` disappears.
+        setState((previous) => ({ data: previous.data, error }));
       }
     }, [serialized]);
 
     useEffect(() => {
+      const entry = { key, load };
+      subscribers.add(entry);
       void load();
-    }, [load]);
+      return () => {
+        subscribers.delete(entry);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [load, serialized]);
 
     return {
       data: state.data,
@@ -186,7 +202,14 @@ vi.mock('@/libs/swr', async () => {
     };
   };
 
-  return { useClientDataSWR };
+  const mutate = async (matcher: unknown) => {
+    mocks.mutate(matcher);
+    const matches = (entry: { key: unknown }) =>
+      typeof matcher === 'function' ? Boolean(matcher(entry.key)) : true;
+    await Promise.all([...subscribers].filter((entry) => matches(entry)).map((e) => e.load()));
+  };
+
+  return { mutate, useClientDataSWR };
 });
 
 const binding = (
@@ -202,6 +225,15 @@ const binding = (
   ...overrides,
 });
 
+const page = (
+  items: AdminImConnectorBindingItem[],
+  overrides: { hasMore?: boolean; total?: number } = {},
+) => ({
+  hasMore: overrides.hasMore ?? false,
+  items,
+  total: overrides.total ?? items.length,
+});
+
 interface Stub extends ImConnectorBindingsService {
   listBindings: ReturnType<typeof vi.fn>;
   removeBinding: ReturnType<typeof vi.fn>;
@@ -210,11 +242,32 @@ interface Stub extends ImConnectorBindingsService {
 
 const service = (overrides: Partial<Stub> = {}): Stub =>
   ({
-    listBindings: vi.fn().mockResolvedValue({ items: [binding()] }),
+    listBindings: vi.fn().mockResolvedValue(page([binding()])),
     removeBinding: vi.fn().mockResolvedValue({ success: true }),
     upsertBinding: vi.fn().mockResolvedValue(binding({ source: 'manual' })),
     ...overrides,
   }) as unknown as Stub;
+
+const conflictError = (boundVia: 'identity_email' | 'link' = 'link') => ({
+  data: {
+    errorData: {
+      code: 'PLATFORM_USER_ALREADY_BOUND',
+      details: {
+        boundUserEmail: 'other@example.com',
+        boundUserId: 'user-2',
+        boundUserName: '李四',
+        boundVia,
+      },
+    },
+  },
+});
+
+/** Conflicts once — what a plain bind gets — then accepts the forced retry. */
+const conflictingUpsert = (boundVia: 'identity_email' | 'link' = 'link') =>
+  vi
+    .fn()
+    .mockRejectedValueOnce(conflictError(boundVia))
+    .mockResolvedValue(binding({ source: 'manual' }));
 
 const fillBindDraft = () => {
   fireEvent.change(
@@ -231,6 +284,7 @@ const fillBindDraft = () => {
 
 beforeEach(() => {
   mocks.confirm.mockReset();
+  mocks.mutate.mockReset();
   mocks.toastError.mockReset();
   mocks.toastSuccess.mockReset();
 });
@@ -238,8 +292,8 @@ beforeEach(() => {
 describe('BindingsSection', () => {
   it('lists the bindings the service answers with', async () => {
     const stub = service({
-      listBindings: vi.fn().mockResolvedValue({
-        items: [
+      listBindings: vi.fn().mockResolvedValue(
+        page([
           binding(),
           binding({
             platformUserId: 'ding-002',
@@ -249,8 +303,8 @@ describe('BindingsSection', () => {
             userId: 'user-2',
             userName: null,
           }),
-        ],
-      }),
+        ]),
+      ),
     });
     render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
 
@@ -264,7 +318,7 @@ describe('BindingsSection', () => {
   });
 
   it('says so when nothing is bound yet', async () => {
-    const stub = service({ listBindings: vi.fn().mockResolvedValue({ items: [] }) });
+    const stub = service({ listBindings: vi.fn().mockResolvedValue(page([])) });
     render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
 
     await waitFor(() =>
@@ -389,24 +443,8 @@ describe('BindingsSection', () => {
     expect(stub.listBindings).toHaveBeenCalledTimes(2);
   });
 
-  it('names the account a taken DingTalk user belongs to, and rebinds on request', async () => {
-    const stub = service({
-      upsertBinding: vi
-        .fn()
-        .mockRejectedValueOnce({
-          data: {
-            errorData: {
-              code: 'PLATFORM_USER_ALREADY_BOUND',
-              details: {
-                boundUserEmail: 'other@example.com',
-                boundUserId: 'user-2',
-                boundUserName: '李四',
-              },
-            },
-          },
-        })
-        .mockResolvedValue(binding({ source: 'manual' })),
-    });
+  it('rebinds with one forced upsert rather than an unbind followed by a write', async () => {
+    const stub = service({ upsertBinding: conflictingUpsert() });
     render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
 
     await waitFor(() => expect(screen.getByText('ding-001')).toBeTruthy());
@@ -418,17 +456,153 @@ describe('BindingsSection', () => {
     await waitFor(() =>
       expect(screen.getByText('systemGeneral.imConnectors.bindings.conflict:李四')).toBeTruthy(),
     );
+    expect(
+      screen.getByText('systemGeneral.imConnectors.bindings.rebindConsequence:李四'),
+    ).toBeTruthy();
     expect(mocks.toastError).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBeTruthy();
 
     fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.rebind'));
 
-    await waitFor(() => expect(stub.removeBinding).toHaveBeenCalled());
-    // The other account's binding goes first, then this one is written again.
-    expect(stub.removeBinding).toHaveBeenCalledWith({ platform: 'dingtalk', userId: 'user-2' });
-    expect(stub.upsertBinding).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(stub.upsertBinding).toHaveBeenCalledTimes(2));
+    // One transaction on the server: nothing is unbound client-side first, so a failed retry
+    // cannot leave the other account without its binding.
+    expect(stub.removeBinding).not.toHaveBeenCalled();
+    expect(stub.upsertBinding).toHaveBeenLastCalledWith({
+      force: true,
+      platform: 'dingtalk',
+      platformUserId: 'ding-009',
+      userId: 'user-9',
+    });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(mocks.toastSuccess).toHaveBeenCalledWith('systemGeneral.imConnectors.bindings.bound');
+  });
+
+  it('keeps the conflict banner when the forced retry fails, and says what failed', async () => {
+    const stub = service({
+      upsertBinding: vi
+        .fn()
+        .mockRejectedValueOnce(conflictError())
+        .mockRejectedValue(new Error('network')),
+    });
+    render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
+
+    await waitFor(() => expect(screen.getByText('ding-001')).toBeTruthy());
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.bind'));
+    fillBindDraft();
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.submit'));
+    await waitFor(() =>
+      expect(screen.getByText('systemGeneral.imConnectors.bindings.conflict:李四')).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.rebind'));
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'systemGeneral.imConnectors.bindings.bindFailed',
+      ),
+    );
+    // Still true, so it stays: nothing was written, and the banner is what offers the retry.
+    expect(screen.getByText('systemGeneral.imConnectors.bindings.conflict:李四')).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(stub.removeBinding).not.toHaveBeenCalled();
+  });
+
+  it('says the other account only matches by sign-in identity when the server says so', async () => {
+    const stub = service({ upsertBinding: conflictingUpsert('identity_email') });
+    render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
+
+    await waitFor(() => expect(screen.getByText('ding-001')).toBeTruthy());
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.bind'));
+    fillBindDraft();
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.submit'));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('systemGeneral.imConnectors.bindings.conflictIdentityEmail:李四'),
+      ).toBeTruthy(),
+    );
+    // No link row to drop, so the other account keeps its reminders — different copy, same action.
+    expect(
+      screen.getByText('systemGeneral.imConnectors.bindings.rebindKeepsIdentity:李四'),
+    ).toBeTruthy();
+    expect(screen.queryByText('systemGeneral.imConnectors.bindings.conflict:李四')).toBeNull();
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.rebind'));
+    await waitFor(() => expect(stub.upsertBinding).toHaveBeenCalledTimes(2));
+    expect(stub.upsertBinding).toHaveBeenLastCalledWith({
+      force: true,
+      platform: 'dingtalk',
+      platformUserId: 'ding-009',
+      userId: 'user-9',
+    });
+  });
+
+  it('invalidates every cached search after a write, not just the filter on screen', async () => {
+    const stub = service();
+    render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
+
+    await waitFor(() => expect(screen.getByText('ding-001')).toBeTruthy());
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.bindings.unbind'));
+    const options = mocks.confirm.mock.calls[0]![0] as { onConfirm: () => Promise<void> };
+    await act(async () => {
+      await options.onConfirm();
+    });
+
+    const matcher = mocks.mutate.mock.calls.at(-1)![0] as (key: unknown) => boolean;
+    expect(matcher(['admin.imConnectors.bindings.list', 'dingtalk', ''])).toBe(true);
+    expect(matcher(['admin.imConnectors.bindings.list', 'dingtalk', '张三'])).toBe(true);
+    // Scoped to this list: the connector row itself is refreshed through `onChanged`.
+    expect(matcher(['admin.imConnectors.list'])).toBe(false);
+    expect(matcher('admin.imConnectors.bindings.list')).toBe(false);
+  });
+
+  it('says how many rows the server withheld when the list is capped', async () => {
+    const stub = service({
+      listBindings: vi.fn().mockResolvedValue(page([binding()], { hasMore: true, total: 412 })),
+    });
+    render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
+
+    await waitFor(() =>
+      expect(screen.getByText('systemGeneral.imConnectors.bindings.truncated:1,412')).toBeTruthy(),
+    );
+  });
+
+  it('reports the total when nothing was withheld', async () => {
+    const stub = service();
+    render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
+
+    await waitFor(() =>
+      expect(screen.getByText('systemGeneral.imConnectors.bindings.total:1')).toBeTruthy(),
+    );
+  });
+
+  it('shows a load failure even while a previous search is still on screen', async () => {
+    const stub = service({
+      listBindings: vi
+        .fn()
+        .mockResolvedValueOnce(page([binding()]))
+        .mockRejectedValue(new Error('network')),
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<BindingsSection canOperate platform="dingtalk" service={stub} />);
+      await waitFor(() => expect(screen.getByText('ding-001')).toBeTruthy());
+
+      fireEvent.change(
+        screen.getByLabelText('systemGeneral.imConnectors.bindings.search') as HTMLInputElement,
+        { target: { value: '李四' } },
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+
+      await waitFor(() =>
+        expect(screen.getByText('systemGeneral.imConnectors.bindings.loadFailed')).toBeTruthy(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falls back to the generic failure copy for anything that is not a conflict', async () => {

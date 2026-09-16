@@ -4,7 +4,7 @@ import { createStaticStyles, cssVar } from 'antd-style';
 export const imConnectorStyles = createStaticStyles(({ css }) => ({
   /** Secondary line inside a cell: the email under a name, the DingTalk name under its id. */
   bindingSecondary: css`
-    font-size: 12px;
+    font-size: ${cssVar.fontSizeSM};
     line-height: 18px;
     color: ${cssVar.colorTextTertiary};
     overflow-wrap: anywhere;

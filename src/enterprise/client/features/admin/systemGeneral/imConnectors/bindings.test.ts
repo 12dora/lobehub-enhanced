@@ -4,6 +4,7 @@ import {
   DINGTALK_PLATFORM_USER_ID_MAX,
   displayBindingUserLabel,
   emptyImConnectorBindingDraft,
+  getImConnectorBindErrorKey,
   readImConnectorBindingConflict,
   toImConnectorBindingUpsertInput,
   validateImConnectorBindingDraft,
@@ -75,6 +76,32 @@ describe('toImConnectorBindingUpsertInput', () => {
       ),
     ).toEqual({ platform: 'dingtalk', platformUserId: 'ding-user', userId: 'user-1' });
   });
+
+  // 改绑 is the same write with `force`, so the server can transfer in one transaction instead of
+  // the client unbinding the other account first and hoping the second call lands.
+  it('asks for the transfer only when 改绑 was pressed', () => {
+    expect(
+      toImConnectorBindingUpsertInput(
+        'dingtalk',
+        draft({ platformUserId: 'ding-user', userId: 'user-1' }),
+        true,
+      ),
+    ).toEqual({
+      force: true,
+      platform: 'dingtalk',
+      platformUserId: 'ding-user',
+      userId: 'user-1',
+    });
+
+    // Omitted rather than `false`: that is the contract's own default refusal.
+    expect(
+      toImConnectorBindingUpsertInput(
+        'dingtalk',
+        draft({ platformUserId: 'ding-user', userId: 'user-1' }),
+        false,
+      ),
+    ).not.toHaveProperty('force');
+  });
 });
 
 describe('readImConnectorBindingConflict', () => {
@@ -82,6 +109,7 @@ describe('readImConnectorBindingConflict', () => {
     boundUserEmail: 'other@example.com',
     boundUserId: 'user-2',
     boundUserName: '李四',
+    boundVia: 'link' as const,
   };
 
   it('reads the other account off the formatter body', () => {
@@ -107,7 +135,34 @@ describe('readImConnectorBindingConflict', () => {
     ).toBeNull();
   });
 
-  // Without the other user's id there is nothing for 改绑 to unbind.
+  it('keeps the identity-email case apart: no link row, so 改绑 costs the other account nothing', () => {
+    expect(
+      readImConnectorBindingConflict({
+        data: {
+          errorData: {
+            code: 'PLATFORM_USER_ALREADY_BOUND',
+            details: { ...details, boundVia: 'identity_email' },
+          },
+        },
+      }),
+    ).toEqual({ ...details, boundVia: 'identity_email' });
+  });
+
+  // A server that predates the field can only have meant a links row.
+  it('falls back to the link case for an unknown or missing boundVia', () => {
+    expect(
+      readImConnectorBindingConflict({
+        data: {
+          errorData: {
+            code: 'PLATFORM_USER_ALREADY_BOUND',
+            details: { boundUserEmail: null, boundUserId: 'user-2', boundUserName: null },
+          },
+        },
+      })?.boundVia,
+    ).toBe('link');
+  });
+
+  // Without the other user's id there is nothing for 改绑 to name.
   it('ignores a conflict body that does not name the other account', () => {
     expect(
       readImConnectorBindingConflict({
@@ -122,5 +177,22 @@ describe('displayBindingUserLabel', () => {
     expect(displayBindingUserLabel('张三', 'a@example.com', 'user-1')).toBe('张三');
     expect(displayBindingUserLabel(null, 'a@example.com', 'user-1')).toBe('a@example.com');
     expect(displayBindingUserLabel(null, null, 'user-1')).toBe('user-1');
+  });
+});
+
+describe('getImConnectorBindErrorKey', () => {
+  it('names a missing account instead of collapsing into the generic retry copy', () => {
+    expect(
+      getImConnectorBindErrorKey({ data: { errorData: { code: 'PLATFORM_NOT_FOUND' } } }),
+    ).toBe('users.errors.notFound');
+    expect(
+      getImConnectorBindErrorKey({ data: { errorData: { code: 'PLATFORM_PERMISSION_DENIED' } } }),
+    ).toBe('users.errors.permissionDenied');
+  });
+
+  it('keeps this surface own retry wording for an unrecognised failure', () => {
+    expect(getImConnectorBindErrorKey(new Error('network'))).toBe(
+      'systemGeneral.imConnectors.bindings.bindFailed',
+    );
   });
 });

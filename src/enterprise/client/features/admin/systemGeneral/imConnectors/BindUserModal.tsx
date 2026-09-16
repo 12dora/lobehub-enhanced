@@ -15,6 +15,7 @@ import { infraFormStyles as formStyles } from '../infra/styles';
 import {
   displayBindingUserLabel,
   emptyImConnectorBindingDraft,
+  getImConnectorBindErrorKey,
   type ImConnectorBindingConflict,
   type ImConnectorBindingDraft,
   readImConnectorBindingConflict,
@@ -44,8 +45,10 @@ export interface BindUserModalProps {
  * this modal.
  *
  * A DingTalk user already bound elsewhere is reported inline rather than as a toast: the admin's
- * next move is about the OTHER account, so the modal keeps the draft and offers 改绑, which drops
- * that binding and retries this one in a single confirmation.
+ * next move is about the OTHER account, so the modal keeps the draft and offers 改绑, which
+ * re-issues the SAME upsert with `force: true`. That is one call the server runs as a single
+ * transaction — never a remove followed by a write that can fail and leave the other account
+ * unbound for nothing.
  */
 export const BindUserModal = memo<BindUserModalProps>(
   ({ onBound, onClose, open, platform, service }) => {
@@ -84,11 +87,12 @@ export const BindUserModal = memo<BindUserModalProps>(
     }, []);
 
     /**
-     * @param unbindUserId - The account whose binding is dropped first (改绑). Leaving it out is
-     *   the plain bind: the server rejects a DingTalk user that already belongs to someone else.
+     * @param force - 改绑. The server transfers the DingTalk user in one transaction. Leaving it
+     *   out is the plain bind: the server rejects a DingTalk user that already belongs to someone
+     *   else, and that rejection is what raises the banner.
      */
     const submit = useCallback(
-      async (unbindUserId?: string) => {
+      async (force?: boolean) => {
         if (submittingRef.current) return;
         setShowErrors(true);
         if (Object.keys(validateImConnectorBindingDraft(draft)).length > 0) {
@@ -107,11 +111,11 @@ export const BindUserModal = memo<BindUserModalProps>(
                 setConflict(nextConflict);
                 return;
               }
-              toast.error(t('systemGeneral.imConnectors.bindings.bindFailed'));
+              // Anything else keeps the banner (it is still true) and says what actually failed.
+              toast.error(t(getImConnectorBindErrorKey(error) as never));
             },
             run: async () => {
-              if (unbindUserId) await service.removeBinding({ platform, userId: unbindUserId });
-              await service.upsertBinding(toImConnectorBindingUpsertInput(platform, draft));
+              await service.upsertBinding(toImConnectorBindingUpsertInput(platform, draft, force));
             },
           });
           if (!committed) return;
@@ -159,17 +163,30 @@ export const BindUserModal = memo<BindUserModalProps>(
               title={t('systemGeneral.imConnectors.bindings.conflictTitle')}
               type="error"
               action={
-                <Button
-                  loading={submitting}
-                  size="small"
-                  onClick={() => void submit(conflict.boundUserId)}
-                >
+                <Button loading={submitting} size="small" onClick={() => void submit(true)}>
                   {t('systemGeneral.imConnectors.bindings.rebind')}
                 </Button>
               }
-              description={t('systemGeneral.imConnectors.bindings.conflict', {
-                name: conflictName,
-              })}
+              description={
+                <>
+                  <div>
+                    {conflict.boundVia === 'identity_email'
+                      ? t('systemGeneral.imConnectors.bindings.conflictIdentityEmail', {
+                          name: conflictName,
+                        })
+                      : t('systemGeneral.imConnectors.bindings.conflict', { name: conflictName })}
+                  </div>
+                  <div>
+                    {conflict.boundVia === 'identity_email'
+                      ? t('systemGeneral.imConnectors.bindings.rebindKeepsIdentity', {
+                          name: conflictName,
+                        })
+                      : t('systemGeneral.imConnectors.bindings.rebindConsequence', {
+                          name: conflictName,
+                        })}
+                  </div>
+                </>
+              }
             />
           ) : null}
 

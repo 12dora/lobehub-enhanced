@@ -17,6 +17,7 @@ import { infraFormStyles as formStyles } from '../infra/styles';
 import { displayBindingUserLabel } from './bindings';
 import { BindUserModal } from './BindUserModal';
 import { formatConnectorTime } from './draft';
+import { invalidateAdminImConnectorBindings } from './invalidate';
 import { type ImConnectorBindingsService, imConnectorBindingsService } from './service';
 import { imConnectorStyles as styles } from './styles';
 
@@ -62,12 +63,13 @@ export const BindingsSection = memo<BindingsSectionProps>(
     }, [query, search]);
 
     const bindings = useAdminImConnectorBindings(true, platform, query, service);
-    const { mutate } = bindings;
 
+    // Every `q` is its own cache entry, so a write has to drop them all — not just the filter on
+    // screen. `onChanged` is what carries the 已绑定员工 counter along.
     const refresh = useCallback(async () => {
-      await mutate();
+      await invalidateAdminImConnectorBindings();
       await onChanged?.();
-    }, [mutate, onChanged]);
+    }, [onChanged]);
 
     const unbind = useCallback(
       (item: AdminImConnectorBindingItem) => {
@@ -100,6 +102,8 @@ export const BindingsSection = memo<BindingsSectionProps>(
     );
 
     const items = bindings.data?.items ?? [];
+    const total = bindings.data?.total ?? items.length;
+    const hasMore = bindings.data?.hasMore ?? false;
 
     return (
       <div className={styles.section}>
@@ -123,16 +127,22 @@ export const BindingsSection = memo<BindingsSectionProps>(
           ) : null}
         </div>
 
-        {bindings.error && !bindings.data ? (
+        {/* Not gated on `!data`: with `keepPreviousData` a failed search still holds the previous
+            filter's rows, and silently showing them under a new search term is the worse lie. */}
+        {bindings.error ? (
           <Text type="danger">{t('systemGeneral.imConnectors.bindings.loadFailed')}</Text>
-        ) : bindings.isLoading && !bindings.data ? (
+        ) : null}
+
+        {bindings.isLoading && !bindings.data ? (
           <Text type="secondary">{t('systemGeneral.imConnectors.bindings.loading')}</Text>
         ) : items.length === 0 ? (
-          <Text type="secondary">
-            {query.length > 0
-              ? t('systemGeneral.imConnectors.bindings.emptySearch')
-              : t('systemGeneral.imConnectors.bindings.empty')}
-          </Text>
+          bindings.error ? null : (
+            <Text type="secondary">
+              {query.length > 0
+                ? t('systemGeneral.imConnectors.bindings.emptySearch')
+                : t('systemGeneral.imConnectors.bindings.empty')}
+            </Text>
+          )
         ) : (
           <div className={styles.bindingsScroll}>
             <table className={styles.bindingsTable}>
@@ -191,6 +201,18 @@ export const BindingsSection = memo<BindingsSectionProps>(
             </table>
           </div>
         )}
+
+        {/* The list is capped server-side; without the count a truncated answer looks complete. */}
+        {items.length > 0 ? (
+          <Text type="secondary">
+            {hasMore
+              ? t('systemGeneral.imConnectors.bindings.truncated', {
+                  shown: items.length,
+                  total,
+                })
+              : t('systemGeneral.imConnectors.bindings.total', { total })}
+          </Text>
+        ) : null}
 
         {canOperate ? (
           <BindUserModal

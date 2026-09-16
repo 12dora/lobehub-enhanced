@@ -1,5 +1,11 @@
+import {
+  AdminReauthBlockedError,
+  AdminReauthCancelledError,
+} from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
+import { getAdminUsersMutationErrorKey } from '@/enterprise/client/features/admin/users/utils';
 import type {
   AdminImConnectorBindingsUpsertInput,
+  ImConnectorBindingBoundVia,
   ImConnectorPlatform,
 } from '@/enterprise/client/services/adminImConnectors';
 import { readEnterpriseErrorBodies } from '@/utils/enterpriseErrorBody';
@@ -56,9 +62,15 @@ export const validateImConnectorBindingDraft = (
   return errors;
 };
 
+/**
+ * @param force - 改绑. The server then transfers the DingTalk user in ONE transaction (drop the
+ *   other account's link row, write this one) instead of refusing with a conflict. Omitted rather
+ *   than sent `false` so a plain bind keeps the default refusal.
+ */
 export const toImConnectorBindingUpsertInput = (
   platform: ImConnectorPlatform,
   draft: ImConnectorBindingDraft,
+  force?: boolean,
 ): AdminImConnectorBindingsUpsertInput => {
   const platformUsername = draft.platformUsername.trim();
 
@@ -66,6 +78,7 @@ export const toImConnectorBindingUpsertInput = (
     platform,
     platformUserId: draft.platformUserId.trim(),
     userId: draft.userId.trim(),
+    ...(force ? { force: true } : {}),
     // Omitted rather than sent empty: that is what lets the server look the name up itself.
     ...(platformUsername.length > 0 ? { platformUsername } : {}),
   };
@@ -76,6 +89,13 @@ export interface ImConnectorBindingConflict {
   boundUserEmail: string | null;
   boundUserId: string;
   boundUserName: string | null;
+  /**
+   * How the server found the occupant. `link` is a `messenger_account_links` row, which 改绑
+   * deletes; `identity_email` is an account whose mailbox is `<staffId>@<identity domain>`, which
+   * has no row to delete — the two cases need different copy because only `link` costs the other
+   * account its reminders.
+   */
+  boundVia: ImConnectorBindingBoundVia;
 }
 
 const readString = (value: unknown): string | null => (typeof value === 'string' ? value : null);
@@ -99,6 +119,8 @@ export const readImConnectorBindingConflict = (
       boundUserEmail: readString(details?.boundUserEmail),
       boundUserId,
       boundUserName: readString(details?.boundUserName),
+      // An older server that does not send it can only mean a links row.
+      boundVia: details?.boundVia === 'identity_email' ? 'identity_email' : 'link',
     };
   }
 
@@ -111,3 +133,17 @@ export const displayBindingUserLabel = (
   email: string | null,
   userId: string,
 ): string => name ?? email ?? userId;
+
+/**
+ * Failure copy for a bind that is NOT the already-bound conflict (that one is an inline banner).
+ *
+ * Goes through the shared admin mapping first, so a missing account reads 用户不存在 and a
+ * cancelled re-authentication says so, instead of every failure collapsing into 绑定失败.
+ */
+export const getImConnectorBindErrorKey = (error: unknown): string => {
+  if (error instanceof AdminReauthCancelledError) return 'users.errors.reauthCancelled';
+  if (error instanceof AdminReauthBlockedError) return 'users.errors.reauthBlocked';
+  const key = getAdminUsersMutationErrorKey(error);
+  // The shared generic is about users; this surface has its own retry wording.
+  return key === 'users.errors.generic' ? 'systemGeneral.imConnectors.bindings.bindFailed' : key;
+};

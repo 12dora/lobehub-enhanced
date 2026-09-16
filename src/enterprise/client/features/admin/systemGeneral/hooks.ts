@@ -115,8 +115,9 @@ export const useAdminImConnectors = (enabled: boolean, service: AdminImConnector
 /**
  * Manual + auto account bindings for one IM platform, filtered server-side by `q`.
  *
- * Not polled: unlike the connector status this list only changes when an administrator writes it
- * (or someone links their account from IM), and the card revalidates it after every write.
+ * Not polled: the card invalidates every cached `q` after a write (`imConnectors/invalidate.ts`).
+ * A link made from IM itself therefore only shows up after the next write or a remount — the
+ * trade the 已绑定员工 counter makes to keep this list off a timer.
  */
 export const useAdminImConnectorBindings = (
   enabled: boolean,
