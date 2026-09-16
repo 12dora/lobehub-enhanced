@@ -20,6 +20,7 @@ import {
 import type { DecryptedMessengerInstallation } from '@/database/models/messengerInstallation';
 import { MessengerInstallationModel } from '@/database/models/messengerInstallation';
 import { RbacModel } from '@/database/models/rbac';
+import { TopicModel } from '@/database/models/topic';
 import { WorkspaceModel } from '@/database/models/workspace';
 import { agents, users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
@@ -40,6 +41,7 @@ import {
   peekLinkToken,
   resolveMessengerPlatformBindings,
 } from '@/server/services/messenger';
+import { mirrorWebTurnToDingTalk } from '@/server/services/messenger/platforms/dingtalk/mirrorWebTurn';
 
 const platformEnum = z.enum([
   'telegram',
@@ -131,6 +133,7 @@ const messengerProcedure = authedProcedure.use(serverDatabase).use(async (opts) 
       // single pre-scoped instance.
       getAgentService: (workspaceId?: string | null) =>
         new AgentService(ctx.serverDB, ctx.userId, workspaceId ?? undefined),
+      topicModel: new TopicModel(ctx.serverDB, ctx.userId),
     },
   });
 });
@@ -523,6 +526,37 @@ export const messengerRouter = router({
   listMyLinks: messengerProcedure.query(async ({ ctx }) => {
     return ctx.messengerLinkModel.list();
   }),
+
+  /**
+   * Client-runtime completion hook: mirror a finished web turn of a
+   * DingTalk-originated topic back into the 1:1 robot chat. Ownership is
+   * the caller's — `TopicModel.findById` is user-scoped. The service no-ops
+   * for non-DingTalk / group / inbound topics.
+   */
+  mirrorWebTurn: messengerProcedure
+    .input(
+      z.object({
+        assistantMessageId: z.string().optional(),
+        topicId: z.string().min(1),
+        userMessageId: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const topic = await ctx.topicModel.findById(input.topicId);
+      if (!topic) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Topic not found' });
+      }
+
+      await mirrorWebTurnToDingTalk({
+        assistantMessageId: input.assistantMessageId,
+        db: ctx.serverDB,
+        topicId: input.topicId,
+        userId: ctx.userId,
+        userMessageId: input.userMessageId,
+      });
+
+      return { success: true };
+    }),
 
   /**
    * Set which agent the IM session routes to. Pass `agentId: null` to clear

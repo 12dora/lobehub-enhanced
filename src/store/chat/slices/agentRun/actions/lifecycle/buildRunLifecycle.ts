@@ -3,6 +3,7 @@ import { isDesktop } from '@lobechat/const';
 import type { ConversationContext, UIChatMessage } from '@lobechat/types';
 import debug from 'debug';
 
+import { messengerService } from '@/services/messenger';
 import type { AgentRuntimeType } from '@/store/chat/slices/agentRun/actions/dispatch/agentDispatcher';
 import { emitClientAgentSignalSourceEvent } from '@/store/chat/slices/agentRun/actions/lifecycle/agentSignalBridge';
 import { snapshotTopicWorkingDirGit } from '@/store/chat/slices/agentRun/actions/lifecycle/snapshotWorkingDirGit';
@@ -313,6 +314,47 @@ export const buildRunLifecycle = (
       // fire regardless of which transport reached this boundary.
       const disposition = resolveTerminalDisposition(event);
 
+      // Client runtime only: this deployment has no AGENT_GATEWAY_URL, so
+      // CompletionLifecycle never fires for ordinary web chats. Gateway / hetero
+      // are covered by the server hook — do not double-post from here.
+      const maybeMirrorWebTurnToDingTalk = () => {
+        if (adapter.runtimeType !== 'client') return;
+        if (adapter.runScope !== 'top_level') return;
+        if (threadId) return;
+        if (disposition !== 'success') return;
+        if (!topicId) return;
+
+        const topic = topicSelectors.getTopicById(topicId)(get());
+        const metadata = topic?.metadata;
+        if (
+          metadata?.bot?.platform !== 'dingtalk' &&
+          metadata?.messenger?.platform !== 'dingtalk'
+        ) {
+          return;
+        }
+
+        const finalMessages = get().messagesMap[messageKey] || [];
+        const assistantMessageId =
+          findCompletionAssistantMessageId(finalMessages, parentMessageId, parentMessageType) ??
+          findCompletionAssistantMessageId(
+            get().dbMessagesMap[messageKey] || [],
+            parentMessageId,
+            parentMessageType,
+          ) ??
+          event.assistantMessageId;
+        const userMessageId = parentMessageType === 'user' ? parentMessageId : undefined;
+
+        void Promise.resolve(
+          messengerService.mirrorWebTurn({
+            assistantMessageId,
+            topicId,
+            userMessageId,
+          }),
+        ).catch((error: unknown) => {
+          console.error('[completeRun] DingTalk web-turn mirror failed:', error);
+        });
+      };
+
       const completeSuccess = () => {
         get().completeOperation(operationId);
         const completedOp = get().operations[operationId];
@@ -375,6 +417,10 @@ export const buildRunLifecycle = (
       //    Gated to TOP-LEVEL runs only: the input queue belongs to the parent
       //    run, so a nested sub-agent completion must never drain it (it would
       //    re-trigger the user's queued message mid-parent-run). See RunScope.
+      if (disposition === 'success') {
+        maybeMirrorWebTurnToDingTalk();
+      }
+
       if (disposition === 'success' && adapter.runScope !== 'sub_agent') {
         const remainingQueued = get().drainQueuedMessages(contextKey);
         if (remainingQueued.length > 0) {

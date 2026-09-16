@@ -14,6 +14,7 @@ vi.mock('@/libs/trpc/client', () => ({
       listBindingScopes: { query: vi.fn() },
       listMyInstallations: { query: vi.fn() },
       listMyLinks: { query: vi.fn() },
+      mirrorWebTurn: { mutate: vi.fn() },
       peekLinkToken: { query: vi.fn() },
       setActiveAgent: { mutate: vi.fn() },
       uninstallInstallation: { mutate: vi.fn() },
@@ -34,9 +35,7 @@ describe('messengerService', () => {
       { binding: { linked: false, platformUsername: null }, id: 'slack' },
     ]);
     const result = await messengerService.availablePlatforms();
-    expect(result).toEqual([
-      { binding: { linked: false, platformUsername: null }, id: 'slack' },
-    ]);
+    expect(result).toEqual([{ binding: { linked: false, platformUsername: null }, id: 'slack' }]);
     expect(messenger.availablePlatforms.query).toHaveBeenCalledTimes(1);
   });
 
@@ -133,6 +132,20 @@ describe('messengerService', () => {
     await messengerService.uninstallInstallation({ installationId: 'inst_1' });
     expect(messenger.uninstallInstallation.mutate).toHaveBeenCalledWith({
       installationId: 'inst_1',
+    });
+  });
+
+  it('mirrorWebTurn forwards mutate params', async () => {
+    messenger.mirrorWebTurn.mutate.mockResolvedValueOnce({ success: true });
+    await messengerService.mirrorWebTurn({
+      assistantMessageId: 'a1',
+      topicId: 'tpc-1',
+      userMessageId: 'u1',
+    });
+    expect(messenger.mirrorWebTurn.mutate).toHaveBeenCalledWith({
+      assistantMessageId: 'a1',
+      topicId: 'tpc-1',
+      userMessageId: 'u1',
     });
   });
 });

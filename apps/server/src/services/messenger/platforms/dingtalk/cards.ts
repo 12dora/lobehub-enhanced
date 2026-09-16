@@ -123,13 +123,15 @@ const recallDingTalkMessage = async (
 export const sendDingTalkMarkdown = async (
   threadId: string,
   text: string,
-  options?: { recallable?: boolean },
+  options?: { recallable?: boolean; staffId?: string },
 ): Promise<string | undefined> => {
   if (!text) return;
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
   const api = new DingTalkApiClient(config.clientId, config.clientSecret);
-  const { decoded, isGroup, session, staffId } = resolveSendTarget(threadId);
+  const resolved = resolveSendTarget(threadId);
+  const { decoded, isGroup, session } = resolved;
+  const staffId = options?.staffId || resolved.staffId;
   const chunks = chunkMarkdown(text);
   let processQueryKey: string | undefined;
   for (const chunk of chunks) {
@@ -162,6 +164,8 @@ export const sendDingTalkMarkdown = async (
             msgKey: 'sampleMarkdown',
             msgParam,
             robotCode: config.robotCode,
+            // Prefer an explicit staffId (web-turn mirror) so a stale DM
+            // never sends `userIds: [conversationId]` (`cid…` is not a userid).
             userIds: [staffId || decoded.conversationId],
           });
       if (sent.processQueryKey) processQueryKey = sent.processQueryKey;

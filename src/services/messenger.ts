@@ -53,6 +53,18 @@ class MessengerService {
     return lambdaClient.messenger.listMyInstallations.query();
   };
 
+  /**
+   * Mirror a finished client-runtime web turn of a DingTalk-originated
+   * topic back into the 1:1 robot chat. Fire-and-forget at the caller.
+   */
+  mirrorWebTurn = async (params: {
+    assistantMessageId?: string;
+    topicId: string;
+    userMessageId?: string;
+  }) => {
+    return lambdaClient.messenger.mirrorWebTurn.mutate(params);
+  };
+
   uninstallInstallation = async (params: { installationId: string }) => {
     return lambdaClient.messenger.uninstallInstallation.mutate(params);
   };

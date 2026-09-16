@@ -5,6 +5,7 @@ import type { ChatStore } from '@/store/chat/store';
 import { useHomeStore } from '@/store/home';
 
 import { messageMapKey } from '../../../../utils/messageMapKey';
+import { topicMapKey } from '../../../../utils/topicMapKey';
 import type { AgentRuntimeType } from '../dispatch/agentDispatcher';
 import { buildRunLifecycle } from './buildRunLifecycle';
 import type { RunCompleteEvent, RunTerminalStatus, UserMessagePersistedEvent } from './types';
@@ -23,6 +24,14 @@ const desktopNotificationMock = vi.hoisted(() => ({
 
 vi.mock('@/store/chat/utils/desktopNotification', () => ({
   notifyDesktopAgentCompleted: desktopNotificationMock.notifyDesktopAgentCompleted,
+}));
+
+const messengerServiceMock = vi.hoisted(() => ({
+  mirrorWebTurn: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/services/messenger', () => ({
+  messengerService: messengerServiceMock,
 }));
 
 // Force the desktop branch of afterRunComplete on (isDesktop is false in the
@@ -99,6 +108,7 @@ const completeEvent = (
 beforeEach(() => {
   agentSignalBridgeMock.emitClientAgentSignalSourceEvent.mockClear();
   desktopNotificationMock.notifyDesktopAgentCompleted.mockClear();
+  messengerServiceMock.mirrorWebTurn.mockClear();
   vi.spyOn(useHomeStore.getState(), 'refreshRecents').mockResolvedValue(undefined);
 });
 
@@ -572,5 +582,71 @@ describe('buildRunLifecycle.onRunResumed — park → resume broadcast seam', ()
 
     expect(store.completeOperation).not.toHaveBeenCalled();
     expect(agentSignalBridgeMock.emitClientAgentSignalSourceEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildRunLifecycle.completeRun — DingTalk web-turn mirror gating', () => {
+  beforeEach(() => {
+    messengerServiceMock.mirrorWebTurn.mockResolvedValue(undefined);
+  });
+  const seedDingTalkTopic = (store: ReturnType<typeof makeStore>['store']) => {
+    store.topicDataMap = {
+      [topicMapKey({ agentId: 'a1' })]: {
+        items: [
+          {
+            id: 't1',
+            metadata: { bot: { platform: 'dingtalk' } },
+          },
+        ],
+      },
+    } as any;
+    store.messagesMap = {
+      [messageMapKey(CONTEXT)]: [
+        { content: 'q', id: 'u1', role: 'user' },
+        { content: 'a', id: 'asst-1', parentId: 'u1', role: 'assistant' },
+      ],
+    } as any;
+  };
+
+  it('calls messengerService.mirrorWebTurn for a top-level client done run on a DingTalk topic', async () => {
+    const { get, store } = makeStore();
+    seedDingTalkTopic(store);
+
+    await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).toHaveBeenCalledWith({
+      assistantMessageId: 'asst-1',
+      topicId: 't1',
+      userMessageId: 'u1',
+    });
+  });
+
+  it('does not call for gateway or hetero (server CompletionLifecycle covers them)', async () => {
+    const { get, store } = makeStore();
+    seedDingTalkTopic(store);
+
+    await lifecycle('gateway', get).completeRun(completeEvent('gateway', { status: 'completed' }));
+    await lifecycle('hetero', get).completeRun(completeEvent('hetero', { status: 'completed' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not call for a sub-agent run', async () => {
+    const { get, store } = makeStore();
+    seedDingTalkTopic(store);
+
+    await lifecycle('client', get, 'sub_agent').completeRun(
+      completeEvent('client', { runtimeStatus: 'done', runScope: 'sub_agent' }),
+    );
+
+    expect(messengerServiceMock.mirrorWebTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not call for an ordinary topic without DingTalk origin metadata', async () => {
+    const { get } = makeStore();
+
+    await lifecycle('client', get).completeRun(completeEvent('client', { runtimeStatus: 'done' }));
+
+    expect(messengerServiceMock.mirrorWebTurn).not.toHaveBeenCalled();
   });
 });

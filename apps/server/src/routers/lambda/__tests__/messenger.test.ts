@@ -29,7 +29,9 @@ const {
   mockPeekLinkToken,
   mockResolveMessengerPlatformBindings,
   mockSlackAuthTest,
+  mockTopicFindById,
   mockUpsertForPlatform,
+  mockMirrorWebTurnToDingTalk,
 } = vi.hoisted(() => ({
   mockConsumeLinkToken: vi.fn(),
   mockFindByPlatform: vi.fn(),
@@ -48,11 +50,13 @@ const {
   mockListMessengerBindableAgents: vi.fn(),
   mockListByInstallerUserId: vi.fn(),
   mockMarkRevoked: vi.fn(),
+  mockMirrorWebTurnToDingTalk: vi.fn(),
   mockNotifyTelegramLinkSuccess: vi.fn(),
   mockPeekConsumedLinkToken: vi.fn(),
   mockPeekLinkToken: vi.fn(),
   mockResolveMessengerPlatformBindings: vi.fn().mockResolvedValue({}),
   mockSlackAuthTest: vi.fn(),
+  mockTopicFindById: vi.fn(),
   mockUpsertForPlatform: vi.fn(),
 }));
 
@@ -67,6 +71,16 @@ vi.mock('@/config/messenger', () => ({
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: mockGetServerDB,
+}));
+
+vi.mock('@/database/models/topic', () => ({
+  TopicModel: class {
+    findById = (...args: unknown[]) => mockTopicFindById(...args);
+  },
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/mirrorWebTurn', () => ({
+  mirrorWebTurnToDingTalk: (...args: unknown[]) => mockMirrorWebTurnToDingTalk(...args),
 }));
 
 vi.mock('@/database/models/workspace', () => ({
@@ -575,5 +589,49 @@ describe('messengerRouter.availablePlatforms', () => {
     const result = await caller.availablePlatforms();
 
     expect(result[0].binding).toEqual({ linked: true, platformUsername: 'staff_1' });
+  });
+});
+
+describe('messengerRouter.mirrorWebTurn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetServerDB.mockResolvedValue({ kind: 'server-db' });
+    mockMirrorWebTurnToDingTalk.mockResolvedValue(undefined);
+  });
+
+  it('rejects when the topic is not owned by the caller', async () => {
+    mockTopicFindById.mockResolvedValueOnce(undefined);
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(
+      caller.mirrorWebTurn({
+        assistantMessageId: 'a1',
+        topicId: 'tpc-other',
+        userMessageId: 'u1',
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+  });
+
+  it('calls the service when the topic belongs to the caller', async () => {
+    mockTopicFindById.mockResolvedValueOnce({ id: 'tpc-1' });
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const result = await caller.mirrorWebTurn({
+      assistantMessageId: 'a1',
+      topicId: 'tpc-1',
+      userMessageId: 'u1',
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(mockMirrorWebTurnToDingTalk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantMessageId: 'a1',
+        topicId: 'tpc-1',
+        userId: 'user-1',
+        userMessageId: 'u1',
+      }),
+    );
   });
 });

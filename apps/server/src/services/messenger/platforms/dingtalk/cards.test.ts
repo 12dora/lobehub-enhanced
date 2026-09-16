@@ -59,6 +59,7 @@ const {
   parseDingTalkAskerCommand,
   sendDingTalkChoiceList,
   sendDingTalkHelpReply,
+  sendDingTalkMarkdown,
   sendDingTalkUnknownCommandReply,
   sendDingTalkWelcomeCard,
   wrapDingTalkAskerCommand,
@@ -478,5 +479,22 @@ describe('DingTalk onboarding cards', () => {
       title: '选择范围',
     });
     expect(mockSetDingTalkLastList).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendDingTalkMarkdown staffId override', () => {
+  it('uses an explicit staffId on the DM oTo path instead of conversationId', async () => {
+    await sendDingTalkMarkdown('dingtalk:cid', 'hello from web', { staffId: 'staff_override' });
+
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msgKey: 'sampleMarkdown',
+        robotCode: 'robot',
+        userIds: ['staff_override'],
+      }),
+    );
+    const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as { text: string };
+    expect(param.text).toBe('hello from web');
   });
 });

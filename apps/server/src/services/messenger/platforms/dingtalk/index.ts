@@ -21,6 +21,7 @@ export {
   DINGTALK_UNSUPPORTED_MEDIA_REPLY,
 } from './const';
 export { dingtalk } from './definition';
+export { mirrorWebTurnToDingTalk } from './mirrorWebTurn';
 export { dingtalkMessengerPushProvider, registerDingTalkMessengerPushProvider } from './push';
 export { dropStaleDingTalkQueues } from './queue';
 export { resolveDingTalkStaffId, staffIdFromDingTalkIdentityEmail } from './resolveStaffId';

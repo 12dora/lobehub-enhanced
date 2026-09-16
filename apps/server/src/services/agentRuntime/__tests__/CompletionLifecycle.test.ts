@@ -9,6 +9,14 @@ import * as verifyServices from '@/server/services/verify';
 import { CompletionLifecycle } from '../CompletionLifecycle';
 import { hookDispatcher } from '../hooks';
 
+const { mockMirrorWebTurnToDingTalk } = vi.hoisted(() => ({
+  mockMirrorWebTurnToDingTalk: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/mirrorWebTurn', () => ({
+  mirrorWebTurnToDingTalk: (...args: unknown[]) => mockMirrorWebTurnToDingTalk(...args),
+}));
+
 const flushMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const buildLifecycle = () => new CompletionLifecycle({} as any, 'user-1');
@@ -744,5 +752,63 @@ describe('CompletionLifecycle.emitSignalEvents — assistant anchor', () => {
       anchorMessageId: 'msg-assistant',
       assistantMessageId: 'msg-assistant',
     });
+  });
+});
+
+describe('CompletionLifecycle.dispatchHooks — DingTalk web-turn mirror', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mockMirrorWebTurnToDingTalk.mockClear();
+  });
+
+  const doneState = {
+    messages: [
+      { content: 'web question', id: 'msg-user', role: 'user' },
+      { content: 'web answer', id: 'msg-asst', role: 'assistant' },
+    ],
+    metadata: { topicId: 'tpc-1', userId: 'user-1' },
+  };
+
+  const prepare = () => {
+    const lifecycle = buildLifecycle();
+    vi.spyOn(lifecycle as any, 'persistCompletion').mockResolvedValue(undefined);
+    vi.spyOn(lifecycle as any, 'createVerifyMessage').mockResolvedValue(undefined);
+    vi.spyOn(hookDispatcher, 'dispatch').mockResolvedValue(undefined as any);
+    vi.spyOn(hookDispatcher, 'unregister').mockImplementation(() => {});
+    return lifecycle;
+  };
+
+  it('calls the mirror on a done web turn', async () => {
+    await prepare().dispatchHooks('op-1', doneState, 'done');
+
+    expect(mockMirrorWebTurnToDingTalk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantMessage: 'web answer',
+        assistantMessageId: 'msg-asst',
+        topicId: 'tpc-1',
+        userId: 'user-1',
+        userMessage: 'web question',
+        userMessageId: 'msg-user',
+      }),
+    );
+  });
+
+  it('does not call the mirror on error', async () => {
+    await prepare().dispatchHooks('op-1', { ...doneState, error: { message: 'fail' } }, 'error');
+
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+  });
+
+  it('does not call the mirror when botContext.platform is dingtalk', async () => {
+    await prepare().dispatchHooks(
+      'op-1',
+      {
+        ...doneState,
+        metadata: { ...doneState.metadata, botContext: { platform: 'dingtalk' } },
+      },
+      'done',
+    );
+
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
   });
 });

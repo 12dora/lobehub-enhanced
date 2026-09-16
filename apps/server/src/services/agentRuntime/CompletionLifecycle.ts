@@ -17,6 +17,7 @@ import { buildFinalSnapshotKey } from '@/server/modules/AgentTracing';
 import { emitAgentSignalSourceEvent } from '@/server/services/agentSignal';
 import { toAgentSignalTraceEvents } from '@/server/services/agentSignal/observability/traceEvents';
 import { extractSelfIterationCompletionPayload } from '@/server/services/agentSignal/services/selfIteration/completion';
+import { mirrorWebTurnToDingTalk } from '@/server/services/messenger/platforms/dingtalk/mirrorWebTurn';
 import { instantiateVerifyPlanOnStart, runVerifyOnCompletion } from '@/server/services/verify';
 
 import { hookDispatcher, type SerializedHook } from './hooks';
@@ -605,6 +606,7 @@ export class CompletionLifecycle {
       // plan against the deliverable. Fire-and-forget and self-guarded — a run
       // without an opted-in plan is a no-op, and failures never affect the run.
       if (reason === 'done') {
+        this.scheduleDingTalkWebTurnMirror(operationId, state, metadata);
         // The task's verify plan is instantiated fire-and-forget at run start; a
         // fast or no-op run can reach completion before it settles. Await the
         // in-flight instantiation (if any) so the gate sees the confirmed plan
@@ -693,6 +695,46 @@ export class CompletionLifecycle {
       }
     }
     if (fatalParkError) throw fatalParkError;
+  }
+
+  /**
+   * After a successful web (or hetero) turn, mirror the turn into the original
+   * DingTalk 1:1 chat when the topic started there. Fire-and-forget; inbound
+   * DingTalk runs (`botContext.platform === 'dingtalk'`) are skipped so the
+   * reply sink is not double-posted.
+   */
+  private scheduleDingTalkWebTurnMirror(operationId: string, state: any, metadata: any): void {
+    if (metadata?.botContext?.platform === 'dingtalk') return;
+
+    const topicId = typeof metadata?.topicId === 'string' ? metadata.topicId : undefined;
+    const userId =
+      (typeof metadata?.userId === 'string' && metadata.userId) || this.userId || undefined;
+    if (!topicId || !userId) return;
+
+    const messages: unknown[] = Array.isArray(state?.messages) ? state.messages : [];
+    const normalized = normalizeCompletionMessages(messages);
+    const lastUserMessage = [...normalized].reverse().find((message) => message.role === 'user');
+    const lastAssistantMessage = findLastAssistantMessage(normalized);
+    const userMeta =
+      lastUserMessage && isRecord(lastUserMessage.metadata) ? lastUserMessage.metadata : undefined;
+    const userMessageTrigger = typeof userMeta?.trigger === 'string' ? userMeta.trigger : undefined;
+
+    void mirrorWebTurnToDingTalk({
+      assistantMessage: extractTextFromMessage(lastAssistantMessage),
+      assistantMessageId:
+        (typeof metadata?.assistantMessageId === 'string' && metadata.assistantMessageId) ||
+        (typeof lastAssistantMessage?.id === 'string' ? lastAssistantMessage.id : undefined),
+      botContext: metadata?.botContext,
+      db: this.serverDB,
+      topicId,
+      userId,
+      userMessage: extractTextFromMessage(lastUserMessage),
+      userMessageId: typeof lastUserMessage?.id === 'string' ? lastUserMessage.id : undefined,
+      userMessageTrigger: typeof userMessageTrigger === 'string' ? userMessageTrigger : undefined,
+      workspaceId: this.workspaceId,
+    }).catch((error) => {
+      log('[%s] DingTalk web-turn mirror failed (non-fatal): %O', operationId, error);
+    });
   }
 
   private buildLifecycleEvent(operationId: string, state: any, reason: string) {
