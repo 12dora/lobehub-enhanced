@@ -93,7 +93,11 @@ beforeEach(() => {
     robotName: null,
   });
   serviceMocks.upsert.mockReset().mockResolvedValue({ ...sampleView, configured: true });
-  serviceMocks.listBindings.mockReset().mockResolvedValue({ items: [sampleBinding] });
+  serviceMocks.listBindings.mockReset().mockResolvedValue({
+    hasMore: false,
+    items: [sampleBinding],
+    total: 1,
+  });
   serviceMocks.upsertBinding.mockReset().mockResolvedValue(sampleBinding);
   serviceMocks.removeBinding.mockReset().mockResolvedValue({ success: true });
 });
@@ -193,7 +197,9 @@ describe('admin.imConnectors permission gating', () => {
       message: 'PLATFORM_PERMISSION_DENIED',
     });
     await expect(reader.bindings.list({ platform: 'dingtalk' })).resolves.toEqual({
+      hasMore: false,
       items: [sampleBinding],
+      total: 1,
     });
     await expect(
       reader.bindings.upsert({
@@ -246,7 +252,9 @@ describe('admin.imConnectors permission gating', () => {
     const operator = await callerFor('superAdmin');
 
     await expect(operator.bindings.list({ platform: 'dingtalk' })).resolves.toEqual({
+      hasMore: false,
       items: [sampleBinding],
+      total: 1,
     });
     await expect(
       operator.bindings.upsert({
@@ -278,6 +286,7 @@ describe('admin.imConnectors permission gating', () => {
   it('maps PLATFORM_USER_ALREADY_BOUND with the other user named in the error', async () => {
     serviceMocks.upsertBinding.mockRejectedValueOnce(
       new ImConnectorPlatformUserAlreadyBoundError({
+        boundVia: 'link',
         email: 'alice@dingtalk.jiefakj.com',
         id: 'user_alice',
         name: 'Alice',
@@ -292,6 +301,16 @@ describe('admin.imConnectors permission gating', () => {
         userId: 'user_admin',
       }),
     ).rejects.toMatchObject({
+      cause: {
+        data: {
+          details: {
+            boundUserEmail: 'alice@dingtalk.jiefakj.com',
+            boundUserId: 'user_alice',
+            boundUserName: 'Alice',
+            boundVia: 'link',
+          },
+        },
+      },
       code: 'CONFLICT',
       message: 'PLATFORM_USER_ALREADY_BOUND',
     });

@@ -193,6 +193,14 @@ export type AdminImConnectorTestOutput = z.infer<typeof adminImConnectorTestOutp
 export const imConnectorBindingSourceSchema = z.enum(['auto', 'manual']);
 export type ImConnectorBindingSource = z.infer<typeof imConnectorBindingSourceSchema>;
 
+/**
+ * Why a DingTalk staffId is already mapped to another AIHub user.
+ * `link` = a `messenger_account_links` row; `identity_email` = the other
+ * user's mailbox is `<staffId>@DINGTALK_IDENTITY_EMAIL_DOMAIN`.
+ */
+export const imConnectorBindingBoundViaSchema = z.enum(['identity_email', 'link']);
+export type ImConnectorBindingBoundVia = z.infer<typeof imConnectorBindingBoundViaSchema>;
+
 export const DINGTALK_PLATFORM_USER_ID_MAX = 64;
 
 export const adminImConnectorBindingItemSchema = z
@@ -219,7 +227,13 @@ export type AdminImConnectorBindingsListInput = z.infer<
 >;
 
 export const adminImConnectorBindingsListOutputSchema = z
-  .object({ items: z.array(adminImConnectorBindingItemSchema) })
+  .object({
+    /** True when `total` exceeds the 200-row list cap (`items.length`). */
+    hasMore: z.boolean(),
+    items: z.array(adminImConnectorBindingItemSchema),
+    /** Count of matching rows without the 200 cap. */
+    total: z.number().int().nonnegative(),
+  })
   .strict();
 export type AdminImConnectorBindingsListOutput = z.infer<
   typeof adminImConnectorBindingsListOutputSchema
@@ -227,6 +241,14 @@ export type AdminImConnectorBindingsListOutput = z.infer<
 
 export const adminImConnectorBindingsUpsertInputSchema = z
   .object({
+    /**
+     * When `platformUserId` is already mapped to another AIHub user (a links
+     * row or an identity-email mailbox), the default is CONFLICT
+     * `PLATFORM_USER_ALREADY_BOUND`. `force: true` transfers in one
+     * transaction: drop the other user's link row (if any) and write this one.
+     * Omitted / false refuses the write.
+     */
+    force: z.boolean().optional(),
     platform: imConnectorPlatformSchema,
     platformUserId: z.string().trim().min(1).max(DINGTALK_PLATFORM_USER_ID_MAX),
     platformUsername: z.string().trim().max(200).nullable().optional(),

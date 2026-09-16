@@ -50,6 +50,7 @@ const executeImConnectors = async <T>(operation: () => Promise<T>): Promise<T> =
               boundUserEmail: error.boundUser.email,
               boundUserId: error.boundUser.id,
               boundUserName: error.boundUser.name,
+              boundVia: error.boundUser.boundVia,
             },
             message: `DingTalk user is already bound to ${error.boundUser.email ?? error.boundUser.id}`,
           },

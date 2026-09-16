@@ -132,13 +132,16 @@ describe('ImConnectorsAdminService', () => {
     });
     lookupDingTalkStaff.mockResolvedValue(null);
     upsertImConnectorBinding.mockResolvedValue({
-      createdAt: '2026-09-16T00:00:00.000Z',
-      platformUserId: 'staff_1',
-      platformUsername: 'Admin',
-      source: 'manual',
-      userEmail: 'admin@jiefakj.com',
-      userId: 'user_admin',
-      userName: 'Break Glass',
+      beforeDiff: null,
+      item: {
+        createdAt: '2026-09-16T00:00:00.000Z',
+        platformUserId: 'staff_1',
+        platformUsername: 'Admin',
+        source: 'manual',
+        userEmail: 'admin@jiefakj.com',
+        userId: 'user_admin',
+        userName: 'Break Glass',
+      },
     });
     removeImConnectorBinding.mockResolvedValue({
       before: {
@@ -152,7 +155,7 @@ describe('ImConnectorsAdminService', () => {
       },
       success: true,
     });
-    listImConnectorBindings.mockResolvedValue({ items: [] });
+    listImConnectorBindings.mockResolvedValue({ hasMore: false, items: [], total: 0 });
     vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue(existingRow as never);
     vi.spyOn(SystemBotProviderModel, 'update').mockResolvedValue(existingRow as never);
     vi.spyOn(SystemBotProviderModel, 'upsertByPlatform').mockResolvedValue(existingRow as never);
@@ -418,6 +421,7 @@ describe('ImConnectorsAdminService', () => {
           source: 'manual',
           userId: 'user_admin',
         }),
+        beforeDiff: null,
         reason: 'bind break-glass admin',
         result: 'success',
         targetId: 'dingtalk',
@@ -428,16 +432,71 @@ describe('ImConnectorsAdminService', () => {
     expect(lookupDingTalkStaff).not.toHaveBeenCalled();
   });
 
+  it('forwards force and beforeDiff (displaced link / previous platformUserId) to audit', async () => {
+    upsertImConnectorBinding.mockResolvedValueOnce({
+      beforeDiff: {
+        displaced: {
+          boundVia: 'link',
+          platformUserId: 'staff_shared',
+          platformUsername: 'Alice',
+          source: 'auto',
+          userEmail: 'alice@dingtalk.jiefakj.com',
+          userId: 'user_alice',
+          userName: 'Alice',
+        },
+        previousPlatformUserId: 'staff_old',
+        previousPlatformUsername: null,
+        previousSource: 'auto',
+      },
+      item: {
+        createdAt: '2026-09-16T00:00:00.000Z',
+        platformUserId: 'staff_shared',
+        platformUsername: 'Admin',
+        source: 'manual',
+        userEmail: 'admin@jiefakj.com',
+        userId: 'user_admin',
+        userName: 'Break Glass',
+      },
+    });
+    const service = new ImConnectorsAdminService(createDb());
+
+    await service.upsertBinding({
+      actorUserId: 'operator-1',
+      input: {
+        force: true,
+        platform: 'dingtalk',
+        platformUserId: 'staff_shared',
+        userId: 'user_admin',
+      },
+    });
+
+    expect(upsertImConnectorBinding).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ force: true, platformUserId: 'staff_shared' }),
+    );
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beforeDiff: expect.objectContaining({
+          displaced: expect.objectContaining({ boundVia: 'link', userId: 'user_alice' }),
+          previousPlatformUserId: 'staff_old',
+        }),
+      }),
+    );
+  });
+
   it('looks up DingTalk staff to fill platformUsername when the admin omitted it', async () => {
     lookupDingTalkStaff.mockResolvedValueOnce({ name: 'Corp Alice' });
     upsertImConnectorBinding.mockResolvedValueOnce({
-      createdAt: '2026-09-16T00:00:00.000Z',
-      platformUserId: 'staff_9',
-      platformUsername: 'Corp Alice',
-      source: 'manual',
-      userEmail: 'admin@jiefakj.com',
-      userId: 'user_admin',
-      userName: 'Break Glass',
+      beforeDiff: null,
+      item: {
+        createdAt: '2026-09-16T00:00:00.000Z',
+        platformUserId: 'staff_9',
+        platformUsername: 'Corp Alice',
+        source: 'manual',
+        userEmail: 'admin@jiefakj.com',
+        userId: 'user_admin',
+        userName: 'Break Glass',
+      },
     });
     const service = new ImConnectorsAdminService(createDb());
 
@@ -446,11 +505,7 @@ describe('ImConnectorsAdminService', () => {
       input: { platform: 'dingtalk', platformUserId: 'staff_9', userId: 'user_admin' },
     });
 
-    expect(lookupDingTalkStaff).toHaveBeenCalledWith({
-      clientId: 'ding-app-key',
-      clientSecret: SECRET,
-      staffId: 'staff_9',
-    });
+    expect(lookupDingTalkStaff).toHaveBeenCalledWith('staff_9');
     expect(upsertImConnectorBinding).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ platformUsername: 'Corp Alice' }),

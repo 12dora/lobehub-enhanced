@@ -321,7 +321,8 @@ export class ImConnectorsAdminService {
     const platformUsername = typedUsername ?? emptyToNull(contact?.name);
 
     return this.db.transaction(async (tx) => {
-      const item = await upsertImConnectorBinding(tx, {
+      const { beforeDiff, item } = await upsertImConnectorBinding(tx, {
+        force: input.force,
         platform: input.platform,
         platformUserId: input.platformUserId,
         platformUsername,
@@ -341,6 +342,7 @@ export class ImConnectorsAdminService {
           userId: item.userId,
           userName: item.userName,
         },
+        beforeDiff,
         reason: input.reason ?? null,
         result: 'success',
         targetId: input.platform,
@@ -392,12 +394,7 @@ export class ImConnectorsAdminService {
   private lookupDingTalkStaff = async (platform: ImConnectorPlatform, staffId: string) => {
     if (platform !== 'dingtalk') return null;
     try {
-      const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();
-      const row = await SystemBotProviderModel.findByPlatform(this.db, platform, gateKeeper);
-      const clientId = row?.applicationId?.trim() || null;
-      const clientSecret = pickClientSecret(row?.credentials);
-      if (!clientId || !clientSecret) return null;
-      return lookupDingTalkStaff({ clientId, clientSecret, staffId });
+      return lookupDingTalkStaff(staffId);
     } catch (error) {
       console.error('[admin.imConnectors.bindings.upsert] staff lookup failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',

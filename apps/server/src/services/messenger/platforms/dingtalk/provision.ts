@@ -109,7 +109,7 @@ const httpsImage = (value: unknown): string | undefined => {
   return trimmed.startsWith('https://') ? trimmed : undefined;
 };
 
-const fetchLegacyAppToken = async (
+export const fetchLegacyAppToken = async (
   clientId: string,
   clientSecret: string,
   now = Date.now(),
@@ -151,12 +151,12 @@ const fetchLegacyAppToken = async (
   return token.trim();
 };
 
-interface DingTalkContact {
+export interface DingTalkContact {
   avatar?: string;
   name: string | null;
 }
 
-const fetchDingTalkContact = async (staffId: string): Promise<DingTalkContact | null> => {
+export const fetchDingTalkContact = async (staffId: string): Promise<DingTalkContact | null> => {
   const config = await getMessengerDingTalkConfig();
   if (!config) {
     log('fetchDingTalkContact: connector missing');
