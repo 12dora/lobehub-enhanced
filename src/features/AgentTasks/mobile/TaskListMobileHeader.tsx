@@ -15,6 +15,12 @@ import TaskNavMenuButton from './TaskNavMenuButton';
 interface TaskListMobileHeaderProps {
   /** Toolbar actions (create, grouping, reminder settings, inbox bell). */
   actions?: ReactNode;
+  /**
+   * Surface switch (任务 / 定时提醒). When present it replaces the static title —
+   * the segment already names the visible surface, and the 44px bar has no room
+   * for both.
+   */
+  tabs?: ReactNode;
 }
 
 /**
@@ -26,7 +32,7 @@ interface TaskListMobileHeaderProps {
  * toolbar keeps half the 44px bar instead of a centred third, matching the
  * Community list header.
  */
-const TaskListMobileHeader = memo<TaskListMobileHeaderProps>(({ actions }) => {
+const TaskListMobileHeader = memo<TaskListMobileHeaderProps>(({ actions, tabs }) => {
   const isMobile = useIsMobile();
   const { t } = useTranslation('chat');
 
@@ -41,9 +47,11 @@ const TaskListMobileHeader = memo<TaskListMobileHeaderProps>(({ actions }) => {
       left={
         <Flexbox horizontal align={'center'} gap={4} style={{ minWidth: 0 }}>
           <TaskNavMenuButton />
-          <Text ellipsis noWrap fontSize={16} weight={600}>
-            {t('taskList.all')}
-          </Text>
+          {tabs ?? (
+            <Text ellipsis noWrap fontSize={16} weight={600}>
+              {t('taskList.all')}
+            </Text>
+          )}
         </Flexbox>
       }
     />

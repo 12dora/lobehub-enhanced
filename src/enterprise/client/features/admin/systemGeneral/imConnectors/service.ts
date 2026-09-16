@@ -1,6 +1,7 @@
 import {
   type AdminImConnectorsBindingsService,
   type AdminImConnectorsMutationService,
+  type AdminImConnectorsNotifyAppService,
   adminImConnectorsService,
 } from '@/enterprise/client/services/adminImConnectors';
 
@@ -20,3 +21,11 @@ export const imConnectorMutationService: ImConnectorMutationService = adminImCon
 export type ImConnectorBindingsService = AdminImConnectorsBindingsService;
 
 export const imConnectorBindingsService: ImConnectorBindingsService = adminImConnectorsService;
+
+/**
+ * 通知应用（服务号）: the probe, the directory read and the manual sync. Kept apart from the
+ * connector's own writes because the block below the robot credentials is the only caller.
+ */
+export type ImConnectorNotifyAppService = AdminImConnectorsNotifyAppService;
+
+export const imConnectorNotifyAppService: ImConnectorNotifyAppService = adminImConnectorsService;

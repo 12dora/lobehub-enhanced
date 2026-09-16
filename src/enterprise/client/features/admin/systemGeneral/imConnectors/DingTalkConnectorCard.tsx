@@ -18,8 +18,14 @@ import {
   formatConnectorTime,
   IM_CONNECTOR_IDLE_HOURS_MAX,
   IM_CONNECTOR_IDLE_HOURS_MIN,
+  resolveImConnectorTestErrorKey,
 } from './draft';
-import type { ImConnectorBindingsService, ImConnectorMutationService } from './service';
+import { NotifyAppSection } from './NotifyAppSection';
+import type {
+  ImConnectorBindingsService,
+  ImConnectorMutationService,
+  ImConnectorNotifyAppService,
+} from './service';
 import { imConnectorStyles as styles } from './styles';
 import { useImConnectorEditor } from './useImConnectorEditor';
 
@@ -35,13 +41,13 @@ const STATUS_PRESENTATION: Record<
   unknown: { icon: CircleDashed },
 };
 
-const TEST_ERROR_CODES = new Set(['auth_failed', 'missing_credentials', 'network', 'unknown']);
-
 export interface DingTalkConnectorCardProps {
   /** Injectable for tests. */
   bindingsService?: ImConnectorBindingsService;
   /** SYSTEM_OPERATE. Without it the card renders the same readings, but nothing can be written. */
   canOperate: boolean;
+  /** Injectable for tests — the 通知应用 probe, directory read and manual sync. */
+  notifyAppService?: ImConnectorNotifyAppService;
   onSaved?: () => Promise<void> | void;
   /** Injectable for tests. */
   service?: ImConnectorMutationService;
@@ -56,7 +62,7 @@ export interface DingTalkConnectorCardProps {
  * for the first time fills them in together.
  */
 export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
-  ({ bindingsService, canOperate, onSaved, service, view }) => {
+  ({ bindingsService, canOperate, notifyAppService, onSaved, service, view }) => {
     const { t } = useTranslation('admin');
     const editor = useImConnectorEditor({ canOperate, onSaved, service, view });
     const { draft, errors } = editor;
@@ -66,10 +72,6 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
     const statusLabel = t(`systemGeneral.imConnectors.status.${view.status.state}` as never);
     const locked = !canOperate || editor.saving;
     const testResult = editor.testResult;
-    const testErrorCode =
-      testResult?.errorCode && TEST_ERROR_CODES.has(testResult.errorCode)
-        ? testResult.errorCode
-        : 'unknown';
 
     const statusTag = (
       <Tag color={status.tone} icon={<Icon icon={status.icon} size={12} />} size="small">
@@ -202,6 +204,17 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
             </div>
           </div>
 
+          {/* Under the robot's own credentials: the second app is what reaches employees who never
+              opened the robot, and what the reminder recipients are read from. */}
+          <NotifyAppSection
+            canOperate={canOperate}
+            disabled={locked}
+            draft={draft}
+            errors={errors}
+            service={notifyAppService}
+            onPatch={editor.patch}
+          />
+
           <div className={styles.section}>
             <span className={styles.sectionTitle}>
               {t('systemGeneral.imConnectors.sections.cardTemplates')}
@@ -315,7 +328,7 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
                 <Text type={testResult.ok ? 'success' : 'danger'}>
                   {testResult.ok
                     ? t('systemGeneral.test.success')
-                    : t(`systemGeneral.imConnectors.test.errors.${testErrorCode}` as never)}
+                    : t(resolveImConnectorTestErrorKey(testResult.errorCode) as never)}
                   {testResult.ok && testResult.robotName
                     ? ` · ${t('systemGeneral.imConnectors.test.robotName', {
                         name: testResult.robotName,

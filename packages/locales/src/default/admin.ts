@@ -2327,12 +2327,17 @@ export default {
   'systemGeneral.imConnectors.sections.cardTemplates': 'Card templates',
   'systemGeneral.imConnectors.sections.capabilities': 'Capabilities',
   'systemGeneral.imConnectors.sections.session': 'Session policy',
+  // 通知应用（服务号）— the second DingTalk app: work notifications + the contacts directory.
+  'systemGeneral.imConnectors.sections.notifyApp': 'Notification app (service account)',
   'systemGeneral.imConnectors.fields.enabled': 'Enabled',
   'systemGeneral.imConnectors.fields.clientId': 'Client ID',
   'systemGeneral.imConnectors.fields.clientSecret': 'Client Secret',
   'systemGeneral.imConnectors.fields.corpId': 'CorpId',
   'systemGeneral.imConnectors.fields.agentId': 'AgentId',
   'systemGeneral.imConnectors.fields.robotCode': 'RobotCode',
+  'systemGeneral.imConnectors.fields.notifyAppKey': 'AppKey',
+  'systemGeneral.imConnectors.fields.notifyAppSecret': 'AppSecret',
+  'systemGeneral.imConnectors.fields.notifyAgentId': 'AgentId',
   'systemGeneral.imConnectors.fields.aiCardTemplateId': 'AI card template ID',
   'systemGeneral.imConnectors.fields.selectCardTemplateId': 'Select card template ID',
   'systemGeneral.imConnectors.fields.chatEnabled': 'Chat',
@@ -2349,6 +2354,10 @@ export default {
     'DingTalk developer console → App → Basic information → AgentId. Used by the workbench micro-app single sign-on deep link.',
   'systemGeneral.imConnectors.hints.cardTemplates':
     'Falls back to Markdown messages when left empty.',
+  'systemGeneral.imConnectors.hints.notifyApp':
+    'Sends the work notifications used by task notices and scheduled reminders, and syncs the contacts directory. Grant the contacts read scope to this app in the DingTalk developer console and publish it.',
+  'systemGeneral.imConnectors.hints.notifyAgentId':
+    'DingTalk developer console → the notification app → Basic information → AgentId.',
   'systemGeneral.imConnectors.hints.chatEnabled': 'Answer direct messages and group mentions.',
   'systemGeneral.imConnectors.hints.pushEnabled': 'Deliver task reminders to linked employees.',
   'systemGeneral.imConnectors.hints.idleNewTopic':
@@ -2372,6 +2381,17 @@ export default {
   'systemGeneral.imConnectors.test.errors.missing_credentials': 'Fill in the credentials first.',
   'systemGeneral.imConnectors.test.errors.unknown': 'Connection test failed.',
   'systemGeneral.imConnectors.errors.idleHours': 'Enter a whole number between 1 and 720.',
+  'systemGeneral.imConnectors.notifyApp.test': 'Test',
+  'systemGeneral.imConnectors.notifyApp.secretPlaceholder':
+    'Stored — leave blank to keep it unchanged',
+  'systemGeneral.imConnectors.notifyApp.directory.summary':
+    'Directory: {{departments}} departments · {{users}} members · last synced {{time}}',
+  'systemGeneral.imConnectors.notifyApp.directory.never': 'Not synced yet',
+  'systemGeneral.imConnectors.notifyApp.directory.sync': 'Sync now',
+  'systemGeneral.imConnectors.notifyApp.directory.synced': 'Directory synced',
+  'systemGeneral.imConnectors.notifyApp.directory.syncFailed':
+    'Could not sync the directory. Try again.',
+  'systemGeneral.imConnectors.notifyApp.directory.error': 'Last sync failed: {{message}}',
   // 绑定用户 — which AIHub account a DingTalk user pushes to. Signing in through DingTalk binds
   // the account automatically; every other account (local / break-glass) is bound here by hand.
   'systemGeneral.imConnectors.bindings.bind': 'Bind user',

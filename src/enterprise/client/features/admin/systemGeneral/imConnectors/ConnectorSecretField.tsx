@@ -13,6 +13,8 @@ export interface ConnectorSecretFieldProps {
   hint?: string;
   label: string;
   onChange: (next: ImConnectorSecretDraft) => void;
+  /** Override the 已保存 placeholder — the notification app's secret has its own wording. */
+  storedPlaceholder?: string;
   value: ImConnectorSecretDraft;
   wide?: boolean;
 }
@@ -26,7 +28,7 @@ export interface ConnectorSecretFieldProps {
  * without the server ever echoing the value.
  */
 export const ConnectorSecretField = memo<ConnectorSecretFieldProps>(
-  ({ disabled, error, hint, label, onChange, value, wide }) => {
+  ({ disabled, error, hint, label, onChange, storedPlaceholder, value, wide }) => {
     const { t } = useTranslation('admin');
 
     return (
@@ -49,7 +51,7 @@ export const ConnectorSecretField = memo<ConnectorSecretFieldProps>(
             value={value.value}
             placeholder={
               value.stored
-                ? t('systemGeneral.secret.storedPlaceholder')
+                ? (storedPlaceholder ?? t('systemGeneral.secret.storedPlaceholder'))
                 : t('systemGeneral.secret.enterPlaceholder')
             }
             onChange={(event) => onChange({ ...value, value: event.target.value })}

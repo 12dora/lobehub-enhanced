@@ -6,6 +6,7 @@ export const ADMIN_SYSTEM_DOCUMENT_RENDER_SETTINGS_KEY = 'admin.system.getDocume
 export const ADMIN_SYSTEM_DOCUMENT_RENDER_STATUS_KEY = 'admin.system.getDocumentRenderStatus';
 export const ADMIN_IM_CONNECTORS_KEY = 'admin.imConnectors.list';
 export const ADMIN_IM_CONNECTOR_BINDINGS_KEY = 'admin.imConnectors.bindings.list';
+export const ADMIN_IM_CONNECTOR_DIRECTORY_STATUS_KEY = 'admin.imConnectors.directoryStatus';
 
 export const buildAdminBrowserProfileKey = (enabled: boolean) =>
   enabled ? ([ADMIN_BROWSER_PROFILE_KEY] as const) : null;
@@ -27,6 +28,9 @@ export const buildAdminDocumentRenderStatusKey = (enabled: boolean) =>
 
 export const buildAdminImConnectorsKey = (enabled: boolean) =>
   enabled ? ([ADMIN_IM_CONNECTORS_KEY] as const) : null;
+
+export const buildAdminImConnectorDirectoryStatusKey = (enabled: boolean) =>
+  enabled ? ([ADMIN_IM_CONNECTOR_DIRECTORY_STATUS_KEY] as const) : null;
 
 /**
  * The search term is part of the key: the list is server-filtered, so a different `q` is a

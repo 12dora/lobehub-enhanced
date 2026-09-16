@@ -6,6 +6,7 @@ import {
   fingerprintDingTalkDraft,
   settleDingTalkDraft,
   toDingTalkDraft,
+  toDingTalkNotifyTestInput,
   toDingTalkTestInput,
   toDingTalkUpsertInput,
   validateDingTalkDraft,
@@ -22,6 +23,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   hasClientSecret: true,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
+  notifyAgentId: null,
+  notifyAppKey: null,
+  notifyAppSecretSet: false,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: 'ding-robot',
@@ -51,6 +55,99 @@ describe('DingTalk connector draft', () => {
   it('seeds the optional AgentId, empty when the row never carried one', () => {
     expect(toDingTalkDraft(view()).agentId).toBe('');
     expect(toDingTalkDraft(view({ agentId: '0_123456' })).agentId).toBe('0_123456');
+  });
+
+  it('seeds the notification app block, empty when the second app was never provisioned', () => {
+    const seed = toDingTalkDraft(view());
+
+    expect(seed.notifyAppKey).toBe('');
+    expect(seed.notifyAgentId).toBe('');
+    expect(seed.notifyAppSecret).toEqual({ fingerprint: null, stored: false, value: '' });
+
+    const configured = toDingTalkDraft(
+      view({ notifyAgentId: '4617854000', notifyAppKey: 'notify-key', notifyAppSecretSet: true }),
+    );
+    expect(configured.notifyAppKey).toBe('notify-key');
+    expect(configured.notifyAgentId).toBe('4617854000');
+    expect(configured.notifyAppSecret.stored).toBe(true);
+    expect(configured.notifyAppSecret.value).toBe('');
+  });
+
+  it('sends the notification app fields, and omits the secret when nothing was typed', () => {
+    const seed = toDingTalkDraft(
+      view({ notifyAgentId: '4617854000', notifyAppKey: 'notify-key', notifyAppSecretSet: true }),
+    );
+    const input = toDingTalkUpsertInput(seed);
+
+    expect(input.notifyAppKey).toBe('notify-key');
+    expect(input.notifyAgentId).toBe('4617854000');
+    // Absent means "keep what is stored" — the AppKey beside it must be editable on its own.
+    expect('notifyAppSecret' in input).toBe(false);
+
+    const typed = toDingTalkUpsertInput({
+      ...seed,
+      notifyAppSecret: { ...seed.notifyAppSecret, value: '  notify-secret  ' },
+    });
+    expect(typed.notifyAppSecret).toEqual({ action: 'replace', value: 'notify-secret' });
+  });
+
+  it('probes the notification app with what was typed, and the stored row otherwise', () => {
+    const seed = toDingTalkDraft(view({ notifyAppKey: 'notify-key', notifyAppSecretSet: true }));
+
+    expect(toDingTalkNotifyTestInput(seed)).toEqual({ notifyAppKey: 'notify-key' });
+    expect(
+      toDingTalkNotifyTestInput({
+        ...seed,
+        notifyAppSecret: { ...seed.notifyAppSecret, value: '  typed-secret  ' },
+      }).notifyAppSecret,
+    ).toBe('typed-secret');
+    // Nothing configured yet: the probe carries nothing and the server answers on the stored row.
+    expect(toDingTalkNotifyTestInput(toDingTalkDraft(view()))).toEqual({});
+  });
+
+  it('sends the notification app fields as null once they are cleared', () => {
+    const seed = toDingTalkDraft(view({ notifyAgentId: '4617854000', notifyAppKey: 'notify-key' }));
+    const input = toDingTalkUpsertInput({ ...seed, notifyAgentId: ' ', notifyAppKey: '   ' });
+
+    expect(input.notifyAppKey).toBeNull();
+    expect(input.notifyAgentId).toBeNull();
+  });
+
+  it('counts the notification app block as part of the draft identity', () => {
+    const seed = toDingTalkDraft(view());
+
+    expect(fingerprintDingTalkDraft({ ...seed, notifyAppKey: 'notify-key' })).not.toBe(
+      fingerprintDingTalkDraft(seed),
+    );
+    expect(
+      fingerprintDingTalkDraft({
+        ...seed,
+        notifyAppSecret: { ...seed.notifyAppSecret, value: 'typed' },
+      }),
+    ).not.toBe(fingerprintDingTalkDraft(seed));
+  });
+
+  it('drops the typed notification secret once the save reports one is stored', () => {
+    const seed = toDingTalkDraft(view());
+    const settled = settleDingTalkDraft(
+      { ...seed, notifyAppSecret: { ...seed.notifyAppSecret, value: 'notify-secret' } },
+      view({ notifyAppSecretSet: true }),
+    );
+
+    expect(settled.notifyAppSecret).toEqual({ fingerprint: null, stored: true, value: '' });
+  });
+
+  it('leaves the notification app optional, but bounds what it accepts', () => {
+    const seed = toDingTalkDraft(view());
+
+    // Half a block is simply "not configured" server-side, so it must not block a save.
+    expect(validateDingTalkDraft({ ...seed, notifyAppKey: 'only-the-key' })).toEqual({});
+    expect(validateDingTalkDraft({ ...seed, notifyAppKey: 'x'.repeat(201) }).notifyAppKey).toBe(
+      'tooLong',
+    );
+    expect(validateDingTalkDraft({ ...seed, notifyAgentId: 'x'.repeat(65) }).notifyAgentId).toBe(
+      'tooLong',
+    );
   });
 
   it('accepts a complete configuration', () => {

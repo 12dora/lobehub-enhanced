@@ -58,11 +58,47 @@ export interface AdminImConnectorsBindingsService {
   ) => Promise<AdminImConnectorBindingsUpsertOutput>;
 }
 
+/**
+ * Contacts directory sync state, as the notification app's worker last reported it (Redis key
+ * `messenger:dingtalk:directory-status`). `running` is what the 立即同步 button polls on.
+ */
+export interface AdminImConnectorDirectoryStatus {
+  departments: number;
+  lastError: string | null;
+  lastRunAt: string | null;
+  state: 'error' | 'idle' | 'ok' | 'running';
+  users: number;
+}
+
+/**
+ * Probe payload for the notification app. Like the robot's probe it takes the draft values, and
+ * falls back to the stored row for anything left out (`adminImConnectorTestNotifyAppInputSchema`).
+ */
+export interface AdminImConnectorNotifyAppTestInput {
+  notifyAppKey?: string;
+  notifyAppSecret?: string;
+}
+
+/**
+ * 通知应用（服务号） — the second DingTalk app: it sends work notifications and syncs the contacts
+ * directory. `directoryStatus` needs SYSTEM_READ; the probe and the sync need SYSTEM_OPERATE.
+ */
+export interface AdminImConnectorsNotifyAppService {
+  directoryStatus: () => Promise<AdminImConnectorDirectoryStatus>;
+  syncDirectory: () => Promise<AdminImConnectorDirectoryStatus>;
+  testNotifyApp: (
+    input?: AdminImConnectorNotifyAppTestInput,
+  ) => Promise<AdminImConnectorTestOutput>;
+}
+
 export type AdminImConnectorsService = AdminImConnectorsBindingsService &
+  AdminImConnectorsNotifyAppService &
   AdminImConnectorsMutationService &
   AdminImConnectorsReadService;
 
 class AdminImConnectorsServiceImpl implements AdminImConnectorsService {
+  directoryStatus = () => lambdaClient.admin.imConnectors.directoryStatus.query();
+
   get = (input: AdminImConnectorGetInput) => lambdaClient.admin.imConnectors.get.query(input);
 
   list = () => lambdaClient.admin.imConnectors.list.query();
@@ -73,7 +109,12 @@ class AdminImConnectorsServiceImpl implements AdminImConnectorsService {
   removeBinding = (input: AdminImConnectorBindingsRemoveInput) =>
     lambdaClient.admin.imConnectors.bindings.remove.mutate(input);
 
+  syncDirectory = () => lambdaClient.admin.imConnectors.syncDirectory.mutate();
+
   test = (input: AdminImConnectorTestInput) => lambdaClient.admin.imConnectors.test.mutate(input);
+
+  testNotifyApp = (input?: AdminImConnectorNotifyAppTestInput) =>
+    lambdaClient.admin.imConnectors.testNotifyApp.mutate(input);
 
   upsert = (input: AdminImConnectorUpsertInput) =>
     lambdaClient.admin.imConnectors.upsert.mutate(input);

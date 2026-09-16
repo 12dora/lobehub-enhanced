@@ -11,21 +11,19 @@ export const imConnectorStyles = createStaticStyles(({ css }) => ({
   `,
   /** The list is capped at 200 rows server-side, so it scrolls rather than paginates. */
   bindingsScroll: css`
-    overflow-x: auto;
+    overflow: auto;
     max-height: 320px;
-    overflow-y: auto;
   `,
   bindingsTable: css`
-    width: 100%;
     border-collapse: collapse;
-
+    width: 100%;
     font-size: ${cssVar.fontSizeSM};
     text-align: start;
 
     th {
       position: sticky;
-      inset-block-start: 0;
       z-index: 1;
+      inset-block-start: 0;
 
       padding-block: 8px;
       padding-inline: 8px;
@@ -60,6 +58,13 @@ export const imConnectorStyles = createStaticStyles(({ css }) => ({
   `,
   /** Statuses and the master switch sit together on the right of the header. */
   headerControls: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+  `,
+  /** The notification app's own actions: a probe, and the directory reading beside its sync. */
+  notifyRow: css`
     display: flex;
     flex-wrap: wrap;
     gap: 12px;

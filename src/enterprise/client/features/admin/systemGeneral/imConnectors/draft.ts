@@ -1,4 +1,5 @@
 import type {
+  AdminImConnectorNotifyAppTestInput,
   AdminImConnectorTestInput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
@@ -39,6 +40,11 @@ export interface DingTalkConnectorDraft {
   idleNewTopicEnabled: boolean;
   /** `null` while the field is empty, so "unset" stays distinguishable from a typed 0. */
   idleNewTopicHours: number | null;
+  /** 通知应用（服务号）AgentId — the numeric app id `asyncsend_v2` sends under. */
+  notifyAgentId: string;
+  /** 通知应用（服务号）AppKey. The whole block is optional: without it nothing is sent by it. */
+  notifyAppKey: string;
+  notifyAppSecret: ImConnectorSecretDraft;
   pushEnabled: boolean;
   robotCode: string;
   selectCardTemplateId: string;
@@ -51,6 +57,9 @@ export type DingTalkConnectorFieldErrors = Partial<
     | 'clientSecret'
     | 'corpId'
     | 'robotCode'
+    | 'notifyAgentId'
+    | 'notifyAppKey'
+    | 'notifyAppSecret'
     | 'idleNewTopicHours'
     | 'aiCardTemplateId'
     | 'selectCardTemplateId',
@@ -72,6 +81,11 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
   enabled: view.enabled,
   idleNewTopicEnabled: view.idleNewTopicEnabled,
   idleNewTopicHours: view.idleNewTopicHours,
+  notifyAgentId: view.notifyAgentId ?? '',
+  notifyAppKey: view.notifyAppKey ?? '',
+  // The notification app's secret has no fingerprint of its own — the server only says whether one
+  // is stored, which is all the 已设置 placeholder needs.
+  notifyAppSecret: { fingerprint: null, stored: view.notifyAppSecretSet, value: '' },
   pushEnabled: view.pushEnabled,
   robotCode: view.robotCode ?? '',
   selectCardTemplateId: view.selectCardTemplateId ?? '',
@@ -96,6 +110,10 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.enabled,
     draft.idleNewTopicEnabled,
     draft.idleNewTopicHours,
+    draft.notifyAgentId.trim(),
+    draft.notifyAppKey.trim(),
+    draft.notifyAppSecret.stored,
+    draft.notifyAppSecret.value,
     draft.pushEnabled,
     draft.robotCode.trim(),
     draft.selectCardTemplateId.trim(),
@@ -117,6 +135,7 @@ export const settleDingTalkDraft = (
     stored: saved.hasClientSecret,
     value: '',
   },
+  notifyAppSecret: { fingerprint: null, stored: saved.notifyAppSecretSet, value: '' },
 });
 
 /**
@@ -143,6 +162,12 @@ export const validateDingTalkDraft = (
 
   if (draft.corpId.trim().length > TEXT_MAX) errors.corpId = 'tooLong';
   if (draft.agentId.trim().length > AGENT_ID_MAX) errors.agentId = 'tooLong';
+
+  // The notification app is optional as a whole: a half-filled block is simply not configured
+  // (the server reads it as absent), so only the lengths the contract caps are checked here.
+  if (draft.notifyAppKey.trim().length > TEXT_MAX) errors.notifyAppKey = 'tooLong';
+  if (draft.notifyAgentId.trim().length > AGENT_ID_MAX) errors.notifyAgentId = 'tooLong';
+  if (draft.notifyAppSecret.value.trim().length > SECRET_MAX) errors.notifyAppSecret = 'tooLong';
 
   if (draft.aiCardTemplateId.trim().length > TEXT_MAX) errors.aiCardTemplateId = 'tooLong';
   if (draft.selectCardTemplateId.trim().length > TEXT_MAX) errors.selectCardTemplateId = 'tooLong';
@@ -181,6 +206,18 @@ export const toDingTalkUpsertInput = (
   enabled: draft.enabled,
   idleNewTopicEnabled: draft.idleNewTopicEnabled,
   idleNewTopicHours: draft.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,
+  notifyAgentId: optionalText(draft.notifyAgentId),
+  notifyAppKey: optionalText(draft.notifyAppKey),
+  // Omitted rather than nulled when untouched: the contract reads an absent secret as `keep`, and
+  // a stored one has to survive an edit of the AppKey beside it.
+  ...(draft.notifyAppSecret.value.trim().length > 0
+    ? {
+        notifyAppSecret: {
+          action: 'replace' as const,
+          value: draft.notifyAppSecret.value.trim(),
+        },
+      }
+    : {}),
   platform: 'dingtalk',
   pushEnabled: draft.pushEnabled,
   robotCode: draft.robotCode.trim(),
@@ -204,6 +241,36 @@ export const toDingTalkTestInput = (draft: DingTalkConnectorDraft): AdminImConne
     ...(robotCode.length > 0 ? { robotCode } : {}),
   };
 };
+
+/**
+ * Probe payload for the 通知应用（服务号）. Same rule as the robot's probe: only what the admin
+ * actually typed is sent, so a saved notification app can be re-tested without re-entering it.
+ */
+export const toDingTalkNotifyTestInput = (
+  draft: DingTalkConnectorDraft,
+): AdminImConnectorNotifyAppTestInput => {
+  const notifyAppKey = draft.notifyAppKey.trim();
+  const notifyAppSecret = draft.notifyAppSecret.value.trim();
+
+  return {
+    ...(notifyAppKey.length > 0 ? { notifyAppKey } : {}),
+    ...(notifyAppSecret.length > 0 ? { notifyAppSecret } : {}),
+  };
+};
+
+/** The probe error codes the contract defines; anything else reads as an unknown failure. */
+const IM_CONNECTOR_TEST_ERROR_CODES = new Set([
+  'auth_failed',
+  'missing_credentials',
+  'network',
+  'unknown',
+]);
+
+/** `admin` key for a probe failure — shared by the robot's 测试连接 and the notification app's 测试. */
+export const resolveImConnectorTestErrorKey = (code: string | null | undefined): string =>
+  `systemGeneral.imConnectors.test.errors.${
+    code && IM_CONNECTOR_TEST_ERROR_CODES.has(code) ? code : 'unknown'
+  }`;
 
 /** Local timestamp for the status line; `—` when the worker never reported one. */
 export const formatConnectorTime = (iso: string | null): string => {

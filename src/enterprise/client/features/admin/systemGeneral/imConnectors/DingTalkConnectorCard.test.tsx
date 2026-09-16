@@ -3,10 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdminImConnectorView } from '@/enterprise/client/services/adminImConnectors';
+import type {
+  AdminImConnectorDirectoryStatus,
+  AdminImConnectorView,
+} from '@/enterprise/client/services/adminImConnectors';
 
 import { DingTalkConnectorCard } from './DingTalkConnectorCard';
-import type { ImConnectorMutationService } from './service';
+import type { ImConnectorMutationService, ImConnectorNotifyAppService } from './service';
 
 const mocks = vi.hoisted(() => ({
   runAdminMutation: vi.fn(),
@@ -97,6 +100,38 @@ vi.mock('@lobehub/ui/base-ui', () => ({
   ),
 }));
 
+/**
+ * Minimal SWR stand-in for the directory status: it runs the real fetcher, so the injected
+ * notification-app service is exercised, and `mutate` re-runs it the way a refetch would.
+ */
+vi.mock('@/libs/swr', async () => {
+  const { useCallback, useEffect, useRef, useState } = await import('react');
+
+  const useClientDataSWR = (key: unknown, fetcher: () => Promise<unknown>) => {
+    const [state, setState] = useState<{ data?: unknown; error?: unknown }>({});
+    const fetcherRef = useRef(fetcher);
+    fetcherRef.current = fetcher;
+    const serialized = JSON.stringify(key);
+
+    const load = useCallback(async () => {
+      if (!serialized) return;
+      try {
+        setState({ data: await fetcherRef.current() });
+      } catch (error) {
+        setState((previous) => ({ data: previous.data, error }));
+      }
+    }, [serialized]);
+
+    useEffect(() => {
+      void load();
+    }, [load]);
+
+    return { data: state.data, error: state.error, isLoading: !state.data, mutate: load };
+  };
+
+  return { mutate: vi.fn(), useClientDataSWR };
+});
+
 vi.mock('@/enterprise/client/providers/AdminAccessProvider', () => ({
   useAdminAccess: () => ({ authMethod: 'better-auth', permissions: [], status: 'allowed' }),
 }));
@@ -129,6 +164,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   hasClientSecret: true,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
+  notifyAgentId: null,
+  notifyAppKey: null,
+  notifyAppSecretSet: false,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: 'ding-robot',
@@ -153,6 +191,37 @@ const service = (overrides: Partial<ImConnectorMutationService> = {}) =>
   }) as unknown as ImConnectorMutationService & {
     test: ReturnType<typeof vi.fn>;
     upsert: ReturnType<typeof vi.fn>;
+  };
+
+const directoryStatus = (
+  overrides: Partial<AdminImConnectorDirectoryStatus> = {},
+): AdminImConnectorDirectoryStatus => ({
+  departments: 12,
+  lastError: null,
+  lastRunAt: '2026-09-16T01:00:00.000Z',
+  state: 'ok',
+  users: 233,
+  ...overrides,
+});
+
+const notifyService = (overrides: Partial<ImConnectorNotifyAppService> = {}) =>
+  ({
+    directoryStatus: vi.fn().mockResolvedValue(directoryStatus()),
+    syncDirectory: vi.fn().mockResolvedValue(directoryStatus()),
+    testNotifyApp: vi
+      .fn()
+      .mockResolvedValue({
+        errorCode: null,
+        errorMessage: null,
+        latencyMs: 90,
+        ok: true,
+        robotName: null,
+      }),
+    ...overrides,
+  }) as unknown as ImConnectorNotifyAppService & {
+    directoryStatus: ReturnType<typeof vi.fn>;
+    syncDirectory: ReturnType<typeof vi.fn>;
+    testNotifyApp: ReturnType<typeof vi.fn>;
   };
 
 beforeEach(() => {
@@ -535,6 +604,221 @@ describe('DingTalkConnectorCard', () => {
     render(<DingTalkConnectorCard canOperate view={view()} />);
 
     expect(screen.queryByText(/systemGeneral.imConnectors.status.lastFrameAt/)).toBeNull();
+  });
+
+  // 通知应用（服务号）— the second DingTalk app: work notifications + the contacts directory.
+  describe('notification app block', () => {
+    it('renders the three fields from the connector the server returned', async () => {
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          notifyAppService={notifyService()}
+          view={view({
+            notifyAgentId: '4617854000',
+            notifyAppKey: 'notify-key',
+            notifyAppSecretSet: true,
+          })}
+        />,
+      );
+
+      expect(screen.getByText('systemGeneral.imConnectors.sections.notifyApp')).toBeTruthy();
+      expect(
+        (
+          screen.getByLabelText(
+            'systemGeneral.imConnectors.fields.notifyAppKey',
+          ) as HTMLInputElement
+        ).value,
+      ).toBe('notify-key');
+      expect(
+        (
+          screen.getByLabelText(
+            'systemGeneral.imConnectors.fields.notifyAgentId',
+          ) as HTMLInputElement
+        ).value,
+      ).toBe('4617854000');
+
+      // The secret is never echoed; a stored one only says so through its placeholder.
+      const secret = screen.getByLabelText(
+        'systemGeneral.imConnectors.fields.notifyAppSecret',
+      ) as HTMLInputElement;
+      expect(secret.value).toBe('');
+      expect(secret.getAttribute('placeholder')).toBe(
+        'systemGeneral.imConnectors.notifyApp.secretPlaceholder',
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(/systemGeneral.imConnectors.notifyApp.directory.summary:12/),
+        ).toBeTruthy(),
+      );
+    });
+
+    it('saves the notification app through the connector’s own 保存', async () => {
+      const stub = service();
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          notifyAppService={notifyService()}
+          service={stub}
+          view={view()}
+        />,
+      );
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.notifyAppKey'), {
+        target: { value: '  notify-key  ' },
+      });
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.notifyAgentId'), {
+        target: { value: '4617854000' },
+      });
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.notifyAppSecret'), {
+        target: { value: 'notify-secret' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        notifyAgentId: '4617854000',
+        notifyAppKey: 'notify-key',
+        notifyAppSecret: { action: 'replace', value: 'notify-secret' },
+      });
+    });
+
+    it('omits the notification secret when the field is left blank, so a stored one survives', async () => {
+      const stub = service();
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          notifyAppService={notifyService()}
+          service={stub}
+          view={view({ notifyAppKey: 'notify-key', notifyAppSecretSet: true })}
+        />,
+      );
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.notifyAppKey'), {
+        target: { value: 'rotated-key' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      const payload = stub.upsert.mock.calls[0]![0];
+      expect(payload.notifyAppKey).toBe('rotated-key');
+      expect('notifyAppSecret' in payload).toBe(false);
+    });
+
+    it('probes the notification app credentials on their own', async () => {
+      const notify = notifyService({
+        testNotifyApp: vi.fn().mockResolvedValue({
+          errorCode: 'auth_failed',
+          errorMessage: 'invalid appSecret',
+          ok: false,
+        }),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      fireEvent.click(screen.getByText('systemGeneral.imConnectors.notifyApp.test'));
+
+      await waitFor(() =>
+        expect(screen.getByText('systemGeneral.imConnectors.test.errors.auth_failed')).toBeTruthy(),
+      );
+      expect(notify.testNotifyApp).toHaveBeenCalled();
+      expect(screen.getByText('invalid appSecret')).toBeTruthy();
+    });
+
+    it('says the directory was never synced before the first pass', async () => {
+      const notify = notifyService({
+        directoryStatus: vi
+          .fn()
+          .mockResolvedValue(
+            directoryStatus({ departments: 0, lastRunAt: null, state: 'idle', users: 0 }),
+          ),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('systemGeneral.imConnectors.notifyApp.directory.never'),
+        ).toBeTruthy(),
+      );
+    });
+
+    it('syncs the directory on demand and reads the new counts back', async () => {
+      const notify = notifyService({
+        directoryStatus: vi
+          .fn()
+          .mockResolvedValueOnce(
+            directoryStatus({ departments: 0, lastRunAt: null, state: 'idle', users: 0 }),
+          )
+          .mockResolvedValue(directoryStatus({ departments: 12, users: 233 })),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('systemGeneral.imConnectors.notifyApp.directory.never'),
+        ).toBeTruthy(),
+      );
+
+      fireEvent.click(screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'));
+
+      await waitFor(() => expect(notify.syncDirectory).toHaveBeenCalledTimes(1));
+      // The counters come from the status read that follows the write, not from its answer.
+      await waitFor(() =>
+        expect(
+          screen.getByText(/systemGeneral.imConnectors.notifyApp.directory.summary:12/),
+        ).toBeTruthy(),
+      );
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(
+        'systemGeneral.imConnectors.notifyApp.directory.synced',
+      );
+    });
+
+    it('will not queue a second sync while one is already running', async () => {
+      const notify = notifyService({
+        directoryStatus: vi.fn().mockResolvedValue(directoryStatus({ state: 'running' })),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByText(
+              'systemGeneral.imConnectors.notifyApp.directory.sync',
+            ) as HTMLButtonElement
+          ).disabled,
+        ).toBe(true),
+      );
+
+      fireEvent.click(screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'));
+      expect(notify.syncDirectory).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed sync in the admin’s own words', async () => {
+      const notify = notifyService({
+        directoryStatus: vi
+          .fn()
+          .mockResolvedValue(directoryStatus({ lastError: 'errcode 60011', state: 'error' })),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('systemGeneral.imConnectors.notifyApp.directory.error:errcode 60011'),
+        ).toBeTruthy(),
+      );
+    });
+
+    it('leaves a read-only admin the reading without the two actions', async () => {
+      const notify = notifyService();
+      render(<DingTalkConnectorCard canOperate={false} notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(/systemGeneral.imConnectors.notifyApp.directory.summary:12/),
+        ).toBeTruthy(),
+      );
+      expect(screen.queryByText('systemGeneral.imConnectors.notifyApp.test')).toBeNull();
+      expect(screen.queryByText('systemGeneral.imConnectors.notifyApp.directory.sync')).toBeNull();
+    });
   });
 
   it('restores the server values when the edit is abandoned', () => {

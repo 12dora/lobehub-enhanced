@@ -1,6 +1,6 @@
 import { ActionIcon, Flexbox } from '@lobehub/ui';
 import { Plus } from 'lucide-react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 
 import { DESKTOP_HEADER_ICON_SMALL_SIZE } from '@/const/layoutTokens';
 import { InboxButton } from '@/features/Inbox';
@@ -18,6 +18,7 @@ import type { TaskViewMode } from '@/store/task/slices/list/initialState';
 
 import { createTaskModal } from '../CreateTaskModal';
 import TaskListMobileHeader from '../mobile/TaskListMobileHeader';
+import ReminderList from '../ReminderList';
 import ReminderSettingsButton from '../ReminderSettings';
 import Breadcrumb from '../shared/Breadcrumb';
 import { taskDetailPath } from '../shared/taskDetailPath';
@@ -30,6 +31,8 @@ import { shouldRenderTaskAgentPanelToggle } from './taskAgentPanelToggle';
 import TaskList from './TaskList';
 import TaskListVisibilityFilter from './TaskListVisibilityFilter';
 import TasksGroupConfig from './TasksGroupConfig';
+import type { TaskSurface } from './TaskSurfaceSwitch';
+import TaskSurfaceSwitch from './TaskSurfaceSwitch';
 
 interface TaskCreateActionBehaviorParams {
   canCreateTask: boolean;
@@ -61,6 +64,10 @@ interface AgentTasksPageProps {
 const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
   const navigate = useWorkspaceAwareNavigate();
   const isMobile = useIsMobile();
+  // 定时提醒 is a sibling surface of the task list, not another task view mode:
+  // it lists reminder objects, so none of the task view options apply to it.
+  const [surface, setSurface] = useState<TaskSurface>('tasks');
+  const isReminderSurface = surface === 'reminders';
   const { allowed: canCreateTask, reason } = usePermission('create_content');
   const viewMode = useTaskStore(taskListSelectors.viewMode);
   const useFetchTaskList = useTaskStore((s) => s.useFetchTaskList);
@@ -128,12 +135,17 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
 
   const showTaskAgentPanelToggle = shouldRenderTaskAgentPanelToggle(isMobile);
 
+  // Shown in the desktop breadcrumb row and, on mobile, in place of the header
+  // title — the segment already names the visible surface.
+  const surfaceSwitch = <TaskSurfaceSwitch value={surface} onChange={setSurface} />;
+
   // Same toolbar on both shells — the reminder bell and the inbox bell stay
   // reachable on mobile, they just move into the mobile ChatHeader's right slot.
+  // The task-only view controls hide while 定时提醒 is the active surface.
   const headerActions = (
     <Flexbox horizontal align={'center'} gap={4}>
-      {!agentId && <TaskListVisibilityFilter />}
-      {(inlineCollapsed || viewMode === 'kanban') && (
+      {!isReminderSurface && !agentId && <TaskListVisibilityFilter />}
+      {!isReminderSurface && (inlineCollapsed || viewMode === 'kanban') && (
         <ActionIcon
           disabled={createActionBehavior.disabled}
           icon={Plus}
@@ -142,7 +154,7 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
           onClick={handleCreateTask}
         />
       )}
-      <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />
+      {!isReminderSurface && <TasksGroupConfig options={viewOptions} setOptions={setViewOptions} />}
       <ReminderSettingsButton />
       <InboxButton />
       {showTaskAgentPanelToggle && (
@@ -157,11 +169,16 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
 
   return (
     <Flexbox flex={1} height={'100%'}>
-      <TaskListMobileHeader actions={headerActions} />
+      <TaskListMobileHeader actions={headerActions} tabs={surfaceSwitch} />
       {!isMobile && (
         <NavHeader
-          left={<Breadcrumb />}
           right={headerActions}
+          left={
+            <Flexbox horizontal align={'center'} gap={8}>
+              <Breadcrumb />
+              {surfaceSwitch}
+            </Flexbox>
+          }
           styles={{
             left: {
               paddingLeft: 4,
@@ -170,7 +187,9 @@ const AgentTasksPage = memo<AgentTasksPageProps>(({ agentId }) => {
           }}
         />
       )}
-      {isEmptyHero ? (
+      {isReminderSurface ? (
+        <ReminderList />
+      ) : isEmptyHero ? (
         <EmptyState agentId={agentId} />
       ) : viewMode === 'kanban' ? (
         <Flexbox flex={1} style={{ overflowX: 'auto', overflowY: 'hidden' }}>

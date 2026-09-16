@@ -3,7 +3,9 @@
 import { useCallback, useRef, useState } from 'react';
 
 import type {
+  AdminImConnectorDirectoryStatus,
   AdminImConnectorsBindingsService,
+  AdminImConnectorsNotifyAppService,
   AdminImConnectorsReadService,
   ImConnectorPlatform,
 } from '@/enterprise/client/services/adminImConnectors';
@@ -24,6 +26,7 @@ import {
   buildAdminDocumentRenderSettingsKey,
   buildAdminDocumentRenderStatusKey,
   buildAdminImConnectorBindingsKey,
+  buildAdminImConnectorDirectoryStatusKey,
   buildAdminImConnectorsKey,
   buildAdminInfraSettingsKey,
   buildAdminSandboxSettingsKey,
@@ -34,6 +37,9 @@ const DOCUMENT_RENDER_STATUS_REFRESH_MS = 15_000;
 
 /** The stream worker republishes its heartbeat every 30s (TTL 120s); 20s reads it without racing. */
 const IM_CONNECTOR_STATUS_REFRESH_MS = 20_000;
+
+/** Only while a sync is running: a full directory pass takes seconds, not minutes. */
+const IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS = 10_000;
 
 export const useAdminBrowserProfile = (enabled: boolean, service: AdminBrowserProfileService) =>
   useClientDataSWR(buildAdminBrowserProfileKey(enabled), () => service.getBrowserProfile(), {
@@ -129,6 +135,28 @@ export const useAdminImConnectorBindings = (
     buildAdminImConnectorBindingsKey(enabled, platform, q),
     () => service.listBindings({ platform, ...(q.length > 0 ? { q } : {}) }),
     { keepPreviousData: true, revalidateOnFocus: false },
+  );
+
+/**
+ * Contacts directory sync state of the 通知应用（服务号）.
+ *
+ * Polled only while a sync is actually running — the rest of the time the counters change once an
+ * hour (the worker's own cadence), and an admin watching 立即同步 is the only reason to ask often.
+ */
+export const useAdminImConnectorDirectoryStatus = (
+  enabled: boolean,
+  service: AdminImConnectorsNotifyAppService,
+) =>
+  useClientDataSWR(
+    buildAdminImConnectorDirectoryStatusKey(enabled),
+    () => service.directoryStatus(),
+    {
+      keepPreviousData: true,
+      refreshInterval: (data?: AdminImConnectorDirectoryStatus) =>
+        data?.state === 'running' ? IM_CONNECTOR_DIRECTORY_RUNNING_REFRESH_MS : 0,
+      refreshWhenHidden: false,
+      revalidateOnFocus: false,
+    },
   );
 
 export interface InfraProbeState {
