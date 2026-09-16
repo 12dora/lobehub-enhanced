@@ -136,6 +136,24 @@ const wrapDingTalkPushButtonUrl = async (
 };
 
 const SHANGHAI_TZ = 'Asia/Shanghai';
+const OA_EVENT_TITLE_MAX_CHARS = 12;
+
+/** Contract §6 short event titles (≤ 12 chars). Long MessengerPushMessage titles map onto these. */
+export const OA_TASK_EVENT_TITLES = {
+  completed: '任务完成',
+  runCompleted: '运行完成',
+  runFailed: '运行失败',
+  waiting: '等待处理',
+} as const;
+
+const LONG_TASK_LABEL_TO_SHORT: Array<readonly [string, string]> = [
+  ['任务已完成一次运行', OA_TASK_EVENT_TITLES.runCompleted],
+  ['任务运行失败', OA_TASK_EVENT_TITLES.runFailed],
+  ['任务等待处理', OA_TASK_EVENT_TITLES.waiting],
+  ['任务已完成', OA_TASK_EVENT_TITLES.completed],
+];
+
+const SHORT_TASK_EVENT_TITLES = new Set<string>(Object.values(OA_TASK_EVENT_TITLES));
 
 const formatShanghaiClock = (date: Date): string =>
   new Intl.DateTimeFormat('en-GB', {
@@ -155,6 +173,25 @@ const taskNameFromPushMessage = (title: string, markdown: string): string => {
   }
   return title;
 };
+
+/**
+ * OA `body.title` kind for task-lifecycle pushes. DingTalk overwrites `head.text`
+ * with the 服务号 name, so the site title is prefixed here separately.
+ */
+export const shortTaskEventTitle = (title: string): string => {
+  const trimmed = title.trim();
+  if (!trimmed) return OA_TASK_EVENT_TITLES.completed;
+  const prefix = trimmed.split(' · ')[0]?.trim() || trimmed;
+  for (const [longLabel, short] of LONG_TASK_LABEL_TO_SHORT) {
+    if (prefix === longLabel || prefix.startsWith(longLabel)) return short;
+  }
+  if (SHORT_TASK_EVENT_TITLES.has(prefix)) return prefix;
+  return [...prefix].slice(0, OA_EVENT_TITLE_MAX_CHARS).join('');
+};
+
+/** DingTalk overwrites `oa.head.text`; app identity is carried in `body.title`. */
+export const formatTaskOaBodyTitle = (headText: string, title: string): string =>
+  `${headText} · ${shortTaskEventTitle(title)}`;
 
 const clockFromMarkdownOrNow = (markdown: string, now: Date): string => {
   const match = /(\d{2}:\d{2})\s*$/.exec(markdown);
@@ -193,15 +230,16 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
         : null;
       const notifyApp = readNotifyAppFromMessengerConfig(config);
       if (notifyApp) {
+        const headText = await resolveWorkNoticeHeadText();
         const oa = buildOaWorkNoticePayload({
           content: markdown,
           form: [
             { key: '任务', value: taskNameFromPushMessage(title, markdown) },
             { key: '时间', value: clockFromMarkdownOrNow(markdown, new Date()) },
           ],
-          headText: await resolveWorkNoticeHeadText(),
+          headText,
           messageUrl: oaMessageUrl(wrappedUrl),
-          title,
+          title: formatTaskOaBodyTitle(headText, title),
         });
         const sent = await sendWorkNotice({ oa, staffIds: [staffId] }, { config: notifyApp });
         await incrementDingTalkDailyCounter('pushes');

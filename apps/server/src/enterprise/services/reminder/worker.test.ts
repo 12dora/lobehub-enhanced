@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReminderItem, ReminderRecipientItem } from '@/database/schemas/reminder';
 
-import { INACTIVE_DELIVERY_REASON, NOTIFY_APP_NOT_CONFIGURED, runReminderSweep } from './worker';
+import {
+  formatReminderOaBodyTitle,
+  INACTIVE_DELIVERY_REASON,
+  NOTIFY_APP_NOT_CONFIGURED,
+  runReminderSweep,
+} from './worker';
 
 const acquired = {
   release: vi.fn(async () => {}),
@@ -127,7 +132,7 @@ describe('runReminderSweep', () => {
           { key: '时间', value: '09:00' },
           { key: '来自', value: '张三' },
         ],
-        title: '定时提醒',
+        title: 'AI平台 · 定时提醒',
       },
       head: { bgcolor: 'FF2E7CF6', text: 'AI平台' },
     });
@@ -289,6 +294,7 @@ describe('runReminderSweep', () => {
       { key: '时间', value: '09:00 · 每周三' },
       { key: '来自', value: '张三' },
     ]);
+    expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 定时提醒');
     expect(send.mock.calls[0][0].oa).not.toHaveProperty('messageUrl');
   });
 
@@ -306,5 +312,23 @@ describe('runReminderSweep', () => {
     expect(resolveHeadText).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].oa.head.text).toBe('AI平台');
     expect(send.mock.calls[1][0].oa.head.text).toBe('AI平台');
+    expect(send.mock.calls[0][0].oa.body.title).toBe('AI平台 · 定时提醒');
+    expect(send.mock.calls[1][0].oa.body.title).toBe('AI平台 · 定时提醒');
+  });
+
+  it('still sends head.text while putting the site title in body.title', async () => {
+    resolveHeadText.mockResolvedValue('AI 助手');
+
+    await run();
+
+    expect(send.mock.calls[0][0].oa.head).toEqual({ bgcolor: 'FF2E7CF6', text: 'AI 助手' });
+    expect(send.mock.calls[0][0].oa.body.title).toBe('AI 助手 · 定时提醒');
+  });
+});
+
+describe('formatReminderOaBodyTitle', () => {
+  it('prefixes 定时提醒 with the site title', () => {
+    expect(formatReminderOaBodyTitle('AI平台')).toBe('AI平台 · 定时提醒');
+    expect(formatReminderOaBodyTitle('AI 助手')).toBe('AI 助手 · 定时提醒');
   });
 });

@@ -68,7 +68,9 @@ const { resetMessengerPushProvidersForTest } = await import('../../push');
 const {
   buildDingTalkOpenAppUrl,
   dingtalkMessengerPushProvider,
+  formatTaskOaBodyTitle,
   registerDingTalkMessengerPushProvider,
+  shortTaskEventTitle,
 } = await import('./push');
 
 const VALID_CONFIG = {
@@ -322,7 +324,7 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
               { key: '任务', value: '报表' },
               { key: '时间', value: '09:00' },
             ],
-            title: '任务已完成一次运行 · 报表',
+            title: 'AI 助手 · 运行完成',
           },
           head: { bgcolor: 'FF2E7CF6', text: 'AI 助手' },
           messageUrl: 'https://app.example.com/dingtalk/sso?redirect=%2Ftask%2F1',
@@ -354,12 +356,47 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
         messageUrl?: string;
       };
     };
-    expect(payload.oa.body.title).toBe('提醒');
+    expect(payload.oa.body.title).toBe('AI 助手 · 提醒');
     expect(payload.oa.body.form[0]).toEqual({ key: '任务', value: '提醒' });
     expect(payload.oa.body.form[1]?.key).toBe('时间');
     expect(payload.oa.body.form[1]?.value).toMatch(/^\d{2}:\d{2}$/);
     expect(payload.oa).not.toHaveProperty('messageUrl');
     expect(mockSendWorkNotice.mock.calls[0]?.[1]).toEqual({ config: NOTIFY_APP });
+  });
+
+  it('maps long task push titles to site title · short event title and keeps the long text in content', async () => {
+    const cases = [
+      { event: '运行完成', title: '任务已完成一次运行 · 报表' },
+      { event: '运行失败', title: '任务运行失败 · 报表' },
+      { event: '等待处理', title: '任务等待处理 · 报表' },
+      { event: '任务完成', title: '任务已完成 · 报表' },
+    ] as const;
+
+    for (const { event, title } of cases) {
+      mockSendWorkNotice.mockClear();
+      vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+        ...VALID_CONFIG,
+        notifyApp: NOTIFY_APP,
+      } as any);
+
+      await dingtalkMessengerPushProvider.pushToUser({
+        db: {} as any,
+        message: {
+          markdown: `**报表**\n\n${title.split(' · ')[0]}\n\n2026-09-16 09:00`,
+          title,
+        },
+        userId: 'user_1',
+      });
+
+      const payload = mockSendWorkNotice.mock.calls[0]?.[0] as {
+        oa: { body: { content: string; title: string }; head: { bgcolor: string; text: string } };
+      };
+      expect(payload.oa.body.title).toBe(`AI 助手 · ${event}`);
+      expect(payload.oa.body.title.length).toBeLessThanOrEqual('AI 助手 · '.length + 12);
+      expect([...event].length).toBeLessThanOrEqual(12);
+      expect(payload.oa.body.content).toContain(title.split(' · ')[0]);
+      expect(payload.oa.head).toEqual({ bgcolor: 'FF2E7CF6', text: 'AI 助手' });
+    }
   });
 
   it('keeps the robot path unchanged when notify app is not configured', async () => {
@@ -516,5 +553,39 @@ describe('DingTalkMessengerPushProvider openapp deep link', () => {
 
     const param = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
     expect(param.singleURL).toBe(HTTPS_SSO);
+  });
+});
+
+describe('shortTaskEventTitle', () => {
+  it('maps long MessengerPushMessage titles onto the four §6 event titles', () => {
+    expect(shortTaskEventTitle('任务已完成一次运行 · 报表')).toBe('运行完成');
+    expect(shortTaskEventTitle('任务运行失败 · 报表')).toBe('运行失败');
+    expect(shortTaskEventTitle('任务等待处理 · 报表')).toBe('等待处理');
+    expect(shortTaskEventTitle('任务已完成 · 报表')).toBe('任务完成');
+  });
+
+  it('does not treat 任务已完成一次运行 as 任务已完成', () => {
+    expect(shortTaskEventTitle('任务已完成一次运行')).toBe('运行完成');
+  });
+
+  it('passes through titles that are already the short event names', () => {
+    expect(shortTaskEventTitle('运行完成')).toBe('运行完成');
+    expect(shortTaskEventTitle('运行失败')).toBe('运行失败');
+    expect(shortTaskEventTitle('等待处理')).toBe('等待处理');
+    expect(shortTaskEventTitle('任务完成')).toBe('任务完成');
+  });
+
+  it('truncates unknown kinds to 12 characters and never the empty string', () => {
+    const unknown = '这是一段超过十二个字的未知标题';
+    expect(shortTaskEventTitle(unknown)).toBe('这是一段超过十二个字的未');
+    expect([...shortTaskEventTitle(unknown)]).toHaveLength(12);
+    expect(shortTaskEventTitle('   ')).toBe('任务完成');
+  });
+});
+
+describe('formatTaskOaBodyTitle', () => {
+  it('prefixes the short event title with the site title', () => {
+    expect(formatTaskOaBodyTitle('AI平台', '任务已完成一次运行 · 报表')).toBe('AI平台 · 运行完成');
+    expect(formatTaskOaBodyTitle('AI 助手', '任务运行失败 · 报表')).toBe('AI 助手 · 运行失败');
   });
 });

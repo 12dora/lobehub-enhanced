@@ -56,6 +56,10 @@ export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
 export const INACTIVE_DELIVERY_REASON = 'inactive';
 export const REMINDER_OA_BODY_TITLE = '定时提醒';
 
+/** DingTalk overwrites `oa.head.text` with the 服务号 name; app identity lives in `body.title`. */
+export const formatReminderOaBodyTitle = (headText: string): string =>
+  `${headText} · ${REMINDER_OA_BODY_TITLE}`;
+
 const noopRelease = async (): Promise<void> => {};
 
 const lockHandle = (
@@ -249,7 +253,7 @@ export const buildReminderWorkNoticeOa = (input: {
       { key: '来自', value: input.creatorName },
     ],
     headText: input.headText,
-    title: REMINDER_OA_BODY_TITLE,
+    title: formatReminderOaBodyTitle(input.headText),
   });
 };
 

@@ -52,7 +52,7 @@
 
 ### 工作通知格式（OA）
 
-钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`（`head.bgcolor` 固定 `FF2E7CF6`；`head.text` 为管理端通用设置的站点标题，未设置时为「AI 助手」）：`{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<定时提醒 | 任务事件标题>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，`body.title` 为「定时提醒」，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」；任务生命周期推送的 form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录接口返回的 `task_id`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径，机器人 `oToMessages/batchSend` 仅在未配置通知应用时用于任务推送。
+钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`。`head.bgcolor` 固定 `FF2E7CF6`（色带标识应用）；`head.text` 仍发送管理端通用设置的站点标题（未设置时为「AI 助手」），但钉钉工作通知会把 `oa.head.text` **改写成服务号在开放平台登记的应用名**，因此调用方身份写在 `body.title`：`<站点标题或「AI 助手」> · <通知种类>`。载荷形如 `{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<站点标题> · <定时提醒 | 运行完成 | 运行失败 | 等待处理 | 任务完成>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，`body.title` 为 `<站点标题> · 定时提醒`，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」。任务生命周期推送的 `body.title` 为 `<站点标题> ·` 加短事件名（运行完成 / 运行失败 / 等待处理 / 任务完成，各不超过 12 字；原先较长的推送标题与说明放在 `content`，任务名在 form「任务」），form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录接口返回的 `task_id`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径，机器人 `oToMessages/batchSend` 仅在未配置通知应用时用于任务推送。
 
 ## 手工绑定
 
