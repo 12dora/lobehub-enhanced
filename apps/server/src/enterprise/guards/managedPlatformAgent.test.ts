@@ -19,6 +19,7 @@ import {
 import { users } from '@/database/schemas/user';
 import type { LobeChatDatabase } from '@/database/type';
 import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
+import { PlatformTaskManagerService } from '@/server/enterprise/services/agentCatalog/taskManagerAgent';
 
 import { getEnterpriseErrorBody } from './enterpriseErrors';
 import {
@@ -61,6 +62,7 @@ const PA_V1 = 'sg07-mpa-pa-v1';
 const AGT_MATERIALIZED = 'sg07-mpa-agt-mat';
 const AGT_ORDINARY = 'sg07-mpa-agt-ord';
 const AGT_BUILTIN_INBOX = 'sg07-mpa-builtin-inbox';
+const AGT_BUILTIN_TASK_AGENT = 'sg07-mpa-builtin-task-agent';
 
 const cleanup = async () => {
   await db
@@ -76,7 +78,14 @@ const cleanup = async () => {
   await db.delete(platformAgents).where(eq(platformAgents.id, PA_ID));
   await db
     .delete(agents)
-    .where(inArray(agents.id, [AGT_MATERIALIZED, AGT_ORDINARY, AGT_BUILTIN_INBOX]));
+    .where(
+      inArray(agents.id, [
+        AGT_MATERIALIZED,
+        AGT_ORDINARY,
+        AGT_BUILTIN_INBOX,
+        AGT_BUILTIN_TASK_AGENT,
+      ]),
+    );
   await db.delete(users).where(inArray(users.id, [USER_A, USER_B]));
 };
 
@@ -225,16 +234,16 @@ describe('assertAgentsNotPlatformManaged (RR2-4 batch)', () => {
         userId: USER_A,
       }),
     ).resolves.toBeUndefined();
-    // live materializations + tombstones + inbox-slug lookup (deduped agent id list once each)
-    expect(countingDb.select).toHaveBeenCalledTimes(3);
+    // live materializations + tombstones + inbox-slug lookup + task-agent slug lookup
+    expect(countingDb.select).toHaveBeenCalledTimes(4);
   });
 
-  it('skipManagedInbox still rejects a materialized platform Agent', async () => {
+  it('skipManagedSystemSlugs still rejects a materialized platform Agent', async () => {
     vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
     const error = await assertAgentsNotPlatformManaged({
       agentIds: [AGT_MATERIALIZED],
       db,
-      skipManagedInbox: true,
+      skipManagedSystemSlugs: true,
       userId: USER_A,
     }).then(
       () => null,
@@ -244,7 +253,7 @@ describe('assertAgentsNotPlatformManaged (RR2-4 batch)', () => {
     expect((error as TRPCError).code).toBe('FORBIDDEN');
   });
 
-  it('skipManagedInbox does not blanket-reject the builtin inbox', async () => {
+  it('skipManagedSystemSlugs does not blanket-reject the builtin inbox', async () => {
     vi.stubEnv('ENABLE_PLATFORM_MANAGED_AGENTS', '1');
     await db.insert(agents).values({ id: AGT_BUILTIN_INBOX, slug: 'inbox', userId: USER_A });
     const capture = vi
@@ -255,7 +264,7 @@ describe('assertAgentsNotPlatformManaged (RR2-4 batch)', () => {
       assertAgentsNotPlatformManaged({
         agentIds: [AGT_BUILTIN_INBOX],
         db,
-        skipManagedInbox: true,
+        skipManagedSystemSlugs: true,
         userId: USER_A,
       }),
     ).resolves.toBeUndefined();
@@ -466,5 +475,46 @@ describe('assertInboxManagedFieldsNotEdited', () => {
     await expect(run({ model: 'x' })).resolves.toBeUndefined();
     expect(capture).not.toHaveBeenCalled();
     expect(isPlatformAgentTakeoverActiveMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects identity patches on slug task-agent when the overlay is bound', async () => {
+    await db.insert(agents).values({
+      id: AGT_BUILTIN_TASK_AGENT,
+      slug: 'task-agent',
+      userId: USER_A,
+    });
+    const capture = vi
+      .spyOn(PlatformTaskManagerService.prototype, 'capture')
+      .mockResolvedValue({} as never);
+
+    const titleError = await run({ title: 'Managed' }, AGT_BUILTIN_TASK_AGENT).then(
+      () => null,
+      (e) => e,
+    );
+    expect(titleError).toBeInstanceOf(TRPCError);
+    expect((titleError as TRPCError).code).toBe(MANAGED_AGENT_MUTATION_FORBIDDEN.code);
+    expect((titleError as TRPCError).message).toBe(
+      MANAGED_ERROR_CODES.MANAGED_RESOURCE_BY_PLATFORM,
+    );
+
+    const roleError = await run({ systemRole: 'x' }, AGT_BUILTIN_TASK_AGENT).then(
+      () => null,
+      (e) => e,
+    );
+    expect(roleError).toBeInstanceOf(TRPCError);
+    expect((roleError as TRPCError).code).toBe('FORBIDDEN');
+    expect(capture).toHaveBeenCalled();
+  });
+
+  it('allows a model-only patch on slug task-agent without capturing the overlay', async () => {
+    await db.insert(agents).values({
+      id: AGT_BUILTIN_TASK_AGENT,
+      slug: 'task-agent',
+      userId: USER_A,
+    });
+    const capture = vi.spyOn(PlatformTaskManagerService.prototype, 'capture');
+
+    await expect(run({ model: 'gpt-5.6-sol' }, AGT_BUILTIN_TASK_AGENT)).resolves.toBeUndefined();
+    expect(capture).not.toHaveBeenCalled();
   });
 });

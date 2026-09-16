@@ -1,5 +1,6 @@
 import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
-import { DEFAULT_AGENT_CONFIG } from '@lobechat/const';
+import { DEFAULT_PROVIDER } from '@lobechat/business-const';
+import { DEFAULT_AGENT_CONFIG, DEFAULT_MODEL } from '@lobechat/const';
 import {
   PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY,
   type PlatformAgentVersionConfig,
@@ -292,6 +293,36 @@ describe('PlatformTaskManagerService', () => {
     expect(result.model).toBe('gpt-6-astra');
     expect(result.provider).toBe('openai');
     expect(result.plugins).toEqual(['lobe-task']);
+  });
+
+  it('treats TASK_AGENT.persist defaults as unowned so existing rows follow the admin pin', async () => {
+    const captured = snapshot('v2');
+    const adminResolved = {
+      ...resolvedConfig(captured),
+      model: 'gpt-6-astra',
+      params: { max_tokens: 4096, temperature: 0.2 },
+      provider: 'openai',
+    };
+    const service = new PlatformTaskManagerService(db, 'user', {
+      flags: flagsOn,
+      materializationService: {
+        resolveForExistingAgent: vi.fn(async () => ({
+          agentId: 'builtin-task-agent-id',
+          config: adminResolved,
+          dependencySnapshot,
+        })),
+      },
+      resolver: { beginSystemOperation: vi.fn(async () => handle(captured)) },
+      validateDependencies: vi.fn(async () => ({ valid: true as const })),
+    });
+
+    const result = await service.getEffectiveBuiltinConfig(base(), {
+      userRow: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
+    });
+
+    expect(result.model).toBe('gpt-6-astra');
+    expect(result.provider).toBe('openai');
+    expect(result.platform?.modelLocked).toBe(false);
   });
 
   it('propagates resolver and exact dependency failures instead of treating errors as absence', async () => {

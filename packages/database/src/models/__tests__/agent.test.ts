@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { getAgentPersistConfig } from '@lobechat/builtin-agents';
 import { DEFAULT_INBOX_AVATAR, DEFAULT_INBOX_TITLE, INBOX_SESSION_ID } from '@lobechat/const';
 import { eq, inArray } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -1577,6 +1578,8 @@ describe('AgentModel', () => {
         expect(result).toBeDefined();
         expect(result?.slug).toBe('task-agent');
         expect(result?.virtual).toBe(true);
+        expect(result?.model).toBeNull();
+        expect(result?.provider).toBeNull();
       });
     });
 
@@ -2961,6 +2964,55 @@ describe('AgentModel', () => {
 
       expect(byId['other-u2']).toMatchObject({ model: 'keep-u2', provider: 'keep-p2' });
       expect(byId['other-u2']?.updatedAt?.getTime()).toBe(updatedAtBefore['other-u2']);
+    });
+  });
+
+  describe('resetTaskAgentPersistDefaultPairForAllUsers', () => {
+    it('nulls only task-agent rows whose pair equals persist defaults', async () => {
+      const persist = getAgentPersistConfig('task-agent');
+      expect(persist?.model).toEqual(expect.any(String));
+      expect(persist?.provider).toEqual(expect.any(String));
+
+      await serverDB.insert(agents).values([
+        {
+          id: 'task-persist',
+          model: persist!.model,
+          provider: persist!.provider,
+          slug: 'task-agent',
+          userId,
+          virtual: true,
+        },
+        {
+          id: 'task-custom',
+          model: 'gpt-6-astra',
+          provider: 'chatgpt',
+          slug: 'task-agent',
+          userId: userId2,
+          virtual: true,
+        },
+        {
+          id: 'other-persist',
+          model: persist!.model,
+          provider: persist!.provider,
+          slug: 'other',
+          userId,
+        },
+      ]);
+
+      const count = await agentModel.resetTaskAgentPersistDefaultPairForAllUsers();
+
+      expect(count).toBe(1);
+      const rows = await serverDB
+        .select({ id: agents.id, model: agents.model, provider: agents.provider })
+        .from(agents)
+        .where(inArray(agents.id, ['task-persist', 'task-custom', 'other-persist']));
+      const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+      expect(byId['task-persist']).toMatchObject({ model: null, provider: null });
+      expect(byId['task-custom']).toMatchObject({ model: 'gpt-6-astra', provider: 'chatgpt' });
+      expect(byId['other-persist']).toMatchObject({
+        model: persist!.model,
+        provider: persist!.provider,
+      });
     });
   });
 });

@@ -846,7 +846,7 @@ export class AgentModel {
    * Does not touch other slugs, topics, or messages, and does not bump `updatedAt`.
    */
   resetModelProviderForSlugForAllUsers = async (slug: string): Promise<number> => {
-    const result = await this.db
+    const updated = await this.db
       .update(agents)
       .set({
         model: null,
@@ -856,11 +856,40 @@ export class AgentModel {
         updatedAt: sql`${agents.updatedAt}`,
         accessedAt: sql`${agents.accessedAt}`,
       })
-      .where(
-        and(eq(agents.slug, slug), or(isNotNull(agents.model), isNotNull(agents.provider))),
-      );
+      .where(and(eq(agents.slug, slug), or(isNotNull(agents.model), isNotNull(agents.provider))))
+      .returning({ id: agents.id });
 
-    return result.rowCount ?? 0;
+    return updated.length;
+  };
+
+  /**
+   * Cross-user (ignores `this.userId`): clear `model`/`provider` on every raw `agents` row
+   * whose slug matches and whose pair equals `pair`. Used by first task-manager provision so
+   * factory persist defaults pick up the admin pin without clobbering a member-chosen pair.
+   * Does not bump `updatedAt`.
+   */
+  resetModelProviderForSlugWhenPairEquals = async (
+    slug: string,
+    pair: { model: string; provider: string },
+  ): Promise<number> => {
+    const updated = await this.db
+      .update(agents)
+      .set({
+        model: null,
+        provider: null,
+        updatedAt: sql`${agents.updatedAt}`,
+        accessedAt: sql`${agents.accessedAt}`,
+      })
+      .where(
+        and(
+          eq(agents.slug, slug),
+          eq(agents.model, pair.model),
+          eq(agents.provider, pair.provider),
+        ),
+      )
+      .returning({ id: agents.id });
+
+    return updated.length;
   };
 
   /**
@@ -881,6 +910,21 @@ export class AgentModel {
    */
   resetTaskAgentModelProviderForAllUsers = async (): Promise<number> =>
     this.resetModelProviderForSlugForAllUsers(BUILTIN_AGENT_SLUGS.taskAgent);
+
+  /**
+   * First-provision repair: null `task-agent` rows that still hold the builtin persist
+   * model/provider pair so they follow the admin pin. Member-chosen pairs are left alone.
+   */
+  resetTaskAgentPersistDefaultPairForAllUsers = async (): Promise<number> => {
+    const persist = getAgentPersistConfig(BUILTIN_AGENT_SLUGS.taskAgent);
+    const model = persist?.model;
+    const provider = persist?.provider;
+    if (!model || !provider) return 0;
+    return this.resetModelProviderForSlugWhenPairEquals(BUILTIN_AGENT_SLUGS.taskAgent, {
+      model,
+      provider,
+    });
+  };
 
   /**
    * Strip fields the Agent Builder's own row must never carry (see
@@ -1244,16 +1288,17 @@ export class AgentModel {
     // partitioned { target, where } once 0109 has flipped the index in every
     // environment. Payload still carries workspaceId so workspace-scoped
     // builtin agents land in the right workspace.
-    const isInbox = slug === INBOX_SESSION_ID;
+    const usesAdminModelDefault =
+      slug === INBOX_SESSION_ID || slug === BUILTIN_AGENT_SLUGS.taskAgent;
     const result = await this.db
       .insert(agents)
       .values(
         buildWorkspacePayload(
           { userId: this.userId, workspaceId: this.workspaceId },
           {
-            // Inbox follows the platform / settings default until the user picks.
+            // Inbox and task-agent follow the platform / settings default until the user picks.
             // Other builtins keep their persist model/provider.
-            ...(isInbox
+            ...(usesAdminModelDefault
               ? { model: null, params: {}, provider: null }
               : { model: persistConfig.model, provider: persistConfig.provider }),
             slug: persistConfig.slug,

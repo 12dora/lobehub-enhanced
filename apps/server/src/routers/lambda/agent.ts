@@ -212,9 +212,9 @@ export const agentRouter = router({
   createAgentFiles: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.createAgentFiles'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -229,9 +229,9 @@ export const agentRouter = router({
   createAgentKnowledgeBase: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.createAgentKnowledgeBase'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -274,9 +274,9 @@ export const agentRouter = router({
   deleteAgentFile: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.deleteAgentFile'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -290,9 +290,9 @@ export const agentRouter = router({
   deleteAgentKnowledgeBase: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.deleteAgentKnowledgeBase'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -578,9 +578,9 @@ export const agentRouter = router({
   toggleFile: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.toggleFile'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -595,9 +595,9 @@ export const agentRouter = router({
   toggleKnowledgeBase: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.toggleKnowledgeBase'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -694,8 +694,9 @@ export const agentRouter = router({
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.updateAgentConfig'))
     // ROOT-02 / RR2-4: managed fields on a platform-materialized Agent are not user-editable.
-    // Inbox overlay is field-level (see assertInboxManagedFieldsNotEdited) so per-user prefs stay writable.
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Inbox / task-agent overlay is field-level (`assertInboxManagedFieldsNotEdited`) so
+    // per-user prefs stay writable on both system slugs.
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(
       z.object({
         agentId: z.string(),
@@ -724,14 +725,17 @@ export const agentRouter = router({
         workspaceId: ctx.workspaceId ?? undefined,
       });
 
-      // Light-mode inbox: a model-only (or provider-only) write must persist a complete
-      // pair so the raw row never ends up half-set. Missing side comes from the overlaid
-      // config the client already sees. AgentService.updateAgentConfig repeats this for
-      // non-router callers; a patch that already has both keys is a no-op there.
+      // Light-mode inbox / task-agent: a model-only (or provider-only) write must persist a
+      // complete pair so the raw row never ends up half-set. Missing side comes from the
+      // overlaid config the client already sees. AgentService.updateAgentConfig repeats this
+      // for non-router callers; a patch that already has both keys is a no-op there.
       let patch = input.value;
       if (Object.hasOwn(patch, 'model') !== Object.hasOwn(patch, 'provider')) {
         const effective = await ctx.agentService.getAgentConfig(input.agentId);
-        if (effective?.slug === INBOX_SESSION_ID) {
+        if (
+          effective?.slug === INBOX_SESSION_ID ||
+          effective?.slug === BUILTIN_AGENT_SLUGS.taskAgent
+        ) {
           if (Object.hasOwn(patch, 'model') && isNonEmptyString(patch.model)) {
             patch = { ...patch, provider: effective.provider };
           } else if (Object.hasOwn(patch, 'provider') && isNonEmptyString(patch.provider)) {
@@ -765,9 +769,9 @@ export const agentRouter = router({
   acquireAgentLock: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.acquireAgentLock'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(z.object({ agentId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.workspaceId) return { expiresAt: null, holderId: null, lockedByOther: false };
@@ -798,9 +802,9 @@ export const agentRouter = router({
   releaseAgentLock: agentProcedure
     .use(withScopedPermission('agent:update'))
     .use(withManagedResourceGuard('agent.releaseAgentLock'))
-    // Per-user attachment/lock on the builtin inbox: not an admin-owned overlay field, so the
-    // platform default assistant binding must not block it (materialized agents stay guarded).
-    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedInbox: true }))
+    // Per-user attachment/lock on builtin inbox / task-agent: not an admin-owned overlay
+    // field, so the platform system-agent binding must not block it (materialized agents stay guarded).
+    .use(withManagedLocalAgentGuard(pickAgentId, { skipManagedSystemSlugs: true }))
     .input(z.object({ agentId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       if (!ctx.workspaceId) return;

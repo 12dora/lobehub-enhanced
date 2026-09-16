@@ -1,4 +1,4 @@
-import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
+import { BUILTIN_AGENT_SLUGS, TASK_AGENT } from '@lobechat/builtin-agents';
 import { type AgentItem, PLATFORM_AGENT_TASK_MANAGER_SYSTEM_KEY } from '@lobechat/types';
 import { isNonEmptyString } from '@lobechat/utils';
 
@@ -43,13 +43,6 @@ export interface GetEffectiveTaskManagerConfigOptions {
   userRow?: TaskManagerUserRow;
 }
 
-/** Display fields from the published task-manager catalog version. */
-export interface PublishedTaskManagerIdentity {
-  avatar: string | null;
-  backgroundColor: string | null;
-  title: string | null;
-}
-
 /**
  * Narrow adapter that maps the stable `task-manager` platform role onto the existing builtin
  * `task-agent` identity. Light-mode only: admin identity/prompt always overlay; model/provider
@@ -79,28 +72,15 @@ export class PlatformTaskManagerService {
   }
 
   /**
-   * Published task-manager display identity without materializing an agent row.
-   * Null when the catalog is off or unpublished. Resolver errors propagate.
-   */
-  async getPublishedIdentity(): Promise<PublishedTaskManagerIdentity | null> {
-    const handle = await this.capture();
-    if (!handle) return null;
-    const { avatar, backgroundColor, displayName } = handle.getSnapshot().config;
-    return {
-      avatar,
-      backgroundColor,
-      title: displayName,
-    };
-  }
-
-  /**
    * Overlay the fields owned by the immutable platform version. Internal id/slug and the
    * existing non-managed chat/TTS/agency fields remain intact. Plugins always stay on the
    * member row (`lobe-task` lives there via builtin runtime).
    *
    * Always light mode: a user pair is kept only when both provider and model are non-empty
-   * on the raw row. Pass `options.userRow` for that decision. A version thinking-effort pin
-   * fills chatConfig only when the user has not set that key.
+   * on the raw row and are not the builtin persist defaults (`TASK_AGENT.persist`). Those
+   * factory pairs are treated as unowned so already-created rows follow the admin pin until
+   * the member actually changes the pair. Pass `options.userRow` for that decision. A version
+   * thinking-effort pin fills chatConfig only when the user has not set that key.
    */
   getEffectiveBuiltinConfig = async (
     base: BuiltinTaskManagerConfig,
@@ -123,7 +103,15 @@ export class PlatformTaskManagerService {
     const modelSource = options?.userRow ?? base;
     const userModel = isNonEmptyString(modelSource.model) ? modelSource.model : undefined;
     const userProvider = isNonEmptyString(modelSource.provider) ? modelSource.provider : undefined;
-    const userOwnsModelPair = userModel !== undefined && userProvider !== undefined;
+    const persistModel = TASK_AGENT.persist.model;
+    const persistProvider = TASK_AGENT.persist.provider;
+    const matchesPersistDefaults =
+      persistModel !== undefined &&
+      persistProvider !== undefined &&
+      userModel === persistModel &&
+      userProvider === persistProvider;
+    const userOwnsModelPair =
+      userModel !== undefined && userProvider !== undefined && !matchesPersistDefaults;
 
     const mappedAdminParams = mapModelParameters(snapshot.config);
     const lightParams = {

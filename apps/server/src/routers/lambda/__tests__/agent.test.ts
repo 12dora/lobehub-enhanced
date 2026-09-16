@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { BUILTIN_AGENT_SLUGS } from '@lobechat/builtin-agents';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { INBOX_SESSION_ID } from '@/const/session';
@@ -475,6 +476,30 @@ describe('agentRouter', () => {
         });
         expect(result.agent?.model).toBe('x');
         expect(result.agent?.provider).toBe('admin-provider');
+      });
+
+      it('completes a model-only write on slug task-agent from the effective config', async () => {
+        agentServiceMock.getAgentConfig = vi.fn().mockResolvedValue({
+          model: 'admin-model',
+          provider: 'admin-provider',
+          slug: BUILTIN_AGENT_SLUGS.taskAgent,
+        });
+        agentServiceMock.updateAgentConfig = vi.fn().mockResolvedValue({
+          agent: { model: 'x', provider: 'admin-provider', slug: BUILTIN_AGENT_SLUGS.taskAgent },
+          success: true,
+        });
+
+        const caller = agentRouter.createCaller(mockCtx);
+        await caller.updateAgentConfig({
+          agentId: 'task-agent-1',
+          value: { model: 'x' },
+        });
+
+        expect(agentServiceMock.getAgentConfig).toHaveBeenCalledWith('task-agent-1');
+        expect(agentServiceMock.updateAgentConfig).toHaveBeenCalledWith('task-agent-1', {
+          model: 'x',
+          provider: 'admin-provider',
+        });
       });
 
       it('does not complete a model-only write on a non-inbox agent', async () => {

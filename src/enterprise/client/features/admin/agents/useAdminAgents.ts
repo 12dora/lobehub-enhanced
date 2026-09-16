@@ -103,7 +103,9 @@ export const fetchPublishedAdminAgentReplacements = async (
     query: options.query,
     status: 'published',
   });
-  return page.items.filter(({ identity }) => identity.id !== excludeAgentId);
+  return page.items.filter(
+    ({ identity }) => identity.id !== excludeAgentId && identity.systemKey == null,
+  );
 };
 
 export const fetchAdminAgentDetail = async (

@@ -199,10 +199,11 @@ export const assertAgentsNotPlatformManaged = async (params: {
   agentIds: string[];
   db: LobeChatDatabase;
   /**
-   * Skip the blanket default-inbox rejection. Use when the mutation applies a field-level
-   * inbox overlay guard instead (`assertInboxManagedFieldsNotEdited` on `updateAgentConfig`).
+   * Skip the blanket default-inbox / task-agent rejection. Use when the mutation applies a
+   * field-level overlay guard instead (`assertInboxManagedFieldsNotEdited` on
+   * `updateAgentConfig` — that lock covers both slugs).
    */
-  skipManagedInbox?: boolean;
+  skipManagedSystemSlugs?: boolean;
   userId: string;
   workspaceId?: string;
 }): Promise<void> => {
@@ -226,10 +227,10 @@ export const assertAgentsNotPlatformManaged = async (params: {
   const agentModel = new AgentModel(params.db, params.userId, params.workspaceId);
   const [platformAgentIds, inboxAgentIds, taskAgentIds] = await Promise.all([
     repository.getPlatformAgentIdsByMaterializedAgentIds(params.userId, uniqueIds),
-    params.skipManagedInbox
+    params.skipManagedSystemSlugs
       ? Promise.resolve(new Set<string>())
       : agentModel.findAgentIdsBySlug(uniqueIds, INBOX_SESSION_ID),
-    params.skipManagedInbox
+    params.skipManagedSystemSlugs
       ? Promise.resolve(new Set<string>())
       : agentModel.findAgentIdsBySlug(uniqueIds, BUILTIN_AGENT_SLUGS.taskAgent),
   ]);
@@ -349,10 +350,12 @@ const resolvePickerKind = (pick: ManagedLocalAgentIdPicker): ManagedLocalAgentPi
 
 export interface ManagedLocalAgentGuardOptions {
   /**
-   * Skip the blanket default-inbox rejection. Pair with {@link assertInboxManagedFieldsNotEdited}
-   * so per-user inbox preferences remain writable while admin-owned overlay fields stay locked.
+   * Skip the blanket default-inbox / task-agent rejection. Pair with
+   * {@link assertInboxManagedFieldsNotEdited} so per-user prefs remain writable while
+   * admin-owned overlay fields stay locked. `updateAgentConfig` relies on that field-level
+   * guard for both slug `inbox` and slug `task-agent`.
    */
-  skipManagedInbox?: boolean;
+  skipManagedSystemSlugs?: boolean;
 }
 
 /**
@@ -386,7 +389,7 @@ export const withManagedLocalAgentGuard = (
     await assertAgentsNotPlatformManaged({
       agentIds,
       db,
-      skipManagedInbox: options?.skipManagedInbox,
+      skipManagedSystemSlugs: options?.skipManagedSystemSlugs,
       userId,
       workspaceId,
     });

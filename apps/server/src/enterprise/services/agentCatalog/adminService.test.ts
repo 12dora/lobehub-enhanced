@@ -52,12 +52,18 @@ const mocks = vi.hoisted(() => ({
   listVersionLabels: vi.fn(),
   lockIdentity: vi.fn(),
   pointToVersionCas: vi.fn(),
+  resetTaskAgentPersistDefaults: vi.fn(),
   updateAssignment: vi.fn(),
   updateDraftCas: vi.fn(),
 }));
 
 vi.mock('@/database/models/user', () => ({
   UserModel: { findByIds: mocks.findByIds },
+}));
+vi.mock('@/database/models/agent', () => ({
+  AgentModel: class {
+    resetTaskAgentPersistDefaultPairForAllUsers = mocks.resetTaskAgentPersistDefaults;
+  },
 }));
 vi.mock('@/database/repositories/platformAgentCatalog', () => ({
   acquirePlatformAgentReferenceLock: mocks.acquireReferenceLock,
@@ -179,6 +185,7 @@ describe('PlatformAgentAdminService', () => {
     mocks.appendAudit.mockResolvedValue(undefined);
     mocks.findByIds.mockResolvedValue([]);
     mocks.isModuleEnabled.mockResolvedValue(true);
+    mocks.resetTaskAgentPersistDefaults.mockResolvedValue(0);
   });
 
   afterEach(() => setEnterprisePlatformObserverForTest(null));
@@ -348,6 +355,34 @@ describe('PlatformAgentAdminService', () => {
     expect(mocks.updateDraftCas).not.toHaveBeenCalled();
   });
 
+  it('refuses to promote a task-manager identity as the default inbox and keeps systemKey', async () => {
+    const previous = identity({
+      agentKey: 'old',
+      id: 'old-agent',
+      isDefault: true,
+      systemKey: 'default-inbox',
+    });
+    const next = identity({
+      agentKey: 'task-manager',
+      id: 'task-manager-agent',
+      isDefault: false,
+      systemKey: 'task-manager',
+    });
+    mocks.lockIdentity.mockImplementation(async (id: string) =>
+      id === previous.id ? previous : next,
+    );
+
+    await expect(
+      new PlatformAgentAdminService(db).setDefaultInbox('admin-id', {
+        currentDefault: pointer(previous),
+        nextDefault: pointer(next),
+        reason: 'cannot steal task-manager',
+      }),
+    ).rejects.toBeInstanceOf(PlatformAgentInvalidInputError);
+    expect(mocks.updateDraftCas).not.toHaveBeenCalled();
+    expect(next.systemKey).toBe('task-manager');
+  });
+
   it('requires a published replacement before archiving the current default', async () => {
     const current = identity({ id: 'default-agent', isDefault: true, systemKey: 'default-inbox' });
     mocks.lockIdentity.mockResolvedValue(current);
@@ -364,6 +399,52 @@ describe('PlatformAgentAdminService', () => {
     expect(mocks.appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'admin.agents.archive', result: 'failure' }),
     );
+  });
+
+  it('refuses a task-manager identity as the archive-default replacement and keeps systemKey', async () => {
+    const current = identity({ id: 'default-agent', isDefault: true, systemKey: 'default-inbox' });
+    const replacement = identity({
+      agentKey: 'task-manager',
+      id: 'task-manager-agent',
+      isDefault: false,
+      systemKey: 'task-manager',
+    });
+    mocks.lockIdentity.mockImplementation(async (id: string) =>
+      id === current.id ? current : replacement,
+    );
+
+    await expect(
+      new PlatformAgentAdminService(db).archive('admin-id', {
+        ...pointer(current),
+        reason: 'archive default onto task-manager',
+        replacementAgentId: replacement.id,
+      }),
+    ).rejects.toBeInstanceOf(PlatformAgentInvalidInputError);
+    expect(mocks.countAgentReferences).not.toHaveBeenCalled();
+    expect(mocks.archiveIdentityCas).not.toHaveBeenCalled();
+    expect(mocks.updateDraftCas).not.toHaveBeenCalled();
+    expect(replacement.systemKey).toBe('task-manager');
+  });
+
+  it('refuses to archive a task-manager identity', async () => {
+    const current = identity({
+      agentKey: 'task-manager',
+      id: 'task-manager-agent',
+      isDefault: false,
+      systemKey: 'task-manager',
+    });
+    mocks.lockIdentity.mockResolvedValue(current);
+
+    await expect(
+      new PlatformAgentAdminService(db).archive('admin-id', {
+        ...pointer(current),
+        reason: 'archive task-manager',
+        replacementAgentId: null,
+      }),
+    ).rejects.toBeInstanceOf(PlatformAgentDefaultRequiredError);
+    expect(mocks.countAgentReferences).not.toHaveBeenCalled();
+    expect(mocks.archiveIdentityCas).not.toHaveBeenCalled();
+    expect(current.systemKey).toBe('task-manager');
   });
 
   it('creates, appends the first version and publishes it in one transaction', async () => {
@@ -1629,6 +1710,7 @@ describe('PlatformAgentAdminService', () => {
         }),
       );
       expect(buildSeed).toHaveBeenCalledWith(expect.anything(), { locale: 'zh-CN' });
+      expect(mocks.resetTaskAgentPersistDefaults).toHaveBeenCalledTimes(1);
       expect(mocks.appendAudit).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'admin.agents.provisionTaskManager',
@@ -1673,6 +1755,7 @@ describe('PlatformAgentAdminService', () => {
       expect(result.identity.isDefault).toBe(false);
       expect(mocks.createIdentity).not.toHaveBeenCalled();
       expect(mocks.createAssignment).not.toHaveBeenCalled();
+      expect(mocks.resetTaskAgentPersistDefaults).not.toHaveBeenCalled();
       expect(mocks.acquireTaskManagerLock).toHaveBeenCalledBefore(mocks.acquireReferenceLock);
       expect(mocks.appendAudit).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1697,6 +1780,25 @@ describe('PlatformAgentAdminService', () => {
       await expect(
         new PlatformAgentAdminService(db).provisionTaskManager({ actorId: 'admin-id' }),
       ).rejects.toBeInstanceOf(PlatformAgentDefaultRequiredError);
+      expect(mocks.createIdentity).not.toHaveBeenCalled();
+    });
+
+    it('refuses to attach a global assignment to an archived task-manager identity', async () => {
+      mocks.getIdentityBySystemKey.mockResolvedValue(
+        identity({
+          agentKey: 'task-manager',
+          id: 'task-agent',
+          isDefault: false,
+          status: 'archived',
+          systemKey: 'task-manager',
+        }),
+      );
+
+      await expect(
+        new PlatformAgentAdminService(db).provisionTaskManager({ actorId: 'admin-id' }),
+      ).rejects.toBeInstanceOf(PlatformAgentDefaultRequiredError);
+      expect(mocks.createAssignment).not.toHaveBeenCalled();
+      expect(mocks.updateAssignment).not.toHaveBeenCalled();
       expect(mocks.createIdentity).not.toHaveBeenCalled();
     });
   });

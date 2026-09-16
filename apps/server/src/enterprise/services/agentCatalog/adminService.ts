@@ -1,5 +1,6 @@
 import debug from 'debug';
 
+import { AgentModel } from '@/database/models/agent';
 import {
   acquirePlatformAgentReferenceLock,
   type PlatformAgentAssignmentSafeItem,
@@ -231,6 +232,20 @@ const assertDefaultInboxGlobalAssignmentMutable = (
   }
 };
 
+/**
+ * Only a published ordinary Agent can become the default inbox. A row that already
+ * holds any `systemKey` (task-manager, or the current default) must not be rewritten
+ * to `default-inbox` — that would drop the unique system-key pointer.
+ */
+const assertPromotableAsDefaultInbox = (identity: PlatformAgentItem) => {
+  if (identity.status !== 'published' || !identity.currentVersionId) {
+    throw new PlatformAgentDefaultRequiredError();
+  }
+  if (identity.systemKey !== null) {
+    throw new PlatformAgentInvalidInputError();
+  }
+};
+
 export interface PlatformAgentAdminServiceOptions {
   buildDefaultInboxSeed?: typeof buildDefaultInboxSeed;
   buildTaskManagerSeed?: typeof buildTaskManagerSeed;
@@ -339,6 +354,11 @@ export class PlatformAgentAdminService {
     const locked = await repository.lockIdentity(agentId);
     if (!locked) throw new PlatformAgentNotFoundError();
     const identity = (await repository.backfillEmptyCurrentVersionLabel(locked)) ?? locked;
+    // Repair must not attach a global assignment to an archived identity (un-archive is
+    // not a draft-CAS patch). Refuse so bootstrap / provision stay fail-closed.
+    if (identity.status === 'archived') {
+      throw new PlatformAgentDefaultRequiredError();
+    }
     const existing = await findDefaultInboxGlobalAssignment(repository, identity.id);
     if (existing && isEffectiveDefaultInboxGlobalAssignment(existing)) {
       return mutationView(identity);
@@ -566,6 +586,11 @@ export class PlatformAgentAdminService {
                 `Reserved agentKey '${PLATFORM_TASK_MANAGER_AGENT_KEY}' cannot be the default inbox`,
               );
             }
+            if (existing.status === 'archived') {
+              throw new PlatformAgentDefaultRequiredError(
+                `Reserved agentKey '${PLATFORM_TASK_MANAGER_AGENT_KEY}' is archived`,
+              );
+            }
             const identity = await this.ensureDefaultInboxGlobalAssignment(
               tx,
               repository,
@@ -598,6 +623,10 @@ export class PlatformAgentAdminService {
             published.id,
             actorUserId,
           );
+          // First provision: existing member rows were inserted with TASK_AGENT.persist
+          // (model/provider). Null those factory pairs so the admin pin overlays like inbox.
+          // User-chosen pairs are left alone.
+          await new AgentModel(tx, actorUserId ?? '').resetTaskAgentPersistDefaultPairForAllUsers();
           return { created: true as const, identity };
         },
         summarize: ({ created, identity }) => ({
@@ -805,9 +834,7 @@ export class PlatformAgentAdminService {
           input.nextDefault.expectedDraftToken,
           input.nextDefault.expectedRevision,
         );
-        if (next.status !== 'published' || !next.currentVersionId) {
-          throw new PlatformAgentDefaultRequiredError();
-        }
+        assertPromotableAsDefaultInbox(next);
         let previousView = null;
         if (input.currentDefault) {
           const previous = locked.get(input.currentDefault.agentId)!;
@@ -872,10 +899,17 @@ export class PlatformAgentAdminService {
           input.expectedDraftToken,
           input.expectedRevision,
         );
-        // Refuse the default pointer before counting references: a provisioned default always
-        // has a locked global assignment, so resource-in-use would otherwise mask this error.
+        // Refuse the default pointer / any other system agent before counting references:
+        // a provisioned system agent always has a locked global assignment, so resource-in-use
+        // would otherwise mask this error. Default-inbox archive still requires a replacement.
+        if (current.systemKey !== null && !current.isDefault) {
+          throw new PlatformAgentDefaultRequiredError();
+        }
         if (current.isDefault && !input.replacementAgentId) {
           throw new PlatformAgentDefaultRequiredError();
+        }
+        if (current.isDefault) {
+          assertPromotableAsDefaultInbox(locked.get(input.replacementAgentId!)!);
         }
         // This phase performs no atomic reference migration: any live Assignment /
         // Materialization must be reassigned first, so archive is a stable resource-in-use
@@ -897,9 +931,6 @@ export class PlatformAgentAdminService {
         if (!archived) throw new PlatformAgentRevisionConflictError();
         if (current.isDefault) {
           const replacement = locked.get(input.replacementAgentId!)!;
-          if (replacement.status !== 'published' || !replacement.currentVersionId) {
-            throw new PlatformAgentDefaultRequiredError();
-          }
           const promoted = await repository.updateDraftCas({
             expectedDraftSequence: replacement.draftSequence,
             expectedRevision: replacement.revision,
