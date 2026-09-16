@@ -5,7 +5,24 @@ import {
 } from '@lobechat/builtin-tool-reminder/executionRuntime';
 import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder/manifest';
 
+import type { ReminderStatus } from '@/database/schemas/reminder';
+
 import type { ServerRuntimeRegistration } from './types';
+
+const toReminderStatus = (status: string | undefined): ReminderStatus | undefined => {
+  switch (status) {
+    case 'canceled':
+    case 'expired':
+    case 'failed':
+    case 'scheduled':
+    case 'sent': {
+      return status;
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
 
 export { createReminderRuntime, ReminderExecutionRuntime };
 export type { IReminderService };
@@ -30,7 +47,12 @@ export const reminderRuntime: ServerRuntimeRegistration = {
         }
         return result;
       },
-      listCreated: (opts) => service.listCreated(opts),
+      listCreated: (opts) =>
+        service.listCreated(
+          opts === undefined
+            ? undefined
+            : { limit: opts.limit, status: toReminderStatus(opts.status) },
+        ),
       listReceived: (opts) => service.listReceived(opts),
       searchDirectory: (q, kind) => service.searchDirectory(q, kind),
     });

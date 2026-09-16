@@ -3315,6 +3315,7 @@
   "systemGeneral.imConnectors.notifyApp.directory.sync": "立即同步",
   "systemGeneral.imConnectors.notifyApp.directory.syncFailed": "同步失败，请重试。",
   "systemGeneral.imConnectors.notifyApp.directory.synced": "通讯录已同步",
+  "systemGeneral.imConnectors.notifyApp.directory.syncing": "同步进行中",
   "systemGeneral.imConnectors.notifyApp.secretPlaceholder": "已设置，留空则保持不变",
   "systemGeneral.imConnectors.notifyApp.test": "测试",
   "systemGeneral.imConnectors.platform.dingtalk": "钉钉",

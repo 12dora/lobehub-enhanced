@@ -3315,6 +3315,7 @@
   "systemGeneral.imConnectors.notifyApp.directory.sync": "Sync now",
   "systemGeneral.imConnectors.notifyApp.directory.syncFailed": "Could not sync the directory. Try again.",
   "systemGeneral.imConnectors.notifyApp.directory.synced": "Directory synced",
+  "systemGeneral.imConnectors.notifyApp.directory.syncing": "A sync is already running",
   "systemGeneral.imConnectors.notifyApp.secretPlaceholder": "Stored — leave blank to keep it unchanged",
   "systemGeneral.imConnectors.notifyApp.test": "Test",
   "systemGeneral.imConnectors.platform.dingtalk": "DingTalk",

@@ -92,6 +92,9 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
             await mutate();
             if (result.state === 'ok') {
               toast.success(t('systemGeneral.imConnectors.notifyApp.directory.synced'));
+            } else if (result.state === 'running') {
+              // Another sync holds the lock: not an error, the polled status will catch up.
+              toast.info(t('systemGeneral.imConnectors.notifyApp.directory.syncing'));
             } else {
               toast.error(
                 result.lastError

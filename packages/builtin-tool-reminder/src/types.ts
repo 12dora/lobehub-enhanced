@@ -118,12 +118,60 @@ export interface ReceivedReminderView {
   status?: string;
 }
 
-export interface ListRemindersState {
+/** Created-list rows always carry the next (or only) fire time. */
+export interface ListReminderCreatedRow {
+  content?: string;
+  creatorName?: string;
+  fireAt: Date | string;
+  id?: string;
+}
+
+/** Received-list rows always carry the delivery time. */
+export interface ListReminderReceivedRow {
+  content?: string;
+  creatorName?: string;
+  firedAt: Date | string;
+  id?: string;
+  reminderId?: string;
+}
+
+export type ListReminderRow = ListReminderCreatedRow | ListReminderReceivedRow;
+
+const isDateLike = (value: unknown): value is Date | string =>
+  typeof value === 'string' || value instanceof Date;
+
+export const isListReminderReceivedRow = (value: unknown): value is ListReminderReceivedRow => {
+  if (typeof value !== 'object' || value === null) return false;
+  return 'firedAt' in value && isDateLike(value.firedAt);
+};
+
+export const isListReminderCreatedRow = (value: unknown): value is ListReminderCreatedRow => {
+  if (typeof value !== 'object' || value === null) return false;
+  if ('firedAt' in value) return false;
+  return 'fireAt' in value && isDateLike(value.fireAt);
+};
+
+export const isListReminderRow = (value: unknown): value is ListReminderRow =>
+  isListReminderCreatedRow(value) || isListReminderReceivedRow(value);
+
+export const listReminderRowTime = (row: ListReminderRow): Date | string =>
+  isListReminderReceivedRow(row) ? row.firedAt : row.fireAt;
+
+export interface ListRemindersCreatedState {
   count: number;
-  items?: Array<ReceivedReminderView | ReminderView>;
-  scope: 'created' | 'received';
+  items?: ReminderView[];
+  scope: 'created';
   success: boolean;
 }
+
+export interface ListRemindersReceivedState {
+  count: number;
+  items?: ReceivedReminderView[];
+  scope: 'received';
+  success: boolean;
+}
+
+export type ListRemindersState = ListRemindersCreatedState | ListRemindersReceivedState;
 
 export interface CancelReminderParams {
   id: string;

@@ -47,10 +47,22 @@ vi.mock('./queue', () => ({
   isDingTalkThreadBusy: (...args: unknown[]) => mockIsDingTalkThreadBusy(...args),
 }));
 
-const mockGetAgentRuntimeRedisClient = vi.fn(() => null);
+/** Minimal Redis surface the mirror lock uses (`set` NX / `del`). */
+interface MirrorLockRedis {
+  del: (key: string) => Promise<unknown>;
+  set: (
+    key: string,
+    value: string,
+    expiryMode: string,
+    ttl: number,
+    setMode: string,
+  ) => Promise<string | null>;
+}
+
+const mockGetAgentRuntimeRedisClient = vi.fn((): MirrorLockRedis | null => null);
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
-  getAgentRuntimeRedisClient: (...args: unknown[]) => mockGetAgentRuntimeRedisClient(...args),
+  getAgentRuntimeRedisClient: () => mockGetAgentRuntimeRedisClient(),
 }));
 
 vi.mock('@/server/services/agentRuntime/CompletionLifecycle', () => ({

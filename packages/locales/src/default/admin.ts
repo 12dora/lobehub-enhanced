@@ -2389,6 +2389,7 @@ export default {
   'systemGeneral.imConnectors.notifyApp.directory.never': 'Not synced yet',
   'systemGeneral.imConnectors.notifyApp.directory.sync': 'Sync now',
   'systemGeneral.imConnectors.notifyApp.directory.synced': 'Directory synced',
+  'systemGeneral.imConnectors.notifyApp.directory.syncing': 'A sync is already running',
   'systemGeneral.imConnectors.notifyApp.directory.syncFailed':
     'Could not sync the directory. Try again.',
   'systemGeneral.imConnectors.notifyApp.directory.error': 'Last sync failed: {{message}}',

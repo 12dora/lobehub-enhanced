@@ -239,7 +239,14 @@ describe('ListRemindersRender', () => {
           {} satisfies ListRemindersParams,
           {
             count: 1,
-            items: [{ content: '例会材料', fireAt: '2026-09-23T01:00:00.000Z', id: 'rmd_1' }],
+            items: [
+              {
+                content: '例会材料',
+                creatorName: '张伟',
+                fireAt: '2026-09-23T01:00:00.000Z',
+                id: 'rmd_1',
+              },
+            ],
             scope: 'created',
             success: true,
           } satisfies ListRemindersState,
@@ -248,6 +255,34 @@ describe('ListRemindersRender', () => {
       />,
     );
 
+    expect(screen.getByText('2026-09-23 09:00 · 例会材料')).toBeTruthy();
+  });
+
+  it('renders received rows from pluginState.items using firedAt', () => {
+    render(
+      <ListRemindersRender
+        {...renderProps(
+          {} satisfies ListRemindersParams,
+          {
+            count: 1,
+            items: [
+              {
+                content: '例会材料',
+                creatorName: '张伟',
+                firedAt: '2026-09-23T01:00:00.000Z',
+                id: 'dlv_1',
+                reminderId: 'rmd_1',
+              },
+            ],
+            scope: 'received',
+            success: true,
+          } satisfies ListRemindersState,
+          '已收到定时提醒',
+        )}
+      />,
+    );
+
+    expect(screen.getByText('我收到的提醒')).toBeTruthy();
     expect(screen.getByText('2026-09-23 09:00 · 例会材料')).toBeTruthy();
   });
 });

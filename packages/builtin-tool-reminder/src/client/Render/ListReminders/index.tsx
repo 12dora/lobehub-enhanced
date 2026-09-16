@@ -12,39 +12,30 @@ import {
   formatReminderTime,
 } from '@/features/AgentTasks/ReminderList/formatters';
 
-import type { ListRemindersParams, ListRemindersState } from '../../../types';
+import type { ListReminderRow, ListRemindersParams, ListRemindersState } from '../../../types';
+import { isListReminderRow, listReminderRowTime } from '../../../types';
 import { ReminderCard } from '../shared';
 
 /** Rows shown before collapsing into `+N`. */
 const MINI_LIST_LIMIT = 5;
 
-interface MiniRow {
-  content?: string;
-  creatorName?: string;
-  fireAt?: Date | string;
-  firedAt?: Date | string;
-  id?: string;
-}
-
 /**
  * The runtime puts the rows in the tool content (`{ items, scope }` JSON) and
  * only the count in the state, so parse the content when it is available.
  */
-const parseRows = (content: unknown): MiniRow[] => {
-  const payload =
-    typeof content === 'string'
-      ? (() => {
-          try {
-            return JSON.parse(content);
-          } catch {
-            return undefined;
-          }
-        })()
-      : content;
+const parseRows = (content: unknown): ListReminderRow[] => {
+  let payload: unknown = content;
+  if (typeof content === 'string') {
+    try {
+      payload = JSON.parse(content);
+    } catch {
+      return [];
+    }
+  }
 
-  const items = (payload as { items?: unknown } | undefined)?.items;
-
-  return Array.isArray(items) ? (items as MiniRow[]) : [];
+  if (typeof payload !== 'object' || payload === null || !('items' in payload)) return [];
+  const { items } = payload;
+  return Array.isArray(items) ? items.filter(isListReminderRow) : [];
 };
 
 /** `listReminders` result: a mini list of the reminders the tool returned. */
@@ -54,7 +45,7 @@ export const ListRemindersRender = memo<
   const { t } = useTranslation('plugin');
 
   const scope = pluginState?.scope === 'received' ? 'received' : 'created';
-  const rows = pluginState?.items ?? parseRows(content);
+  const rows: ListReminderRow[] = pluginState?.items ?? parseRows(content);
   const count = pluginState?.count ?? rows.length;
   const visible = rows.slice(0, MINI_LIST_LIMIT);
   const overflow = Math.max(count - visible.length, 0);
@@ -75,7 +66,7 @@ export const ListRemindersRender = memo<
       ) : (
         <>
           {visible.map((row, index) => {
-            const time = formatReminderTime(row.firedAt ?? row.fireAt, DEFAULT_REMINDER_TIMEZONE);
+            const time = formatReminderTime(listReminderRowTime(row), DEFAULT_REMINDER_TIMEZONE);
 
             return (
               <Text fontSize={13} key={row.id ?? index}>
