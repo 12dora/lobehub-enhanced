@@ -167,6 +167,8 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   notifyAgentId: null,
   notifyAppKey: null,
   notifyAppSecretSet: false,
+  notifyRobotEnabled: true,
+  notifyWorkNoticeEnabled: true,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: 'ding-robot',
@@ -701,6 +703,32 @@ describe('DingTalkConnectorCard', () => {
       const payload = stub.upsert.mock.calls[0]![0];
       expect(payload.notifyAppKey).toBe('rotated-key');
       expect('notifyAppSecret' in payload).toBe(false);
+    });
+
+    it('saves the work-notice and service-account-robot channel switches', async () => {
+      const stub = service();
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          notifyAppService={notifyService()}
+          service={stub}
+          view={view()}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByLabelText('systemGeneral.imConnectors.fields.notifyWorkNoticeEnabled'),
+      );
+      fireEvent.click(
+        screen.getByLabelText('systemGeneral.imConnectors.fields.notifyRobotEnabled'),
+      );
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        notifyRobotEnabled: false,
+        notifyWorkNoticeEnabled: false,
+      });
     });
 
     it('probes the notification app credentials on their own', async () => {

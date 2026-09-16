@@ -56,6 +56,8 @@ const sampleView = {
   notifyAgentId: null,
   notifyAppKey: null,
   notifyAppSecretSet: false,
+  notifyRobotEnabled: true,
+  notifyWorkNoticeEnabled: true,
   platform: 'dingtalk' as const,
   pushEnabled: true,
   robotCode: null,

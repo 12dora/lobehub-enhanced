@@ -147,6 +147,33 @@ describe('getMessengerDingTalkConfig', () => {
         agentId: '4617854000',
         appKey: 'notify-app-key',
         appSecret: 'notify-secret',
+        notifyRobotEnabled: true,
+        notifyWorkNoticeEnabled: true,
+      },
+    });
+  });
+
+  it('carries notify-app channel switches when they are stored as false', async () => {
+    invalidateMessengerConfigCache('dingtalk');
+    findEnabledByPlatform.mockReset();
+    findEnabledByPlatform.mockResolvedValue({
+      ...COMPLETE_ROW,
+      credentials: { clientSecret: 'app_secret', notifyAppSecret: 'notify-secret' },
+      settings: {
+        ...COMPLETE_ROW.settings,
+        notifyAgentId: '4617854000',
+        notifyAppKey: 'notify-app-key',
+        notifyRobotEnabled: false,
+        notifyWorkNoticeEnabled: false,
+      },
+    });
+    await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+      notifyApp: {
+        agentId: '4617854000',
+        appKey: 'notify-app-key',
+        appSecret: 'notify-secret',
+        notifyRobotEnabled: false,
+        notifyWorkNoticeEnabled: false,
       },
     });
   });

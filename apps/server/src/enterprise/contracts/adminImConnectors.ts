@@ -47,6 +47,16 @@ export const dingTalkConnectorSettingsSchema = z
     notifyAgentId: z.string().trim().max(64).nullable().optional().default(null),
     /** Notify-app (服务号) AppKey. Empty = notify app unset. */
     notifyAppKey: z.string().trim().max(200).nullable().optional().default(null),
+    /**
+     * Notify-app 服务号 robot 1:1 channel. Default on; off skips that channel only.
+     * `pushEnabled` remains the master switch for task-lifecycle pushes.
+     */
+    notifyRobotEnabled: z.boolean().default(true),
+    /**
+     * Notify-app work-notification (工作通知) channel. Default on; off skips that channel only.
+     * `pushEnabled` remains the master switch for task-lifecycle pushes.
+     */
+    notifyWorkNoticeEnabled: z.boolean().default(true),
     /** Proactive push (task reminders) capability. */
     pushEnabled: z.boolean().default(true),
     /** RobotCode from the DingTalk robot page (often equals the Client ID). */
@@ -120,6 +130,10 @@ export const adminImConnectorViewSchema = z
     notifyAppKey: z.string().nullable(),
     /** True when a notify-app secret is stored; the secret itself is never returned. */
     notifyAppSecretSet: z.boolean(),
+    /** Notify-app 服务号 robot 1:1 channel. Default on. */
+    notifyRobotEnabled: z.boolean(),
+    /** Notify-app work-notification (工作通知) channel. Default on. */
+    notifyWorkNoticeEnabled: z.boolean(),
     platform: imConnectorPlatformSchema,
     pushEnabled: z.boolean(),
     robotCode: z.string().nullable(),
@@ -175,6 +189,8 @@ export const adminImConnectorUpsertInputSchema = z
     notifyAgentId: z.string().trim().max(64).nullable().optional(),
     notifyAppKey: z.string().trim().max(200).nullable().optional(),
     notifyAppSecret: adminImConnectorNotifyAppSecretInputSchema.optional(),
+    notifyRobotEnabled: z.boolean().optional().default(true),
+    notifyWorkNoticeEnabled: z.boolean().optional().default(true),
     platform: imConnectorPlatformSchema,
     pushEnabled: z.boolean(),
     reason: secretSafeAuditReasonSchema.optional(),

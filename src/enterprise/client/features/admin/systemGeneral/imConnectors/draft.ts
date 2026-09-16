@@ -45,6 +45,10 @@ export interface DingTalkConnectorDraft {
   /** 通知应用（服务号）AppKey. The whole block is optional: without it nothing is sent by it. */
   notifyAppKey: string;
   notifyAppSecret: ImConnectorSecretDraft;
+  /** Notify-app 服务号 robot 1:1 channel. */
+  notifyRobotEnabled: boolean;
+  /** Notify-app work-notification (工作通知) channel. */
+  notifyWorkNoticeEnabled: boolean;
   pushEnabled: boolean;
   robotCode: string;
   selectCardTemplateId: string;
@@ -86,6 +90,8 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
   // The notification app's secret has no fingerprint of its own — the server only says whether one
   // is stored, which is all the 已设置 placeholder needs.
   notifyAppSecret: { fingerprint: null, stored: view.notifyAppSecretSet, value: '' },
+  notifyRobotEnabled: view.notifyRobotEnabled ?? true,
+  notifyWorkNoticeEnabled: view.notifyWorkNoticeEnabled ?? true,
   pushEnabled: view.pushEnabled,
   robotCode: view.robotCode ?? '',
   selectCardTemplateId: view.selectCardTemplateId ?? '',
@@ -114,6 +120,8 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.notifyAppKey.trim(),
     draft.notifyAppSecret.stored,
     draft.notifyAppSecret.value,
+    draft.notifyRobotEnabled,
+    draft.notifyWorkNoticeEnabled,
     draft.pushEnabled,
     draft.robotCode.trim(),
     draft.selectCardTemplateId.trim(),
@@ -218,6 +226,8 @@ export const toDingTalkUpsertInput = (
         },
       }
     : {}),
+  notifyRobotEnabled: draft.notifyRobotEnabled,
+  notifyWorkNoticeEnabled: draft.notifyWorkNoticeEnabled,
   platform: 'dingtalk',
   pushEnabled: draft.pushEnabled,
   robotCode: draft.robotCode.trim(),

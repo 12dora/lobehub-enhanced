@@ -45,6 +45,7 @@ const {
   getNotifyAppNewApiToken,
   getNotifyAppToken,
   invalidateNotifyAppToken,
+  isNotifyChannelEnabled,
   listDepartments,
   listDeptUsers,
   probeNotifyAppToken,
@@ -98,6 +99,14 @@ describe('readNotifyAppFromMessengerConfig', () => {
       readNotifyAppFromMessengerConfig({ notifyApp: { appKey: 'a', appSecret: 's' } }),
     ).toBeNull();
     expect(readNotifyAppFromMessengerConfig({ notifyApp: NOTIFY_APP })).toEqual(NOTIFY_APP);
+  });
+});
+
+describe('isNotifyChannelEnabled', () => {
+  it('treats missing as on and false as off', () => {
+    expect(isNotifyChannelEnabled(undefined)).toBe(true);
+    expect(isNotifyChannelEnabled(true)).toBe(true);
+    expect(isNotifyChannelEnabled(false)).toBe(false);
   });
 });
 

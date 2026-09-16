@@ -13,6 +13,8 @@ import { DINGTALK_CORP_ID_KEY, formatDingTalkViewInBrandingLabel } from './const
 import {
   buildNotifyRobotMarkdown,
   buildOaWorkNoticePayload,
+  isNotifyChannelEnabled,
+  NOTIFY_CHANNEL_DISABLED,
   readNotifyAppFromMessengerConfig,
   resolveWorkNoticeHeadText,
   sendRobotMessage,
@@ -232,6 +234,21 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
         : null;
       const notifyApp = readNotifyAppFromMessengerConfig(config);
       if (notifyApp) {
+        const workNoticeEnabled = isNotifyChannelEnabled(config.notifyApp?.notifyWorkNoticeEnabled);
+        const robotEnabled = isNotifyChannelEnabled(config.notifyApp?.notifyRobotEnabled);
+        if (!workNoticeEnabled && !robotEnabled) {
+          console.info('[dingtalk-push] skip notify-app channels', {
+            reason: NOTIFY_CHANNEL_DISABLED,
+            userId: params.userId,
+          });
+          return { reason: NOTIFY_CHANNEL_DISABLED, status: 'skipped' };
+        }
+
+        const credentials = {
+          agentId: notifyApp.agentId,
+          appKey: notifyApp.appKey,
+          appSecret: notifyApp.appSecret,
+        };
         const headText = await resolveWorkNoticeHeadText();
         const kind = shortTaskEventTitle(title);
         const clock = clockFromMarkdownOrNow(markdown, new Date());
@@ -254,41 +271,61 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
 
         let workError: unknown;
         let taskId: string | undefined;
-        try {
-          const sent = await sendWorkNotice({ oa, staffIds: [staffId] }, { config: notifyApp });
-          taskId = sent[0]?.taskId;
-        } catch (error) {
-          workError = error;
-          log('work notice failed user=%s: %O', params.userId, error);
-        }
-
-        try {
-          if (wrappedUrl) {
-            await sendRobotMessage(
-              {
-                actionCard: {
-                  singleTitle: formatDingTalkViewInBrandingLabel(headText),
-                  singleUrl: wrappedUrl,
-                  text: robotMarkdown.text,
-                  title: robotMarkdown.title,
-                },
-                staffIds: [staffId],
-              },
-              { config: notifyApp },
-            );
-          } else {
-            await sendRobotMessage(
-              { markdown: robotMarkdown, staffIds: [staffId] },
-              { config: notifyApp },
-            );
+        if (workNoticeEnabled) {
+          try {
+            const sent = await sendWorkNotice({ oa, staffIds: [staffId] }, { config: credentials });
+            taskId = sent[0]?.taskId;
+          } catch (error) {
+            workError = error;
+            log('work notice failed user=%s: %O', params.userId, error);
           }
-        } catch (error) {
-          console.warn('[dingtalk-push] notify-app robot send failed', {
-            errorClass: error instanceof Error ? error.name : 'UnknownError',
-            message: error instanceof Error ? error.message : String(error),
+        } else {
+          console.info('[dingtalk-push] skip work notice', {
+            reason: NOTIFY_CHANNEL_DISABLED,
             userId: params.userId,
           });
-          log('notify-app robot send failed user=%s: %O', params.userId, error);
+        }
+
+        if (robotEnabled) {
+          try {
+            if (wrappedUrl) {
+              await sendRobotMessage(
+                {
+                  actionCard: {
+                    singleTitle: formatDingTalkViewInBrandingLabel(headText),
+                    singleUrl: wrappedUrl,
+                    text: robotMarkdown.text,
+                    title: robotMarkdown.title,
+                  },
+                  staffIds: [staffId],
+                },
+                { config: credentials },
+              );
+            } else {
+              await sendRobotMessage(
+                { markdown: robotMarkdown, staffIds: [staffId] },
+                { config: credentials },
+              );
+            }
+          } catch (error) {
+            console.warn('[dingtalk-push] notify-app robot send failed', {
+              errorClass: error instanceof Error ? error.name : 'UnknownError',
+              message: error instanceof Error ? error.message : String(error),
+              userId: params.userId,
+            });
+            log('notify-app robot send failed user=%s: %O', params.userId, error);
+            if (!workNoticeEnabled) {
+              return {
+                error: error instanceof Error ? error.message : String(error),
+                status: 'failed',
+              };
+            }
+          }
+        } else {
+          console.info('[dingtalk-push] skip notify-app robot', {
+            reason: NOTIFY_CHANNEL_DISABLED,
+            userId: params.userId,
+          });
         }
 
         if (workError) {
@@ -298,7 +335,7 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
           };
         }
         await incrementDingTalkDailyCounter('pushes');
-        return { providerMessageId: taskId, status: 'sent' };
+        return taskId ? { providerMessageId: taskId, status: 'sent' } : { status: 'sent' };
       }
 
       const api = new DingTalkApiClient(config.clientId, config.clientSecret);

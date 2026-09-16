@@ -75,6 +75,8 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   notifyAgentId: null,
   notifyAppKey: null,
   notifyAppSecretSet: false,
+  notifyRobotEnabled: true,
+  notifyWorkNoticeEnabled: true,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: null,

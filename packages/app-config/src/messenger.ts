@@ -75,6 +75,10 @@ export interface MessengerDingTalkNotifyApp {
   agentId: string;
   appKey: string;
   appSecret: string;
+  /** 服务号 robot 1:1. Missing / undefined = on (legacy rows). */
+  notifyRobotEnabled: boolean;
+  /** 工作通知. Missing / undefined = on (legacy rows). */
+  notifyWorkNoticeEnabled: boolean;
 }
 
 /**
@@ -126,6 +130,8 @@ const dingTalkConnectorSettingsSchema = z
       .optional(),
     notifyAgentId: z.string().trim().max(64).nullable().optional(),
     notifyAppKey: z.string().trim().max(200).nullable().optional(),
+    notifyRobotEnabled: z.boolean().optional(),
+    notifyWorkNoticeEnabled: z.boolean().optional(),
     pushEnabled: z.boolean().optional(),
     robotCode: z.string().trim().min(1).max(200),
     selectCardTemplateId: z.string().trim().max(200).nullable().optional(),
@@ -244,7 +250,13 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
       typeof c.notifyAppSecret === 'string' ? emptyToNull(c.notifyAppSecret) : null;
     const notifyApp =
       notifyAppKey && notifyAppSecret && notifyAgentId
-        ? { agentId: notifyAgentId, appKey: notifyAppKey, appSecret: notifyAppSecret }
+        ? {
+            agentId: notifyAgentId,
+            appKey: notifyAppKey,
+            appSecret: notifyAppSecret,
+            notifyRobotEnabled: settings.notifyRobotEnabled ?? true,
+            notifyWorkNoticeEnabled: settings.notifyWorkNoticeEnabled ?? true,
+          }
         : null;
 
     return {

@@ -9,7 +9,7 @@ import type { AdminImConnectorTestOutput } from '@/enterprise/client/services/ad
 
 import { runAdminMutation } from '../../primitives/runAdminMutation';
 import { useAdminImConnectorDirectoryStatus } from '../hooks';
-import { InfraField } from '../infra/InfraField';
+import { InfraField, InfraSwitchRow } from '../infra/InfraField';
 import { infraFormStyles as formStyles } from '../infra/styles';
 import { ConnectorSecretField } from './ConnectorSecretField';
 import type { DingTalkConnectorDraft } from './draft';
@@ -163,6 +163,20 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
               />
             )}
           </InfraField>
+          <InfraSwitchRow
+            checked={draft.notifyWorkNoticeEnabled}
+            disabled={disabled}
+            hint={t('systemGeneral.imConnectors.hints.notifyWorkNoticeEnabled')}
+            label={t('systemGeneral.imConnectors.fields.notifyWorkNoticeEnabled')}
+            onChange={(checked) => onPatch({ notifyWorkNoticeEnabled: checked })}
+          />
+          <InfraSwitchRow
+            checked={draft.notifyRobotEnabled}
+            disabled={disabled}
+            hint={t('systemGeneral.imConnectors.hints.notifyRobotEnabled')}
+            label={t('systemGeneral.imConnectors.fields.notifyRobotEnabled')}
+            onChange={(checked) => onPatch({ notifyRobotEnabled: checked })}
+          />
         </div>
 
         {canOperate ? (

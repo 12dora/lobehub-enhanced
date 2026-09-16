@@ -483,6 +483,76 @@ describe('DingTalkMessengerPushProvider notify app work notice', () => {
     expect(mockSendRobotMessage).toHaveBeenCalled();
     expect(mockIncr).not.toHaveBeenCalled();
   });
+
+  it('skips the work-notice channel when notifyWorkNoticeEnabled is false', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: { ...NOTIFY_APP, notifyWorkNoticeEnabled: false, notifyRobotEnabled: true },
+    } as any);
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ status: 'sent' });
+    expect(mockSendWorkNotice).not.toHaveBeenCalled();
+    expect(mockSendRobotMessage).toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      '[dingtalk-push] skip work notice',
+      expect.objectContaining({ reason: 'channel_disabled', userId: 'user_1' }),
+    );
+    info.mockRestore();
+  });
+
+  it('skips the notify-app robot when notifyRobotEnabled is false', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: { ...NOTIFY_APP, notifyRobotEnabled: false, notifyWorkNoticeEnabled: true },
+    } as any);
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ providerMessageId: 'wn-1', status: 'sent' });
+    expect(mockSendWorkNotice).toHaveBeenCalled();
+    expect(mockSendRobotMessage).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      '[dingtalk-push] skip notify-app robot',
+      expect.objectContaining({ reason: 'channel_disabled', userId: 'user_1' }),
+    );
+    info.mockRestore();
+  });
+
+  it('skips the whole notify-app push when both channels are off', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce({
+      ...VALID_CONFIG,
+      notifyApp: { ...NOTIFY_APP, notifyRobotEnabled: false, notifyWorkNoticeEnabled: false },
+    } as any);
+
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ reason: 'channel_disabled', status: 'skipped' });
+    expect(mockSendWorkNotice).not.toHaveBeenCalled();
+    expect(mockSendRobotMessage).not.toHaveBeenCalled();
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      '[dingtalk-push] skip notify-app channels',
+      expect.objectContaining({ reason: 'channel_disabled', userId: 'user_1' }),
+    );
+    info.mockRestore();
+  });
 });
 
 describe('buildDingTalkOpenAppUrl', () => {

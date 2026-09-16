@@ -43,7 +43,15 @@ export interface DingTalkNotifyAppConfig {
   agentId: string;
   appKey: string;
   appSecret: string;
+  notifyRobotEnabled?: boolean;
+  notifyWorkNoticeEnabled?: boolean;
 }
+
+/** Per-channel skip reason when a notify-app switch is off. */
+export const NOTIFY_CHANNEL_DISABLED = 'channel_disabled';
+
+/** Missing / undefined = on (legacy rows before the switches existed). */
+export const isNotifyChannelEnabled = (value: boolean | undefined): boolean => value !== false;
 
 export interface DingTalkWorkNoticeMarkdown {
   text: string;

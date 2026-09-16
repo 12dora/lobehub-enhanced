@@ -59,6 +59,8 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   idleNewTopicHours: IM_CONNECTOR_IDLE_HOURS_DEFAULT,
   notifyAgentId: null,
   notifyAppKey: null,
+  notifyRobotEnabled: true,
+  notifyWorkNoticeEnabled: true,
   pushEnabled: true,
   robotCode: '',
   selectCardTemplateId: null,
@@ -123,6 +125,14 @@ const parseDingTalkSettings = (
         : DEFAULT_SETTINGS.idleNewTopicHours,
     notifyAgentId: emptyToNull(typeof raw?.notifyAgentId === 'string' ? raw.notifyAgentId : null),
     notifyAppKey: emptyToNull(typeof raw?.notifyAppKey === 'string' ? raw.notifyAppKey : null),
+    notifyRobotEnabled:
+      typeof raw?.notifyRobotEnabled === 'boolean'
+        ? raw.notifyRobotEnabled
+        : DEFAULT_SETTINGS.notifyRobotEnabled,
+    notifyWorkNoticeEnabled:
+      typeof raw?.notifyWorkNoticeEnabled === 'boolean'
+        ? raw.notifyWorkNoticeEnabled
+        : DEFAULT_SETTINGS.notifyWorkNoticeEnabled,
     pushEnabled:
       typeof raw?.pushEnabled === 'boolean' ? raw.pushEnabled : DEFAULT_SETTINGS.pushEnabled,
     robotCode: typeof raw?.robotCode === 'string' ? raw.robotCode : '',
@@ -142,6 +152,8 @@ const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnect
     idleNewTopicHours: input.idleNewTopicHours,
     notifyAgentId: emptyToNull(input.notifyAgentId ?? null),
     notifyAppKey: emptyToNull(input.notifyAppKey ?? null),
+    notifyRobotEnabled: input.notifyRobotEnabled ?? true,
+    notifyWorkNoticeEnabled: input.notifyWorkNoticeEnabled ?? true,
     pushEnabled: input.pushEnabled,
     robotCode: input.robotCode,
     selectCardTemplateId: emptyToNull(input.selectCardTemplateId),
@@ -172,6 +184,8 @@ const unconfiguredView = async (
     notifyAgentId: DEFAULT_SETTINGS.notifyAgentId,
     notifyAppKey: DEFAULT_SETTINGS.notifyAppKey,
     notifyAppSecretSet: false,
+    notifyRobotEnabled: DEFAULT_SETTINGS.notifyRobotEnabled,
+    notifyWorkNoticeEnabled: DEFAULT_SETTINGS.notifyWorkNoticeEnabled,
     platform,
     pushEnabled: DEFAULT_SETTINGS.pushEnabled,
     robotCode: null,
@@ -212,6 +226,8 @@ const toView = async (
     notifyAgentId: emptyToNull(settings.notifyAgentId),
     notifyAppKey: emptyToNull(settings.notifyAppKey),
     notifyAppSecretSet: Boolean(pickNotifyAppSecret(row.credentials)),
+    notifyRobotEnabled: settings.notifyRobotEnabled,
+    notifyWorkNoticeEnabled: settings.notifyWorkNoticeEnabled,
     platform,
     pushEnabled: settings.pushEnabled,
     robotCode: emptyToNull(settings.robotCode),
@@ -323,6 +339,8 @@ export class ImConnectorsAdminService {
           notifyAgentId: settings.notifyAgentId,
           notifyAppKey: settings.notifyAppKey,
           notifyAppSecretRotation: notifySecretAction,
+          notifyRobotEnabled: settings.notifyRobotEnabled,
+          notifyWorkNoticeEnabled: settings.notifyWorkNoticeEnabled,
           platform: input.platform,
           pushEnabled: settings.pushEnabled,
           robotCode: settings.robotCode,

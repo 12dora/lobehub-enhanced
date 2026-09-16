@@ -484,6 +484,44 @@ describe('ImConnectorsAdminService', () => {
     );
   });
 
+  it('defaults notify-app channel switches to on and persists both', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+
+    const defaults = await service.get('dingtalk');
+    expect(defaults.notifyWorkNoticeEnabled).toBe(true);
+    expect(defaults.notifyRobotEnabled).toBe(true);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: {
+        ...upsertInput,
+        notifyRobotEnabled: false,
+        notifyWorkNoticeEnabled: false,
+      },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          notifyRobotEnabled: false,
+          notifyWorkNoticeEnabled: false,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterDiff: expect.objectContaining({
+          notifyRobotEnabled: false,
+          notifyWorkNoticeEnabled: false,
+        }),
+      }),
+    );
+  });
+
   it('keeps the stored notify-app secret when clientSecret is replaced', async () => {
     const db = createDb();
     const service = new ImConnectorsAdminService(db);

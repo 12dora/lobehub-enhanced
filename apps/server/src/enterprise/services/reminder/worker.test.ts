@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReminderItem, ReminderRecipientItem } from '@/database/schemas/reminder';
 
 import {
+  CHANNEL_DISABLED,
   formatReminderOaBodyTitle,
   INACTIVE_DELIVERY_REASON,
   NOTIFY_APP_NOT_CONFIGURED,
@@ -400,6 +401,114 @@ describe('runReminderSweep', () => {
         robotStatus: 'sent',
         staffId: 'staff_hyq',
         status: 'failed',
+        userId: null,
+      },
+    ]);
+  });
+
+  it('skips the work-notice channel with channel_disabled when that switch is off', async () => {
+    const isWorkNoticeEnabled = vi.fn(async () => false);
+
+    await runReminderSweep({} as any, {
+      acquireLock: async () => acquired,
+      createInboxNotification: createInbox,
+      getUsers,
+      isNotifyAppConfigured,
+      isWorkNoticeEnabled,
+      listDue,
+      loadRecipients,
+      now: new Date('2026-09-16T01:00:00.000Z'),
+      recordFire,
+      resolveHeadText,
+      resolveUserId,
+      sendRobotMessage: sendRobot,
+      sendWorkNotice: send,
+      subtreeMemberStaffIds,
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(sendRobot).toHaveBeenCalledTimes(1);
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      {
+        failedReason: CHANNEL_DISABLED,
+        providerTaskId: null,
+        robotFailedReason: null,
+        robotMessageId: 'pqk_1',
+        robotStatus: 'sent',
+        staffId: 'staff_hyq',
+        status: 'skipped',
+        userId: null,
+      },
+    ]);
+  });
+
+  it('skips the robot channel with channel_disabled when that switch is off', async () => {
+    const isNotifyRobotEnabled = vi.fn(async () => false);
+
+    await runReminderSweep({} as any, {
+      acquireLock: async () => acquired,
+      createInboxNotification: createInbox,
+      getUsers,
+      isNotifyAppConfigured,
+      isNotifyRobotEnabled,
+      listDue,
+      loadRecipients,
+      now: new Date('2026-09-16T01:00:00.000Z'),
+      recordFire,
+      resolveHeadText,
+      resolveUserId,
+      sendRobotMessage: sendRobot,
+      sendWorkNotice: send,
+      subtreeMemberStaffIds,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sendRobot).not.toHaveBeenCalled();
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      {
+        failedReason: null,
+        providerTaskId: 'task_1',
+        robotFailedReason: CHANNEL_DISABLED,
+        robotMessageId: null,
+        robotStatus: 'skipped',
+        staffId: 'staff_hyq',
+        status: 'sent',
+        userId: null,
+      },
+    ]);
+  });
+
+  it('skips both channels with channel_disabled when both switches are off', async () => {
+    await runReminderSweep({} as any, {
+      acquireLock: async () => acquired,
+      createInboxNotification: createInbox,
+      getUsers,
+      isNotifyAppConfigured,
+      isNotifyRobotEnabled: async () => false,
+      isWorkNoticeEnabled: async () => false,
+      listDue,
+      loadRecipients,
+      now: new Date('2026-09-16T01:00:00.000Z'),
+      recordFire,
+      resolveHeadText,
+      resolveUserId,
+      sendRobotMessage: sendRobot,
+      sendWorkNotice: send,
+      subtreeMemberStaffIds,
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(sendRobot).not.toHaveBeenCalled();
+    expect(createInbox).not.toHaveBeenCalled();
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual([
+      {
+        failedReason: CHANNEL_DISABLED,
+        providerTaskId: null,
+        robotFailedReason: CHANNEL_DISABLED,
+        robotMessageId: null,
+        robotStatus: 'skipped',
+        staffId: 'staff_hyq',
+        status: 'skipped',
         userId: null,
       },
     ]);

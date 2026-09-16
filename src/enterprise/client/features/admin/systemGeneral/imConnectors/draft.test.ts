@@ -26,6 +26,8 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   notifyAgentId: null,
   notifyAppKey: null,
   notifyAppSecretSet: false,
+  notifyRobotEnabled: true,
+  notifyWorkNoticeEnabled: true,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: 'ding-robot',
@@ -71,6 +73,8 @@ describe('DingTalk connector draft', () => {
     expect(configured.notifyAgentId).toBe('4617854000');
     expect(configured.notifyAppSecret.stored).toBe(true);
     expect(configured.notifyAppSecret.value).toBe('');
+    expect(configured.notifyWorkNoticeEnabled).toBe(true);
+    expect(configured.notifyRobotEnabled).toBe(true);
   });
 
   it('sends the notification app fields, and omits the secret when nothing was typed', () => {
@@ -81,6 +85,8 @@ describe('DingTalk connector draft', () => {
 
     expect(input.notifyAppKey).toBe('notify-key');
     expect(input.notifyAgentId).toBe('4617854000');
+    expect(input.notifyWorkNoticeEnabled).toBe(true);
+    expect(input.notifyRobotEnabled).toBe(true);
     // Absent means "keep what is stored" — the AppKey beside it must be editable on its own.
     expect('notifyAppSecret' in input).toBe(false);
 
@@ -89,6 +95,16 @@ describe('DingTalk connector draft', () => {
       notifyAppSecret: { ...seed.notifyAppSecret, value: '  notify-secret  ' },
     });
     expect(typed.notifyAppSecret).toEqual({ action: 'replace', value: 'notify-secret' });
+  });
+
+  it('sends the notify-app channel switches', () => {
+    const seed = toDingTalkDraft(view());
+    expect(
+      toDingTalkUpsertInput({ ...seed, notifyWorkNoticeEnabled: false }).notifyWorkNoticeEnabled,
+    ).toBe(false);
+    expect(toDingTalkUpsertInput({ ...seed, notifyRobotEnabled: false }).notifyRobotEnabled).toBe(
+      false,
+    );
   });
 
   it('probes the notification app with what was typed, and the stored row otherwise', () => {
@@ -125,6 +141,12 @@ describe('DingTalk connector draft', () => {
         notifyAppSecret: { ...seed.notifyAppSecret, value: 'typed' },
       }),
     ).not.toBe(fingerprintDingTalkDraft(seed));
+    expect(fingerprintDingTalkDraft({ ...seed, notifyWorkNoticeEnabled: false })).not.toBe(
+      fingerprintDingTalkDraft(seed),
+    );
+    expect(fingerprintDingTalkDraft({ ...seed, notifyRobotEnabled: false })).not.toBe(
+      fingerprintDingTalkDraft(seed),
+    );
   });
 
   it('drops the typed notification secret once the save reports one is stored', () => {

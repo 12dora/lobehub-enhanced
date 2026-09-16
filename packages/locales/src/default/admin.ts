@@ -2338,6 +2338,8 @@ export default {
   'systemGeneral.imConnectors.fields.notifyAppKey': 'AppKey',
   'systemGeneral.imConnectors.fields.notifyAppSecret': 'AppSecret',
   'systemGeneral.imConnectors.fields.notifyAgentId': 'AgentId',
+  'systemGeneral.imConnectors.fields.notifyRobotEnabled': 'Service-account robot',
+  'systemGeneral.imConnectors.fields.notifyWorkNoticeEnabled': 'Work notification',
   'systemGeneral.imConnectors.fields.aiCardTemplateId': 'AI card template ID',
   'systemGeneral.imConnectors.fields.selectCardTemplateId': 'Select card template ID',
   'systemGeneral.imConnectors.fields.chatEnabled': 'Chat',
@@ -2358,6 +2360,10 @@ export default {
     'Sends the work notifications used by task notices and scheduled reminders, and syncs the contacts directory. Grant the contacts read scope to this app in the DingTalk developer console and publish it.',
   'systemGeneral.imConnectors.hints.notifyAgentId':
     'DingTalk developer console → the notification app → Basic information → AgentId.',
+  'systemGeneral.imConnectors.hints.notifyRobotEnabled':
+    'When off, this channel is not used for sending.',
+  'systemGeneral.imConnectors.hints.notifyWorkNoticeEnabled':
+    'When off, this channel is not used for sending.',
   'systemGeneral.imConnectors.hints.chatEnabled': 'Answer direct messages and group mentions.',
   'systemGeneral.imConnectors.hints.pushEnabled': 'Deliver task reminders to linked employees.',
   'systemGeneral.imConnectors.hints.idleNewTopic':

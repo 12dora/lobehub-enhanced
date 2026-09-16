@@ -7,6 +7,7 @@ import {
 import debug from 'debug';
 import { inArray } from 'drizzle-orm';
 
+import { getMessengerDingTalkConfig } from '@/config/messenger';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
@@ -35,7 +36,8 @@ import {
   DINGTALK_OA_HEAD_TEXT_FALLBACK,
   DINGTALK_ROBOT_USERID_CHUNK,
   DINGTALK_WORK_NOTICE_USERID_CHUNK,
-  resolveNotifyAppConfig,
+  isNotifyChannelEnabled,
+  NOTIFY_CHANNEL_DISABLED,
   resolveWorkNoticeHeadText,
   sendRobotMessage,
   sendWorkNotice,
@@ -56,6 +58,7 @@ export const REMINDER_SWEEP_LOCK_TTL_SECONDS = 5 * 60;
 export const REMINDER_SWEEP_INTERVAL_MS = 60_000;
 export const REMINDER_SWEEP_DUE_LIMIT = 50;
 export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
+export const CHANNEL_DISABLED = NOTIFY_CHANNEL_DISABLED;
 export const INACTIVE_DELIVERY_REASON = 'inactive';
 export const REMINDER_OA_BODY_TITLE = '定时提醒';
 
@@ -130,6 +133,8 @@ export interface ReminderSweepDeps {
   }) => Promise<void>;
   getUsers?: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
   isNotifyAppConfigured?: () => Promise<boolean>;
+  isNotifyRobotEnabled?: () => Promise<boolean>;
+  isWorkNoticeEnabled?: () => Promise<boolean>;
   listDue?: typeof ReminderModel.listDue;
   loadRecipients?: (reminderIds: string[]) => Promise<Map<string, ReminderRecipientItem[]>>;
   now?: Date;
@@ -142,6 +147,36 @@ export interface ReminderSweepDeps {
 }
 
 const emptyCounts = (): ReminderSweepCounts => ({ failed: 0, fired: 0, skipped: 0 });
+
+interface NotifyChannelFlags {
+  configured: boolean;
+  robotEnabled: boolean;
+  workNoticeEnabled: boolean;
+}
+
+const resolveNotifyChannels = async (deps: ReminderSweepDeps): Promise<NotifyChannelFlags> => {
+  if (deps.isNotifyAppConfigured || deps.isWorkNoticeEnabled || deps.isNotifyRobotEnabled) {
+    const configured = await (deps.isNotifyAppConfigured ?? (async () => true))();
+    return {
+      configured,
+      robotEnabled: configured ? await (deps.isNotifyRobotEnabled ?? (async () => true))() : false,
+      workNoticeEnabled: configured
+        ? await (deps.isWorkNoticeEnabled ?? (async () => true))()
+        : false,
+    };
+  }
+
+  const config = await getMessengerDingTalkConfig();
+  const notifyApp = config?.notifyApp ?? null;
+  if (!notifyApp) {
+    return { configured: false, robotEnabled: false, workNoticeEnabled: false };
+  }
+  return {
+    configured: true,
+    robotEnabled: isNotifyChannelEnabled(notifyApp.notifyRobotEnabled),
+    workNoticeEnabled: isNotifyChannelEnabled(notifyApp.notifyWorkNoticeEnabled),
+  };
+};
 
 export const loadReminderRecipients = async (
   db: LobeChatDatabase,
@@ -331,9 +366,8 @@ export const runReminderSweep = async (
     const loadRecipients =
       deps.loadRecipients ?? ((ids: string[]) => loadReminderRecipients(db, ids));
     const recipientsByReminder = await loadRecipients(due.map((row) => row.id));
-    const isNotifyAppConfigured =
-      deps.isNotifyAppConfigured ?? (async () => Boolean(await resolveNotifyAppConfig()));
-    const notifyConfigured = await isNotifyAppConfigured();
+    const channels = await resolveNotifyChannels(deps);
+    const notifyConfigured = channels.configured;
     const headText = notifyConfigured
       ? await (deps.resolveHeadText ?? resolveWorkNoticeHeadText)()
       : DINGTALK_OA_HEAD_TEXT_FALLBACK;
@@ -373,9 +407,11 @@ export const runReminderSweep = async (
           notifyConfigured,
           recordFire,
           resolveUserId,
+          robotEnabled: channels.robotEnabled,
           send,
           sendRobot,
           subtreeMemberStaffIds,
+          workNoticeEnabled: channels.workNoticeEnabled,
         });
         counts.fired += 1;
       } catch (error) {
@@ -407,9 +443,11 @@ const fireOneReminder = async (
     notifyConfigured: boolean;
     recordFire: typeof ReminderModel.recordFire;
     resolveUserId: (staffId: string) => Promise<string | null>;
+    robotEnabled: boolean;
     send: typeof sendWorkNotice;
     sendRobot: typeof sendRobotMessage;
     subtreeMemberStaffIds: (deptId: string) => Promise<string[]>;
+    workNoticeEnabled: boolean;
   },
 ): Promise<void> => {
   const { activeIds: staffIds, inactiveIds } = await expandStaffIds(recipients, deps);
@@ -492,15 +530,21 @@ const fireOneReminder = async (
   } else {
     const workByStaff = new Map<
       string,
-      { failedReason?: string; status: 'failed' | 'sent'; taskId?: string }
+      { failedReason?: string; status: 'failed' | 'sent' | 'skipped'; taskId?: string }
     >();
     const robotByStaff = new Map<
       string,
-      { failedReason?: string; processQueryKey?: string; status: 'failed' | 'sent' }
+      { failedReason?: string; processQueryKey?: string; status: 'failed' | 'sent' | 'skipped' }
     >();
 
     await Promise.all([
       (async () => {
+        if (!deps.workNoticeEnabled) {
+          for (const staffId of staffIds) {
+            workByStaff.set(staffId, { failedReason: CHANNEL_DISABLED, status: 'skipped' });
+          }
+          return;
+        }
         for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
           const result = await deliverWorkNoticeChunk({ oa, send: deps.send, staffIds: chunk });
           for (const staffId of result.staffIds) {
@@ -509,6 +553,12 @@ const fireOneReminder = async (
         }
       })(),
       (async () => {
+        if (!deps.robotEnabled) {
+          for (const staffId of staffIds) {
+            robotByStaff.set(staffId, { failedReason: CHANNEL_DISABLED, status: 'skipped' });
+          }
+          return;
+        }
         for (const chunk of chunkStaffIds(staffIds, DINGTALK_ROBOT_USERID_CHUNK)) {
           const result = await deliverRobotChunk({
             markdown: robotMarkdown,
