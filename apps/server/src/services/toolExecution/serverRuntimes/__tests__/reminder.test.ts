@@ -1,11 +1,32 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IReminderService } from '../reminder';
-import { createReminderRuntime } from '../reminder';
+import { createReminderRuntime, reminderRuntime } from '../reminder';
 
 const onceSchedule = { date: '2026-09-17', kind: 'once' as const, time: '09:00' };
 const fireAt = '2026-09-17T09:00:00+08:00';
+
+const mockCreateReminderTask = vi.fn();
+const mockCancel = vi.fn();
+const mockListCreated = vi.fn();
+const mockListReceived = vi.fn();
+const mockSearchDirectory = vi.fn();
+
+vi.mock('@/server/enterprise/services/reminder', () => ({
+  ReminderService: vi.fn(() => ({
+    searchDirectory: mockSearchDirectory,
+  })),
+}));
+
+vi.mock('@/server/enterprise/services/reminder/taskReminder', () => ({
+  ReminderTaskService: vi.fn(() => ({
+    cancel: mockCancel,
+    createReminderTask: mockCreateReminderTask,
+    listCreated: mockListCreated,
+    listReceived: mockListReceived,
+  })),
+}));
 
 const makeService = (overrides: Partial<IReminderService> = {}): IReminderService => ({
   cancel: vi.fn(),
@@ -82,5 +103,73 @@ describe('createReminderRuntime', () => {
     await runtime.cancelReminder({ taskId: 'task-1' });
 
     expect(cancel).toHaveBeenCalledWith('task-1');
+  });
+});
+
+describe('reminderRuntime.factory', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreateReminderTask.mockResolvedValue({
+      reminder: {
+        content: '交安全报告',
+        fireAt,
+        id: 'rem-1',
+        recipients: [],
+      },
+      status: 'created',
+      task: { id: 'task-1', identifier: 'T-12' },
+    });
+  });
+
+  it('constructs ReminderTaskService with db/user/workspace and fills createdByAgentId/topicId', async () => {
+    const { ReminderService } = await import('@/server/enterprise/services/reminder');
+    const { ReminderTaskService } =
+      await import('@/server/enterprise/services/reminder/taskReminder');
+    const serverDB = { tag: 'db' };
+
+    const runtime = await reminderRuntime.factory({
+      agentId: 'agent-1',
+      serverDB,
+      topicId: 'topic-1',
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+    } as never);
+
+    expect(ReminderService).toHaveBeenCalledWith(serverDB, 'user-1');
+    expect(ReminderTaskService).toHaveBeenCalledWith(serverDB, 'user-1', 'ws-1');
+
+    await runtime.createReminder({
+      content: '交安全报告',
+      recipients: ['胡玉琴A'],
+      schedule: onceSchedule,
+    });
+
+    expect(mockCreateReminderTask).toHaveBeenCalledWith({
+      content: '交安全报告',
+      createdByAgentId: 'agent-1',
+      recipients: ['胡玉琴A'],
+      schedule: onceSchedule,
+      topicId: 'topic-1',
+    });
+  });
+
+  it('rejects kind-specific invalid schedules before calling ReminderTaskService', async () => {
+    const runtime = await reminderRuntime.factory({
+      agentId: 'agent-1',
+      serverDB: {},
+      topicId: 'topic-1',
+      userId: 'user-1',
+      workspaceId: 'ws-1',
+    } as never);
+
+    const result = await runtime.createReminder({
+      content: '交安全报告',
+      recipients: ['胡玉琴A'],
+      schedule: { kind: 'weekly', time: '09:00' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('"serverNow"');
+    expect(mockCreateReminderTask).not.toHaveBeenCalled();
   });
 });

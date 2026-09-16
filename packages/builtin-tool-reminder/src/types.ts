@@ -241,7 +241,7 @@ export const formatReminderRecipientLabel = (recipient: {
 }): string => {
   if (recipient.kind === 'department') {
     return typeof recipient.memberCount === 'number'
-      ? `${recipient.displayName} · ${recipient.memberCount}`
+      ? `${recipient.displayName} · ${recipient.memberCount} 人`
       : recipient.displayName;
   }
   return recipient.deptName

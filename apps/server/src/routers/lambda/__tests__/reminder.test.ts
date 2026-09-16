@@ -25,6 +25,7 @@ vi.mock('@/server/enterprise/services/reminder', () => {
   }
   return {
     REMINDER_NOT_FOUND: 'REMINDER_NOT_FOUND',
+    REMINDER_SCHEDULE_INVALID: 'REMINDER_SCHEDULE_INVALID',
     ReminderService: vi.fn(() => ({
       hideReceived: mockHideReceived,
       searchDirectory: mockSearchDirectory,
@@ -65,7 +66,7 @@ describe('reminderRouter', () => {
     expect(mockListReceived).toHaveBeenCalledWith({ limit: 5 });
   });
 
-  it('cancel and hideReceived mutate by id', async () => {
+  it('cancel uses taskId and hideReceived uses deliveryId', async () => {
     mockCancel.mockResolvedValueOnce(undefined);
     mockHideReceived.mockResolvedValueOnce(undefined);
     await expect(createCaller().cancel({ taskId: 'task-1' })).resolves.toEqual({
@@ -114,6 +115,80 @@ describe('reminderRouter', () => {
         schedule: { date: '09-17', kind: 'once', time: '09:00' },
       }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('rejects kind-specific missing schedule fields and too many recipients', async () => {
+    await expect(
+      createCaller().create({
+        content: '交报告',
+        recipients: ['胡玉琴A'],
+        schedule: { kind: 'once', time: '09:00' },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expect(
+      createCaller().create({
+        content: '交报告',
+        recipients: ['胡玉琴A'],
+        schedule: { kind: 'weekly', time: '09:00' },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expect(
+      createCaller().create({
+        content: '交报告',
+        recipients: ['胡玉琴A'],
+        schedule: { kind: 'monthly', time: '09:00' },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expect(
+      createCaller().create({
+        content: '交报告',
+        recipients: Array.from({ length: 51 }, (_, i) => `user-${i}`),
+        schedule: { date: '2026-09-17', kind: 'once', time: '09:00' },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('rejects non-object and oversized saveTask.editorData', async () => {
+    await expect(
+      createCaller().saveTask({
+        editorData: 'not-an-object',
+        instruction: '@胡玉琴A\n\n开会',
+        taskId: 'task-1',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expect(
+      createCaller().saveTask({
+        editorData: ['array'],
+        instruction: '@胡玉琴A\n\n开会',
+        taskId: 'task-1',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expect(
+      createCaller().saveTask({
+        editorData: { pad: 'x'.repeat(256 * 1024) },
+        instruction: '@胡玉琴A\n\n开会',
+        taskId: 'task-1',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    mockSaveReminderTask.mockResolvedValueOnce({ status: 'saved' });
+    await expect(
+      createCaller().saveTask({
+        editorData: { root: { children: [] } },
+        instruction: '@胡玉琴A\n\n开会',
+        taskId: 'task-1',
+      }),
+    ).resolves.toEqual({ status: 'saved' });
+    expect(mockSaveReminderTask).toHaveBeenCalledWith({
+      editorData: { root: { children: [] } },
+      instruction: '@胡玉琴A\n\n开会',
+      taskId: 'task-1',
+    });
   });
 
   it('searchDirectory forwards q and kind', async () => {

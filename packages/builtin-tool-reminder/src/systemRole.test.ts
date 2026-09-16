@@ -41,4 +41,10 @@ describe('reminder systemRole', () => {
     expect(systemPrompt).toContain('内容');
     expect(systemPrompt).toContain('任务编号');
   });
+
+  it('tells the model that 任务编号 is the cancelReminder argument', () => {
+    expect(systemPrompt).toContain('cancelReminder');
+    expect(systemPrompt).toContain('任务编号');
+    expect(systemPrompt).toContain('T-12');
+  });
 });

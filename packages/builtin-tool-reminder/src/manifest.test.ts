@@ -27,6 +27,8 @@ describe('ReminderManifest', () => {
     expect(create?.parameters.required).toEqual(['recipients', 'content', 'schedule']);
     expect(create?.parameters.additionalProperties).toBe(false);
     expect(create?.parameters.properties.recipients.items.type).toBe('string');
+    expect(create?.parameters.properties.recipients.maxItems).toBe(50);
+    expect(create?.parameters.properties.recipients.minItems).toBe(1);
     expect(create?.parameters.properties.schedule.required).toEqual(['kind', 'time']);
     expect(create?.parameters.properties.schedule.properties.kind.enum).toEqual([
       'daily',

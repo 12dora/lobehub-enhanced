@@ -93,6 +93,31 @@ vi.mock('@/store/tool', () => ({
         } as unknown as ToolManifest,
         type: 'builtin' as const,
       },
+      {
+        identifier: 'lobe-reminder',
+        manifest: {
+          api: [
+            {
+              description: 'Create a timed reminder',
+              name: 'createReminder',
+              parameters: {
+                properties: {
+                  content: { type: 'string' },
+                },
+                required: ['content'],
+                type: 'object',
+              },
+            },
+          ],
+          identifier: 'lobe-reminder',
+          meta: {
+            title: 'Reminders',
+            avatar: '⏰',
+          },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
     ],
   }),
 }));
@@ -121,6 +146,7 @@ vi.mock('../isCanUseFC', () => ({
 
 let mockCurrentAgentPlugins: string[] = [];
 let mockCurrentAgentDisabledPlugins: string[] = [];
+let mockEnableAgentMode: boolean | undefined;
 
 vi.mock('@/store/agent', () => ({
   getAgentStoreState: () => ({}),
@@ -133,7 +159,7 @@ vi.mock('@/store/agent/selectors', () => ({
     hasEnabledKnowledgeBases: () => false,
   },
   agentChatConfigSelectors: {
-    currentChatConfig: () => ({}),
+    currentChatConfig: () => ({ enableAgentMode: mockEnableAgentMode }),
     isCloudSandboxEnabled: () => false,
     isLocalSystemEnabled: () => false,
     isMemoryToolEnabled: () => false,
@@ -167,6 +193,7 @@ describe('toolEngineering', () => {
     mockUseApplicationBuiltinSearchTool = true;
     mockCurrentAgentPlugins = [];
     mockCurrentAgentDisabledPlugins = [];
+    mockEnableAgentMode = undefined;
     mockIsCanUseFC = true;
   });
 
@@ -255,9 +282,14 @@ describe('toolEngineering', () => {
         provider: 'openai',
       });
 
-      // lobe-agent is always-on (alwaysOnToolIds), so it rides along with user tools.
-      expect(result.enabledToolIds).toEqual(['search', 'lobe-web-browsing', 'lobe-agent']);
-      expect(result.enabledToolIds).toHaveLength(3);
+      // lobe-agent and lobe-reminder are always-on (alwaysOnToolIds).
+      expect(result.enabledToolIds).toEqual([
+        'search',
+        'lobe-web-browsing',
+        'lobe-reminder',
+        'lobe-agent',
+      ]);
+      expect(result.enabledToolIds).toHaveLength(4);
     });
 
     it('should enable lobe-agent when it is injected into runtime plugin ids', () => {
@@ -287,6 +319,38 @@ describe('toolEngineering', () => {
       });
 
       expect(result.enabledToolIds).toContain('lobe-agent');
+    });
+
+    it('enables lobe-reminder in agent mode because it is always-on', () => {
+      const toolsEngine = createAgentToolsEngine({
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      const result = toolsEngine.generateToolsDetailed({
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds: [],
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-reminder');
+    });
+
+    it('does not enable lobe-reminder in chat mode', () => {
+      mockEnableAgentMode = false;
+
+      const toolsEngine = createAgentToolsEngine({
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      const result = toolsEngine.generateToolsDetailed({
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds: [],
+      });
+
+      expect(result.enabledToolIds).not.toContain('lobe-reminder');
     });
 
     it('should use chat-mode defaults when the model does not support function calling', () => {

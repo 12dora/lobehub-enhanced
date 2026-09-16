@@ -5,9 +5,14 @@ import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import {
   REMINDER_NOT_FOUND,
+  REMINDER_SCHEDULE_INVALID,
   ReminderService,
   ReminderServiceError,
 } from '@/server/enterprise/services/reminder';
+import {
+  reminderRecipientsSchema,
+  reminderScheduleSchema,
+} from '@/server/enterprise/services/reminder/scheduleSchema';
 import { ReminderTaskService } from '@/server/enterprise/services/reminder/taskReminder';
 
 const reminderProcedure = authedProcedure.use(serverDatabase).use(async (opts) => {
@@ -24,19 +29,37 @@ const reminderProcedure = authedProcedure.use(serverDatabase).use(async (opts) =
   });
 });
 
-const timeSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'HH:mm');
-const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
+const EDITOR_DATA_MAX_BYTES = 256 * 1024;
 
-const scheduleSchema = z
-  .object({
-    date: dateSchema.optional(),
-    kind: z.enum(['daily', 'monthly', 'once', 'weekly']),
-    monthDays: z.array(z.number().int().min(1).max(31)).optional(),
-    time: timeSchema,
-    until: dateSchema.optional(),
-    weekdays: z.array(z.number().int().min(1).max(7)).optional(),
-  })
-  .strict();
+const reminderEditorDataSchema = z
+  .unknown()
+  .optional()
+  .superRefine((value, ctx) => {
+    if (value === undefined) return;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'editorData must be an object',
+      });
+      return;
+    }
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'editorData is not serialisable',
+      });
+      return;
+    }
+    if (new TextEncoder().encode(serialized).byteLength > EDITOR_DATA_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'editorData exceeds 256 KB',
+      });
+    }
+  });
 
 const reminderErrorCode = (error: unknown): string | undefined => {
   if (error instanceof ReminderServiceError) return error.code;
@@ -53,7 +76,7 @@ const mapError = (error: unknown, procedure: string): never => {
   if (code) {
     throw new TRPCError({
       code: code === REMINDER_NOT_FOUND ? 'NOT_FOUND' : 'BAD_REQUEST',
-      message: code,
+      message: code === REMINDER_SCHEDULE_INVALID ? REMINDER_SCHEDULE_INVALID : code,
     });
   }
   console.error(`[reminder:${procedure}]`, error);
@@ -83,8 +106,8 @@ export const reminderRouter = router({
           confirmLargeAudience: z.boolean().optional(),
           content: z.string().min(1),
           createdByAgentId: z.string().optional(),
-          recipients: z.array(z.string().min(1)).min(1),
-          schedule: scheduleSchema,
+          recipients: reminderRecipientsSchema,
+          schedule: reminderScheduleSchema,
           topicId: z.string().optional(),
         })
         .strict(),
@@ -155,7 +178,7 @@ export const reminderRouter = router({
     .input(
       z
         .object({
-          editorData: z.unknown().optional(),
+          editorData: reminderEditorDataSchema,
           instruction: z.string().min(1),
           taskId: z.string().min(1),
         })

@@ -107,7 +107,7 @@ describe('CreateReminderRender', () => {
     expect(screen.getByText('TASK-1')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'TASK-1' }).getAttribute('href')).toBe('/task/TASK-1');
     expect(screen.getByText('胡玉琴A · 安环部')).toBeTruthy();
-    expect(screen.getByText('安环部 · 12')).toBeTruthy();
+    expect(screen.getByText('安环部 · 12 人')).toBeTruthy();
     expect(screen.getByText('每周三 09:00')).toBeTruthy();
     expect(screen.getByText('2026-09-23 09:00')).toBeTruthy();
     expect(screen.getByText('周三例会材料准备')).toBeTruthy();

@@ -5,6 +5,11 @@ import {
 } from '@lobechat/builtin-tool-reminder/executionRuntime';
 import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder/manifest';
 
+import {
+  reminderRecipientsSchema,
+  reminderScheduleSchema,
+} from '@/server/enterprise/services/reminder/scheduleSchema';
+
 import type { ServerRuntimeRegistration } from './types';
 
 export { createReminderRuntime, ReminderExecutionRuntime };
@@ -28,12 +33,17 @@ export const reminderRuntime: ServerRuntimeRegistration = {
 
     return createReminderRuntime({
       cancel: (taskId) => tasks.cancel(taskId),
-      create: (input) =>
-        tasks.createReminderTask({
+      create: (input) => {
+        const recipients = reminderRecipientsSchema.parse(input.recipients);
+        const schedule = reminderScheduleSchema.parse(input.schedule);
+        return tasks.createReminderTask({
           ...input,
           createdByAgentId: input.createdByAgentId ?? agentId ?? null,
+          recipients,
+          schedule,
           topicId: input.topicId ?? topicId ?? null,
-        }),
+        });
+      },
       listCreated: (opts) => tasks.listCreated(opts),
       listReceived: (opts) => tasks.listReceived(opts),
       searchDirectory: (q, kind) => directory.searchDirectory(q, kind),

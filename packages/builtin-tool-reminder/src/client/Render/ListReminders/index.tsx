@@ -21,8 +21,8 @@ import { ReminderCard } from '../shared';
 const MINI_LIST_LIMIT = 5;
 
 /**
- * The runtime puts the rows in the tool content (`{ items, scope }` JSON) and
- * only the count in the state, so parse the content when it is available.
+ * The runtime now puts `items` on pluginState. `parseRows(content)` is the
+ * fallback for older messages that only had `{ items, scope }` in the tool text.
  */
 const parseRows = (content: unknown): ListReminderRow[] => {
   let payload: unknown = content;

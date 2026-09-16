@@ -172,16 +172,66 @@ describe('ReminderExecutionRuntime', () => {
     expect(result.content).toContain('胡玉琴A · 安环部');
     expect(result.content).toContain('交安全报告');
     expect(result.content).toContain('TASK-1');
+    expect(result.content).toContain('"taskId":"task-1"');
+    expect(result.content).toContain('"taskIdentifier":"TASK-1"');
     expect(result.content).toContain('serverNow');
   });
 
-  it('lists created reminders as compact JSON with serverNow', async () => {
+  it('formats Date fire times as Asia/Shanghai in LLM content, not UTC', async () => {
+    const create = vi.fn().mockResolvedValue({
+      reminder: {
+        content: '交安全报告',
+        fireAt: new Date('2026-09-17T01:00:00.000Z'),
+        id: 'rem-1',
+        recipients: [],
+      },
+      status: 'created',
+      task: { id: 'task-1', identifier: 'T-12' },
+    });
+    const runtime = createReminderRuntime(makeService({ create }));
+
+    const result = await runtime.createReminder({
+      content: '交安全报告',
+      recipients: ['胡玉琴A'],
+      schedule: onceSchedule,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('+08:00');
+    expect(result.content).toContain('09:00');
+    expect(result.content).not.toContain('T01:00');
+    expect(result.content).toContain('"taskId":"task-1"');
+    expect(result.content).toContain('"taskIdentifier":"T-12"');
+  });
+
+  it('includes serverNow on create failure including REMINDER_TIME_PAST', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('REMINDER_TIME_PAST'), { code: 'REMINDER_TIME_PAST' }),
+      );
+    const runtime = createReminderRuntime(makeService({ create }));
+
+    const result = await runtime.createReminder({
+      content: '交安全报告',
+      recipients: ['胡玉琴A'],
+      schedule: onceSchedule,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('REMINDER_TIME_PAST');
+    expect(result.content).toContain('"serverNow"');
+    expect(result.content).toMatch(/\+08:00"/);
+  });
+
+  it('lists created reminders as compact JSON with taskId, taskIdentifier, and Shanghai nextFireAt', async () => {
     const listCreated = vi.fn().mockResolvedValue([
       {
         content: '例会材料',
-        nextFireAt: fireAt,
+        nextFireAt: new Date('2026-09-17T01:00:00.000Z'),
         scheduleSummary: '每周三 09:00',
         status: 'scheduled',
+        taskId: 'task-1',
         taskIdentifier: 'TASK-1',
       },
     ]);
@@ -190,9 +240,31 @@ describe('ReminderExecutionRuntime', () => {
     const result = await runtime.listReminders({ scope: 'created' });
 
     expect(result.success).toBe(true);
+    expect(result.content).toContain('"taskId":"task-1"');
     expect(result.content).toContain('"taskIdentifier":"TASK-1"');
     expect(result.content).toContain('"serverNow"');
+    expect(result.content).toContain('2026-09-17T09:00:00+08:00');
+    expect(result.content).not.toContain('T01:00');
     expect(result.content).not.toMatch(/\n {2}"/);
+  });
+
+  it('formats received firedAt as Asia/Shanghai in LLM JSON', async () => {
+    const listReceived = vi.fn().mockResolvedValue([
+      {
+        content: '例会材料',
+        creatorName: '张伟',
+        firedAt: new Date('2026-09-17T01:00:00.000Z'),
+        id: 'dlv-1',
+        reminderId: 'rem-1',
+      },
+    ]);
+    const runtime = createReminderRuntime(makeService({ listReceived }));
+
+    const result = await runtime.listReminders({ scope: 'received' });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('2026-09-17T09:00:00+08:00');
+    expect(result.content).not.toContain('T01:00');
   });
 
   it('cancels by taskId', async () => {

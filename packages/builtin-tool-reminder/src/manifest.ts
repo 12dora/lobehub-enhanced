@@ -60,7 +60,9 @@ export const ReminderManifest: BuiltinToolManifest = {
           recipients: {
             description:
               'People or departments: name, "姓名·部门", department name, or staff:<id>/dept:<id>.',
-            items: { type: 'string' },
+            items: { minLength: 1, type: 'string' },
+            maxItems: 50,
+            minItems: 1,
             type: 'array',
           },
           schedule: {
@@ -119,7 +121,8 @@ export const ReminderManifest: BuiltinToolManifest = {
         additionalProperties: false,
         properties: {
           taskId: {
-            description: 'Task id returned by createReminder or listReminders.',
+            description:
+              '任务编号 from createReminder / listReminders (e.g. T-12). Not the task uuid.',
             type: 'string',
           },
         },

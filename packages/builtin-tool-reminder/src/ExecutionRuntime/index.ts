@@ -50,11 +50,13 @@ const WEEKDAY_LABELS = ['', '一', '二', '三', '四', '五', '六', '日'];
 
 const compactJson = (value: unknown): string => JSON.stringify(value);
 
+/** Asia/Shanghai ISO-like clock. `hourCycle: 'h23'` so midnight is 00, not 24. */
 const formatServerNow = (now: Date = new Date()): string => {
   const parts = new Intl.DateTimeFormat('en-CA', {
     day: '2-digit',
     hour: '2-digit',
     hour12: false,
+    hourCycle: 'h23',
     minute: '2-digit',
     month: '2-digit',
     second: '2-digit',
@@ -66,10 +68,12 @@ const formatServerNow = (now: Date = new Date()): string => {
   return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}+08:00`;
 };
 
-const formatFireAt = (value: Date | string | null | undefined): string => {
-  if (!value) return '';
-  if (value instanceof Date) return value.toISOString();
-  return String(value);
+/** Every LLM-facing instant must be Asia/Shanghai, never `Date.toISOString()` / Zulu. */
+const formatInstant = (value: Date | string | null | undefined): string | null => {
+  if (value == null || value === '') return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return formatServerNow(date);
 };
 
 const describeSchedule = (schedule: ReminderScheduleInput, summary?: string): string => {
@@ -126,6 +130,12 @@ const errorMessage = (error: unknown): string => {
 const withServerNow = (content: string, serverNow: string): string =>
   content.includes('"serverNow"') ? content : `${content}\n${compactJson({ serverNow })}`;
 
+const failResult = (content: string, error?: unknown): BuiltinServerRuntimeOutput => ({
+  content: `${content}\n${compactJson({ serverNow: formatServerNow() })}`,
+  error,
+  success: false,
+});
+
 /**
  * Reminder execution runtime. Accepts ReminderTaskService (or a test double)
  * via constructor injection — no React, no Zustand, no `@/services` imports.
@@ -173,11 +183,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return {
-        content: errorMessage(error),
-        error,
-        success: false,
-      };
+      return failResult(errorMessage(error), error);
     }
   }
 
@@ -240,10 +246,7 @@ export class ReminderExecutionRuntime {
       }
 
       if (!isCreatedReminderResult(result)) {
-        return {
-          content: `Unexpected createReminder result${compactJson({ serverNow })}`,
-          success: false,
-        };
+        return failResult(`Unexpected createReminder result`);
       }
 
       const config = isReminderTaskConfig(result.task.config)
@@ -252,6 +255,7 @@ export class ReminderExecutionRuntime {
       const recipients = result.reminder.recipients ?? [];
       const scheduleSummary = describeSchedule(args.schedule, config?.scheduleSummary);
       const nextFireAt = result.reminder.fireAt ?? undefined;
+      const nextFireLabel = formatInstant(nextFireAt) ?? '';
       const recipientLabels = recipients.map(formatReminderRecipientLabel).join('、') || '（无）';
       const state: CreateReminderState = {
         needsClarification: false,
@@ -273,11 +277,15 @@ export class ReminderExecutionRuntime {
         content: [
           '已创建定时提醒',
           `- 收件人: ${recipientLabels}`,
-          `- 时间: ${formatFireAt(nextFireAt)}`,
+          `- 时间: ${nextFireLabel}`,
           `- 周期: ${scheduleSummary}`,
           `- 内容: ${result.reminder.content}`,
           `- 任务编号: ${result.task.identifier}`,
-          compactJson({ serverNow }),
+          compactJson({
+            serverNow,
+            taskId: result.task.id,
+            taskIdentifier: result.task.identifier,
+          }),
         ].join('\n'),
         state,
         success: true,
@@ -293,11 +301,7 @@ export class ReminderExecutionRuntime {
             : code === 'REMINDER_RECIPIENT_UNKNOWN'
               ? `收件人无法解析（REMINDER_RECIPIENT_UNKNOWN）：${message}`
               : message;
-      return {
-        content,
-        error,
-        success: false,
-      };
+      return failResult(content, error);
     }
   }
 
@@ -319,7 +323,7 @@ export class ReminderExecutionRuntime {
             items: items.map((item) => ({
               content: item.content,
               creatorName: item.creatorName,
-              firedAt: item.firedAt,
+              firedAt: formatInstant(item.firedAt),
             })),
             scope,
             serverNow,
@@ -341,10 +345,11 @@ export class ReminderExecutionRuntime {
         content: compactJson({
           items: items.map((item) => ({
             content: item.content,
-            nextFireAt: item.nextFireAt,
+            nextFireAt: formatInstant(item.nextFireAt),
             recipients: (item.recipients ?? []).map(formatReminderRecipientLabel),
             scheduleSummary: item.scheduleSummary,
             status: item.status,
+            taskId: item.taskId,
             taskIdentifier: item.taskIdentifier,
           })),
           scope,
@@ -354,11 +359,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return {
-        content: errorMessage(error),
-        error,
-        success: false,
-      };
+      return failResult(errorMessage(error), error);
     }
   }
 
@@ -373,11 +374,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return {
-        content: errorMessage(error),
-        error,
-        success: false,
-      };
+      return failResult(errorMessage(error), error);
     }
   }
 }
