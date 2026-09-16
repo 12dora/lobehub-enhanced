@@ -103,8 +103,8 @@ export class PlatformTaskManagerService {
     const modelSource = options?.userRow ?? base;
     const userModel = isNonEmptyString(modelSource.model) ? modelSource.model : undefined;
     const userProvider = isNonEmptyString(modelSource.provider) ? modelSource.provider : undefined;
-    const persistModel = TASK_AGENT.persist.model;
-    const persistProvider = TASK_AGENT.persist.provider;
+    const persistModel = TASK_AGENT.persist?.model;
+    const persistProvider = TASK_AGENT.persist?.provider;
     const matchesPersistDefaults =
       persistModel !== undefined &&
       persistProvider !== undefined &&

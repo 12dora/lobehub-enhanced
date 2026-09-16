@@ -40,10 +40,10 @@ vi.mock('@/database/models/reminder', () => {
     listCreatedByTasks: mockListCreatedByTasks,
     updateProfile: mockUpdateProfile,
   }));
-  (Model as unknown as { claimFireSlot: typeof mockClaimFireSlot }).claimFireSlot = (
+  (Model as unknown as { claimFireSlot: (...args: unknown[]) => unknown }).claimFireSlot = (
     ...args: unknown[]
   ) => mockClaimFireSlot(...args);
-  (Model as unknown as { insertDeliveries: typeof mockInsertDeliveries }).insertDeliveries = (
+  (Model as unknown as { insertDeliveries: (...args: unknown[]) => unknown }).insertDeliveries = (
     ...args: unknown[]
   ) => mockInsertDeliveries(...args);
   return { ReminderModel: Model };
