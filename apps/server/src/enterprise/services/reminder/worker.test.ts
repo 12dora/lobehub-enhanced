@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ReminderModel } from '@/database/models/reminder';
 import type { ReminderItem, ReminderRecipientItem } from '@/database/schemas/reminder';
 
 import {
   CHANNEL_DISABLED,
+  deliverReminder,
   formatReminderOaBodyTitle,
   INACTIVE_DELIVERY_REASON,
   NOTIFY_APP_NOT_CONFIGURED,
@@ -520,5 +522,56 @@ describe('formatReminderOaBodyTitle', () => {
   it('prefixes 定时提醒 with the site title', () => {
     expect(formatReminderOaBodyTitle('AI平台')).toBe('AI平台 · 定时提醒');
     expect(formatReminderOaBodyTitle('AI 助手')).toBe('AI 助手 · 定时提醒');
+  });
+});
+
+describe('legacy listDue filter', () => {
+  it('includes task_id IS NULL so the sweep never fires task-linked rows', async () => {
+    const now = new Date('2026-09-16T01:00:00.000Z');
+    const where = vi.fn().mockReturnValue({
+      orderBy: () => ({ limit: async () => [] }),
+    });
+    await ReminderModel.listDue({ select: () => ({ from: () => ({ where }) }) } as never, now);
+    expect(where).toHaveBeenCalledWith(ReminderModel.buildListDueCondition(now));
+    expect(ReminderModel.buildListDueCondition.toString()).toContain('isNull');
+    expect(ReminderModel.buildListDueCondition.toString()).toContain('taskId');
+  });
+});
+
+describe('deliverReminder persistMode deliveries', () => {
+  it('inserts delivery rows without recordFire CAS, even when a channel throws', async () => {
+    const insert = vi.spyOn(ReminderModel, 'insertDeliveries').mockResolvedValue(undefined);
+    const recordFire = vi.fn();
+    const send = vi.fn().mockRejectedValue(new Error('work notice 500'));
+    const sendRobot = vi.fn().mockResolvedValue([{ processQueryKey: 'pqk_1' }]);
+
+    try {
+      const result = await deliverReminder({} as never, reminder({ taskId: 'task_1' }), {
+        createInboxNotification: vi.fn(),
+        getUsers: async () => [{ active: true, staffId: 'staff_hyq' }],
+        isNotifyAppConfigured: async () => true,
+        isNotifyRobotEnabled: async () => true,
+        isWorkNoticeEnabled: async () => true,
+        now: new Date('2026-09-16T01:00:00.000Z'),
+        persistMode: 'deliveries',
+        recipients: [recipient({})],
+        recordFire,
+        resolveHeadText: async () => 'AI平台',
+        resolveUserId: async () => null,
+        sendRobotMessage: sendRobot,
+        sendWorkNotice: send,
+      });
+
+      expect(recordFire).not.toHaveBeenCalled();
+      expect(insert).toHaveBeenCalledOnce();
+      expect(insert.mock.calls[0][1].deliveries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ staffId: 'staff_hyq', status: 'failed' }),
+        ]),
+      );
+      expect(result.failed).toBe(1);
+    } finally {
+      insert.mockRestore();
+    }
   });
 });

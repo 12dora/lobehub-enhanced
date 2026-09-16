@@ -224,4 +224,33 @@ describe('ReminderModel', () => {
       expect(deliveries[0]).toMatchObject({ staffId: 'staff_hyq_a', status: 'skipped' });
     });
   });
+
+  describe('buildListDueCondition / claimFireSlot', () => {
+    it('buildListDueCondition includes task_id IS NULL', () => {
+      expect(ReminderModel.buildListDueCondition.toString()).toContain('isNull');
+      expect(ReminderModel.buildListDueCondition.toString()).toContain('taskId');
+    });
+
+    it('claimFireSlot lets only the first caller win a slot', async () => {
+      const created = await createSample();
+      const first = await ReminderModel.claimFireSlot(serverDB, {
+        firedAt: new Date('2026-09-17T01:00:01.000Z'),
+        nextFireAt: null,
+        reminderId: created.id,
+        slotStart: fireAt,
+        taskId: 'task_missing',
+      });
+      const second = await ReminderModel.claimFireSlot(serverDB, {
+        firedAt: new Date('2026-09-17T01:00:02.000Z'),
+        nextFireAt: null,
+        reminderId: created.id,
+        slotStart: fireAt,
+        taskId: 'task_missing',
+      });
+
+      expect(first?.firedCount).toBe(1);
+      expect(first?.fireAt).toEqual(new Date('2026-09-17T01:00:01.000Z'));
+      expect(second).toBeNull();
+    });
+  });
 });

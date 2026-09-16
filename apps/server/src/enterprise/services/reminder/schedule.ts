@@ -9,9 +9,17 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 export const REMINDER_DEFAULT_TZ = 'Asia/Shanghai';
+export const FIRE_NOW_SLOT_MS = 60_000;
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Index 1..7 = Monday..Sunday, without the leading 周 so `每周` + 三 → 每周三. */
 const WEEKDAY_ZH = ['', '一', '二', '三', '四', '五', '六', '日'] as const;
+
+const uniqueSorted = (values: number[] | undefined, min: number, max: number): number[] => {
+  if (!values || values.length === 0) return [];
+  return [...new Set(values.filter((value) => value >= min && value <= max))].sort((a, b) => a - b);
+};
 
 export const parseClockTime = (time: string): { hour: number; minute: number } | null => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
@@ -20,6 +28,72 @@ export const parseClockTime = (time: string): { hour: number; minute: number } |
   const minute = Number.parseInt(match[2], 10);
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return { hour, minute };
+};
+
+export type ReminderScheduleInvalidReason =
+  | 'invalid_date'
+  | 'invalid_time'
+  | 'invalid_until'
+  | 'missing_date'
+  | 'missing_monthDays'
+  | 'missing_weekdays'
+  | 'unknown_kind';
+
+/** Kind-specific field check. Returns a reason when the payload cannot be scheduled. */
+export const validateReminderSchedule = (
+  schedule: ReminderScheduleInput,
+): ReminderScheduleInvalidReason | null => {
+  if (!parseClockTime(schedule.time)) return 'invalid_time';
+  if (schedule.until && !DATE_RE.test(schedule.until)) return 'invalid_until';
+  switch (schedule.kind) {
+    case 'once': {
+      if (!schedule.date) return 'missing_date';
+      if (!DATE_RE.test(schedule.date)) return 'invalid_date';
+      return null;
+    }
+    case 'daily': {
+      return null;
+    }
+    case 'weekly': {
+      return uniqueSorted(schedule.weekdays, 1, 7).length === 0 ? 'missing_weekdays' : null;
+    }
+    case 'monthly': {
+      return uniqueSorted(schedule.monthDays, 1, 31).length === 0 ? 'missing_monthDays' : null;
+    }
+    default: {
+      return 'unknown_kind';
+    }
+  }
+};
+
+export const fireNowSlotStart = (now: Date): Date => new Date(now.getTime() - FIRE_NOW_SLOT_MS);
+
+/**
+ * Local wall-clock start of the cron occurrence being fired (Asia/Shanghai).
+ * Repeats use today's `HH:mm`; once uses the absolute date+time.
+ */
+export const reminderOccurrenceStart = (
+  schedule: ReminderScheduleInput,
+  now: Date,
+  tz: string = REMINDER_DEFAULT_TZ,
+): Date => {
+  if (schedule.kind === 'once') {
+    if (!schedule.date) return fireNowSlotStart(now);
+    try {
+      return resolveOneShotFireAt({ localDate: schedule.date, time: schedule.time, tz });
+    } catch {
+      return fireNowSlotStart(now);
+    }
+  }
+  const parsed = parseClockTime(schedule.time);
+  if (!parsed) return fireNowSlotStart(now);
+  return dayjs(now)
+    .tz(tz)
+    .hour(parsed.hour)
+    .minute(parsed.minute)
+    .second(0)
+    .millisecond(0)
+    .toDate();
 };
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
@@ -67,11 +141,6 @@ export const nextClockTime = (time: string, after: Date, tz: string): Date | nul
     candidate = candidate.add(1, 'day');
   }
   return candidate.toDate();
-};
-
-const uniqueSorted = (values: number[] | undefined, min: number, max: number): number[] => {
-  if (!values || values.length === 0) return [];
-  return [...new Set(values.filter((value) => value >= min && value <= max))].sort((a, b) => a - b);
 };
 
 const isOnOrBeforeUntil = (fireAt: Date, until: string | undefined, tz: string): boolean => {

@@ -12,6 +12,7 @@ import {
   REMINDER_TIMEZONE,
   stripReminderMentions,
 } from '@lobechat/types';
+import { isExecutionTime } from '@lobechat/utils/cronEval';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -36,7 +37,9 @@ import {
   REMINDER_CONTENT_EMPTY,
   REMINDER_FIRE_AT_LEAD_MS,
   REMINDER_LARGE_AUDIENCE_THRESHOLD,
+  REMINDER_MAX_RECIPIENT_QUERIES,
   REMINDER_NOT_FOUND,
+  REMINDER_SCHEDULE_INVALID,
   REMINDER_TIME_PAST,
   ReminderService,
   ReminderServiceError,
@@ -44,19 +47,25 @@ import {
 import {
   buildReminderCron,
   describeReminderSchedule,
+  fireNowSlotStart,
   formatServerNowIso,
+  nextFireAt,
   nextReminderFireAt,
   parseClockTime,
   REMINDER_DEFAULT_TZ,
+  reminderOccurrenceStart,
   scheduleFromLegacy,
   scheduleToRepeatRule,
+  validateReminderSchedule,
 } from './schedule';
 import type { ReminderDeliverResult, ReminderSweepDeps } from './worker';
 import { deliverReminder as defaultDeliverReminder } from './worker';
 
 export {
   REMINDER_CONTENT_EMPTY,
+  REMINDER_MAX_RECIPIENT_QUERIES,
   REMINDER_NOT_FOUND,
+  REMINDER_SCHEDULE_INVALID,
   REMINDER_TIME_PAST,
   ReminderServiceError,
 } from './index';
@@ -98,6 +107,7 @@ const REMINDER_SCHEDULE_SCHEMA = {
     required: ['schedule'],
     type: 'object' as const,
   },
+  strict: true,
 };
 
 export type RecipientQuery = string;
@@ -105,10 +115,11 @@ export type RecipientQuery = string;
 export type ReminderProfile = ReminderWithRecipients;
 
 export interface ReminderAmbiguousCandidate {
+  deptId?: string;
   deptPath: string;
   leafDeptName: string;
   name: string;
-  staffId: string;
+  staffId?: string;
 }
 
 export interface ReminderAmbiguousQuery {
@@ -135,11 +146,11 @@ export interface CreatedReminderRow {
   firedCount: number;
   lastDelivery?: { failed: number; firedAt: Date; sent: number; skipped: number };
   lastFiredAt: Date | null;
-  nextFireAt: Date;
+  nextFireAt: Date | null;
   recipients: ResolvedReminderRecipient[];
   reminderId: string;
   scheduleSummary: string;
-  status: 'canceled' | 'completed' | 'scheduled';
+  status: 'canceled' | 'completed' | 'failed' | 'paused' | 'scheduled';
   taskId: string;
   taskIdentifier: string;
 }
@@ -298,8 +309,22 @@ const reminderConfigOf = (task: TaskItem): TaskReminderConfig | null =>
   isReminderTaskConfig(task.config) ? task.config.reminder : null;
 
 const asTaskStatus = (status: string): CreatedReminderRow['status'] => {
-  if (status === 'completed' || status === 'canceled') return status;
+  if (
+    status === 'completed' ||
+    status === 'canceled' ||
+    status === 'paused' ||
+    status === 'failed'
+  ) {
+    return status;
+  }
   return 'scheduled';
+};
+
+const assertValidSchedule = (schedule: ReminderScheduleInput) => {
+  const reason = validateReminderSchedule(schedule);
+  if (reason) {
+    throw new ReminderServiceError(REMINDER_SCHEDULE_INVALID, reason);
+  }
 };
 
 const assertOnceNotPast = (schedule: ReminderScheduleInput, fireAt: Date | null, now: Date) => {
@@ -335,13 +360,11 @@ export class ReminderTaskService {
     const unknown: string[] = [];
     const seen = new Set<string>();
     const largeAudience: ReminderLargeAudience[] = [];
+    const capped = queries.slice(0, REMINDER_MAX_RECIPIENT_QUERIES);
 
-    for (const raw of queries) {
+    for (const raw of capped) {
       const query = raw.trim();
-      if (!query) {
-        unknown.push(raw);
-        continue;
-      }
+      if (!query) continue;
 
       const resolved = await this.resolveOneQuery(query);
       if (resolved.kind === 'unknown') {
@@ -402,6 +425,7 @@ export class ReminderTaskService {
     }
 
     const now = new Date();
+    assertValidSchedule(input.schedule);
     const fireAt = nextReminderFireAt(input.schedule, now);
     assertOnceNotPast(input.schedule, fireAt, now);
     if (!fireAt) {
@@ -424,9 +448,10 @@ export class ReminderTaskService {
       until: input.schedule.until ?? null,
     };
 
-    let task: TaskItem | undefined;
-    try {
-      task = await this.taskModel.create({
+    const created = await this.db.transaction(async (tx) => {
+      const taskModel = new TaskModel(tx, this.userId, this.workspaceId);
+      const reminderModel = new ReminderModel(tx, this.userId);
+      const task = await taskModel.create({
         assigneeAgentId: null,
         automationMode: 'schedule',
         config: { reminder: reminderConfig },
@@ -437,29 +462,27 @@ export class ReminderTaskService {
         schedulePattern: cron,
         scheduleTimezone: REMINDER_TIMEZONE,
         status: 'scheduled',
+        visibility: 'private',
       });
-      const reminder = await this.reminderModel.createForTask({
-        content,
-        createdByAgentId: input.createdByAgentId ?? null,
-        creatorName: creatorDisplayName(user ?? null),
-        fireAt,
-        id: reminderId,
-        recipients: resolved.recipients.map(toRecipientInput),
-        repeatRule,
-        taskId: task.id,
-        timezone: REMINDER_DEFAULT_TZ,
-        topicId: input.topicId ?? null,
-      });
-      log('created reminder-task task=%s reminder=%s', task.id, reminder.id);
-      return { reminder, status: 'created', task };
-    } catch (error) {
-      if (task) {
-        await this.taskModel.delete(task.id).catch((cleanupError) => {
-          log('cleanup task=%s after reminder create failed: %O', task?.id, cleanupError);
-        });
-      }
-      throw error;
-    }
+      const reminder = await reminderModel.createForTask(
+        {
+          content,
+          createdByAgentId: input.createdByAgentId ?? null,
+          creatorName: creatorDisplayName(user ?? null),
+          fireAt,
+          id: reminderId,
+          recipients: resolved.recipients.map(toRecipientInput),
+          repeatRule,
+          taskId: task.id,
+          timezone: REMINDER_DEFAULT_TZ,
+          topicId: input.topicId ?? null,
+        },
+        tx,
+      );
+      return { reminder, task };
+    });
+    log('created reminder-task task=%s reminder=%s', created.task.id, created.reminder.id);
+    return { reminder: created.reminder, status: 'created', task: created.task };
   };
 
   saveReminderTask = async (input: SaveReminderTaskInput): Promise<SaveReminderTaskResult> => {
@@ -500,8 +523,13 @@ export class ReminderTaskService {
         now,
       });
       if (interpreted && !schedulesEqual(interpreted, currentSchedule)) {
-        schedule = interpreted;
-        scheduleChanged = true;
+        const invalid = validateReminderSchedule(interpreted);
+        if (invalid) {
+          log('LLM schedule invalid (%s), keeping current', invalid);
+        } else {
+          schedule = interpreted;
+          scheduleChanged = true;
+        }
       }
     } catch (error) {
       log('schedule re-interpret failed, keeping current: %O', error);
@@ -511,10 +539,9 @@ export class ReminderTaskService {
 
     const fireAt = nextReminderFireAt(schedule, now);
     if (scheduleChanged) {
+      assertValidSchedule(schedule);
       assertOnceNotPast(schedule, fireAt, now);
-      if (!fireAt) throw new ReminderServiceError(REMINDER_TIME_PAST);
     }
-    if (!fireAt) throw new ReminderServiceError(REMINDER_TIME_PAST);
 
     const once = schedule.kind === 'once';
     const scheduleSummary = describeReminderSchedule(schedule);
@@ -532,11 +559,16 @@ export class ReminderTaskService {
       until: schedule.until ?? null,
     };
 
+    const previousAutoTitle = titleFromContent(
+      stripReminderMentions(task.instruction ?? '') || reminder.content,
+    );
+    const namePatch = task.name === previousAutoTitle ? { name: titleFromContent(content) } : {};
+
     const updatedTask = await this.taskModel.update(task.id, {
       config: { ...previousConfig, reminder: reminderConfig },
       ...(input.editorData !== undefined ? { editorData: input.editorData } : {}),
       instruction,
-      name: titleFromContent(content),
+      ...namePatch,
       schedulePattern: buildReminderCron(schedule),
       scheduleTimezone: REMINDER_TIMEZONE,
     });
@@ -544,7 +576,7 @@ export class ReminderTaskService {
 
     const updatedReminder = await this.reminderModel.updateProfile(reminder.id, {
       content,
-      fireAt,
+      ...(fireAt ? { fireAt } : {}),
       recipients: resolved.recipients.map(toRecipientInput),
       repeatRule: scheduleToRepeatRule(schedule),
     });
@@ -586,7 +618,7 @@ export class ReminderTaskService {
           ? { ...profile.deliveryCounts, firedAt: profile.lastFiredAt }
           : undefined,
         lastFiredAt: profile.lastFiredAt,
-        nextFireAt: profile.fireAt,
+        nextFireAt: profile.status === 'scheduled' ? profile.fireAt : null,
         recipients: profile.recipients.map(toResolvedRecipient),
         reminderId: profile.id,
         scheduleSummary:
@@ -622,9 +654,31 @@ export class ReminderTaskService {
     if (!reminder) throw new ReminderServiceError(REMINDER_NOT_FOUND);
     if (reminder.status === 'canceled') throw new ReminderServiceError(REMINDER_NOT_FOUND);
 
-    const result = await this.deliver(this.db, reminder, { recipients: reminder.recipients });
-    await this.taskModel.updateHeartbeat(task.id);
-    await this.completeIfTerminal(task, reminderConfigOf(task), result);
+    const config = reminderConfigOf(task);
+    const now = new Date();
+    const noop = {
+      failed: 0,
+      firedAt: reminder.lastFiredAt ?? now,
+      sent: 0,
+      skipped: 0,
+    };
+
+    if (reminder.status !== 'scheduled') {
+      await this.parkOnceIfNeeded(task, reminder, config, now);
+      return noop;
+    }
+
+    const result = await this.claimAndDeliver({
+      config,
+      now,
+      reminder,
+      slotStart: fireNowSlotStart(now),
+      task,
+    });
+    if (!result) {
+      await this.parkOnceIfNeeded(task, reminder, config, now);
+      return noop;
+    }
     return {
       failed: result.failed,
       firedAt: result.firedAt,
@@ -636,7 +690,7 @@ export class ReminderTaskService {
   fireForTick = async (
     taskId: string,
     now: Date,
-  ): Promise<'fired' | 'not_reminder' | 'skipped_until'> => {
+  ): Promise<'already_sent' | 'fired' | 'not_reminder' | 'skipped' | 'skipped_until'> => {
     const task = await this.taskModel.findById(taskId);
     if (!task) return 'not_reminder';
     const config = reminderConfigOf(task);
@@ -651,16 +705,122 @@ export class ReminderTaskService {
       if (reminder.status === 'scheduled') {
         await this.reminderModel.updateProfile(reminder.id, { status: 'sent' });
       }
+      await this.taskModel.updateHeartbeat(task.id);
       return 'skipped_until';
     }
 
-    const result = await this.deliver(this.db, reminder, {
+    if (reminder.status === 'canceled') return 'skipped';
+
+    if (reminder.status === 'sent') {
+      await this.parkOnceIfNeeded(task, reminder, config, now);
+      return 'already_sent';
+    }
+
+    if (reminder.status !== 'scheduled') return 'skipped';
+
+    if (
+      task.schedulePattern &&
+      task.lastHeartbeatAt &&
+      !isExecutionTime({
+        cronPattern: task.schedulePattern,
+        currentTime: now,
+        lastExecutedAt: task.lastHeartbeatAt,
+        timezone: task.scheduleTimezone ?? REMINDER_DEFAULT_TZ,
+      })
+    ) {
+      await this.parkOnceIfNeeded(task, reminder, config, now);
+      return config.once ? 'already_sent' : 'skipped';
+    }
+
+    const result = await this.claimAndDeliver({
+      config,
       now,
-      recipients: reminder.recipients,
+      reminder,
+      slotStart: reminderOccurrenceStart(config.schedule, now),
+      task,
     });
-    await this.taskModel.updateHeartbeat(task.id);
-    await this.completeIfTerminal(task, config, result, now);
+    if (!result) {
+      await this.parkOnceIfNeeded(task, reminder, config, now);
+      return config.once ? 'already_sent' : 'skipped';
+    }
     return 'fired';
+  };
+
+  private claimAndDeliver = async (input: {
+    config: TaskReminderConfig | null;
+    now: Date;
+    reminder: ReminderProfile;
+    slotStart: Date;
+    task: TaskItem;
+  }): Promise<ReminderDeliverResult | null> => {
+    const next = input.reminder.repeatRule
+      ? nextFireAt(input.reminder.repeatRule, input.now)
+      : nextReminderFireAt(input.config?.schedule ?? { kind: 'once', time: '00:00' }, input.now);
+    const nextFireAtForClaim = input.config?.once ? null : next;
+    const claimed = await ReminderModel.claimFireSlot(this.db, {
+      firedAt: input.now,
+      nextFireAt: nextFireAtForClaim,
+      reminderId: input.reminder.id,
+      slotStart: input.slotStart,
+      taskId: input.task.id,
+    });
+    if (!claimed) return null;
+
+    let result: ReminderDeliverResult;
+    try {
+      result = await this.deliver(this.db, claimed, {
+        now: input.now,
+        persistMode: 'deliveries',
+        recipients: input.reminder.recipients,
+      });
+    } catch (error) {
+      log('deliver after claim failed reminder=%s %O', claimed.id, error);
+      const failedDeliveries = input.reminder.recipients
+        .filter((row): row is typeof row & { staffId: string } =>
+          Boolean(row.kind === 'user' && row.staffId),
+        )
+        .map((row) => ({
+          failedReason: error instanceof Error ? error.message : 'deliver_failed',
+          staffId: row.staffId,
+          status: 'failed' as const,
+        }));
+      try {
+        await ReminderModel.insertDeliveries(this.db, {
+          deliveries: failedDeliveries,
+          firedAt: input.now,
+          reminderId: claimed.id,
+        });
+      } catch (persistError) {
+        log('insert failed deliveries after claim reminder=%s %O', claimed.id, persistError);
+      }
+      result = {
+        failed: failedDeliveries.length || input.reminder.recipients.length,
+        firedAt: input.now,
+        reminder: claimed,
+        sent: 0,
+        skipped: 0,
+      };
+    }
+
+    await this.completeIfTerminal(input.task, input.config, result, input.now, nextFireAtForClaim);
+    return result;
+  };
+
+  private parkOnceIfNeeded = async (
+    task: TaskItem,
+    reminder: ReminderProfile,
+    config: TaskReminderConfig | null,
+    now: Date,
+  ) => {
+    const once = config?.once ?? !reminder.repeatRule;
+    if (!once && reminder.status === 'scheduled') return;
+    if (task.status === 'scheduled') {
+      await this.taskModel.updateStatus(task.id, 'completed', { completedAt: now });
+    }
+    if (reminder.status === 'scheduled') {
+      await this.reminderModel.updateProfile(reminder.id, { status: 'sent' });
+    }
+    await this.taskModel.updateHeartbeat(task.id);
   };
 
   private completeIfTerminal = async (
@@ -668,9 +828,12 @@ export class ReminderTaskService {
     config: TaskReminderConfig | null,
     result: ReminderDeliverResult,
     now: Date = result.firedAt,
+    next: Date | null = null,
   ) => {
     const once = config?.once ?? !result.reminder.repeatRule;
-    if (!once && result.reminder.status === 'scheduled') return;
+    // Repeats stay armed only when another occurrence exists. Last-until (next
+    // is null) must complete here so listCreated.nextFireAt does not lie.
+    if (!once && next) return;
     await this.taskModel.updateStatus(task.id, 'completed', { completedAt: now });
     if (result.reminder.status === 'scheduled') {
       await this.reminderModel.updateProfile(result.reminder.id, { status: 'sent' });
@@ -679,7 +842,7 @@ export class ReminderTaskService {
 
   private requireReminderTask = async (taskId: string): Promise<TaskItem> => {
     const task = await this.taskModel.resolve(taskId);
-    if (!task || !isReminderTaskConfig(task.config)) {
+    if (!task || task.createdByUserId !== this.userId || !isReminderTaskConfig(task.config)) {
       throw new ReminderServiceError(REMINDER_NOT_FOUND);
     }
     return task;
@@ -780,6 +943,17 @@ export class ReminderTaskService {
     const departments = hits.departments.filter((row) => row.name === name);
     if (departments.length === 1) {
       return this.departmentHitToRecipient(departments[0]);
+    }
+    if (departments.length > 1) {
+      return {
+        candidates: departments.map((row) => ({
+          deptId: row.deptId,
+          deptPath: row.pathNames,
+          leafDeptName: row.name,
+          name: row.name,
+        })),
+        kind: 'ambiguous',
+      };
     }
     return { kind: 'unknown' };
   };

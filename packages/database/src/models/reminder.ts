@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 
 import type {
   NewReminderDelivery,
@@ -10,6 +10,7 @@ import type {
   ReminderStatus,
 } from '../schemas/reminder';
 import { reminderDeliveries, reminderRecipients, reminders } from '../schemas/reminder';
+import { tasks } from '../schemas/task';
 import type { LobeChatDatabase, Transaction } from '../type';
 import { idGenerator } from '../utils/idGenerator';
 
@@ -63,9 +64,12 @@ export interface ReminderWithRecipients extends ReminderItem {
 export interface ReceivedReminder {
   content: string;
   creatorName: string;
+  failedReason: string | null;
   firedAt: Date;
   id: string;
   reminderId: string;
+  robotFailedReason: string | null;
+  robotStatus: ReminderDeliveryStatus | null;
   status: ReminderDeliveryStatus;
 }
 
@@ -106,8 +110,11 @@ export class ReminderModel {
     private readonly userId: string,
   ) {}
 
-  create = async (input: ReminderCreateInput): Promise<ReminderWithRecipients> => {
-    return this.db.transaction(async (tx) => {
+  create = async (
+    input: ReminderCreateInput,
+    trx?: Transaction,
+  ): Promise<ReminderWithRecipients> => {
+    const run = async (tx: LobeChatDatabase | Transaction) => {
       const id = input.id ?? idGenerator('reminders');
       const [row] = await tx
         .insert(reminders)
@@ -147,12 +154,17 @@ export class ReminderModel {
               .returning();
 
       return { ...row, deliveryCounts: emptyDeliveryCounts(), recipients };
-    });
+    };
+
+    if (trx) return run(trx);
+    return this.db.transaction(run);
   };
 
   createForTask = async (
     input: ReminderCreateInput & { taskId: string },
-  ): Promise<ReminderWithRecipients> => this.create({ ...input, source: input.source ?? 'task' });
+    trx?: Transaction,
+  ): Promise<ReminderWithRecipients> =>
+    this.create({ ...input, source: input.source ?? 'task' }, trx);
 
   findByTaskId = async (taskId: string): Promise<ReminderWithRecipients | null> => {
     const [row] = await this.db
@@ -264,9 +276,12 @@ export class ReminderModel {
       .select({
         content: reminders.content,
         creatorName: reminders.creatorName,
+        failedReason: reminderDeliveries.failedReason,
         firedAt: reminderDeliveries.firedAt,
         id: reminderDeliveries.id,
         reminderId: reminderDeliveries.reminderId,
+        robotFailedReason: reminderDeliveries.robotFailedReason,
+        robotStatus: reminderDeliveries.robotStatus,
         status: reminderDeliveries.status,
       })
       .from(reminderDeliveries)
@@ -303,6 +318,13 @@ export class ReminderModel {
     return rows.length > 0;
   };
 
+  /**
+   * Legacy sweep filter: scheduled, due, and not linked to a reminder task.
+   * Exported so tests can assert `task_id IS NULL` without running Postgres.
+   */
+  static buildListDueCondition = (now: Date) =>
+    and(eq(reminders.status, 'scheduled'), lte(reminders.fireAt, now), isNull(reminders.taskId));
+
   static listDue = async (
     db: LobeChatDatabase,
     now: Date,
@@ -311,15 +333,77 @@ export class ReminderModel {
     return db
       .select()
       .from(reminders)
-      .where(
-        and(
-          eq(reminders.status, 'scheduled'),
-          lte(reminders.fireAt, now),
-          isNull(reminders.taskId),
-        ),
-      )
+      .where(ReminderModel.buildListDueCondition(now))
       .orderBy(reminders.fireAt, reminders.id)
       .limit(clampLimit(limit, DEFAULT_DUE_LIMIT));
+  };
+
+  /**
+   * Claim a fire slot before HTTP. Returns the updated row, or null when another
+   * worker already claimed this occurrence (`last_fired_at >= slotStart`).
+   * Stamps `tasks.last_heartbeat_at` in the same transaction.
+   */
+  static claimFireSlot = async (
+    db: LobeChatDatabase,
+    input: {
+      firedAt: Date;
+      nextFireAt: Date | null;
+      reminderId: string;
+      slotStart: Date;
+      taskId: string;
+    },
+  ): Promise<ReminderItem | null> => {
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(reminders)
+        .set({
+          fireAt: input.nextFireAt ?? input.firedAt,
+          firedCount: sql`${reminders.firedCount} + 1`,
+          lastFiredAt: input.firedAt,
+        })
+        .where(
+          and(
+            eq(reminders.id, input.reminderId),
+            eq(reminders.status, 'scheduled'),
+            or(isNull(reminders.lastFiredAt), lt(reminders.lastFiredAt, input.slotStart)),
+          ),
+        )
+        .returning();
+
+      if (!updated) return null;
+
+      await tx
+        .update(tasks)
+        .set({ lastHeartbeatAt: input.firedAt, updatedAt: input.firedAt })
+        .where(eq(tasks.id, input.taskId));
+
+      return updated;
+    });
+  };
+
+  static insertDeliveries = async (
+    db: LobeChatDatabase,
+    input: {
+      deliveries: ReminderFireDeliveryInput[];
+      firedAt: Date;
+      reminderId: string;
+    },
+  ): Promise<void> => {
+    if (input.deliveries.length === 0) return;
+    const values: NewReminderDelivery[] = input.deliveries.map((delivery) => ({
+      failedReason: delivery.failedReason ?? null,
+      firedAt: input.firedAt,
+      id: idGenerator('reminderDeliveries'),
+      providerTaskId: delivery.providerTaskId ?? null,
+      reminderId: input.reminderId,
+      robotFailedReason: delivery.robotFailedReason ?? null,
+      robotMessageId: delivery.robotMessageId ?? null,
+      robotStatus: delivery.robotStatus ?? null,
+      staffId: delivery.staffId,
+      status: delivery.status,
+      userId: delivery.userId ?? null,
+    }));
+    await db.insert(reminderDeliveries).values(values);
   };
 
   static recordFire = async (
@@ -344,7 +428,7 @@ export class ReminderModel {
       const [updated] = await tx
         .update(reminders)
         .set({
-          ...(input.nextFireAt ? { fireAt: input.nextFireAt } : {}),
+          fireAt: input.nextFireAt ?? input.firedAt,
           firedCount: sql`${reminders.firedCount} + 1`,
           lastFiredAt: input.firedAt,
           status: nextStatus,

@@ -3376,7 +3376,8 @@ table reminders {
 
   indexes {
     (status, fire_at) [name: 'reminders_status_fire_at_idx']
-    task_id [name: 'reminders_task_id_unique', unique]
+    // Partial unique: WHERE task_id IS NOT NULL (legacy rows keep task_id NULL).
+    task_id [name: 'reminders_task_id_unique', unique, note: 'partial: WHERE task_id IS NOT NULL']
   }
 }
 

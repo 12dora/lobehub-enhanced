@@ -14,6 +14,8 @@ import { resolveDingTalkStaffId } from '@/server/services/messenger/platforms/di
 
 import { formatServerNowIso, REMINDER_DEFAULT_TZ } from './schedule';
 
+export type { ReceivedReminder };
+
 export {
   buildReminderNotice,
   formatRepeatSummary,
@@ -39,13 +41,16 @@ export const REMINDER_TIME_PAST = 'REMINDER_TIME_PAST';
 export const REMINDER_RECIPIENT_UNKNOWN = 'REMINDER_RECIPIENT_UNKNOWN';
 export const REMINDER_CONTENT_EMPTY = 'REMINDER_CONTENT_EMPTY';
 export const REMINDER_NOT_FOUND = 'REMINDER_NOT_FOUND';
+export const REMINDER_SCHEDULE_INVALID = 'REMINDER_SCHEDULE_INVALID';
 export const REMINDER_FIRE_AT_LEAD_MS = 30_000;
 export const REMINDER_LARGE_AUDIENCE_THRESHOLD = 30;
+export const REMINDER_MAX_RECIPIENT_QUERIES = 50;
 
 export type ReminderServiceErrorCode =
   | typeof REMINDER_CONTENT_EMPTY
   | typeof REMINDER_NOT_FOUND
   | typeof REMINDER_RECIPIENT_UNKNOWN
+  | typeof REMINDER_SCHEDULE_INVALID
   | typeof REMINDER_TIME_PAST;
 
 export class ReminderServiceError extends Error {

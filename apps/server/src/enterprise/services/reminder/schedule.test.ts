@@ -8,15 +8,18 @@ import {
   buildReminderCron,
   buildReminderNotice,
   describeReminderSchedule,
+  fireNowSlotStart,
   formatRepeatSummary,
   initialFireAt,
   isDue,
   nextClockTime,
   nextFireAt,
   nextReminderFireAt,
+  reminderOccurrenceStart,
   resolveOneShotFireAt,
   scheduleFromLegacy,
   scheduleToRepeatRule,
+  validateReminderSchedule,
 } from './schedule';
 
 dayjs.extend(utc);
@@ -228,5 +231,24 @@ describe('reminder-task cron helpers', () => {
       until: '2026-12-01',
       weekdays: [3],
     });
+  });
+
+  it('validateReminderSchedule rejects malformed weekly/monthly/time payloads', () => {
+    expect(validateReminderSchedule({ kind: 'weekly', time: '09:00' })).toBe('missing_weekdays');
+    expect(validateReminderSchedule({ kind: 'monthly', time: '09:00' })).toBe('missing_monthDays');
+    expect(validateReminderSchedule({ kind: 'daily', time: '25:00' })).toBe('invalid_time');
+    expect(validateReminderSchedule({ kind: 'once', time: '09:00' })).toBe('missing_date');
+    expect(validateReminderSchedule({ kind: 'daily', time: '09:00' })).toBeNull();
+  });
+
+  it('reminderOccurrenceStart is today 09:00 for a daily tick after the minute', () => {
+    const start = reminderOccurrenceStart(
+      { kind: 'daily', time: '09:00' },
+      at('2026-09-16 09:04:00'),
+    );
+    expect(fmt(start)).toBe('2026-09-16 09:00');
+    expect(fireNowSlotStart(at('2026-09-16 09:04:00')).getTime()).toBe(
+      at('2026-09-16 09:03:00').getTime(),
+    );
   });
 });

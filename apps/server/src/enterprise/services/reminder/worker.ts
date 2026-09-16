@@ -138,6 +138,7 @@ export interface ReminderSweepDeps {
   listDue?: typeof ReminderModel.listDue;
   loadRecipients?: (reminderIds: string[]) => Promise<Map<string, ReminderRecipientItem[]>>;
   now?: Date;
+  persistMode?: 'cas' | 'deliveries';
   recordFire?: typeof ReminderModel.recordFire;
   resolveHeadText?: () => Promise<string>;
   resolveUserId?: (staffId: string) => Promise<string | null>;
@@ -217,6 +218,7 @@ interface ReminderFireRuntime {
   headText: string;
   notifyConfigured: boolean;
   now: Date;
+  persistMode: 'cas' | 'deliveries';
   recordFire: typeof ReminderModel.recordFire;
   resolveUserId: (staffId: string) => Promise<string | null>;
   robotEnabled: boolean;
@@ -259,6 +261,7 @@ const resolveFireRuntime = async (
     headText,
     now: deps.now ?? new Date(),
     notifyConfigured,
+    persistMode: deps.persistMode ?? 'cas',
     recordFire: deps.recordFire ?? ReminderModel.recordFire,
     resolveUserId:
       deps.resolveUserId ?? ((staffId: string) => resolveUserIdFromStaffId(db, staffId)),
@@ -512,14 +515,30 @@ const fireOneReminder = async (
     return hasActive ? ('sent' as const) : ('failed' as const);
   };
 
-  if (staffIds.length === 0) {
-    const updated = await deps.recordFire(db, {
+  const persistFire = async (status: ReminderItem['status']): Promise<ReminderItem> => {
+    if (deps.persistMode === 'deliveries') {
+      try {
+        await ReminderModel.insertDeliveries(db, {
+          deliveries,
+          firedAt: deps.now,
+          reminderId: reminder.id,
+        });
+      } catch (error) {
+        log('insert deliveries failed reminder=%s %O', reminder.id, error);
+      }
+      return reminder;
+    }
+    return deps.recordFire(db, {
       deliveries,
       firedAt: deps.now,
       nextFireAt: next,
       reminderId: reminder.id,
-      status: resolveStatus(false),
+      status,
     });
+  };
+
+  if (staffIds.length === 0) {
+    const updated = await persistFire(resolveStatus(false));
     return { deliveries, reminder: updated };
   }
 
@@ -542,66 +561,79 @@ const fireOneReminder = async (
       { failedReason?: string; processQueryKey?: string; status: 'failed' | 'sent' | 'skipped' }
     >();
 
-    await Promise.all([
-      (async () => {
-        if (!deps.workNoticeEnabled) {
-          for (const staffId of staffIds) {
-            workByStaff.set(staffId, { failedReason: CHANNEL_DISABLED, status: 'skipped' });
+    try {
+      await Promise.all([
+        (async () => {
+          if (!deps.workNoticeEnabled) {
+            for (const staffId of staffIds) {
+              workByStaff.set(staffId, { failedReason: CHANNEL_DISABLED, status: 'skipped' });
+            }
+            return;
           }
-          return;
-        }
-        for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
-          const result = await deliverWorkNoticeChunk({ oa, send: deps.send, staffIds: chunk });
-          for (const staffId of result.staffIds) {
-            workByStaff.set(staffId, result);
+          for (const chunk of chunkStaffIds(staffIds, DINGTALK_WORK_NOTICE_USERID_CHUNK)) {
+            const result = await deliverWorkNoticeChunk({ oa, send: deps.send, staffIds: chunk });
+            for (const staffId of result.staffIds) {
+              workByStaff.set(staffId, result);
+            }
           }
-        }
-      })(),
-      (async () => {
-        if (!deps.robotEnabled) {
-          for (const staffId of staffIds) {
-            robotByStaff.set(staffId, { failedReason: CHANNEL_DISABLED, status: 'skipped' });
+        })(),
+        (async () => {
+          if (!deps.robotEnabled) {
+            for (const staffId of staffIds) {
+              robotByStaff.set(staffId, { failedReason: CHANNEL_DISABLED, status: 'skipped' });
+            }
+            return;
           }
-          return;
-        }
-        for (const chunk of chunkStaffIds(staffIds, DINGTALK_ROBOT_USERID_CHUNK)) {
-          const result = await deliverRobotChunk({
-            markdown: robotMarkdown,
-            send: deps.sendRobot,
-            staffIds: chunk,
-          });
-          for (const staffId of result.staffIds) {
-            robotByStaff.set(staffId, result);
+          for (const chunk of chunkStaffIds(staffIds, DINGTALK_ROBOT_USERID_CHUNK)) {
+            const result = await deliverRobotChunk({
+              markdown: robotMarkdown,
+              send: deps.sendRobot,
+              staffIds: chunk,
+            });
+            for (const staffId of result.staffIds) {
+              robotByStaff.set(staffId, result);
+            }
           }
-        }
-      })(),
-    ]);
+        })(),
+      ]);
 
-    for (const staffId of staffIds) {
-      const work = workByStaff.get(staffId);
-      const robot = robotByStaff.get(staffId);
-      deliveries.push({
-        failedReason: work?.failedReason ?? null,
-        providerTaskId: work?.taskId ?? null,
-        robotFailedReason: robot?.failedReason ?? null,
-        robotMessageId: robot?.processQueryKey ?? null,
-        robotStatus: robot?.status ?? 'failed',
-        staffId,
-        status: work?.status ?? 'failed',
-        userId: userIds.get(staffId) ?? null,
-      });
+      for (const staffId of staffIds) {
+        const work = workByStaff.get(staffId);
+        const robot = robotByStaff.get(staffId);
+        deliveries.push({
+          failedReason: work?.failedReason ?? null,
+          providerTaskId: work?.taskId ?? null,
+          robotFailedReason: robot?.failedReason ?? null,
+          robotMessageId: robot?.processQueryKey ?? null,
+          robotStatus: robot?.status ?? 'failed',
+          staffId,
+          status: work?.status ?? 'failed',
+          userId: userIds.get(staffId) ?? null,
+        });
+      }
+    } catch (error) {
+      log('deliver channels failed reminder=%s %O', reminder.id, error);
+      const reason = error instanceof Error ? error.message : 'deliver_failed';
+      for (const staffId of staffIds) {
+        if (deliveries.some((row) => row.staffId === staffId)) continue;
+        deliveries.push({
+          failedReason: reason,
+          providerTaskId: null,
+          robotFailedReason: reason,
+          robotMessageId: null,
+          robotStatus: 'failed',
+          staffId,
+          status: 'failed',
+          userId: userIds.get(staffId) ?? null,
+        });
+      }
+      if (deps.persistMode !== 'deliveries') throw error;
     }
   }
 
   const firedAt = deps.now;
 
-  const updated = await deps.recordFire(db, {
-    deliveries,
-    firedAt,
-    nextFireAt: next,
-    reminderId: reminder.id,
-    status: resolveStatus(true),
-  });
+  const updated = await persistFire(resolveStatus(true));
 
   const dedupeKey = `reminder:${reminder.id}:${firedAt.toISOString()}`;
   for (const delivery of deliveries) {
