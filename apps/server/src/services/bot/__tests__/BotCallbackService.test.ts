@@ -1046,6 +1046,35 @@ describe('BotCallbackService', () => {
       expect(mockGenerateTopicTitle).not.toHaveBeenCalled();
     });
 
+    it('should replace a matching initialTopicTitle placeholder with a prefixed summary', async () => {
+      mockFindById.mockResolvedValue({ title: '钉钉 · hello world' });
+      mockGenerateTopicTitle.mockResolvedValue('周报');
+
+      const body = makeBody({
+        initialTopicTitle: '钉钉 · hello world',
+        lastAssistantContent: 'Here is the answer.',
+        reason: 'completed',
+        topicId: 'topic-1',
+        topicTitlePrefix: '钉钉 · ',
+        type: 'completion',
+        userId: 'user-1',
+        userPrompt: 'hello world',
+      });
+
+      await service.handleCallback(body);
+
+      await vi.waitFor(() => {
+        expect(mockGenerateTopicTitle).toHaveBeenCalledWith({
+          lastAssistantContent: 'Here is the answer.',
+          userPrompt: 'hello world',
+        });
+      });
+
+      await vi.waitFor(() => {
+        expect(mockTopicUpdate).toHaveBeenCalledWith('topic-1', { title: '钉钉 · 周报' });
+      });
+    });
+
     it('should skip summarization when reason is error', async () => {
       const body = makeBody({
         errorMessage: 'Failed',
@@ -1331,6 +1360,25 @@ describe('BotCallbackService', () => {
 
     expect(drainDingTalkQueue).toHaveBeenCalledWith('dingtalk:cid');
     expect(releaseDingTalkThreadBusy).not.toHaveBeenCalled();
+  });
+
+  it('routes DingTalk completed completions through the reply sink', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '答案',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        type: 'completion',
+      }),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith('答案', expect.anything());
+    expect(mockEditMessage).not.toHaveBeenCalled();
   });
 
   it('prefixes DingTalk auto titles with DINGTALK_TOPIC_TITLE_PREFIX when the body omits topicTitlePrefix', async () => {

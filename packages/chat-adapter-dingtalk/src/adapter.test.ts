@@ -325,4 +325,28 @@ describe('DingTalkAdapter inbound', () => {
     const groupBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(JSON.parse(groupBody.msgParam).at.atUserIds).toEqual(['staff_alice']);
   });
+
+  it('recalls 1:1 and group robot messages via processQueryKey', async () => {
+    await init();
+    const fetchMock = fetch as unknown as Mock;
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await adapter.recallMessage('dingtalk:cid_dm_1', 'pqk-1');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1.0/robot/otoMessages/batchRecall');
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      processQueryKeys: ['pqk-1'],
+      robotCode: 'robot_abc',
+    });
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+    await adapter.recallMessage('dingtalk:cid_group_1:staff_alice', 'pqk-g');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1.0/robot/groupMessages/recall');
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      openConversationId: 'cid_group_1',
+      processQueryKeys: ['pqk-g'],
+      robotCode: 'robot_abc',
+    });
+  });
 });

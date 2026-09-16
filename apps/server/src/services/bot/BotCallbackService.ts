@@ -82,6 +82,8 @@ export interface BotCallbackBody {
   hookId?: string;
   /** Hook type from HookDispatcher (e.g. 'afterStep', 'onComplete') */
   hookType?: string;
+  /** Placeholder title written at topic create; summarization may replace it. */
+  initialTopicTitle?: string;
   lastAssistantContent?: string;
   lastLLMContent?: string;
   lastToolsCalling?: any;
@@ -458,10 +460,7 @@ export class BotCallbackService {
     const dingtalkSink = platformThreadId.startsWith('dingtalk:')
       ? getDingTalkReplySink(platformThreadId)
       : undefined;
-    if (
-      dingtalkSink &&
-      (reason === 'error' || reason === 'interrupted' || reason === 'done' || !reason)
-    ) {
+    if (dingtalkSink) {
       if (reason === 'error') {
         const errorBody = renderAgentError(
           errorType,
@@ -479,8 +478,13 @@ export class BotCallbackService {
       }
       const hasText = !!lastAssistantContent?.trim();
       const hasAttachments = !!attachments?.length;
-      if (hasText || hasAttachments) {
-        await dingtalkSink.onComplete?.(lastAssistantContent ?? '', { attachments });
+      // Always complete the sink so the thinking placeholder is replaced even
+      // when the model returned no text (`reason` is `done` or `completed`).
+      await dingtalkSink.onComplete?.(lastAssistantContent ?? '', {
+        attachments: hasAttachments ? attachments : undefined,
+      });
+      if (!hasText && !hasAttachments) {
+        log('handleCompletion: dingtalk sink completed with empty body');
       }
       return;
     }
@@ -739,7 +743,9 @@ export class BotCallbackService {
     topicModel
       .findById(topicId)
       .then(async (topic) => {
-        if (topic?.title) return;
+        // Empty titles and the excerpt placeholder written at create may be
+        // replaced. A user-set or previously summarized title is left alone.
+        if (topic?.title && topic.title !== body.initialTopicTitle) return;
 
         const systemAgent = new SystemAgentService(this.db, userId, body.workspaceId ?? undefined);
         const title = await systemAgent.generateTopicTitle({

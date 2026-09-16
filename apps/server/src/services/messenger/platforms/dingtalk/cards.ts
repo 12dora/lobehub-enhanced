@@ -99,19 +99,47 @@ const resolveSendTarget = (threadId: string) => {
   return { decoded, isGroup, session, staffId };
 };
 
-export const sendDingTalkMarkdown = async (threadId: string, text: string): Promise<void> => {
+const recallDingTalkMessage = async (
+  api: DingTalkApiClient,
+  params: {
+    isGroup: boolean;
+    openConversationId: string;
+    processQueryKey: string | undefined;
+    robotCode: string;
+  },
+): Promise<void> => {
+  if (!params.processQueryKey) return;
+  try {
+    await api.recallMessage({
+      openConversationId: params.isGroup ? params.openConversationId : undefined,
+      processQueryKeys: [params.processQueryKey],
+      robotCode: params.robotCode,
+    });
+  } catch (error) {
+    log('recallDingTalkMessage failed: %O', error);
+  }
+};
+
+export const sendDingTalkMarkdown = async (
+  threadId: string,
+  text: string,
+  options?: { recallable?: boolean },
+): Promise<string | undefined> => {
   if (!text) return;
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
   const api = new DingTalkApiClient(config.clientId, config.clientSecret);
   const { decoded, isGroup, session, staffId } = resolveSendTarget(threadId);
   const chunks = chunkMarkdown(text);
+  let processQueryKey: string | undefined;
   for (const chunk of chunks) {
     const title = markdownTitle(chunk);
     const body =
       isGroup && staffId && !chunk.includes(`@${staffId}`) ? `@${staffId} ${chunk}` : chunk;
     try {
-      if (isSessionWebhookLive(session) && session?.sessionWebhook) {
+      // Session webhooks do not return `processQueryKey`, so skip them when
+      // the caller needs to recall this message later (thinking placeholder).
+      if (!options?.recallable && isSessionWebhookLive(session) && session?.sessionWebhook) {
         const payload: Record<string, unknown> = {
           markdown: { text: body, title },
           msgtype: 'markdown',
@@ -123,25 +151,25 @@ export const sendDingTalkMarkdown = async (threadId: string, text: string): Prom
       const msgParamObj: Record<string, unknown> = { text: body, title };
       if (isGroup && staffId) msgParamObj.at = { atUserIds: [staffId] };
       const msgParam = JSON.stringify(msgParamObj);
-      if (isGroup) {
-        await api.sendGroupMessage({
-          msgKey: 'sampleMarkdown',
-          msgParam,
-          openConversationId: decoded.conversationId,
-          robotCode: config.robotCode,
-        });
-      } else {
-        await api.sendOtoMessage({
-          msgKey: 'sampleMarkdown',
-          msgParam,
-          robotCode: config.robotCode,
-          userIds: [staffId || decoded.conversationId],
-        });
-      }
+      const sent = isGroup
+        ? await api.sendGroupMessage({
+            msgKey: 'sampleMarkdown',
+            msgParam,
+            openConversationId: decoded.conversationId,
+            robotCode: config.robotCode,
+          })
+        : await api.sendOtoMessage({
+            msgKey: 'sampleMarkdown',
+            msgParam,
+            robotCode: config.robotCode,
+            userIds: [staffId || decoded.conversationId],
+          });
+      if (sent.processQueryKey) processQueryKey = sent.processQueryKey;
     } catch (error) {
       log('sendDingTalkMarkdown failed: %O', error);
     }
   }
+  return processQueryKey;
 };
 
 const lastListKindFromPagePrefix = (
@@ -399,21 +427,47 @@ export const createDingTalkReplySink = async (
   let mode: 'card' | 'text' = config.aiCardTemplateId ? 'card' : 'text';
   let stream: DingTalkAiCardStream | undefined;
   let finalized = false;
+  let thinkingProcessQueryKey: string | undefined;
+
+  const recallThinking = async () => {
+    const key = thinkingProcessQueryKey;
+    thinkingProcessQueryKey = undefined;
+    await recallDingTalkMessage(api, {
+      isGroup,
+      openConversationId: decoded.conversationId,
+      processQueryKey: key,
+      robotCode: config.robotCode,
+    });
+  };
+
+  const sendThinkingPlaceholder = async () => {
+    thinkingProcessQueryKey = await sendDingTalkMarkdown(threadId, DINGTALK_THINKING_REPLY, {
+      recallable: true,
+    });
+  };
 
   const fallbackToText = async (content?: string) => {
     mode = 'text';
+    if (content === DINGTALK_THINKING_REPLY) {
+      await sendThinkingPlaceholder();
+      return;
+    }
     if (content) await sendDingTalkMarkdown(threadId, content);
   };
 
   const finalizeCard = async (content: string) => {
     if (finalized) return;
     finalized = true;
-    if (mode !== 'card' || !stream) return;
+    if (!stream) return;
     try {
+      // Replace first so the card body is the answer even if DingTalk's
+      // streaming-finish call only flips the streaming flag.
+      await stream.replace(content);
       await stream.finalize(content);
     } catch (error) {
       log('finalizeCard failed, falling back to text: %O', error);
-      await fallbackToText(content);
+      mode = 'text';
+      await sendDingTalkMarkdown(threadId, content);
     }
   };
 
@@ -422,6 +476,7 @@ export const createDingTalkReplySink = async (
       if (mode === 'card') {
         await finalizeCard(content);
       } else {
+        await recallThinking();
         await sendDingTalkMarkdown(threadId, content);
       }
       if (extras?.attachments?.length) {
@@ -434,6 +489,7 @@ export const createDingTalkReplySink = async (
         await finalizeCard(text);
         return;
       }
+      await recallThinking();
       await sendDingTalkMarkdown(threadId, text);
     },
     onPartial: async (content) => {
@@ -451,7 +507,7 @@ export const createDingTalkReplySink = async (
     onStart: async () => {
       if (mode !== 'card' || !config.aiCardTemplateId) {
         mode = 'text';
-        await sendDingTalkMarkdown(threadId, DINGTALK_THINKING_REPLY);
+        await sendThinkingPlaceholder();
         return;
       }
       stream = new DingTalkAiCardStream(api, {

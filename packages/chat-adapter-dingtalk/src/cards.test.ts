@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { DingTalkApiClient } from './api';
 import {
@@ -137,5 +137,29 @@ describe('DingTalkAiCardStream', () => {
     });
     await stream.create();
     expect(getDingTalkCard('out_no_staff')).toBeUndefined();
+  });
+
+  it('finalize streaming finish carries the final content', async () => {
+    const streamCard = vi.fn(async () => ({}));
+    const api = {
+      createAndDeliverCard: async () => ({}),
+      streamCard,
+    } as unknown as DingTalkApiClient;
+
+    const stream = new DingTalkAiCardStream(api, {
+      cardTemplateId: 'tpl',
+      outTrackId: 'out_fin',
+      robotCode: 'r',
+      staffId: 'staff_1',
+    });
+    await stream.create('正在思考…');
+    await stream.finalize('最终回答');
+    expect(streamCard).toHaveBeenCalledWith({
+      content: '最终回答',
+      isFinalize: true,
+      isFull: true,
+      key: 'content',
+      outTrackId: 'out_fin',
+    });
   });
 });

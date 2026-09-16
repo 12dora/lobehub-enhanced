@@ -7,7 +7,17 @@ export {
   encodeDingTalkThreadId,
   extractMediaMetadata,
 } from './adapter';
-export { assertDingTalkSessionWebhook, DingTalkApiClient } from './api';
+export type {
+  DingTalkRecallMessageParams,
+  DingTalkSendGroupParams,
+  DingTalkSendOtoParams,
+  DingTalkSendResult,
+} from './api';
+export {
+  assertDingTalkSessionWebhook,
+  DingTalkApiClient,
+  extractProcessQueryKey,
+} from './api';
 export {
   buildActionCardParam,
   buildSampleActionCardParam,

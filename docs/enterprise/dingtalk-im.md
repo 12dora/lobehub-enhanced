@@ -7,9 +7,9 @@
 - **管理端 → 通用设置 → IM 连接器**：每种 IM 一张卡片。钉钉卡片保存 Client ID / Client Secret / RobotCode、可选的 AI 卡片模板 ID 与选择卡片模板 ID、能力开关（对话 / 提醒推送）、会话策略（空闲自动新建会话及时长）。凭据以 `KEY_VAULTS_SECRET` 加密写入 `system_bot_providers`（platform = `dingtalk`）。该表同时是「设置 → 聊天平台」可用平台列表的来源。
 - **Stream 长连接**：服务进程内的 `dingtalkStreamWorker` 在连接器启用且「对话」开启时维持一条钉钉 Stream 连接（无需公网回调），收到的机器人消息与卡片回调带 HMAC 转发头在进程内交给聊天平台路由。状态每 30 s 写入 Redis `messenger:dingtalk:stream-status`，管理端卡片轮询显示。
 - **身份映射**：员工在钉钉的 staffId 与 AIHub 账号邮箱 `<staffId>@dingtalk.jiefakj.com`（Authentik 生成）一一对应，首次发消息即自动绑定，默认路由到默认助理。未登录过 AIHub 的员工会被提示先登录网页端一次。域名可用环境变量 `DINGTALK_IDENTITY_EMAIL_DOMAIN` 覆盖。
-- **会话**：单聊按会话保持当前话题；群聊按「群 + 提问人」隔离，机器人只能看到 @ 它的消息及其引用内容。话题在网页端可见，标题前缀「钉钉 ·」。空闲超过连接器设定时长自动新建会话。
+- **会话**：单聊按会话保持当前话题；群聊按「群 + 提问人」隔离，机器人只能看到 @ 它的消息及其引用内容。话题在网页端可见。新建话题时标题写成「钉钉 · 」加首条用户消息（最多 30 字）；首轮助手回复完成后，服务端走与网页相同的 `generateTopicTitle` 摘要，把占位标题换成「钉钉 · 」加摘要。空闲超过连接器设定时长自动新建会话。
 - **指令**：`/助手`（列出并切换）、`/切换 N`、`/新会话`、`/会话`（最近 5 个）、`/继续 N`、`/当前`、`/停止`、`/帮助`；同时接受英文别名 `/agents /use /new /topics /resume /status /stop /help`。
-- **回复**：配置了 AI 卡片模板时流式更新卡片；否则先回复「正在思考…」再发送完整 Markdown（超长按段落分片）。卡片接口失败自动回退 Markdown。
+- **回复**：配置了 AI 卡片模板时，先把「正在思考…」写入卡片首帧，流式 `replace` 后 `finalize`（`isFinalize` + 最终正文）覆盖思考文案。无模板或卡片失败时先发一条可撤回的 Markdown「正在思考…」（走机器人 1:1 / 群发接口以拿到 `processQueryKey`），答案或错误发出前 `recall` 该占位消息；撤回失败只记日志。超长 Markdown 按段落分片。卡片接口失败自动回退 Markdown。
 - **任务提醒**：任务事件（运行完成 / 运行失败 / 等待处理 / 任务完成）写入站内通知并按用户在任务页「提醒设置」中的渠道选择推送到钉钉（ActionCard，含直达链接）。投递结果记录在 `notification_deliveries`（channel = `dingtalk`），含 `sent` / `failed` / `skipped`。推送 `skipped`（例如账号未映射）仍会写一条 `{ status: 'skipped', failed_reason }` 的投递行；仅钉钉、站内关闭时，父通知以 `isArchived=true` 插入，以便 skipped 行有 parent 且不出现在铃铛里。
 - **定时任务**：本部署没有 QStash，`taskSchedulingWorker` 每 60 s 在进程内扫描 cron 到期任务、补发心跳、执行看门狗，见 `task-scheduling.md`。
 - **客户端绑定状态**：`messenger.availablePlatforms` 每条平台除 `capabilities.push` 外还带 `binding: { linked: boolean; platformUsername?: string | null }`（调用用户）。钉钉的 `linked` 与推送同一套解析（`resolveDingTalkStaffId`）：`findByPlatform('dingtalk', '')` 命中，或邮箱符合 `<staffId>@dingtalk.jiefakj.com` 约定。`platformUsername` 为链接行用户名，缺省时回退 `platformUserId` / 身份邮箱 local-part（staffId），避免已关联却显示空白账号名。客户端可 `import type { MessengerPlatformBinding } from '@lobechat/types'` 或 `@/services/messenger`。
@@ -37,13 +37,13 @@
 2. 否则邮箱符合 `<staffId>@dingtalk.jiefakj.com` 约定
 3. 都没有则投递 `skipped`（`failed_reason=user_not_mapped`）
 
-本地账号（例如破窗管理员 `admin@jiefakj.com`）没有钉钉身份邮箱，也不会在机器人会话里自动建链。管理员可在 **管理端 → 通用设置 → IM 连接器 → 钉钉 → 已绑定员工** 为任意 AIHub 账号手工绑定（或解绑）钉钉企业用户：
+本地账号（例如破窗管理员 `admin@jiefakj.com`）没有钉钉身份邮箱，也不会在机器人会话里自动建链。管理员可在 **管理端 → 通用设置 → IM 连接器 → 钉钉 → 已绑定员工** 为任意 AIHub 账号手工绑定（或解绑）钉钉企业用户。
 
-- `admin.imConnectors.bindings.list({ platform: 'dingtalk', q? })` — 列出已绑定用户（与卡片上的 `linkedUsers` 同源：`messenger_account_links`）
-- `admin.imConnectors.bindings.upsert({ platform, userId, platformUserId, platformUsername? })` — 创建或替换该账号的钉钉绑定；`source=manual`。若该钉钉用户已绑到另一个 AIHub 账号，返回 `PLATFORM_USER_ALREADY_BOUND`（错误详情含对方用户）
-- `admin.imConnectors.bindings.remove({ platform, userId })` — 解绑
+若该钉钉用户已经映射到另一个 AIHub 账号——无论是 `messenger_account_links` 行（`boundVia: 'link'`）还是身份邮箱 local-part 等于该 staffId（`boundVia: 'identity_email'`）——默认拒绝并返回 `PLATFORM_USER_ALREADY_BOUND`（详情含对方 `boundUserId` / Email / Name / `boundVia`）。`force: true` 在同一事务里删掉对方的链接行（若有）并写入当前绑定，避免「先解绑再绑定」半提交。身份邮箱冲突没有链接行可删；`force: true` 仍允许写入手工行（运维可能故意把某钉钉用户指到本地管理员）。
 
-连接器已配置凭据时，保存会尝试调用钉钉 `topapi/v2/user/get` 补全显示名；查找失败不阻断写入。手工绑定与自动绑定一样会被 `resolveDingTalkStaffId` / `messenger.availablePlatforms.binding` 读到。
+手工行一旦存在，**入站对话**按 `findByPlatformUser` 命中该行，因此该 staffId 的机器人消息会到达手工绑定的账号（链接行优先于身份邮箱）。**推送**仍按账号各自解析：手工绑定账号走链接行，身份邮箱账号走邮箱 local-part，两边都会推到同一个钉钉用户。
+
+连接器已配置凭据时，保存会尝试调用钉钉 `topapi/v2/user/get` 补全显示名；查找失败不阻断写入。手工绑定与自动绑定一样会被 `resolveDingTalkStaffId` / `messenger.availablePlatforms.binding` 读到。列表最多返回 200 行，并带 `hasMore` / `total`（`total` 不受 200 上限截断）。
 
 ## 员工侧
 

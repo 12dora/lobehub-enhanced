@@ -127,6 +127,37 @@ export interface DingTalkSendGroupParams {
   robotCode: string;
 }
 
+export interface DingTalkSendResult {
+  processQueryKey?: string;
+}
+
+export interface DingTalkRecallMessageParams {
+  /** Group open-conversation id. Omit for 1:1 (`otoMessages/batchRecall`). */
+  openConversationId?: string;
+  processQueryKeys: string[];
+  robotCode: string;
+}
+
+/**
+ * DingTalk robot send responses expose `processQueryKey` (sometimes nested
+ * under `result`, sometimes as `processQueryKeys[0]`). Needed to recall.
+ */
+export const extractProcessQueryKey = (data: unknown): string | undefined => {
+  if (!data || typeof data !== 'object') return undefined;
+  const record = data as Record<string, unknown>;
+  if (typeof record.processQueryKey === 'string' && record.processQueryKey) {
+    return record.processQueryKey;
+  }
+  const keys = record.processQueryKeys;
+  if (Array.isArray(keys) && typeof keys[0] === 'string' && keys[0]) {
+    return keys[0];
+  }
+  if (record.result && typeof record.result === 'object') {
+    return extractProcessQueryKey(record.result);
+  }
+  return undefined;
+};
+
 export interface DingTalkDownloadFileParams {
   downloadCode: string;
   robotCode: string;
@@ -248,20 +279,47 @@ export class DingTalkApiClient {
     }
   }
 
-  async sendOtoMessage(params: DingTalkSendOtoParams): Promise<unknown> {
-    return this.call('POST', '/v1.0/robot/oToMessages/batchSend', {
+  async sendOtoMessage(params: DingTalkSendOtoParams): Promise<DingTalkSendResult> {
+    const data = await this.call('POST', '/v1.0/robot/oToMessages/batchSend', {
       msgKey: params.msgKey,
       msgParam: params.msgParam,
       robotCode: params.robotCode,
       userIds: params.userIds,
     });
+    return { processQueryKey: extractProcessQueryKey(data) };
   }
 
-  async sendGroupMessage(params: DingTalkSendGroupParams): Promise<unknown> {
-    return this.call('POST', '/v1.0/robot/groupMessages/send', {
+  async sendGroupMessage(params: DingTalkSendGroupParams): Promise<DingTalkSendResult> {
+    const data = await this.call('POST', '/v1.0/robot/groupMessages/send', {
       msgKey: params.msgKey,
       msgParam: params.msgParam,
       openConversationId: params.openConversationId,
+      robotCode: params.robotCode,
+    });
+    return { processQueryKey: extractProcessQueryKey(data) };
+  }
+
+  /**
+   * Recall a previously sent robot message. 1:1 uses
+   * `POST /v1.0/robot/otoMessages/batchRecall`; groups use
+   * `POST /v1.0/robot/groupMessages/recall`. `processQueryKeys` come from the
+   * send response.
+   */
+  async recallMessage(params: DingTalkRecallMessageParams): Promise<void> {
+    const keys = params.processQueryKeys.filter(Boolean);
+    if (keys.length === 0) return;
+
+    if (params.openConversationId) {
+      await this.call('POST', '/v1.0/robot/groupMessages/recall', {
+        openConversationId: params.openConversationId,
+        processQueryKeys: keys,
+        robotCode: params.robotCode,
+      });
+      return;
+    }
+
+    await this.call('POST', '/v1.0/robot/otoMessages/batchRecall', {
+      processQueryKeys: keys,
       robotCode: params.robotCode,
     });
   }

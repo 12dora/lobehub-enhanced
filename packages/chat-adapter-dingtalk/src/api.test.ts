@@ -225,6 +225,59 @@ describe('DingTalkApiClient', () => {
       expect(String(fetchMock.mock.calls[3][0])).toBe(`${DINGTALK_API_BASE}/v1.0/card/instances`);
       expect((fetchMock.mock.calls[3][1] as RequestInit).method).toBe('PUT');
     });
+
+    it('returns processQueryKey from sendOtoMessage', async () => {
+      withToken();
+      fetchMock.mockResolvedValueOnce(jsonResponse({ processQueryKey: 'pqk-1' }));
+      const result = await client.sendOtoMessage({
+        msgKey: 'sampleMarkdown',
+        msgParam: '{"title":"t","text":"hi"}',
+        robotCode: 'r',
+        userIds: ['staff1'],
+      });
+      expect(result).toEqual({ processQueryKey: 'pqk-1' });
+    });
+
+    it('recalls 1:1 messages via otoMessages/batchRecall', async () => {
+      withToken();
+      fetchMock.mockResolvedValueOnce(jsonResponse({}));
+      await client.recallMessage({ processQueryKeys: ['pqk-1'], robotCode: 'r' });
+      expect(String(fetchMock.mock.calls[1][0])).toBe(
+        `${DINGTALK_API_BASE}/v1.0/robot/otoMessages/batchRecall`,
+      );
+      expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+        processQueryKeys: ['pqk-1'],
+        robotCode: 'r',
+      });
+    });
+
+    it('recalls group messages via groupMessages/recall', async () => {
+      withToken();
+      fetchMock.mockResolvedValueOnce(jsonResponse({}));
+      await client.recallMessage({
+        openConversationId: 'cid',
+        processQueryKeys: ['pqk-g'],
+        robotCode: 'r',
+      });
+      expect(String(fetchMock.mock.calls[1][0])).toBe(
+        `${DINGTALK_API_BASE}/v1.0/robot/groupMessages/recall`,
+      );
+      expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+        openConversationId: 'cid',
+        processQueryKeys: ['pqk-g'],
+        robotCode: 'r',
+      });
+    });
+  });
+
+  describe('extractProcessQueryKey', () => {
+    it('reads top-level, nested result, and processQueryKeys[0]', async () => {
+      const { extractProcessQueryKey } = await import('./api');
+      expect(extractProcessQueryKey({ processQueryKey: 'a' })).toBe('a');
+      expect(extractProcessQueryKey({ result: { processQueryKey: 'b' } })).toBe('b');
+      expect(extractProcessQueryKey({ processQueryKeys: ['c'] })).toBe('c');
+      expect(extractProcessQueryKey({})).toBeUndefined();
+    });
   });
 
   describe('error mapping', () => {

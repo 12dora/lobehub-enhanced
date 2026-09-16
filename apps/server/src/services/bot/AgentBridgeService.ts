@@ -38,9 +38,9 @@ import {
 
 const log = debug('lobe-server:bot:agent-bridge');
 
-const INITIAL_TOPIC_TITLE_CHARS = 20;
+const INITIAL_TOPIC_TITLE_CHARS = 30;
 
-/** `钉钉 · ` + first 20 chars of the user text, used as execAgent `title` on create. */
+/** `钉钉 · ` + first 30 chars of the user text, used as execAgent `title` on create. */
 const buildInitialTopicTitle = (
   prefix: string | undefined,
   userText: string | undefined,
@@ -1014,6 +1014,7 @@ export class AgentBridgeService {
         channelContext?.thread?.name && /^Thread \d/.test(channelContext.thread.name)
           ? undefined
           : channelContext?.thread?.name,
+      initialTopicTitle,
       topicTitlePrefix,
       // Forward the lobe userId so messenger callbacks can rebuild the same
       // per-user gateway connectionId (`messenger:<platform>[:<tenant>]:user-<userId>`)

@@ -461,7 +461,25 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
   }
 
   async deleteMessage(_threadId: string, _messageId: string): Promise<void> {
-    // DingTalk robots cannot delete messages.
+    // DingTalk robots cannot delete messages. Use `recallMessage` with the
+    // send response's `processQueryKey` for robot 1:1 / group recalls.
+  }
+
+  /**
+   * Recall a robot markdown/text message by the `processQueryKey` returned
+   * from `sendOtoMessage` / `sendGroupMessage`. Session-webhook sends do not
+   * yield a key and cannot be recalled this way.
+   */
+  async recallMessage(threadId: string, processQueryKey: string): Promise<void> {
+    if (!processQueryKey) return;
+    const decoded = this.decodeThreadId(threadId);
+    const session = getDingTalkSession(threadId) ?? getDingTalkSession(decoded.conversationId);
+    const robotCode = session?.robotCode || this.robotCode;
+    await this.api.recallMessage({
+      openConversationId: this.isDM(threadId) ? undefined : decoded.conversationId,
+      processQueryKeys: [processQueryKey],
+      robotCode,
+    });
   }
 
   async fetchMessages(

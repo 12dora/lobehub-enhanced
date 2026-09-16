@@ -6,6 +6,7 @@ const finalize = vi.fn();
 const sendOtoMessage = vi.fn();
 const sendGroupMessage = vi.fn();
 const sendBySessionWebhook = vi.fn();
+const recallMessage = vi.fn();
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
 const mockSetDingTalkLastList = vi.fn();
 
@@ -28,6 +29,7 @@ vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
     ...actual,
     DingTalkAiCardStream: vi.fn().mockImplementation(() => ({ create, finalize, replace })),
     DingTalkApiClient: vi.fn().mockImplementation(() => ({
+      recallMessage,
       sendBySessionWebhook,
       sendGroupMessage,
       sendOtoMessage,
@@ -62,6 +64,7 @@ const {
   DINGTALK_COMMAND_CARD_TITLE,
   DINGTALK_COMMAND_SHORTCUT_BUTTONS,
   DINGTALK_HELP_TEXT,
+  DINGTALK_THINKING_REPLY,
   DINGTALK_UNKNOWN_COMMAND_REPLY,
   DINGTALK_WELCOME_TEXT,
 } = await import('./const');
@@ -84,8 +87,9 @@ beforeEach(() => {
   create.mockResolvedValue(undefined);
   replace.mockResolvedValue(undefined);
   finalize.mockResolvedValue(undefined);
-  sendOtoMessage.mockResolvedValue({});
-  sendGroupMessage.mockResolvedValue({});
+  sendOtoMessage.mockResolvedValue({ processQueryKey: 'pqk-1' });
+  sendGroupMessage.mockResolvedValue({ processQueryKey: 'pqk-g1' });
+  recallMessage.mockResolvedValue(undefined);
   vi.mocked(getDingTalkSession).mockReset();
   vi.mocked(getDingTalkSession).mockReturnValue(undefined);
   mockResolveDingTalkBrandingDisplayName.mockResolvedValue('AI平台');
@@ -107,9 +111,93 @@ describe('DingTalk AI-card reply sink', () => {
     await sink?.onError?.('执行失败');
     expect(create).toHaveBeenCalled();
     expect(replace).toHaveBeenCalledWith('thinking');
+    expect(replace).toHaveBeenCalledWith('执行失败');
     expect(finalize).toHaveBeenCalledWith('执行失败');
   });
 
+  it('replaces thinking with the final answer on the AI-card stream', async () => {
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await sink?.onComplete?.('最终回答');
+    expect(create).toHaveBeenCalledWith(DINGTALK_THINKING_REPLY);
+    expect(replace).toHaveBeenCalledWith('最终回答');
+    expect(finalize).toHaveBeenCalledWith('最终回答');
+    expect(recallMessage).not.toHaveBeenCalled();
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('DingTalk markdown thinking placeholder', () => {
+  const TEXT_CONFIG = { ...CONFIG, aiCardTemplateId: null };
+
+  it('recalls the thinking placeholder before sending the answer', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msgKey: 'sampleMarkdown',
+        robotCode: 'robot',
+      }),
+    );
+    const thinkingParam = JSON.parse(
+      (sendOtoMessage.mock.calls[0] as [{ msgParam: string }])[0].msgParam,
+    ) as { text: string };
+    expect(thinkingParam.text).toBe(DINGTALK_THINKING_REPLY);
+
+    await sink?.onComplete?.('最终回答');
+    expect(recallMessage).toHaveBeenCalledWith({
+      openConversationId: undefined,
+      processQueryKeys: ['pqk-1'],
+      robotCode: 'robot',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledTimes(2);
+    const answerParam = JSON.parse(
+      (sendOtoMessage.mock.calls[1] as [{ msgParam: string }])[0].msgParam,
+    ) as { text: string };
+    expect(answerParam.text).toBe('最终回答');
+  });
+
+  it('recalls the thinking placeholder before sending an error reply', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await sink?.onError?.('执行失败');
+    expect(recallMessage).toHaveBeenCalledWith({
+      openConversationId: undefined,
+      processQueryKeys: ['pqk-1'],
+      robotCode: 'robot',
+    });
+    const errorParam = JSON.parse(
+      (sendOtoMessage.mock.calls.at(-1) as [{ msgParam: string }])[0].msgParam,
+    ) as { text: string };
+    expect(errorParam.text).toBe('执行失败');
+  });
+
+  it('swallows recall failures and still sends the answer', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    recallMessage.mockRejectedValueOnce(new Error('recall 500'));
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await expect(sink?.onComplete?.('最终回答')).resolves.toBeUndefined();
+    expect(sendOtoMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('recalls group thinking placeholders via groupMessages/recall', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid_group:staff_a');
+    await sink?.onStart?.();
+    expect(sendGroupMessage).toHaveBeenCalled();
+    await sink?.onComplete?.('群回复');
+    expect(recallMessage).toHaveBeenCalledWith({
+      openConversationId: 'cid_group',
+      processQueryKeys: ['pqk-g1'],
+      robotCode: 'robot',
+    });
+  });
+});
+
+describe('DingTalk AI-card attachments', () => {
   it('filters outbound attachments through mapOutboundAttachments', async () => {
     const sink = await createDingTalkReplySink('dingtalk:cid');
     await sink?.onStart?.();

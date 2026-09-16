@@ -635,7 +635,10 @@ describe('AgentBridgeService', () => {
       });
 
       expect(completionWebhookBody()).toEqual(
-        expect.objectContaining({ topicTitlePrefix: '钉钉 · ' }),
+        expect.objectContaining({
+          initialTopicTitle: '钉钉 · hello world',
+          topicTitlePrefix: '钉钉 · ',
+        }),
       );
       expect(mockExecAgent).toHaveBeenCalledWith(
         expect.objectContaining({ title: '钉钉 · hello world' }),
@@ -682,12 +685,12 @@ describe('AgentBridgeService', () => {
       expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ title: '' }));
     });
 
-    it('truncates the initial title to 20 characters of user text', async () => {
+    it('truncates the initial title to 30 characters of user text', async () => {
       const service = new AgentBridgeService(FAKE_DB, USER_ID);
       const thread = createThread();
       const message = {
         ...createMessage(),
-        text: '这是一段超过二十个字符的钉钉用户消息内容用来截断',
+        text: '这是一段超过三十个字符的钉钉用户消息内容用来验证截断长度三十余',
       };
       const client = createClient();
 
@@ -699,7 +702,9 @@ describe('AgentBridgeService', () => {
       });
 
       expect(mockExecAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ title: '钉钉 · 这是一段超过二十个字符的钉钉用户消息内容' }),
+        expect.objectContaining({
+          title: '钉钉 · 这是一段超过三十个字符的钉钉用户消息内容用来验证截断长度三十',
+        }),
       );
     });
 
