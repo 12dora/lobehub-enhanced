@@ -45,6 +45,49 @@ export const auditTargetTypeLabel = (t: TFunction<'admin'>, value: string): stri
     ? t(`audit.logs.targetType.${value}` as never, { defaultValue: humanizeAuditToken(value) })
     : '—';
 
+/** Target ids that name a singleton scope rather than a row; rendered as localized copy. */
+const GLOBAL_TARGET_IDS = new Set(['global', '__global__']);
+
+export interface AuditTargetDisplayInput {
+  targetId?: string | null;
+  /** Server-resolved human name (topic title, user name, agent title…); null for sentinels. */
+  targetLabel?: string | null;
+  targetType?: string | null;
+}
+
+export interface AuditTargetDisplay {
+  /** Resolved name: server label → localized sentinel → raw id. */
+  displayName: string | null;
+  /** Raw target id, kept for the hover tooltip / copy. */
+  rawId: string | null;
+  /** One-line cell text: `type · name`. */
+  text: string;
+  /** Tooltip text: the full one-liner plus the raw id on its own line when it differs. */
+  tooltip: string;
+  typeLabel: string | null;
+}
+
+/**
+ * Human-readable target for an audit event: `typeLabel · displayName`, where the name is the
+ * server-resolved `targetLabel`, a localized sentinel (`global` → "Global") or the raw id.
+ */
+export const auditTargetDisplay = (
+  t: TFunction<'admin'>,
+  row: AuditTargetDisplayInput,
+): AuditTargetDisplay => {
+  const typeLabel = row.targetType ? auditTargetTypeLabel(t, row.targetType) : null;
+  const rawId = row.targetId?.trim() || null;
+  const label = row.targetLabel?.trim() || null;
+  const sentinel =
+    rawId && GLOBAL_TARGET_IDS.has(rawId)
+      ? t('audit.logs.targetId.global' as never, { defaultValue: 'Global' })
+      : null;
+  const displayName = label ?? sentinel ?? rawId;
+  const text = [typeLabel, displayName].filter(Boolean).join(' · ') || '—';
+  const tooltip = rawId && rawId !== displayName ? `${text}\n${rawId}` : text;
+  return { displayName, rawId, text, tooltip, typeLabel };
+};
+
 export const truncateText = (value: string | null | undefined, max = 80): string => {
   if (!value) return '—';
   const trimmed = value.trim();

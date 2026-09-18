@@ -1,4 +1,4 @@
-import { Text } from '@lobehub/ui/base-ui';
+import { Tooltip } from '@lobehub/ui/base-ui';
 import { type TableColumnsType } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { UserIcon } from 'lucide-react';
@@ -13,7 +13,7 @@ import AuditStatusTag from '../shared/AuditStatusTag';
 import {
   auditActionLabel,
   auditReasonLabel,
-  auditTargetTypeLabel,
+  auditTargetDisplay,
   formatAdminDateTime,
   truncateText,
 } from '../shared/format';
@@ -29,6 +29,21 @@ const styles = createStaticStyles(({ css }) => ({
   filterIconActive: css`
     display: inline-flex;
     color: ${cssVar.colorPrimary};
+  `,
+  targetCell: css`
+    overflow: hidden;
+    display: block;
+
+    width: 100%;
+    min-width: 0;
+
+    color: ${cssVar.colorTextSecondary};
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  `,
+  targetTooltip: css`
+    word-break: break-all;
+    white-space: pre-line;
   `,
 }));
 
@@ -110,8 +125,10 @@ export const useOperationLogColumns = ({
       },
       {
         key: 'target',
+        // The cell renders its own tooltip (full text + raw id); suppress antd's `title`.
+        ellipsis: { showTitle: false },
         title: t('audit.logs.columns.target'),
-        width: 200,
+        width: 280,
         filterDropdown: (dropdownProps) => (
           <TargetFilterDropdown
             {...dropdownProps}
@@ -125,11 +142,19 @@ export const useOperationLogColumns = ({
           filters.targetType || filters.targetId
             ? [filters.targetType ?? '', filters.targetId ?? '']
             : null,
-        render: (_, row) => (
-          <Text ellipsis style={{ margin: 0 }} type="secondary">
-            {[auditTargetTypeLabel(t, row.targetType), row.targetId].filter(Boolean).join(' · ')}
-          </Text>
-        ),
+        render: (_, row) => {
+          const target = auditTargetDisplay(t, row);
+          return (
+            <Tooltip
+              placement="topLeft"
+              title={<span className={styles.targetTooltip}>{target.tooltip}</span>}
+            >
+              <span className={styles.targetCell} data-testid="audit-target-cell">
+                {target.text}
+              </span>
+            </Tooltip>
+          );
+        },
       },
       {
         dataIndex: 'requestId',
