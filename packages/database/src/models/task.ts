@@ -30,6 +30,7 @@ import type { NewTaskComment, TaskCommentItem } from '../schemas/task';
 import { taskComments, taskDependencies, taskDocuments, tasks, taskTopics } from '../schemas/task';
 import type { LobeChatDatabase } from '../type';
 import { buildWorkspaceWhere } from '../utils/workspace';
+import { isUniqueViolation } from './platform/pgUniqueViolation';
 
 /**
  * Ownership helpers in this model come in three flavors. Choose by USE CASE,
@@ -145,50 +146,48 @@ export class TaskModel {
   ): Promise<TaskItem> {
     const { identifierPrefix = 'T', ...rest } = data;
 
-    // Retry loop to handle concurrent creates (parallel tool calls)
+    // Retry loop to handle concurrent creates (parallel tool calls). Each
+    // attempt runs in a nested transaction / SAVEPOINT so a 23505 seq race
+    // does not abort an outer caller transaction (createReminderTask wraps
+    // this in `db.transaction`; without a savepoint the retry's SELECT dies
+    // with "current transaction is aborted").
     const maxRetries = 5;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        // Seq is allocated per ownership scope: workspace-wide in team mode,
-        // user-private in personal mode. This keeps `T-N` identifiers stable
-        // within the surface the user actually sees.
-        //
-        // Note: this uses `seqOwnership` (visibility-blind), NOT the regular
-        // `ownership()`, because the `(workspace_id, identifier)` unique
-        // constraint is workspace-wide and ignores visibility. If we let the
-        // seq lookup filter out private rows, a private creator would compute
-        // a max seq that skips another member's existing identifier and hit
-        // PG error 23505 on insert.
-        const seqResult = await this.db
-          .select({ maxSeq: sql<number>`COALESCE(MAX(${tasks.seq}), 0)` })
-          .from(tasks)
-          .where(this.seqOwnership());
+        return await this.db.transaction(async (tx) => {
+          // Seq is allocated per ownership scope: workspace-wide in team mode,
+          // user-private in personal mode. This keeps `T-N` identifiers stable
+          // within the surface the user actually sees.
+          //
+          // Note: this uses `seqOwnership` (visibility-blind), NOT the regular
+          // `ownership()`, because the `(workspace_id, identifier)` unique
+          // constraint is workspace-wide and ignores visibility. If we let the
+          // seq lookup filter out private rows, a private creator would compute
+          // a max seq that skips another member's existing identifier and hit
+          // PG error 23505 on insert.
+          const seqResult = await tx
+            .select({ maxSeq: sql<number>`COALESCE(MAX(${tasks.seq}), 0)` })
+            .from(tasks)
+            .where(this.seqOwnership());
 
-        const nextSeq = Number(seqResult[0].maxSeq) + 1;
-        const identifier = `${identifierPrefix}-${nextSeq}`;
+          const nextSeq = Number(seqResult[0].maxSeq) + 1;
+          const identifier = `${identifierPrefix}-${nextSeq}`;
 
-        const [task] = await this.db
-          .insert(tasks)
-          .values({
-            ...rest,
-            createdByUserId: this.userId,
-            identifier,
-            seq: nextSeq,
-            workspaceId: this.workspaceId ?? null,
-          } as NewTask)
-          .returning();
+          const [task] = await tx
+            .insert(tasks)
+            .values({
+              ...rest,
+              createdByUserId: this.userId,
+              identifier,
+              seq: nextSeq,
+              workspaceId: this.workspaceId ?? null,
+            } as NewTask)
+            .returning();
 
-        return task;
-      } catch (error: any) {
-        // Retry on unique constraint violation (concurrent seq conflict)
-        // Check error itself, cause, and stringified message for PG error code 23505
-        const errStr =
-          String(error?.message || '') +
-          String(error?.cause?.code || '') +
-          String(error?.code || '');
-        const isUniqueViolation =
-          errStr.includes('23505') || errStr.includes('unique') || errStr.includes('duplicate');
-        if (isUniqueViolation && attempt < maxRetries - 1) {
+          return task;
+        });
+      } catch (error: unknown) {
+        if (isUniqueViolation(error) && attempt < maxRetries - 1) {
           continue;
         }
         throw error;

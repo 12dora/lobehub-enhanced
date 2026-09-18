@@ -1,4 +1,4 @@
-import { count, desc, eq, inArray, or, type SQL, sql, type SQLWrapper } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, or, type SQL, sql, type SQLWrapper } from 'drizzle-orm';
 
 import { escapeLike, likeContains } from '../repositories/platformSearch';
 import type {
@@ -19,6 +19,9 @@ import { pinyinFull, pinyinInitials } from '../utils/pinyin';
 const DEFAULT_SEARCH_LIMIT = 20;
 const MAX_SEARCH_LIMIT = 50;
 const SUBTREE_DEPTH_LIMIT = 32;
+/** Same-length surname/pinyin candidate cap. Must stay well above the old 80. */
+const NEAR_NAME_SQL_LIMIT = 256;
+const NEAR_NAME_SQL_MAX = 512;
 
 export interface DirectoryUserHit {
   active: boolean;
@@ -162,6 +165,53 @@ export class DingTalkDirectoryModel {
     }
 
     return { departments, users };
+  };
+
+  /**
+   * Bounded lookup for typo / near-homograph suggestions. Candidates must be
+   * the same character length, and either share the surname prefix or exact
+   * stored full pinyin (homophones like 刘钢/刘刚). Pinyin equality is ordered
+   * first so a true near-match is not cut off by alphabetical `LIMIT`.
+   */
+  listActiveUsersNearName = async (
+    name: string,
+    opts?: { limit?: number },
+  ): Promise<DirectoryUserHit[]> => {
+    const trimmed = name.trim();
+    if (!trimmed) return [];
+
+    // Callers historically passed 80, which truncated the true hit among many
+    // 陈* names. Floor the cap so a small `opts.limit` cannot recreate that.
+    const limit = Math.min(
+      Math.max(opts?.limit ?? NEAR_NAME_SQL_LIMIT, NEAR_NAME_SQL_LIMIT),
+      NEAR_NAME_SQL_MAX,
+    );
+    const surname = [...trimmed][0] ?? trimmed;
+    const prefix = `${escapeLike(surname)}%`;
+    const nameLen = [...trimmed].length;
+    const full = pinyinFull(trimmed);
+    const sameLength = sql`char_length(${dingtalkDirectoryUsers.name}) = ${nameLen}`;
+    const surnamePrefix = sql`${dingtalkDirectoryUsers.name} LIKE ${prefix} ESCAPE '\\'`;
+    const match = full
+      ? or(surnamePrefix, eq(dingtalkDirectoryUsers.namePinyinFull, full))!
+      : surnamePrefix;
+    const pinyinRank = full
+      ? sql`CASE WHEN ${dingtalkDirectoryUsers.namePinyinFull} = ${full} THEN 0 ELSE 1 END`
+      : sql`1`;
+
+    return this.db
+      .select({
+        active: dingtalkDirectoryUsers.active,
+        deptPath: dingtalkDirectoryUsers.deptPath,
+        leafDeptId: dingtalkDirectoryUsers.leafDeptId,
+        leafDeptName: dingtalkDirectoryUsers.leafDeptName,
+        name: dingtalkDirectoryUsers.name,
+        staffId: dingtalkDirectoryUsers.staffId,
+      })
+      .from(dingtalkDirectoryUsers)
+      .where(and(eq(dingtalkDirectoryUsers.active, true), sameLength, match))
+      .orderBy(pinyinRank, dingtalkDirectoryUsers.name, dingtalkDirectoryUsers.staffId)
+      .limit(limit);
   };
 
   getUsers = async (staffIds: string[]): Promise<DingTalkDirectoryUserItem[]> => {

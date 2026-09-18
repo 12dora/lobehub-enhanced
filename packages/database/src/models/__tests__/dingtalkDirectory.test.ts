@@ -213,6 +213,101 @@ describe('DingTalkDirectoryModel', () => {
     });
   });
 
+  describe('listActiveUsersNearName', () => {
+    it('prefix-matches the surname and includes same-pinyin homophones', async () => {
+      await serverDB.insert(dingtalkDirectoryUsers).values([
+        {
+          active: true,
+          deptPath: '捷发 / 外贸组',
+          leafDeptId: 'anhuan',
+          leafDeptName: '外贸组',
+          name: '陈柠',
+          staffId: 'staff_ning',
+          syncedAt,
+          ...pinyin('陈柠'),
+        },
+        {
+          active: true,
+          deptPath: '捷发 / 外贸组',
+          leafDeptId: 'anhuan',
+          leafDeptName: '外贸组',
+          name: '刘钢',
+          staffId: 'staff_gang_steel',
+          syncedAt,
+          ...pinyin('刘钢'),
+        },
+        {
+          active: true,
+          deptPath: '捷发 / 业务部',
+          leafDeptId: 'finance',
+          leafDeptName: '业务部',
+          name: '刘刚',
+          staffId: 'staff_gang_just',
+          syncedAt,
+          ...pinyin('刘刚'),
+        },
+      ]);
+
+      const chen = await model.listActiveUsersNearName('陈柑');
+      expect(chen.map((row) => row.staffId)).toContain('staff_ning');
+      expect(chen.every((row) => row.active)).toBe(true);
+
+      const liu = await model.listActiveUsersNearName('刘钢');
+      expect(liu.map((row) => row.staffId).sort()).toEqual(
+        ['staff_gang_just', 'staff_gang_steel'].sort(),
+      );
+    });
+
+    it('returns empty results for a blank query', async () => {
+      await expect(model.listActiveUsersNearName('   ')).resolves.toEqual([]);
+    });
+
+    it('still returns the true 2-char near-match among more than 80 same-surname names', async () => {
+      const fillers = Array.from({ length: 90 }, (_, i) => {
+        const name = `陈${String.fromCodePoint(0x4e00 + i)}`;
+        return {
+          active: true,
+          deptPath: '捷发 / 其他',
+          leafDeptId: 'anhuan',
+          leafDeptName: '其他',
+          name,
+          staffId: `staff_chen_fill_${i}`,
+          syncedAt,
+          ...pinyin(name),
+        };
+      });
+      await serverDB.insert(dingtalkDirectoryUsers).values([
+        ...fillers,
+        {
+          active: true,
+          deptPath: '捷发 / 外贸组',
+          leafDeptId: 'anhuan',
+          leafDeptName: '外贸组',
+          name: '陈柠',
+          staffId: 'staff_ning',
+          syncedAt,
+          ...pinyin('陈柠'),
+        },
+        {
+          active: true,
+          deptPath: '捷发 / 业务部',
+          leafDeptId: 'finance',
+          leafDeptName: '业务部',
+          name: '陈伟强',
+          staffId: 'staff_weiqiang',
+          syncedAt,
+          ...pinyin('陈伟强'),
+        },
+      ]);
+
+      const chen = await model.listActiveUsersNearName('陈柑', { limit: 80 });
+      expect(chen.length).toBeGreaterThan(80);
+      expect(chen.map((row) => row.staffId)).toContain('staff_ning');
+      expect(chen.every((row) => [...row.name].length === 2)).toBe(true);
+      expect(chen.map((row) => row.staffId)).not.toContain('staff_weiqiang');
+    });
+  });
+
   describe('replaceAll', () => {
     it('replaces the directory transactionally and fills pinyin when omitted', async () => {
       await model.replaceAll({

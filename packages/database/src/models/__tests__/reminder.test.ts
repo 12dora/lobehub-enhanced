@@ -7,6 +7,7 @@ import { notifications } from '../../schemas/notification';
 import { reminderDeliveries, reminders } from '../../schemas/reminder';
 import { users } from '../../schemas/user';
 import type { LobeChatDatabase } from '../../type';
+import { isUniqueViolation } from '../platform/pgUniqueViolation';
 import type { ReminderCreateInput } from '../reminder';
 import { ReminderModel } from '../reminder';
 
@@ -222,6 +223,69 @@ describe('ReminderModel', () => {
       const deliveries = await serverDB.select().from(reminderDeliveries);
       expect(deliveries).toHaveLength(1);
       expect(deliveries[0]).toMatchObject({ staffId: 'staff_hyq_a', status: 'skipped' });
+    });
+  });
+
+  describe('recipient unique indexes', () => {
+    const tradeDeptId = '990739069';
+    const userInTrade = (staffId: string, displayName: string) => ({
+      deptId: tradeDeptId,
+      deptName: '外贸组',
+      deptPath: '捷发 / 外贸组',
+      displayName,
+      kind: 'user' as const,
+      staffId,
+    });
+
+    it('inserts multiple users in the same department plus that department', async () => {
+      const created = await createSample({
+        recipients: [
+          userInTrade('staff_040', '刘钢'),
+          userInTrade('staff_026', '钱宝国'),
+          userInTrade('staff_173', '陈柠'),
+          {
+            deptId: tradeDeptId,
+            deptName: '外贸组',
+            deptPath: '捷发 / 外贸组',
+            displayName: '外贸组',
+            kind: 'department',
+            memberCount: 12,
+          },
+        ],
+      });
+
+      expect(created.recipients).toHaveLength(4);
+      expect(created.recipients.filter((row) => row.kind === 'user')).toHaveLength(3);
+      expect(created.recipients.filter((row) => row.kind === 'department')).toHaveLength(1);
+    });
+
+    it('rejects a duplicate user on the same reminder', async () => {
+      await expect(
+        createSample({
+          recipients: [userInTrade('staff_040', '刘钢'), userInTrade('staff_040', '刘钢')],
+        }),
+      ).rejects.toSatisfy(isUniqueViolation);
+    });
+
+    it('rejects a duplicate department on the same reminder', async () => {
+      await expect(
+        createSample({
+          recipients: [
+            {
+              deptId: tradeDeptId,
+              displayName: '外贸组',
+              kind: 'department',
+              memberCount: 3,
+            },
+            {
+              deptId: tradeDeptId,
+              displayName: '外贸组',
+              kind: 'department',
+              memberCount: 3,
+            },
+          ],
+        }),
+      ).rejects.toSatisfy(isUniqueViolation);
     });
   });
 

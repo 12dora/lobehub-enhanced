@@ -91,11 +91,11 @@ export const reminderRecipients = pgTable(
   },
   (t) => [
     uniqueIndex('reminder_recipients_user_unique')
-      .on(t.reminderId, t.kind, t.staffId)
-      .where(sql`${t.staffId} is not null`),
+      .on(t.reminderId, t.staffId)
+      .where(sql`${t.kind} = 'user'`),
     uniqueIndex('reminder_recipients_dept_unique')
-      .on(t.reminderId, t.kind, t.deptId)
-      .where(sql`${t.deptId} is not null`),
+      .on(t.reminderId, t.deptId)
+      .where(sql`${t.kind} = 'department'`),
     index('reminder_recipients_reminder_id_idx').on(t.reminderId),
   ],
 );

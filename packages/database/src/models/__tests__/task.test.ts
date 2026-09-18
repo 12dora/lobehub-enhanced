@@ -163,6 +163,101 @@ describe('TaskModel', () => {
       const uniqueIdentifiers = new Set(identifiers);
       expect(uniqueIdentifiers.size).toBe(5);
     });
+
+    it('retries seq unique violations inside an outer transaction without aborting it', async () => {
+      // Production createReminderTask wraps TaskModel.create in db.transaction.
+      // A 23505 on insert used to abort that outer txn so the retry SELECT failed.
+      const sequential = await serverDB.transaction(async (tx) => {
+        const model = new TaskModel(tx, userId);
+        const first = await model.create({ instruction: 'outer first' });
+        const second = await model.create({ instruction: 'outer second' });
+        return [first, second];
+      });
+      expect(sequential.map((row) => row.identifier)).toEqual(['T-1', 'T-2']);
+
+      await serverDB.delete(tasks);
+
+      const results = await Promise.all(
+        [1, 2, 3, 4, 5].map((n) =>
+          serverDB.transaction(async (tx) => {
+            const model = new TaskModel(tx, userId);
+            return model.create({ instruction: `outer concurrent ${n}` });
+          }),
+        ),
+      );
+      expect(new Set(results.map((row) => row.seq)).size).toBe(5);
+      expect(new Set(results.map((row) => row.identifier)).size).toBe(5);
+    });
+
+    it('retries a 23505 seq insert inside one outer transaction without aborting it', async () => {
+      // Production createReminderTask wraps TaskModel.create in db.transaction.
+      // A 23505 on the first insert used to abort that outer txn so the retry
+      // SELECT died with "current transaction is aborted". The nested
+      // savepoint in create() is what keeps the outer txn usable.
+      //
+      // If that savepoint wrapper is removed, this test fails: the colliding
+      // insert aborts the outer txn and the later statement never runs.
+      await serverDB.transaction(async (tx) => {
+        await tx.insert(tasks).values({
+          createdByUserId: userId,
+          id: 'task_occupied_t1',
+          identifier: 'T-1',
+          instruction: 'occupied identifier',
+          seq: 1,
+        });
+
+        let usedZeroMax = false;
+        const patchSelect = (session: { select: typeof tx.select }) => {
+          const origSelect = session.select.bind(session);
+          session.select = ((...args: Parameters<typeof tx.select>) => {
+            const projection = args[0];
+            if (
+              !usedZeroMax &&
+              projection &&
+              typeof projection === 'object' &&
+              'maxSeq' in projection
+            ) {
+              const fake = {
+                from: () => fake,
+                where: () => {
+                  usedZeroMax = true;
+                  return Promise.resolve([{ maxSeq: 0 }]);
+                },
+              };
+              return fake as unknown as ReturnType<typeof origSelect>;
+            }
+            return origSelect(...args);
+          }) as typeof session.select;
+        };
+
+        patchSelect(tx);
+        const origTransaction = tx.transaction.bind(tx);
+        tx.transaction = ((cb: (inner: typeof tx) => Promise<unknown>) =>
+          origTransaction(async (inner) => {
+            patchSelect(inner);
+            return cb(inner);
+          })) as unknown as typeof tx.transaction;
+
+        const model = new TaskModel(tx, userId);
+        const created = await model.create({ instruction: 'savepoint retry' });
+        expect(usedZeroMax).toBe(true);
+        expect(created.identifier).toBe('T-2');
+        expect(created.seq).toBe(2);
+
+        const occupied = await tx
+          .select({ identifier: tasks.identifier })
+          .from(tasks)
+          .where(eq(tasks.id, 'task_occupied_t1'));
+        expect(occupied[0]?.identifier).toBe('T-1');
+
+        const [later] = await tx
+          .update(tasks)
+          .set({ name: 'outer-tx-alive' })
+          .where(eq(tasks.id, created.id))
+          .returning();
+        expect(later?.name).toBe('outer-tx-alive');
+      });
+    });
   });
 
   describe('findById', () => {
