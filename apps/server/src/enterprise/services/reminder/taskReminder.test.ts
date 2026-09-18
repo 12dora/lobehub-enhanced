@@ -6,6 +6,7 @@ const mockSearch = vi.fn();
 const mockGetUsers = vi.fn();
 const mockGetDepartment = vi.fn();
 const mockSubtreeMemberStaffIds = vi.fn();
+const mockListActiveUsersNearName = vi.fn();
 const mockCreateForTask = vi.fn();
 const mockFindByTaskId = vi.fn();
 const mockUpdateProfile = vi.fn();
@@ -22,12 +23,14 @@ const mockUpdateHeartbeat = vi.fn();
 const mockUpdateStatus = vi.fn();
 const mockFindById = vi.fn();
 const mockDeliverReminder = vi.fn();
+const mockResolveStaffId = vi.fn();
 const mockTransaction = vi.fn(async (fn: (tx: Record<string, never>) => unknown) => fn({}));
 
 vi.mock('@/database/models/dingtalkDirectory', () => ({
   DingTalkDirectoryModel: vi.fn(() => ({
     getDepartment: mockGetDepartment,
     getUsers: mockGetUsers,
+    listActiveUsersNearName: mockListActiveUsersNearName,
     search: mockSearch,
     subtreeMemberStaffIds: mockSubtreeMemberStaffIds,
   })),
@@ -66,6 +69,10 @@ vi.mock('@/database/models/user', () => ({
   UserModel: { findById: mockFindById },
 }));
 
+vi.mock('@/server/services/messenger/platforms/dingtalk/resolveStaffId', () => ({
+  resolveDingTalkStaffId: (...args: unknown[]) => mockResolveStaffId(...args),
+}));
+
 vi.mock('./worker', () => ({
   deliverReminder: (...args: unknown[]) => mockDeliverReminder(...args),
   ensureReminderWorkerStarted: vi.fn(),
@@ -86,8 +93,13 @@ vi.mock('./worker', () => ({
   stopReminderWorkerForTest: vi.fn(),
 }));
 
-const { REMINDER_SCHEDULE_INVALID, REMINDER_TIME_PAST, ReminderTaskService } =
-  await import('./taskReminder');
+const {
+  REMINDER_CREATE_RETRY,
+  REMINDER_INTERNAL,
+  REMINDER_SCHEDULE_INVALID,
+  REMINDER_TIME_PAST,
+  ReminderTaskService,
+} = await import('./taskReminder');
 
 const hyq = {
   active: true,
@@ -146,6 +158,8 @@ describe('ReminderTaskService', () => {
     mockGetUsers.mockResolvedValue([]);
     mockGetDepartment.mockResolvedValue(undefined);
     mockSubtreeMemberStaffIds.mockResolvedValue([]);
+    mockListActiveUsersNearName.mockResolvedValue([]);
+    mockResolveStaffId.mockResolvedValue(null);
     mockTaskCreate.mockResolvedValue({
       config: { reminder: { kind: 'reminder', reminderId: 'rmd_1' } },
       createdByUserId: 'user_1',
@@ -280,6 +294,65 @@ describe('ReminderTaskService', () => {
         unknown: ['不存在的人'],
       });
     });
+
+    it('attaches unknownSuggestions for a one-character name typo', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [] });
+      mockListActiveUsersNearName.mockResolvedValue([
+        {
+          active: true,
+          deptPath: '捷发 / 外贸组',
+          leafDeptId: 'dept_trade',
+          leafDeptName: '外贸组',
+          name: '陈柠',
+          staffId: 'staff_173',
+        },
+      ]);
+
+      await expect(service().resolveRecipients(['陈柑'])).resolves.toEqual({
+        ambiguous: [],
+        ok: false,
+        unknown: ['陈柑'],
+        unknownSuggestions: [
+          {
+            candidates: [
+              {
+                deptPath: '捷发 / 外贸组',
+                leafDeptName: '外贸组',
+                name: '陈柠',
+                staffId: 'staff_173',
+              },
+            ],
+            query: '陈柑',
+          },
+        ],
+      });
+      expect(mockListActiveUsersNearName).toHaveBeenCalledWith('陈柑', { limit: 80 });
+    });
+
+    it('resolves 我 / 自己 / me / myself to the caller directory row', async () => {
+      mockResolveStaffId.mockResolvedValue('staff_hyq');
+      mockGetUsers.mockResolvedValue([hyq]);
+
+      for (const query of ['我', '自己', 'me', 'myself']) {
+        const result = await service().resolveRecipients([query]);
+        expect(result, query).toMatchObject({
+          ok: true,
+          recipients: [{ kind: 'user', staffId: 'staff_hyq' }],
+        });
+      }
+      expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    it('keeps 我 unknown when the caller has no DingTalk staff mapping', async () => {
+      mockResolveStaffId.mockResolvedValue(null);
+
+      await expect(service().resolveRecipients(['我'])).resolves.toEqual({
+        ambiguous: [],
+        ok: false,
+        unknown: ['我'],
+      });
+      expect(mockListActiveUsersNearName).not.toHaveBeenCalled();
+    });
   });
 
   describe('createReminderTask', () => {
@@ -362,6 +435,78 @@ describe('ReminderTaskService', () => {
 
       expect(result.status).toBe('needs_clarification');
       expect(mockTaskCreate).not.toHaveBeenCalled();
+    });
+
+    it('forwards unknownSuggestions when createReminderTask cannot resolve a name', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [] });
+      mockListActiveUsersNearName.mockResolvedValue([
+        {
+          active: true,
+          deptPath: '捷发 / 外贸组',
+          leafDeptId: 'dept_trade',
+          leafDeptName: '外贸组',
+          name: '陈柠',
+          staffId: 'staff_173',
+        },
+      ]);
+
+      const result = await service().createReminderTask({
+        content: '开会',
+        recipients: ['陈柑'],
+        schedule: futureOnce(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'needs_clarification',
+        unknown: ['陈柑'],
+        unknownSuggestions: [{ candidates: [{ staffId: 'staff_173' }], query: '陈柑' }],
+      });
+      expect(mockTaskCreate).not.toHaveBeenCalled();
+    });
+
+    it('maps unique-violation / seq races to REMINDER_CREATE_RETRY', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
+      mockTransaction.mockRejectedValue(
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+        }),
+      );
+
+      await expect(
+        service().createReminderTask({
+          content: '开会',
+          recipients: ['胡玉琴A'],
+          schedule: futureOnce(),
+        }),
+      ).rejects.toMatchObject({
+        code: REMINDER_CREATE_RETRY,
+        message: REMINDER_CREATE_RETRY,
+        name: 'ReminderServiceError',
+      });
+    });
+
+    it('maps unexpected DB failures to REMINDER_INTERNAL without SQL text', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
+      mockTransaction.mockRejectedValue(
+        new Error(
+          'Failed query: insert into reminder_recipients ("id","reminder_id","kind","dept_id") values ($1,$2,$3,$4)',
+        ),
+      );
+
+      const err = await service()
+        .createReminderTask({
+          content: '开会',
+          recipients: ['胡玉琴A'],
+          schedule: futureOnce(),
+        })
+        .catch((error: unknown) => error);
+
+      expect(err).toMatchObject({
+        code: REMINDER_INTERNAL,
+        message: REMINDER_INTERNAL,
+        name: 'ReminderServiceError',
+      });
+      expect(String((err as Error).message)).not.toMatch(/insert into|Failed query/i);
     });
   });
 
@@ -654,6 +799,125 @@ describe('ReminderTaskService', () => {
         service({ deliverReminder: mockDeliverReminder }).fireForTick('task_1', new Date()),
       ).resolves.toBe('skipped');
       expect(mockDeliverReminder).not.toHaveBeenCalled();
+    });
+
+    // 2026-09-18 is Friday. Mon/Wed/Fri 12:30 Asia/Shanghai → cron `30 12 * * 1,3,5`.
+    const weeklyMwF = {
+      ...reminderTask,
+      config: {
+        reminder: {
+          ...reminderTask.config.reminder,
+          once: false,
+          schedule: { kind: 'weekly' as const, time: '12:30', weekdays: [1, 3, 5] },
+          scheduleSummary: '每周一三五 12:30',
+          until: null,
+        },
+      },
+      schedulePattern: '30 12 * * 1,3,5',
+    };
+    const weeklyMwFProfile = {
+      ...profile,
+      createdAt: new Date('2026-09-18T07:00:00.000Z'),
+      fireAt: new Date('2026-09-21T04:30:00.000Z'),
+      repeatRule: { freq: 'weekly' as const, time: '12:30', weekdays: [1, 3, 5] },
+    };
+
+    it('does not catch up a Mon/Wed/Fri 12:30 reminder created Friday 15:00 at the Friday 15:01 tick', async () => {
+      mockTaskFindById.mockResolvedValue({
+        ...weeklyMwF,
+        createdAt: new Date('2026-09-18T07:00:00.000Z'),
+        lastHeartbeatAt: null,
+      });
+      mockFindByTaskId.mockResolvedValue(weeklyMwFProfile);
+
+      const outcome = await service({ deliverReminder: mockDeliverReminder }).fireForTick(
+        'task_1',
+        new Date('2026-09-18T07:01:00.000Z'),
+      );
+
+      expect(outcome).toBe('skipped');
+      expect(mockClaimFireSlot).not.toHaveBeenCalled();
+      expect(mockDeliverReminder).not.toHaveBeenCalled();
+      // Stops the dispatcher's null-heartbeat catch-up from re-selecting it every sweep.
+      expect(mockUpdateHeartbeat).toHaveBeenCalledWith('task_1');
+    });
+
+    it('delivers Monday 12:30 after the Friday skip stamped a heartbeat', async () => {
+      mockTaskFindById.mockResolvedValue({
+        ...weeklyMwF,
+        createdAt: new Date('2026-09-18T07:00:00.000Z'),
+        lastHeartbeatAt: new Date('2026-09-18T07:01:00.000Z'),
+      });
+      mockFindByTaskId.mockResolvedValue(weeklyMwFProfile);
+
+      const outcome = await service({ deliverReminder: mockDeliverReminder }).fireForTick(
+        'task_1',
+        new Date('2026-09-21T04:30:00.000Z'),
+      );
+
+      expect(outcome).toBe('fired');
+      expect(mockDeliverReminder).toHaveBeenCalledOnce();
+    });
+
+    it('delivers a Mon/Wed/Fri 12:30 reminder created Friday 15:00 at Monday 12:30', async () => {
+      mockTaskFindById.mockResolvedValue({
+        ...weeklyMwF,
+        createdAt: new Date('2026-09-18T07:00:00.000Z'),
+        lastHeartbeatAt: null,
+      });
+      mockFindByTaskId.mockResolvedValue(weeklyMwFProfile);
+
+      const now = new Date('2026-09-21T04:30:00.000Z');
+      const outcome = await service({ deliverReminder: mockDeliverReminder }).fireForTick(
+        'task_1',
+        now,
+      );
+
+      expect(outcome).toBe('fired');
+      expect(mockClaimFireSlot).toHaveBeenCalledOnce();
+      expect(mockDeliverReminder).toHaveBeenCalledOnce();
+    });
+
+    it('delivers Friday 12:30 when the Mon/Wed/Fri reminder was created Friday 11:00', async () => {
+      mockTaskFindById.mockResolvedValue({
+        ...weeklyMwF,
+        createdAt: new Date('2026-09-18T03:00:00.000Z'),
+        lastHeartbeatAt: null,
+      });
+      mockFindByTaskId.mockResolvedValue({
+        ...weeklyMwFProfile,
+        createdAt: new Date('2026-09-18T03:00:00.000Z'),
+        fireAt: new Date('2026-09-18T04:30:00.000Z'),
+      });
+
+      const outcome = await service({ deliverReminder: mockDeliverReminder }).fireForTick(
+        'task_1',
+        new Date('2026-09-18T04:30:00.000Z'),
+      );
+
+      expect(outcome).toBe('fired');
+      expect(mockDeliverReminder).toHaveBeenCalledOnce();
+    });
+
+    it('still catch-up fires an already-sent weekly reminder after a later matching weekday slot', async () => {
+      mockTaskFindById.mockResolvedValue({
+        ...weeklyMwF,
+        createdAt: new Date('2026-09-18T07:00:00.000Z'),
+        lastHeartbeatAt: new Date('2026-09-21T04:30:00.000Z'),
+      });
+      mockFindByTaskId.mockResolvedValue({
+        ...weeklyMwFProfile,
+        fireAt: new Date('2026-09-23T04:30:00.000Z'),
+        lastFiredAt: new Date('2026-09-21T04:30:00.000Z'),
+      });
+
+      const outcome = await service({ deliverReminder: mockDeliverReminder }).fireForTick(
+        'task_1',
+        new Date('2026-09-23T07:00:00.000Z'), // Wednesday 15:00 Asia/Shanghai
+      );
+
+      expect(outcome).toBe('fired');
+      expect(mockDeliverReminder).toHaveBeenCalledOnce();
     });
   });
 

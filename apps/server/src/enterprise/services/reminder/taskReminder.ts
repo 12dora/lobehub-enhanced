@@ -31,11 +31,15 @@ import type { ReminderItem } from '@/database/schemas/reminder';
 import type { LobeChatDatabase } from '@/database/type';
 import { idGenerator } from '@/database/utils/idGenerator';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
+import { resolveDingTalkStaffId } from '@/server/services/messenger/platforms/dingtalk/resolveStaffId';
 import { SystemAgentService } from '@/server/services/systemAgent';
 
 import {
+  isReminderCreateRetryConflict,
   REMINDER_CONTENT_EMPTY,
+  REMINDER_CREATE_RETRY,
   REMINDER_FIRE_AT_LEAD_MS,
+  REMINDER_INTERNAL,
   REMINDER_LARGE_AUDIENCE_THRESHOLD,
   REMINDER_MAX_RECIPIENT_QUERIES,
   REMINDER_NOT_FOUND,
@@ -44,6 +48,7 @@ import {
   ReminderService,
   ReminderServiceError,
 } from './index';
+import { isSelfRecipientQuery, pickRecipientNearMatches } from './recipientNearMatch';
 import {
   buildReminderCron,
   describeReminderSchedule,
@@ -69,6 +74,8 @@ import {
 
 export {
   REMINDER_CONTENT_EMPTY,
+  REMINDER_CREATE_RETRY,
+  REMINDER_INTERNAL,
   REMINDER_MAX_RECIPIENT_QUERIES,
   REMINDER_NOT_FOUND,
   REMINDER_SCHEDULE_INVALID,
@@ -140,13 +147,23 @@ export interface ReminderLargeAudience {
   name: string;
 }
 
+export interface ReminderUnknownSuggestion {
+  candidates: ReminderAmbiguousCandidate[];
+  query: string;
+}
+
 export type ResolveOutcome =
   | {
       largeAudience: ReminderLargeAudience[];
       ok: true;
       recipients: ResolvedReminderRecipient[];
     }
-  | { ambiguous: ReminderAmbiguousQuery[]; ok: false; unknown: string[] };
+  | {
+      ambiguous: ReminderAmbiguousQuery[];
+      ok: false;
+      unknown: string[];
+      unknownSuggestions?: ReminderUnknownSuggestion[];
+    };
 
 export interface CreatedReminderRow {
   content: string;
@@ -175,7 +192,12 @@ export interface CreateReminderTaskInput {
 
 export type CreateReminderTaskResult =
   | { reminder: ReminderProfile; status: 'created'; task: TaskItem }
-  | { ambiguous: ReminderAmbiguousQuery[]; status: 'needs_clarification'; unknown: string[] }
+  | {
+      ambiguous: ReminderAmbiguousQuery[];
+      status: 'needs_clarification';
+      unknown: string[];
+      unknownSuggestions?: ReminderUnknownSuggestion[];
+    }
   | { audience: ReminderLargeAudience[]; status: 'needs_confirmation' };
 
 export interface SaveReminderTaskInput {
@@ -196,7 +218,12 @@ export type SaveReminderTaskResult =
       status: 'saved';
       task: TaskItem;
     }
-  | { ambiguous: ReminderAmbiguousQuery[]; status: 'needs_clarification'; unknown: string[] };
+  | {
+      ambiguous: ReminderAmbiguousQuery[];
+      status: 'needs_clarification';
+      unknown: string[];
+      unknownSuggestions?: ReminderUnknownSuggestion[];
+    };
 
 export interface ReminderTaskServiceDeps {
   deliverReminder?: (
@@ -382,6 +409,7 @@ export class ReminderTaskService {
     const recipients: ResolvedReminderRecipient[] = [];
     const ambiguous: ReminderAmbiguousQuery[] = [];
     const unknown: string[] = [];
+    const unknownSuggestions: ReminderUnknownSuggestion[] = [];
     const seen = new Set<string>();
     const largeAudience: ReminderLargeAudience[] = [];
     const capped = queries.slice(0, REMINDER_MAX_RECIPIENT_QUERIES);
@@ -393,6 +421,9 @@ export class ReminderTaskService {
       const resolved = await this.resolveOneQuery(query);
       if (resolved.kind === 'unknown') {
         unknown.push(query);
+        if (resolved.suggestions && resolved.suggestions.length > 0) {
+          unknownSuggestions.push({ candidates: resolved.suggestions, query });
+        }
         continue;
       }
       if (resolved.kind === 'ambiguous') {
@@ -420,7 +451,12 @@ export class ReminderTaskService {
     }
 
     if (ambiguous.length > 0 || unknown.length > 0) {
-      return { ambiguous, ok: false, unknown };
+      return {
+        ambiguous,
+        ok: false,
+        unknown,
+        ...(unknownSuggestions.length > 0 ? { unknownSuggestions } : {}),
+      };
     }
     return { largeAudience, ok: true, recipients };
   };
@@ -439,6 +475,9 @@ export class ReminderTaskService {
         ambiguous: resolved.ambiguous,
         status: 'needs_clarification',
         unknown: resolved.unknown,
+        ...(resolved.unknownSuggestions?.length
+          ? { unknownSuggestions: resolved.unknownSuggestions }
+          : {}),
       };
     }
     if (resolved.recipients.length === 0) {
@@ -472,41 +511,82 @@ export class ReminderTaskService {
       until: input.schedule.until ?? null,
     };
 
-    const created = await this.db.transaction(async (tx) => {
-      const taskModel = new TaskModel(tx, this.userId, this.workspaceId);
-      const reminderModel = new ReminderModel(tx, this.userId);
-      const task = await taskModel.create({
-        assigneeAgentId: null,
-        automationMode: 'schedule',
-        config: { reminder: reminderConfig },
-        context: { scheduler: { scheduleStartedAt: now.toISOString() } },
-        createdByAgentId: input.createdByAgentId ?? null,
-        instruction,
-        name: reminderSummaryTitle(input.title, content),
-        schedulePattern: cron,
-        scheduleTimezone: REMINDER_TIMEZONE,
-        status: 'scheduled',
-        visibility: 'private',
-      });
-      const reminder = await reminderModel.createForTask(
-        {
-          content,
-          createdByAgentId: input.createdByAgentId ?? null,
-          creatorName: creatorDisplayName(user ?? null),
-          fireAt,
-          id: reminderId,
-          recipients: resolved.recipients.map(toRecipientInput),
-          repeatRule,
-          taskId: task.id,
-          timezone: REMINDER_DEFAULT_TZ,
-          topicId: input.topicId ?? null,
-        },
-        tx,
-      );
-      return { reminder, task };
+    const created = await this.createReminderRows({
+      content,
+      createdByAgentId: input.createdByAgentId,
+      creatorName: creatorDisplayName(user ?? null),
+      cron,
+      fireAt,
+      instruction,
+      now,
+      reminderConfig,
+      reminderId,
+      repeatRule,
+      resolvedRecipients: resolved.recipients,
+      title: input.title,
+      topicId: input.topicId,
     });
     log('created reminder-task task=%s reminder=%s', created.task.id, created.reminder.id);
     return { reminder: created.reminder, status: 'created', task: created.task };
+  };
+
+  private createReminderRows = async (input: {
+    content: string;
+    createdByAgentId?: string | null;
+    creatorName: string;
+    cron: string;
+    fireAt: Date;
+    instruction: string;
+    now: Date;
+    reminderConfig: TaskReminderConfig;
+    reminderId: string;
+    repeatRule: ReturnType<typeof scheduleToRepeatRule>;
+    resolvedRecipients: ResolvedReminderRecipient[];
+    title?: string;
+    topicId?: string | null;
+  }): Promise<{ reminder: ReminderProfile; task: TaskItem }> => {
+    try {
+      return await this.db.transaction(async (tx) => {
+        const taskModel = new TaskModel(tx, this.userId, this.workspaceId);
+        const reminderModel = new ReminderModel(tx, this.userId);
+        const task = await taskModel.create({
+          assigneeAgentId: null,
+          automationMode: 'schedule',
+          config: { reminder: input.reminderConfig },
+          context: { scheduler: { scheduleStartedAt: input.now.toISOString() } },
+          createdByAgentId: input.createdByAgentId ?? null,
+          instruction: input.instruction,
+          name: reminderSummaryTitle(input.title, input.content),
+          schedulePattern: input.cron,
+          scheduleTimezone: REMINDER_TIMEZONE,
+          status: 'scheduled',
+          visibility: 'private',
+        });
+        const reminder = await reminderModel.createForTask(
+          {
+            content: input.content,
+            createdByAgentId: input.createdByAgentId ?? null,
+            creatorName: input.creatorName,
+            fireAt: input.fireAt,
+            id: input.reminderId,
+            recipients: input.resolvedRecipients.map(toRecipientInput),
+            repeatRule: input.repeatRule,
+            taskId: task.id,
+            timezone: REMINDER_DEFAULT_TZ,
+            topicId: input.topicId ?? null,
+          },
+          tx,
+        );
+        return { reminder, task };
+      });
+    } catch (error) {
+      if (error instanceof ReminderServiceError) throw error;
+      log('create reminder-task failed: %O', error);
+      if (isReminderCreateRetryConflict(error)) {
+        throw new ReminderServiceError(REMINDER_CREATE_RETRY);
+      }
+      throw new ReminderServiceError(REMINDER_INTERNAL);
+    }
   };
 
   saveReminderTask = async (input: SaveReminderTaskInput): Promise<SaveReminderTaskResult> => {
@@ -521,6 +601,9 @@ export class ReminderTaskService {
         ambiguous: resolved.ambiguous,
         status: 'needs_clarification',
         unknown: resolved.unknown,
+        ...(resolved.unknownSuggestions?.length
+          ? { unknownSuggestions: resolved.unknownSuggestions }
+          : {}),
       };
     }
     if (resolved.recipients.length === 0) {
@@ -752,13 +835,23 @@ export class ReminderTaskService {
     const occurrence = reminderOccurrenceStart(config.schedule, now);
     if (now.getTime() < occurrence.getTime()) return 'skipped';
 
+    // Cron catch-up treats `lastExecutedAt: null` as "missed today's slot — fire now". A reminder
+    // created after that slot has not missed anything; baseline is last fire, else createdAt.
+    const dueBaseline = task.lastHeartbeatAt ?? task.createdAt ?? reminder.createdAt ?? null;
+    if (dueBaseline && occurrence.getTime() < new Date(dueBaseline).getTime()) {
+      // Stamp a heartbeat on the first such skip so the dispatcher's own catch-up (which sees a
+      // null heartbeat) stops re-selecting this task every sweep for the rest of the day. The
+      // stamp is still earlier than the next real occurrence, so that one delivers normally.
+      if (!task.lastHeartbeatAt) await this.taskModel.updateHeartbeat(task.id);
+      return 'skipped';
+    }
+
     if (
       task.schedulePattern &&
-      task.lastHeartbeatAt &&
       !isExecutionTime({
         cronPattern: task.schedulePattern,
         currentTime: now,
-        lastExecutedAt: task.lastHeartbeatAt,
+        lastExecutedAt: dueBaseline,
         timezone: task.scheduleTimezone ?? REMINDER_DEFAULT_TZ,
       })
     ) {
@@ -948,7 +1041,7 @@ export class ReminderTaskService {
   ): Promise<
     | { kind: 'ambiguous'; candidates: ReminderAmbiguousCandidate[] }
     | { kind: 'ok'; recipient: ResolvedReminderRecipient }
-    | { kind: 'unknown' }
+    | { kind: 'unknown'; suggestions?: ReminderAmbiguousCandidate[] }
   > => {
     if (query.startsWith(STAFF_PREFIX)) {
       const staffId = query.slice(STAFF_PREFIX.length).trim();
@@ -968,6 +1061,10 @@ export class ReminderTaskService {
     const dept = separator === -1 ? undefined : query.slice(separator + 1);
     if (!name) return { kind: 'unknown' };
 
+    if (isSelfRecipientQuery(query) || isSelfRecipientQuery(name)) {
+      return this.resolveSelfRecipient();
+    }
+
     const hits = await this.directory.search(name, {
       kind: dept ? 'user' : undefined,
       limit: 50,
@@ -981,7 +1078,7 @@ export class ReminderTaskService {
       if (narrowed.length > 1) {
         return { candidates: narrowed.map(this.toAmbiguousCandidate), kind: 'ambiguous' };
       }
-      return { kind: 'unknown' };
+      return { kind: 'unknown', suggestions: await this.suggestUnknownName(name, dept) };
     }
 
     if (narrowed.length > 1) {
@@ -1006,7 +1103,26 @@ export class ReminderTaskService {
         kind: 'ambiguous',
       };
     }
-    return { kind: 'unknown' };
+    return { kind: 'unknown', suggestions: await this.suggestUnknownName(name, dept) };
+  };
+
+  private resolveSelfRecipient = async (): Promise<
+    { kind: 'ok'; recipient: ResolvedReminderRecipient } | { kind: 'unknown' }
+  > => {
+    const staffId = await resolveDingTalkStaffId(this.db, this.userId);
+    if (!staffId) return { kind: 'unknown' };
+    const [user] = await this.directory.getUsers([staffId]);
+    if (!user?.active) return { kind: 'unknown' };
+    return { kind: 'ok', recipient: this.userToRecipient(user) };
+  };
+
+  private suggestUnknownName = async (
+    name: string,
+    dept?: string,
+  ): Promise<ReminderAmbiguousCandidate[] | undefined> => {
+    const rows = await this.directory.listActiveUsersNearName(name, { limit: 80 });
+    const suggestions = pickRecipientNearMatches(name, rows, { dept });
+    return suggestions.length > 0 ? suggestions : undefined;
   };
 
   private resolveDepartmentById = async (

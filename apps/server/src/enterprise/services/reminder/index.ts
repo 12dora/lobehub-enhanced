@@ -1,6 +1,7 @@
 import debug from 'debug';
 
 import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
+import { isUniqueViolation } from '@/database/models/platform/pgUniqueViolation';
 import type {
   ReceivedReminder,
   ReminderRecipientInput,
@@ -42,12 +43,16 @@ export const REMINDER_RECIPIENT_UNKNOWN = 'REMINDER_RECIPIENT_UNKNOWN';
 export const REMINDER_CONTENT_EMPTY = 'REMINDER_CONTENT_EMPTY';
 export const REMINDER_NOT_FOUND = 'REMINDER_NOT_FOUND';
 export const REMINDER_SCHEDULE_INVALID = 'REMINDER_SCHEDULE_INVALID';
+export const REMINDER_CREATE_RETRY = 'REMINDER_CREATE_RETRY';
+export const REMINDER_INTERNAL = 'REMINDER_INTERNAL';
 export const REMINDER_FIRE_AT_LEAD_MS = 30_000;
 export const REMINDER_LARGE_AUDIENCE_THRESHOLD = 30;
 export const REMINDER_MAX_RECIPIENT_QUERIES = 50;
 
 export type ReminderServiceErrorCode =
   | typeof REMINDER_CONTENT_EMPTY
+  | typeof REMINDER_CREATE_RETRY
+  | typeof REMINDER_INTERNAL
   | typeof REMINDER_NOT_FOUND
   | typeof REMINDER_RECIPIENT_UNKNOWN
   | typeof REMINDER_SCHEDULE_INVALID
@@ -62,6 +67,32 @@ export class ReminderServiceError extends Error {
     this.code = code;
   }
 }
+
+const RETRYABLE_PG_CODES = new Set(['23505', '40001', '40P01']);
+
+const collectPgCodes = (error: unknown): string[] => {
+  const codes: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && current; depth++) {
+    if (typeof current === 'object' && current !== null && 'code' in current) {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'string' && code.length > 0) codes.push(code);
+    }
+    current =
+      typeof current === 'object' && current !== null && 'cause' in current
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+  return codes;
+};
+
+/** Unique-violation / serialization / deadlock that is safe to retry once. */
+export const isReminderCreateRetryConflict = (error: unknown): boolean => {
+  if (isUniqueViolation(error)) return true;
+  if (collectPgCodes(error).some((code) => RETRYABLE_PG_CODES.has(code))) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /Failed to create task after max retries/i.test(message);
+};
 
 export interface ReminderRecipientRef {
   deptId?: string;
