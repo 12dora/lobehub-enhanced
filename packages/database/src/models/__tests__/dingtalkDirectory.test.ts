@@ -308,6 +308,41 @@ describe('DingTalkDirectoryModel', () => {
     });
   });
 
+  describe('listActiveUsersByExactNames', () => {
+    it('returns only active users whose name is in the given list', async () => {
+      await serverDB.insert(dingtalkDirectoryUsers).values([
+        {
+          active: true,
+          deptPath: '捷发 / 生产部',
+          leafDeptId: 'anhuan',
+          leafDeptName: '生产部',
+          name: '陈斌斌',
+          staffId: 'staff_binbin',
+          syncedAt,
+          ...pinyin('陈斌斌'),
+        },
+        {
+          active: false,
+          deptPath: '捷发 / 生产部',
+          leafDeptId: 'anhuan',
+          leafDeptName: '生产部',
+          name: '陈斌斌',
+          staffId: 'staff_binbin_left',
+          syncedAt,
+          ...pinyin('陈斌斌'),
+        },
+      ]);
+
+      const rows = await model.listActiveUsersByExactNames(['陈斌斌', '给陈斌', ' 陈斌斌 ']);
+      expect(rows.map((row) => row.staffId)).toEqual(['staff_binbin']);
+    });
+
+    it('returns empty results for an empty name list', async () => {
+      await expect(model.listActiveUsersByExactNames([])).resolves.toEqual([]);
+      await expect(model.listActiveUsersByExactNames(['  '])).resolves.toEqual([]);
+    });
+  });
+
   describe('replaceAll', () => {
     it('replaces the directory transactionally and fills pinyin when omitted', async () => {
       await model.replaceAll({

@@ -110,10 +110,15 @@ export interface CreateReminderCreatedResult {
   };
 }
 
+/** Why a near-match list was narrowed to a single candidate. */
+export type ClarificationUnknownSuggestionReason = 'user_text' | 'co_recipient_dept';
+
 /** Near matches for a recipient query that resolved to nobody (typo / near-homograph). */
 export interface ClarificationUnknownSuggestion {
   candidates: ClarificationCandidate[];
   query: string;
+  /** Set only when server-side context narrowed the list to exactly one candidate. */
+  reason?: ClarificationUnknownSuggestionReason;
 }
 
 export interface CreateReminderClarificationResult {

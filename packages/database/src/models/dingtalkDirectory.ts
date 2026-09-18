@@ -214,6 +214,29 @@ export class DingTalkDirectoryModel {
       .limit(limit);
   };
 
+  /**
+   * Bounded exact-name lookup for the few 1-CJK-char extensions of near-match
+   * candidate names in user text. Empty input skips the query.
+   */
+  listActiveUsersByExactNames = async (names: string[]): Promise<DirectoryUserHit[]> => {
+    const unique = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
+    if (unique.length === 0) return [];
+
+    return this.db
+      .select({
+        active: dingtalkDirectoryUsers.active,
+        deptPath: dingtalkDirectoryUsers.deptPath,
+        leafDeptId: dingtalkDirectoryUsers.leafDeptId,
+        leafDeptName: dingtalkDirectoryUsers.leafDeptName,
+        name: dingtalkDirectoryUsers.name,
+        staffId: dingtalkDirectoryUsers.staffId,
+      })
+      .from(dingtalkDirectoryUsers)
+      .where(
+        and(eq(dingtalkDirectoryUsers.active, true), inArray(dingtalkDirectoryUsers.name, unique)),
+      );
+  };
+
   getUsers = async (staffIds: string[]): Promise<DingTalkDirectoryUserItem[]> => {
     if (staffIds.length === 0) return [];
     return this.db

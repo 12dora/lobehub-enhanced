@@ -169,6 +169,12 @@ const formatClarificationCandidate = (candidate: ClarificationCandidate): string
   return dept ? `${candidate.name} · ${dept}（${token}）` : `${candidate.name}（${token}）`;
 };
 
+const formatNarrowedCandidate = (candidate: ClarificationCandidate): string => {
+  const token = toStaffToken(candidate.staffId);
+  const dept = candidate.leafDeptName || candidate.deptPath;
+  return dept ? `${candidate.name} · ${dept}，${token}` : `${candidate.name}，${token}`;
+};
+
 const isScheduleToolError = (code: string | undefined, message: string): boolean => {
   if (code === 'REMINDER_SCHEDULE_INVALID') return true;
   return message.startsWith('Missing required field:') || message.startsWith('Invalid schedule:');
@@ -242,17 +248,30 @@ const buildClarificationContent = (
   const unknown = result.unknown ?? [];
   const ambiguous = result.ambiguous ?? [];
   const unknownSuggestions = result.unknownSuggestions;
-  const suggestionByQuery = new Map(
-    (unknownSuggestions ?? []).map((item) => [item.query, item.candidates]),
-  );
+  const suggestionByQuery = new Map((unknownSuggestions ?? []).map((item) => [item.query, item]));
 
   const lines = ['收件人无法唯一解析，未创建提醒。'];
   const unknownWithoutSuggestions: string[] = [];
 
   for (const query of unknown) {
-    const candidates = suggestionByQuery.get(query) ?? [];
+    const suggestion = suggestionByQuery.get(query);
+    const candidates = suggestion?.candidates ?? [];
     if (candidates.length === 1) {
-      const listed = formatClarificationCandidate(candidates[0]);
+      const candidate = candidates[0];
+      const listed = formatClarificationCandidate(candidate);
+      if (suggestion?.reason === 'user_text') {
+        lines.push(
+          `未找到「${query}」。用户原文写的是「${candidate.name}」（${formatNarrowedCandidate(candidate)}），请直接用该 token 重试 createReminder。`,
+        );
+        continue;
+      }
+      if (suggestion?.reason === 'co_recipient_dept') {
+        const dept = candidate.leafDeptName || candidate.deptPath;
+        lines.push(
+          `未找到「${query}」。与其他收件人同在${dept}（${formatNarrowedCandidate(candidate)}），请直接用该 token 重试 createReminder。`,
+        );
+        continue;
+      }
       lines.push(
         `未找到「${query}」。通讯录中最接近：${listed}。请直接用该 token 重试 createReminder，不要改写汉字、不要询问用户。`,
       );

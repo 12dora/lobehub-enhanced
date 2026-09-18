@@ -7,6 +7,7 @@ const mockGetUsers = vi.fn();
 const mockGetDepartment = vi.fn();
 const mockSubtreeMemberStaffIds = vi.fn();
 const mockListActiveUsersNearName = vi.fn();
+const mockListActiveUsersByExactNames = vi.fn();
 const mockCreateForTask = vi.fn();
 const mockFindByTaskId = vi.fn();
 const mockUpdateProfile = vi.fn();
@@ -30,6 +31,7 @@ vi.mock('@/database/models/dingtalkDirectory', () => ({
   DingTalkDirectoryModel: vi.fn(() => ({
     getDepartment: mockGetDepartment,
     getUsers: mockGetUsers,
+    listActiveUsersByExactNames: mockListActiveUsersByExactNames,
     listActiveUsersNearName: mockListActiveUsersNearName,
     search: mockSearch,
     subtreeMemberStaffIds: mockSubtreeMemberStaffIds,
@@ -159,6 +161,7 @@ describe('ReminderTaskService', () => {
     mockGetDepartment.mockResolvedValue(undefined);
     mockSubtreeMemberStaffIds.mockResolvedValue([]);
     mockListActiveUsersNearName.mockResolvedValue([]);
+    mockListActiveUsersByExactNames.mockResolvedValue([]);
     mockResolveStaffId.mockResolvedValue(null);
     mockTaskCreate.mockResolvedValue({
       config: { reminder: { kind: 'reminder', reminderId: 'rmd_1' } },
@@ -949,6 +952,221 @@ describe('ReminderTaskService', () => {
         }),
       ).rejects.toMatchObject({ code: REMINDER_SCHEDULE_INVALID });
       expect(mockTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createReminderTask near-match narrowing', () => {
+    const liuGang = {
+      active: true,
+      deptPath: '捷发 / 外贸组',
+      leafDeptId: 'dept_trade',
+      leafDeptName: '外贸组',
+      name: '刘钢',
+      staffId: 'staff_040',
+    };
+    const qianBaoguo = {
+      active: true,
+      deptPath: '捷发 / 外贸组',
+      leafDeptId: 'dept_trade',
+      leafDeptName: '外贸组',
+      name: '钱宝国',
+      staffId: 'staff_026',
+    };
+    const chenNing = {
+      active: true,
+      deptPath: '捷发 / 外贸组',
+      leafDeptId: 'dept_trade',
+      leafDeptName: '外贸组',
+      name: '陈柠',
+      staffId: 'staff_173',
+    };
+    const chenBin = {
+      active: true,
+      deptPath: '捷发 / 生产部',
+      leafDeptId: 'dept_prod',
+      leafDeptName: '生产部',
+      name: '陈斌',
+      staffId: 'staff_bin',
+    };
+    const chenJun = {
+      active: true,
+      deptPath: '捷发 / 质量技术中心',
+      leafDeptId: 'dept_qc',
+      leafDeptName: '质量技术中心',
+      name: '陈俊',
+      staffId: 'staff_jun',
+    };
+
+    const stubDirectory = (near = [chenBin, chenJun, chenNing]) => {
+      mockSearch.mockImplementation(async (name: string) => {
+        const users = name === '刘钢' ? [liuGang] : name === '钱宝国' ? [qianBaoguo] : [];
+        return { departments: [], users };
+      });
+      mockListActiveUsersNearName.mockResolvedValue(near);
+    };
+
+    it('does not user-text-narrow when 陈斌 only occurs inside directory person 陈斌斌', async () => {
+      stubDirectory();
+      mockListActiveUsersByExactNames.mockResolvedValue([
+        {
+          active: true,
+          deptPath: '捷发 / 生产部',
+          leafDeptId: 'dept_prod',
+          leafDeptName: '生产部',
+          name: '陈斌斌',
+          staffId: 'staff_binbin',
+        },
+      ]);
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        contextText: '给陈斌斌发提醒',
+        recipients: ['陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result.status).toBe('needs_clarification');
+      if (result.status !== 'needs_clarification') return;
+      expect(result.unknownSuggestions?.[0]?.candidates).toHaveLength(3);
+      expect(result.unknownSuggestions?.[0]).not.toHaveProperty('reason');
+      expect(mockListActiveUsersByExactNames).toHaveBeenCalledWith(
+        expect.arrayContaining(['陈斌斌']),
+      );
+    });
+
+    it('narrows 3→1 when contextText contains 陈柠', async () => {
+      stubDirectory();
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        contextText: '明天考外贸组 刘钢、钱宝国、陈柠',
+        recipients: ['刘钢', '钱宝国', '陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'needs_clarification',
+        unknown: ['陈染'],
+        unknownSuggestions: [
+          {
+            candidates: [{ name: '陈柠', staffId: 'staff_173' }],
+            query: '陈染',
+            reason: 'user_text',
+          },
+        ],
+      });
+      expect(mockTaskCreate).not.toHaveBeenCalled();
+    });
+
+    it('narrows when 陈柠 is glued to a non-name CJK character', async () => {
+      stubDirectory();
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        contextText: '给陈柠发提醒',
+        recipients: ['陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'needs_clarification',
+        unknown: ['陈染'],
+        unknownSuggestions: [
+          {
+            candidates: [{ name: '陈柠', staffId: 'staff_173' }],
+            query: '陈染',
+            reason: 'user_text',
+          },
+        ],
+      });
+    });
+
+    it('does not narrow when contextText contains two candidate names', async () => {
+      stubDirectory();
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        contextText: '陈柠 和 陈斌',
+        recipients: ['陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result.status).toBe('needs_clarification');
+      expect(result).toMatchObject({
+        unknown: ['陈染'],
+        unknownSuggestions: [{ query: '陈染' }],
+      });
+      if (result.status !== 'needs_clarification') return;
+      expect(result.unknownSuggestions?.[0]?.candidates).toHaveLength(3);
+      expect(result.unknownSuggestions?.[0]).not.toHaveProperty('reason');
+    });
+
+    it('narrows via co-recipient department affinity', async () => {
+      stubDirectory();
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        recipients: ['刘钢', '钱宝国', '陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'needs_clarification',
+        unknown: ['陈染'],
+        unknownSuggestions: [
+          {
+            candidates: [{ leafDeptName: '外贸组', name: '陈柠', staffId: 'staff_173' }],
+            query: '陈染',
+            reason: 'co_recipient_dept',
+          },
+        ],
+      });
+      expect(mockTaskCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not narrow when two candidates share a department with co-recipients', async () => {
+      stubDirectory([
+        chenBin,
+        chenJun,
+        chenNing,
+        {
+          active: true,
+          deptPath: '捷发 / 外贸组',
+          leafDeptId: 'dept_trade',
+          leafDeptName: '外贸组',
+          name: '陈楠',
+          staffId: 'staff_nan',
+        },
+      ]);
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        recipients: ['刘钢', '钱宝国', '陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result.status).toBe('needs_clarification');
+      if (result.status !== 'needs_clarification') return;
+      expect(result.unknownSuggestions?.[0]?.candidates.map((row) => row.name)).toEqual(
+        expect.arrayContaining(['陈柠', '陈楠']),
+      );
+      expect(result.unknownSuggestions?.[0]?.candidates.length).toBeGreaterThan(1);
+      expect(result.unknownSuggestions?.[0]).not.toHaveProperty('reason');
+    });
+
+    it('skips user-text matching when contextText is omitted', async () => {
+      stubDirectory();
+
+      const result = await service().createReminderTask({
+        content: '考勤',
+        recipients: ['陈染'],
+        schedule: futureOnce(),
+      });
+
+      expect(result.status).toBe('needs_clarification');
+      if (result.status !== 'needs_clarification') return;
+      expect(result.unknownSuggestions?.[0]?.candidates).toHaveLength(3);
+      expect(result.unknownSuggestions?.[0]).not.toHaveProperty('reason');
     });
   });
 

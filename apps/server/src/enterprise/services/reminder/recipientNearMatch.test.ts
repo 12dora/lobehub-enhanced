@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 import { pinyinFull } from '@/database/utils/pinyin';
 
-import { isSelfRecipientQuery, levenshtein, pickRecipientNearMatches } from './recipientNearMatch';
+import {
+  isSelfRecipientQuery,
+  levenshtein,
+  narrowRecipientNearMatches,
+  pickRecipientNearMatches,
+} from './recipientNearMatch';
 
 const ning = {
   deptPath: '捷发 / 外贸组',
@@ -83,5 +88,109 @@ describe('recipientNearMatch', () => {
     expect(isSelfRecipientQuery('ME')).toBe(true);
     expect(isSelfRecipientQuery('Myself')).toBe(true);
     expect(isSelfRecipientQuery('陈柠')).toBe(false);
+  });
+});
+
+const chenBin = {
+  deptPath: '捷发 / 生产部',
+  leafDeptName: '生产部',
+  name: '陈斌',
+  staffId: 'staff_bin',
+};
+const chenJun = {
+  deptPath: '捷发 / 质量技术中心',
+  leafDeptName: '质量技术中心',
+  name: '陈俊',
+  staffId: 'staff_jun',
+};
+
+const threeChen = [chenBin, chenJun, ning];
+
+describe('narrowRecipientNearMatches', () => {
+  it('narrows 3→1 when the user text contains exactly one candidate name', () => {
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        contextText: '明天考外贸组 刘钢、钱宝国、陈柠，请提醒交表',
+      }),
+    ).toEqual({ candidates: [ning], reason: 'user_text' });
+  });
+
+  it('narrows when the name is glued to surrounding CJK that is not a person name', () => {
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        contextText: '给陈柠发提醒',
+      }),
+    ).toEqual({ candidates: [ning], reason: 'user_text' });
+  });
+
+  it('does not narrow when 陈斌 only occurs inside directory person 陈斌斌', () => {
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        contextText: '给陈斌斌发提醒',
+        directoryNames: ['陈斌斌'],
+      }),
+    ).toEqual({ candidates: threeChen });
+  });
+
+  it('does not narrow when candidate 陈斌 overlaps the unknown query 陈斌斌', () => {
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        contextText: '给陈斌斌发提醒',
+        query: '陈斌斌',
+      }),
+    ).toEqual({ candidates: threeChen });
+  });
+
+  it('does not count a candidate that is a prefix of a longer candidate at that position', () => {
+    const chenBinBin = {
+      deptPath: '捷发 / 生产部',
+      leafDeptName: '生产部',
+      name: '陈斌斌',
+      staffId: 'staff_binbin',
+    };
+    expect(
+      narrowRecipientNearMatches([chenBin, chenBinBin, chenJun], {
+        contextText: '给陈斌斌发提醒',
+      }),
+    ).toEqual({ candidates: [chenBinBin], reason: 'user_text' });
+  });
+
+  it('does not narrow when the user text contains two candidates names', () => {
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        contextText: '陈柠 和 陈斌 都提醒一下',
+      }),
+    ).toEqual({ candidates: threeChen });
+  });
+
+  it('narrows via co-recipient leaf-department affinity', () => {
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        coRecipientLeafDepts: ['外贸组'],
+      }),
+    ).toEqual({ candidates: [ning], reason: 'co_recipient_dept' });
+  });
+
+  it('does not narrow when two candidates share a department with co-recipients', () => {
+    const chenNanTrade = {
+      deptPath: '捷发 / 外贸组',
+      leafDeptName: '外贸组',
+      name: '陈楠',
+      staffId: 'staff_nan',
+    };
+    expect(
+      narrowRecipientNearMatches([chenBin, ning, chenNanTrade], {
+        coRecipientLeafDepts: ['外贸组'],
+      }),
+    ).toEqual({ candidates: [chenBin, ning, chenNanTrade] });
+  });
+
+  it('skips user-text matching when contextText is omitted, then may still apply dept affinity', () => {
+    expect(narrowRecipientNearMatches(threeChen)).toEqual({ candidates: threeChen });
+    expect(
+      narrowRecipientNearMatches(threeChen, {
+        coRecipientLeafDepts: ['外贸组'],
+      }),
+    ).toEqual({ candidates: [ning], reason: 'co_recipient_dept' });
   });
 });

@@ -163,6 +163,82 @@ describe('ReminderExecutionRuntime', () => {
     expect(result.content).not.toContain('不要自行挑选');
   });
 
+  it('explains a user_text-narrowed suggestion and tells the model to retry with the token', async () => {
+    const create = vi.fn().mockResolvedValue({
+      ambiguous: [],
+      status: 'needs_clarification',
+      unknown: ['陈染'],
+      unknownSuggestions: [
+        {
+          candidates: [
+            {
+              deptPath: '捷发 / 外贸组',
+              leafDeptName: '外贸组',
+              name: '陈柠',
+              staffId: '173abc',
+            },
+          ],
+          query: '陈染',
+          reason: 'user_text',
+        },
+      ],
+    });
+    const runtime = createReminderRuntime(makeService({ create }));
+
+    const result = await runtime.createReminder({
+      content: '考勤',
+      recipients: ['陈染'],
+      schedule: onceSchedule,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain(
+      '未找到「陈染」。用户原文写的是「陈柠」（陈柠 · 外贸组，staff:173abc），请直接用该 token 重试 createReminder。',
+    );
+    expect(result.content).not.toContain('请列出候选');
+    expect(result.content).not.toContain('不要询问用户');
+    expect(result.content).not.toContain('通讯录中最接近');
+    expect(result.content).not.toContain('与其他收件人同在');
+  });
+
+  it('explains a co_recipient_dept-narrowed suggestion and tells the model to retry with the token', async () => {
+    const create = vi.fn().mockResolvedValue({
+      ambiguous: [],
+      status: 'needs_clarification',
+      unknown: ['陈染'],
+      unknownSuggestions: [
+        {
+          candidates: [
+            {
+              deptPath: '捷发 / 外贸组',
+              leafDeptName: '外贸组',
+              name: '陈柠',
+              staffId: '173abc',
+            },
+          ],
+          query: '陈染',
+          reason: 'co_recipient_dept',
+        },
+      ],
+    });
+    const runtime = createReminderRuntime(makeService({ create }));
+
+    const result = await runtime.createReminder({
+      content: '考勤',
+      recipients: ['刘钢', '钱宝国', '陈染'],
+      schedule: onceSchedule,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain(
+      '未找到「陈染」。与其他收件人同在外贸组（陈柠 · 外贸组，staff:173abc），请直接用该 token 重试 createReminder。',
+    );
+    expect(result.content).not.toContain('请列出候选');
+    expect(result.content).not.toContain('不要询问用户');
+    expect(result.content).not.toContain('用户原文写的是');
+    expect(result.content).not.toContain('通讯录中最接近');
+  });
+
   it('asks the user when an unknown query has two or more near-match candidates', async () => {
     const create = vi.fn().mockResolvedValue({
       ambiguous: [],

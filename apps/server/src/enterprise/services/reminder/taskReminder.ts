@@ -48,7 +48,12 @@ import {
   ReminderService,
   ReminderServiceError,
 } from './index';
-import { isSelfRecipientQuery, pickRecipientNearMatches } from './recipientNearMatch';
+import {
+  collectCjkNameExtensions,
+  isSelfRecipientQuery,
+  narrowRecipientNearMatches,
+  pickRecipientNearMatches,
+} from './recipientNearMatch';
 import {
   buildReminderCron,
   describeReminderSchedule,
@@ -150,6 +155,7 @@ export interface ReminderLargeAudience {
 export interface ReminderUnknownSuggestion {
   candidates: ReminderAmbiguousCandidate[];
   query: string;
+  reason?: 'user_text' | 'co_recipient_dept';
 }
 
 export type ResolveOutcome =
@@ -182,6 +188,11 @@ export interface CreatedReminderRow {
 export interface CreateReminderTaskInput {
   confirmLargeAudience?: boolean;
   content: string;
+  /**
+   * Latest user-message text from the current conversation. Server-supplied
+   * (never a tool argument); used only to narrow near-match suggestions.
+   */
+  contextText?: string;
   createdByAgentId?: string | null;
   recipients: RecipientQuery[];
   schedule: ReminderScheduleInput;
@@ -405,7 +416,10 @@ export class ReminderTaskService {
     this.interpretTitleFn = deps.interpretTitle;
   }
 
-  resolveRecipients = async (queries: RecipientQuery[]): Promise<ResolveOutcome> => {
+  resolveRecipients = async (
+    queries: RecipientQuery[],
+    opts?: { contextText?: string },
+  ): Promise<ResolveOutcome> => {
     const recipients: ResolvedReminderRecipient[] = [];
     const ambiguous: ReminderAmbiguousQuery[] = [];
     const unknown: string[] = [];
@@ -451,11 +465,29 @@ export class ReminderTaskService {
     }
 
     if (ambiguous.length > 0 || unknown.length > 0) {
+      const coRecipientLeafDepts = recipients.map((row) => row.deptName);
+      const directoryNames = await this.directoryNamesForContext(
+        opts?.contextText,
+        unknownSuggestions,
+      );
+      const narrowedSuggestions = unknownSuggestions.map((item) => {
+        const narrowed = narrowRecipientNearMatches(item.candidates, {
+          coRecipientLeafDepts,
+          contextText: opts?.contextText,
+          ...(directoryNames ? { directoryNames } : {}),
+          query: item.query,
+        });
+        return {
+          candidates: narrowed.candidates,
+          query: item.query,
+          ...(narrowed.reason ? { reason: narrowed.reason } : {}),
+        };
+      });
       return {
         ambiguous,
         ok: false,
         unknown,
-        ...(unknownSuggestions.length > 0 ? { unknownSuggestions } : {}),
+        ...(narrowedSuggestions.length > 0 ? { unknownSuggestions: narrowedSuggestions } : {}),
       };
     }
     return { largeAudience, ok: true, recipients };
@@ -469,7 +501,9 @@ export class ReminderTaskService {
       throw new ReminderServiceError(REMINDER_CONTENT_EMPTY, 'Reminder content is required');
     }
 
-    const resolved = await this.resolveRecipients(input.recipients);
+    const resolved = await this.resolveRecipients(input.recipients, {
+      contextText: input.contextText,
+    });
     if (!resolved.ok) {
       return {
         ambiguous: resolved.ambiguous,
@@ -1034,6 +1068,25 @@ export class ReminderTaskService {
       schedule: schedule === null || schedule === undefined ? null : parseLlmSchedule(schedule),
       title: parseLlmTitle(payload?.title),
     };
+  };
+
+  private directoryNamesForContext = async (
+    contextText: string | undefined,
+    unknownSuggestions: ReminderUnknownSuggestion[],
+  ): Promise<string[] | undefined> => {
+    const text = contextText?.trim();
+    if (!text) return undefined;
+
+    const candidateNames = unknownSuggestions.flatMap((item) =>
+      item.candidates.map((row) => row.name).filter(Boolean),
+    );
+    if (candidateNames.length === 0) return undefined;
+
+    const extensions = collectCjkNameExtensions(text, candidateNames);
+    if (extensions.length === 0) return candidateNames;
+
+    const rows = await this.directory.listActiveUsersByExactNames(extensions);
+    return [...candidateNames, ...rows.map((row) => row.name)];
   };
 
   private resolveOneQuery = async (
