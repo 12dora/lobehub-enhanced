@@ -50,8 +50,8 @@ vi.mock('../shared/AuditChatMessageList', () => ({
   default: () => <div data-testid="transcript" />,
 }));
 
-vi.mock('./useLiveStreamScroll', () => ({
-  useLiveStreamScroll: () => ({
+vi.mock('../shared/useAuditStreamScroll', () => ({
+  useAuditStreamScroll: () => ({
     onScroll: () => {},
     scrollRef: { current: null },
     scrollToBottom,

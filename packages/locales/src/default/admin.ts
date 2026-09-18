@@ -3125,6 +3125,7 @@ export default {
     'Loading full message bodies will be recorded in the audit trail. Continue?',
   'audit.conversations.topic.bodyNotLoaded': 'Body not loaded',
   'audit.conversations.topic.emptyMessages': 'No messages in this conversation.',
+  'audit.conversations.topic.startOfConversation': 'Start of conversation',
   'audit.conversations.topic.detailUnavailable':
     'Conversation details are temporarily unavailable. The message evidence below may still be available.',
   'audit.conversations.message.attachments': 'Attachments',

@@ -488,6 +488,7 @@
   "audit.conversations.topic.loadError": "Could not load messages.",
   "audit.conversations.topic.metadataOnlyBanner": "Current policy allows metadata only — message bodies are not available.",
   "audit.conversations.topic.openLive": "Live View",
+  "audit.conversations.topic.startOfConversation": "Start of conversation",
   "audit.conversations.topic.title": "Conversation",
   "audit.conversations.untitled": "(untitled)",
   "audit.conversations.user.back": "Back to search",

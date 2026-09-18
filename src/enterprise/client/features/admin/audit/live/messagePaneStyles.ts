@@ -62,9 +62,4 @@ export const styles = createStaticStyles(({ css }) => ({
     inset-block-end: 16px;
     inset-inline-end: 24px;
   `,
-  older: css`
-    display: flex;
-    justify-content: center;
-    margin-block-end: 8px;
-  `,
 }));

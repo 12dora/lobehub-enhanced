@@ -7,6 +7,7 @@ import type { AdminAuditConversationMessage } from '@/enterprise/client/services
 import { adminAuditService } from '@/enterprise/client/services/adminAudit';
 
 import {
+  AUDIT_MESSAGE_PAGE_LIMIT,
   type AuditContentAccessMode,
   type AuditRedactionProfile,
   mergeMessagePages,
@@ -16,7 +17,7 @@ import { envelopeSlot } from '../shared/redactionAuthority';
 import { idSetsDisjoint } from '../shared/topicListUtils';
 import type { LiveFeedSWR } from './useLiveAuditAccess';
 
-export const MSG_LIMIT = 100;
+export const MSG_LIMIT = AUDIT_MESSAGE_PAGE_LIMIT;
 
 export interface ProfiledMessagePage {
   items: AdminAuditConversationMessage[];

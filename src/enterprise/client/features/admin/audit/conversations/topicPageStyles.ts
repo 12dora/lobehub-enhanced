@@ -34,15 +34,17 @@ export const styles = createStaticStyles(({ css }) => ({
   metaSeparator: css`
     color: ${cssVar.colorTextQuaternary};
   `,
-  /** Fixed-height transcript box: the page never grows with the conversation. */
+  /**
+   * Fixed-height transcript box: the page never grows with the conversation; older history loads
+   * inside it as the auditor scrolls up.
+   */
   streamBox: css`
     overflow: auto;
     flex-shrink: 0;
 
     height: calc(100vh - 300px);
     min-height: 360px;
-    padding-block: 12px;
-    padding-inline: 16px;
+    padding: 16px;
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadiusLG};
 

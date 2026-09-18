@@ -9,9 +9,19 @@ import {
   useFetchAuditConversationMessages,
   useFetchAuditPolicy,
 } from '../hooks/useAdminAudit';
-import { emptyRedactionSlots, envelopeSlot } from '../shared/redactionAuthority';
+import {
+  AUDIT_MESSAGE_PAGE_LIMIT,
+  sortMessagesChronological,
+  stripMessageBodies,
+} from '../shared/liveMessageUtils';
+import {
+  emptyRedactionSlots,
+  envelopeSlot,
+  selectRenderablePages,
+} from '../shared/redactionAuthority';
 import { useRedactionAuthority } from '../shared/useRedactionAuthority';
 import { useSummaryFailureToast } from '../shared/useSummaryFailureToast';
+import { useTopicMessageFeed } from './useTopicMessageFeed';
 
 export interface TopicEvidenceArgs {
   canAuditRead: boolean;
@@ -22,8 +32,9 @@ export interface TopicEvidenceArgs {
 }
 
 /**
- * Fetches one topic's evidence (detail + message page + policy) under the redaction authority,
- * and owns the body-reveal confirmation and the cursor stack that page through the messages.
+ * Fetches one topic's evidence (detail + transcript + policy) under the redaction authority, and
+ * owns the body-reveal confirmation. The transcript is the newest message page (SWR, same query
+ * shape as the live view) plus older pages loaded on demand, merged oldest → newest.
  */
 export const useTopicEvidence = ({
   canAuditRead,
@@ -32,9 +43,13 @@ export const useTopicEvidence = ({
   topicId,
   userId,
 }: TopicEvidenceArgs) => {
-  const [includeBody, setIncludeBody] = useState(false);
-  const [cursorStack, setCursorStack] = useState<(string | null)[]>([]);
-  const currentCursor = cursorStack.at(-1) ?? null;
+  // The body reveal belongs to the topic it was confirmed on. The page is reused across :topicId,
+  // so a reveal from another topic reads as off in the very first render — the new topic's first
+  // request never includes bodies and needs its own confirmation.
+  const scope = `${userId}:${topicId}`;
+  const [reveal, setReveal] = useState({ on: false, scope });
+  const includeBody = reveal.on && reveal.scope === scope;
+  const setIncludeBody = useCallback((on: boolean) => setReveal({ on, scope }), [scope]);
 
   const policy = useFetchAuditPolicy(canAuditRead);
   const detail = useFetchAuditConversation(
@@ -43,13 +58,7 @@ export const useTopicEvidence = ({
     canConversationRead && !!userId && !!topicId,
   );
   const messages = useFetchAuditConversationMessages(
-    {
-      cursor: currentCursor,
-      includeBody,
-      limit: 50,
-      topicId,
-      userId,
-    },
+    { includeBody, limit: AUDIT_MESSAGE_PAGE_LIMIT, topicId, userId },
     canConversationRead && !!userId && !!topicId,
   );
 
@@ -80,11 +89,21 @@ export const useTopicEvidence = ({
   // Fail closed for rendering: an unknown mode never paints bodies.
   const bodyHidden = contentAccessMode !== 'content_allowed';
   const policyForbidsBodies = contentAccessMode !== undefined && bodyHidden;
+
+  const feed = useTopicMessageFeed({
+    bodyAllowed: !bodyHidden,
+    head: messages.data,
+    includeBody,
+    topicId,
+    userId,
+  });
+  const resetFeed = feed.reset;
+
   useEffect(() => {
     if (!policyForbidsBodies) return;
     setIncludeBody(false);
-    setCursorStack([]);
-  }, [policyForbidsBodies]);
+    resetFeed();
+  }, [policyForbidsBodies, resetFeed, setIncludeBody]);
 
   const redaction = useRedactionAuthority(
     {
@@ -93,20 +112,37 @@ export const useTopicEvidence = ({
       messages: envelopeSlot(messages.data),
       policy: canAuditRead ? envelopeSlot(policy.data) : undefined,
     },
-    [],
+    feed.pageProfiles,
     `${userId}:${topicId}`,
     () => {
-      setCursorStack([]);
+      resetFeed();
     },
   );
   const detailRenderable = redaction.isEnvelopeRenderable(envelopeSlot(detail.data));
-  const messagesRenderable = redaction.isEnvelopeRenderable(envelopeSlot(messages.data));
+  // Older cursors served under a looser redaction profile must not be followed.
+  const hasOlder = redaction.isEnvelopeRenderable(feed.cursorProfile) && Boolean(feed.cursor);
+
+  // Older pages + newest page, each kept only while its envelope is renderable, oldest first.
+  // The live head goes last so its copy of a message wins over the snapshot the chain anchored to.
+  const items = useMemo(() => {
+    const merged = sortMessagesChronological(
+      selectRenderablePages(
+        [
+          ...feed.olderPages,
+          { items: messages.data?.items ?? [], redactionProfile: envelopeSlot(messages.data) },
+        ],
+        redaction.isEnvelopeRenderable,
+      ),
+    );
+    return bodyHidden ? stripMessageBodies(merged) : merged;
+  }, [bodyHidden, feed.olderPages, messages.data, redaction]);
 
   const onToggleBody = useCallback(
     (checked: boolean) => {
+      // Either way the transcript restarts from the newest page in the new body mode.
       if (!checked) {
         setIncludeBody(false);
-        setCursorStack([]);
+        resetFeed();
         return;
       }
       openDangerConfirm({
@@ -114,11 +150,11 @@ export const useTopicEvidence = ({
         title: t('audit.conversations.topic.loadBodyTitle'),
         onConfirm: () => {
           setIncludeBody(true);
-          setCursorStack([]);
+          resetFeed();
         },
       });
     },
-    [t],
+    [resetFeed, setIncludeBody, t],
   );
 
   return {
@@ -135,24 +171,20 @@ export const useTopicEvidence = ({
     messages: {
       hasData: Boolean(messages.data),
       hasError: Boolean(messages.error),
+      hasOlder,
       isLoading: messages.isLoading,
-      items: messagesRenderable ? (messages.data?.items ?? []) : [],
+      items,
+      loadOlder: () => {
+        if (!hasOlder) return;
+        void feed.loadOlder();
+      },
+      loadingOlder: feed.loadingOlder,
+      olderError: feed.olderError,
+      /** Changes whenever the transcript restarts from the newest page (topic, body mode, reset). */
+      resetKey: `${userId}:${topicId}:${includeBody ? 'body' : 'meta'}:${feed.generation}`,
       retry: () => void messages.mutate(),
     },
     onToggleBody,
-    pager: {
-      hasNext: messagesRenderable && Boolean(messages.data?.nextCursor),
-      hasPrevious: messagesRenderable && cursorStack.length > 0,
-      onNext: () => {
-        if (!messagesRenderable) return;
-        const next = messages.data?.nextCursor;
-        if (next) setCursorStack((p) => [...p, next]);
-      },
-      onPrevious: () => {
-        if (!messagesRenderable) return;
-        setCursorStack((p) => p.slice(0, -1));
-      },
-    },
   };
 };
 

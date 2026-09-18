@@ -1,28 +1,47 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
-import { isNearBottom, LIVE_SCROLL_BOTTOM_THRESHOLD_PX } from '../shared/liveMessageUtils';
+import { isNearBottom, LIVE_SCROLL_BOTTOM_THRESHOLD_PX } from './liveMessageUtils';
 
-export interface LiveStreamScrollArgs {
+/** Distance (px) from the top of the transcript at which older history starts loading. */
+export const AUDIT_STREAM_TOP_THRESHOLD_PX = 120;
+
+export interface AuditStreamScrollArgs {
   itemCount: number;
   loadingOlder?: boolean;
-  topicId?: string;
+  /** Called when the reader scrolls within {@link AUDIT_STREAM_TOP_THRESHOLD_PX} of the top. */
+  onNearTop?: () => void;
+  /**
+   * Identity of the transcript (topic, body mode, …). A change starts over at the newest message:
+   * stickiness, the prepend anchor and the jump affordance reset and the box scrolls to the bottom.
+   */
+  resetKey?: string;
 }
 
 /**
- * Follow-the-tail scrolling for the live message stream: sticks to the bottom while the auditor
- * is there, offers a jump affordance when they are not, and restores the reading position after
- * an older page prepends.
+ * Follow-the-tail scrolling for an audit transcript (newest message at the bottom): sticks to the
+ * bottom while the auditor is there, offers a jump affordance when new messages arrive while they
+ * are not, asks for older history near the top, and restores the reading position after an older
+ * page prepends. Shared by the live message pane and the conversation-history topic page.
  */
-export const useLiveStreamScroll = ({ itemCount, loadingOlder, topicId }: LiveStreamScrollArgs) => {
+export const useAuditStreamScroll = ({
+  itemCount,
+  loadingOlder,
+  onNearTop,
+  resetKey,
+}: AuditStreamScrollArgs) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const prevCountRef = useRef(0);
+  const itemCountRef = useRef(itemCount);
+  itemCountRef.current = itemCount;
   const wasLoadingOlderRef = useRef(false);
   const anchorScrollHeightRef = useRef(0);
   const anchorScrollTopRef = useRef(0);
+  const onNearTopRef = useRef(onNearTop);
+  onNearTopRef.current = onNearTop;
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -38,6 +57,8 @@ export const useLiveStreamScroll = ({ itemCount, loadingOlder, topicId }: LiveSt
     const near = isNearBottom(el, LIVE_SCROLL_BOTTOM_THRESHOLD_PX);
     stickToBottomRef.current = near;
     if (near) setShowJump(false);
+    // A box that fits entirely is "near the bottom" too — only a real upward scroll asks for more.
+    if (!near && el.scrollTop <= AUDIT_STREAM_TOP_THRESHOLD_PX) onNearTopRef.current?.();
   }, []);
 
   // Capture scroll metrics before older messages prepend.
@@ -57,10 +78,10 @@ export const useLiveStreamScroll = ({ itemCount, loadingOlder, topicId }: LiveSt
     // Restore relative position after older-page prepend (do not rely on overflow-anchor).
     if (el && !loadingOlder && anchorScrollHeightRef.current > 0) {
       const delta = el.scrollHeight - anchorScrollHeightRef.current;
+      anchorScrollHeightRef.current = 0;
       if (delta > 0) {
         el.scrollTop = anchorScrollTopRef.current + delta;
         prevCountRef.current = itemCount;
-        anchorScrollHeightRef.current = 0;
         return;
       }
     }
@@ -74,13 +95,13 @@ export const useLiveStreamScroll = ({ itemCount, loadingOlder, topicId }: LiveSt
     }
   }, [itemCount, loadingOlder, scrollToBottom]);
 
-  useEffect(() => {
-    // Reset stickiness when topic changes.
-    stickToBottomRef.current = true;
-    prevCountRef.current = 0;
+  // A new transcript identity starts reading at the newest message. Layout effect so a cached
+  // transcript (same item count, no "grew" signal) still lands at the bottom before paint.
+  useLayoutEffect(() => {
+    prevCountRef.current = itemCountRef.current;
     anchorScrollHeightRef.current = 0;
-    setShowJump(false);
-  }, [topicId]);
+    scrollToBottom();
+  }, [resetKey, scrollToBottom]);
 
   return { onScroll, scrollRef, scrollToBottom, showJump };
 };

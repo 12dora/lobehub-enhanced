@@ -488,6 +488,7 @@
   "audit.conversations.topic.loadError": "消息加载失败。",
   "audit.conversations.topic.metadataOnlyBanner": "当前策略仅允许元数据，消息正文不可见。",
   "audit.conversations.topic.openLive": "实时查看",
+  "audit.conversations.topic.startOfConversation": "已到会话开头",
   "audit.conversations.topic.title": "会话详情",
   "audit.conversations.untitled": "（无标题）",
   "audit.conversations.user.back": "返回搜索",

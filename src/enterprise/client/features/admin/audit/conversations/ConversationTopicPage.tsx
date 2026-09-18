@@ -15,7 +15,6 @@ import { useTopicModelLine } from '../shared/topicModelLine';
 import ContentAccessDisabledState from './ContentAccessDisabledState';
 import TopicAccessBanner from './TopicAccessBanner';
 import TopicBodyToggle from './TopicBodyToggle';
-import TopicMessagePager from './TopicMessagePager';
 import TopicMessageStream from './TopicMessageStream';
 import { styles } from './topicPageStyles';
 import { useTopicEvidence } from './useTopicEvidence';
@@ -41,7 +40,6 @@ const ConversationTopicPage = memo(() => {
     isForbidden,
     messages,
     onToggleBody,
-    pager,
   } = useTopicEvidence({ canAuditRead, canConversationRead, t, topicId, userId });
 
   if (isForbidden || contentAccessMode === 'disabled') {
@@ -112,8 +110,6 @@ const ConversationTopicPage = memo(() => {
         bodyHidden={bodyHidden}
         feed={messages}
       />
-
-      <TopicMessagePager pager={pager} />
     </AdminPageTemplate>
   );
 });

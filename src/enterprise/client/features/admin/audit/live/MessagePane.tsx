@@ -11,11 +11,12 @@ import type {
 } from '@/enterprise/client/services/adminAudit';
 
 import AuditChatMessageList from '../shared/AuditChatMessageList';
+import AuditOlderMessagesRow from '../shared/AuditOlderMessagesRow';
 import { sortMessagesChronological } from '../shared/liveMessageUtils';
 import { useTopicModelLine } from '../shared/topicModelLine';
+import { useAuditStreamScroll } from '../shared/useAuditStreamScroll';
 import MessagePaneHeader from './MessagePaneHeader';
 import { styles } from './messagePaneStyles';
-import { useLiveStreamScroll } from './useLiveStreamScroll';
 import { useMessageEntrance } from './useMessageEntrance';
 
 export interface MessagePaneProps {
@@ -44,10 +45,10 @@ const MessagePane = memo<MessagePaneProps>(
       topicId: topic?.id,
     });
 
-    const { onScroll, scrollRef, scrollToBottom, showJump } = useLiveStreamScroll({
+    const { onScroll, scrollRef, scrollToBottom, showJump } = useAuditStreamScroll({
       itemCount: ordered.length,
       loadingOlder,
-      topicId: topic?.id,
+      resetKey: topic?.id,
     });
 
     if (!topic) {
@@ -64,13 +65,11 @@ const MessagePane = memo<MessagePaneProps>(
 
         <div className={styles.streamViewport}>
           <div className={styles.stream} ref={scrollRef} onScroll={onScroll}>
-            {hasOlder ? (
-              <div className={styles.older}>
-                <Button loading={loadingOlder} size="small" type="default" onClick={onLoadOlder}>
-                  {t('audit.live.messages.loadOlder')}
-                </Button>
-              </div>
-            ) : null}
+            <AuditOlderMessagesRow
+              hasOlder={hasOlder}
+              loadingOlder={loadingOlder}
+              onLoadOlder={onLoadOlder}
+            />
             {loading && !ordered.length ? (
               <div aria-label={t('primitives.dataTable.loading')} role="status">
                 <SkeletonText animated={!reduceMotion} rows={4} />

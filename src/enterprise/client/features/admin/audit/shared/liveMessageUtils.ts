@@ -1,3 +1,6 @@
+/** Page size for audit transcript requests (live head/older pages and history topic pages). */
+export const AUDIT_MESSAGE_PAGE_LIMIT = 100;
+
 /** Near-bottom threshold (px) for auto-scroll while live updates arrive. */
 export const LIVE_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 
