@@ -7,6 +7,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '@/database/core/getTestDB';
+import { files, topics } from '@/database/schemas';
 import {
   platformAuditExports,
   platformAuditLegalHolds,
@@ -236,6 +237,78 @@ describe('admin.audit router', () => {
       .from(platformAuditLogs)
       .where(eq(platformAuditLogs.action, 'admin.audit.policy.update'));
     expect(denied.some((r) => r.result === 'denied')).toBe(true);
+  });
+
+  it('omits topic and file targetLabel without conversation-read or when policy is disabled', async () => {
+    const contexts = await fixture.createContexts(db);
+    const secret = 'sk-abcdefghijklmnopqrstuvwxyz012345';
+    const topicId = `${fixture.actors.normal}-t-label`;
+    const fileId = `${fixture.actors.normal}-f-label`;
+    const topicEventId = `${fixture.actors.normal}-evt-topic`;
+    const fileEventId = `${fixture.actors.normal}-evt-file`;
+    await db.insert(topics).values({
+      id: topicId,
+      title: `Keys ${secret} keep ACME`,
+      userId: fixture.actors.normal,
+    });
+    await db.insert(files).values({
+      fileType: 'application/pdf',
+      id: fileId,
+      name: `Keys ${secret} invoice.pdf`,
+      size: 10,
+      url: 's3://bucket/obj',
+      userId: fixture.actors.normal,
+    });
+    await db.insert(platformAuditLogs).values([
+      {
+        action: 'admin.audit.conversations.get',
+        id: topicEventId,
+        result: 'success',
+        targetId: topicId,
+        targetType: 'topic',
+      },
+      {
+        action: 'admin.audit.files.open',
+        id: fileEventId,
+        result: 'success',
+        targetId: fileId,
+        targetType: 'file',
+      },
+    ]);
+
+    const auditor = createCaller(contexts.auditor as never);
+    const superAdmin = createCaller(contexts.superAdmin as never);
+
+    const auditorTopic = await auditor.audit.events.list({ targetId: topicId });
+    const auditorFile = await auditor.audit.get({ id: fileEventId });
+    expect(auditorTopic.items.find((row) => row.id === topicEventId)?.targetLabel).toBeNull();
+    expect(auditorFile.targetLabel).toBeNull();
+
+    const superTopic = await superAdmin.audit.events.list({ targetId: topicId });
+    const superFile = await superAdmin.audit.events.get({ id: fileEventId });
+    const superAlias = await superAdmin.audit.list({ targetId: fileId });
+    expect(superTopic.items.find((row) => row.id === topicEventId)?.targetLabel).toContain('ACME');
+    expect(superTopic.items.find((row) => row.id === topicEventId)?.targetLabel).not.toContain(
+      secret,
+    );
+    expect(superFile.targetLabel).not.toContain(secret);
+    expect(superAlias.items.find((row) => row.id === fileEventId)?.targetLabel).not.toContain(
+      secret,
+    );
+
+    const policy = await superAdmin.audit.policy.get();
+    await superAdmin.audit.policy.update({
+      contentAccessMode: 'disabled',
+      expectedRevision: policy.revision,
+      reason: 'disable conversation target labels',
+    });
+
+    const disabledList = await superAdmin.audit.events.list({ targetId: topicId });
+    const disabledGet = await superAdmin.audit.events.get({ id: topicEventId });
+    const disabledAlias = await superAdmin.audit.get({ id: fileEventId });
+    expect(disabledList.items.find((row) => row.id === topicEventId)?.targetLabel).toBeNull();
+    expect(disabledGet.targetLabel).toBeNull();
+    expect(disabledAlias.targetLabel).toBeNull();
   });
 
   it('aliases list/get share event contracts with events.*', async () => {

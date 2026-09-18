@@ -21,7 +21,7 @@ import {
   adminAuditEventsListOutputSchema,
 } from '../../contracts/adminAudit';
 import { AdminAuditService } from '../../services/audit';
-import { auditRead } from './audit.procedure';
+import { auditRead, canSeeConversationEvidence } from './audit.procedure';
 import { conversationsRouter, eventsRouter, policyRouter, usersRouter } from './audit.reads';
 import { exportsRouter, legalHoldsRouter, retentionRouter } from './audit.writes';
 
@@ -41,6 +41,7 @@ export const adminAuditRouter = router({
       return service.getEvent({
         accessAction: 'admin.audit.get',
         actorUserId: ctx.userId!,
+        canSeeConversationEvidence: canSeeConversationEvidence(ctx),
         id: input.id,
       });
     }),
@@ -53,6 +54,7 @@ export const adminAuditRouter = router({
       return service.listEvents({
         accessAction: 'admin.audit.list',
         actorUserId: ctx.userId!,
+        canSeeConversationEvidence: canSeeConversationEvidence(ctx),
         input,
       });
     }),

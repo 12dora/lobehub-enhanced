@@ -65,3 +65,9 @@ export const assertAuditDangerousReauth = async (params: {
 export const platformAuthPermissions = (ctx: {
   platformAuth?: { permissions?: readonly string[] };
 }): readonly string[] | undefined => ctx.platformAuth?.permissions;
+
+/** True when the already-authorized actor also holds conversation-evidence read. */
+export const canSeeConversationEvidence = (ctx: {
+  platformAuth?: { permissions?: readonly string[] };
+}): boolean =>
+  platformAuthPermissions(ctx)?.includes(PLATFORM_PERMISSIONS.AUDIT_CONVERSATION_READ) === true;

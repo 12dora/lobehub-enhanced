@@ -33,6 +33,8 @@ export const adminAuditConversationsListInputSchema = z
 export const adminAuditConversationListItemSchema = z
   .object({
     agentId: z.string().nullable(),
+    agentSlug: z.string().nullable().optional(),
+    agentTitle: z.string().nullable().optional(),
     createdAt: z.date(),
     description: z.string().nullable(),
     id: z.string(),

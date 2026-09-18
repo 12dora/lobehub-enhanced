@@ -14,6 +14,7 @@ import type { UserPublicRef } from '../../contracts/shared/userPublicRef';
 import { getEnterpriseErrorBody } from '../../guards/enterpriseErrors';
 import { toPublicPlatformAuditItem } from '../platformAudit';
 import { userRefOf } from '../shared/userRefResolver';
+import { targetLabelOf } from './targetLabelResolver';
 
 export type ConversationsGetInput = { topicId: string; userId: string };
 export type EventsStatsInput = { from?: Date; to?: Date };
@@ -41,6 +42,7 @@ export const toPolicyPublic = (
 export const toEventListItem = (
   row: PlatformAuditLogItem,
   refs: Map<string, UserPublicRef> = new Map(),
+  targetLabels: Map<string, string> = new Map(),
 ) => ({
   action: row.action,
   actorUser: userRefOf(row.actorUserId, refs),
@@ -53,6 +55,7 @@ export const toEventListItem = (
   requestId: row.requestId,
   result: row.result,
   targetId: row.targetId,
+  targetLabel: targetLabelOf(row.targetType, row.targetId, targetLabels),
   targetType: row.targetType,
   userAgent: row.userAgent,
 });
@@ -61,10 +64,11 @@ export const toEventListItem = (
 export const toEventDetail = (
   row: PlatformAuditLogItem,
   refs: Map<string, UserPublicRef> = new Map(),
+  targetLabels: Map<string, string> = new Map(),
 ) => {
   const publicRow = toPublicPlatformAuditItem(row);
   return {
-    ...toEventListItem(publicRow, refs),
+    ...toEventListItem(publicRow, refs, targetLabels),
     afterDiff: publicRow.afterDiff,
     beforeDiff: publicRow.beforeDiff,
   };

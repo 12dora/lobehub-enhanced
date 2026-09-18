@@ -3,7 +3,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '@/database/core/getTestDB';
-import { files, messages, messagesFiles, topics, users } from '@/database/schemas';
+import { agents, files, messages, messagesFiles, topics, users } from '@/database/schemas';
 import {
   platformAuditLegalHolds,
   platformAuditLogs,
@@ -35,6 +35,7 @@ beforeEach(async () => {
   await serverDB.delete(platformAuditPolicies);
   await serverDB.delete(messages);
   await serverDB.delete(topics);
+  await serverDB.delete(agents).where(inArray(agents.userId, [actor, userA, userB]));
   await serverDB.delete(files).where(inArray(files.userId, [actor, userA, userB]));
   await serverDB.delete(users).where(eq(users.id, actor));
   await serverDB.delete(users).where(eq(users.id, userA));
@@ -54,6 +55,7 @@ afterEach(async () => {
   await serverDB.delete(platformAuditPolicies);
   await serverDB.delete(messages);
   await serverDB.delete(topics);
+  await serverDB.delete(agents).where(inArray(agents.userId, [actor, userA, userB]));
   await serverDB.delete(files).where(inArray(files.userId, [actor, userA, userB]));
 });
 
@@ -585,6 +587,197 @@ describe('AdminAuditService', () => {
       fullName: 'Break-glass Super Admin',
       id: actor,
       username: null,
+    });
+  });
+
+  it('resolves targetLabel on event list and get; sentinels and missing rows stay null', async () => {
+    await serverDB
+      .insert(topics)
+      .values({ id: 't-label', title: 'Quarterly planning', userId: userA });
+    await serverDB.insert(platformAuditLogs).values([
+      {
+        action: 'admin.users.ban',
+        id: 'op-label-user',
+        result: 'success',
+        targetId: userA,
+        targetType: 'user',
+      },
+      {
+        action: 'admin.audit.conversations.get',
+        id: 'op-label-topic',
+        result: 'success',
+        targetId: 't-label',
+        targetType: 'topic',
+      },
+      {
+        action: 'admin.settings.publish',
+        id: 'op-label-global',
+        result: 'success',
+        targetId: 'global',
+        targetType: 'settings',
+      },
+      {
+        action: 'admin.users.ban',
+        id: 'op-label-missing',
+        result: 'success',
+        targetId: 'missing-user',
+        targetType: 'user',
+      },
+    ]);
+
+    const list = await service.listEvents({
+      actorUserId: actor,
+      canSeeConversationEvidence: true,
+      input: { limit: 20 },
+    });
+    expect(list.items.find((row) => row.id === 'op-label-user')?.targetLabel).toBe('邵军军');
+    expect(list.items.find((row) => row.id === 'op-label-topic')?.targetLabel).toBe(
+      'Quarterly planning',
+    );
+    expect(list.items.find((row) => row.id === 'op-label-global')?.targetLabel).toBeNull();
+    expect(list.items.find((row) => row.id === 'op-label-missing')?.targetLabel).toBeNull();
+
+    const detail = await service.getEvent({
+      actorUserId: actor,
+      canSeeConversationEvidence: true,
+      id: 'op-label-user',
+    });
+    expect(detail.targetLabel).toBe('邵军军');
+    const globalDetail = await service.getEvent({ actorUserId: actor, id: 'op-label-global' });
+    expect(globalDetail.targetLabel).toBeNull();
+  });
+
+  it('omits topic and file targetLabel without conversation-read or when policy is disabled', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwxyz012345';
+    await serverDB.insert(topics).values({
+      id: 't-gate',
+      title: `Keys ${secret} keep ACME`,
+      userId: userA,
+    });
+    await serverDB.insert(files).values({
+      fileType: 'application/pdf',
+      id: 'file-gate',
+      name: `Keys ${secret} invoice.pdf`,
+      size: 10,
+      url: 's3://bucket/obj',
+      userId: userA,
+    });
+    await serverDB.insert(platformAuditLogs).values([
+      {
+        action: 'admin.users.ban',
+        id: 'op-gate-user',
+        result: 'success',
+        targetId: userA,
+        targetType: 'user',
+      },
+      {
+        action: 'admin.audit.conversations.get',
+        id: 'op-gate-topic',
+        result: 'success',
+        targetId: 't-gate',
+        targetType: 'topic',
+      },
+      {
+        action: 'admin.audit.files.open',
+        id: 'op-gate-file',
+        result: 'success',
+        targetId: 'file-gate',
+        targetType: 'file',
+      },
+    ]);
+
+    const denied = await service.listEvents({ actorUserId: actor, input: { limit: 20 } });
+    expect(denied.items.find((row) => row.id === 'op-gate-user')?.targetLabel).toBe('邵军军');
+    expect(denied.items.find((row) => row.id === 'op-gate-topic')?.targetLabel).toBeNull();
+    expect(denied.items.find((row) => row.id === 'op-gate-file')?.targetLabel).toBeNull();
+
+    const allowed = await service.listEvents({
+      actorUserId: actor,
+      canSeeConversationEvidence: true,
+      input: { limit: 20 },
+    });
+    const allowedTopic = allowed.items.find((row) => row.id === 'op-gate-topic')?.targetLabel;
+    const allowedFile = allowed.items.find((row) => row.id === 'op-gate-file')?.targetLabel;
+    expect(allowed.items.find((row) => row.id === 'op-gate-user')?.targetLabel).toBe('邵军军');
+    expect(allowedTopic).toContain('ACME');
+    expect(allowedTopic).not.toContain(secret);
+    expect(allowedFile).toContain('invoice.pdf');
+    expect(allowedFile).not.toContain(secret);
+
+    const allowedDetail = await service.getEvent({
+      actorUserId: actor,
+      canSeeConversationEvidence: true,
+      id: 'op-gate-topic',
+    });
+    expect(allowedDetail.targetLabel).not.toContain(secret);
+
+    const policy = await service.getPolicy({ actorUserId: actor });
+    await service.updatePolicy({
+      actorUserId: actor,
+      input: {
+        contentAccessMode: 'disabled',
+        expectedRevision: policy.revision,
+        reason: 'disable conversation evidence labels',
+      },
+    });
+
+    const disabled = await service.listEvents({
+      actorUserId: actor,
+      canSeeConversationEvidence: true,
+      input: { limit: 20 },
+    });
+    expect(disabled.items.find((row) => row.id === 'op-gate-user')?.targetLabel).toBe('邵军军');
+    expect(disabled.items.find((row) => row.id === 'op-gate-topic')?.targetLabel).toBeNull();
+    expect(disabled.items.find((row) => row.id === 'op-gate-file')?.targetLabel).toBeNull();
+
+    const disabledDetail = await service.getEvent({
+      actorUserId: actor,
+      canSeeConversationEvidence: true,
+      id: 'op-gate-file',
+    });
+    expect(disabledDetail.targetLabel).toBeNull();
+  });
+
+  it('attaches agentTitle and agentSlug on conversation list and get', async () => {
+    await serverDB.insert(agents).values({
+      id: 'agt-conv-1',
+      slug: 'inbox',
+      title: 'Support Bot',
+      userId: userA,
+    });
+    await serverDB.insert(topics).values([
+      {
+        agentId: 'agt-conv-1',
+        id: 't-agt',
+        title: 'With agent',
+        userId: userA,
+      },
+      { id: 't-agt-none', title: 'No agent', userId: userA },
+    ]);
+
+    const listed = await service.listConversations({
+      actorUserId: actor,
+      input: { limit: 10, userId: userA },
+    });
+    expect(listed.items.find((row) => row.id === 't-agt')).toMatchObject({
+      agentId: 'agt-conv-1',
+      agentSlug: 'inbox',
+      agentTitle: 'Support Bot',
+    });
+    expect(listed.items.find((row) => row.id === 't-agt-none')).toMatchObject({
+      agentId: null,
+      agentSlug: null,
+      agentTitle: null,
+    });
+
+    const detail = await service.getConversation({
+      actorUserId: actor,
+      input: { topicId: 't-agt', userId: userA },
+    });
+    expect(detail).toMatchObject({
+      agentId: 'agt-conv-1',
+      agentSlug: 'inbox',
+      agentTitle: 'Support Bot',
     });
   });
 

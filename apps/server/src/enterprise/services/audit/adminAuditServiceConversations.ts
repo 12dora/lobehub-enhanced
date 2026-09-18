@@ -22,6 +22,7 @@ import {
   isNotFoundError,
   maskOptionalText,
 } from './adminAuditServiceShared';
+import { resolveAgentRefs, withAgentDisplay } from './agentRefResolver';
 import type { ConversationContentAccess } from './contentPolicy';
 import { assertConversationAccessEnabled, resolveConversationContentAccess } from './contentPolicy';
 import { resolveAuditTimeWindow } from './timeWindow';
@@ -59,11 +60,20 @@ export const listConversations = async (
       userId: params.input.userId,
     });
 
-    const items = page.items.map((row) => ({
-      ...row,
-      description: maskOptionalText(row.description, policy.redactionProfile) ?? null,
-      title: maskOptionalText(row.title, policy.redactionProfile) ?? null,
-    }));
+    const refs = await resolveAgentRefs(
+      host.db,
+      page.items.map((row) => row.agentId),
+    );
+    const items = page.items.map((row) =>
+      withAgentDisplay(
+        {
+          ...row,
+          description: maskOptionalText(row.description, policy.redactionProfile) ?? null,
+          title: maskOptionalText(row.title, policy.redactionProfile) ?? null,
+        },
+        refs,
+      ),
+    );
 
     await appendAuditAccessLog(host.db, {
       action: 'admin.audit.conversations.list',
@@ -168,7 +178,11 @@ export const getConversation = async (
       });
     }
 
-    const result = toConversationGetResult(topic, access, policy.redactionProfile);
+    const refs = await resolveAgentRefs(host.db, [topic.agentId]);
+    const result = withAgentDisplay(
+      toConversationGetResult(topic, access, policy.redactionProfile),
+      refs,
+    );
 
     // Body-bearing conversation reads are sensitive — fail closed on audit failure.
     await appendAuditAccessLog(host.db, {

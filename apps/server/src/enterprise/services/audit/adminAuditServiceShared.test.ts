@@ -86,6 +86,26 @@ describe('admin audit serializers', () => {
     expect(toEventDetail({ ...event, actorUserId: null }, refs).actorUser).toBeNull();
   });
 
+  it('attaches targetLabel from the batch map and null for sentinels / misses', () => {
+    const labels = new Map([
+      ['user:user-1', '邵军军'],
+      ['topic:t-1', 'Q3 notes'],
+    ]);
+
+    expect(
+      toEventListItem({ ...event, targetId: 'user-1', targetType: 'user' }, refs, labels)
+        .targetLabel,
+    ).toBe('邵军军');
+    expect(
+      toEventDetail({ ...event, targetId: 't-1', targetType: 'topic' }, refs, labels).targetLabel,
+    ).toBe('Q3 notes');
+    expect(toEventListItem(event, refs, labels).targetLabel).toBeNull();
+    expect(
+      toEventDetail({ ...event, targetId: 'missing', targetType: 'topic' }, refs, labels)
+        .targetLabel,
+    ).toBeNull();
+  });
+
   it('attaches createdByUser / releasedByUser and null for unknown ids', () => {
     const publicHold = toLegalHoldPublic(hold, refs);
     expect(publicHold.createdByUser).toEqual(ref);

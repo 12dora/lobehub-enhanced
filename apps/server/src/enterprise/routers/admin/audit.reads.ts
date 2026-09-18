@@ -29,6 +29,7 @@ import {
   auditConversationRead,
   auditPolicyUpdate,
   auditRead,
+  canSeeConversationEvidence,
 } from './audit.procedure';
 
 export const policyRouter = router({
@@ -73,6 +74,7 @@ export const eventsRouter = router({
       return service.getEvent({
         accessAction: 'admin.audit.events.get',
         actorUserId: ctx.userId!,
+        canSeeConversationEvidence: canSeeConversationEvidence(ctx),
         id: input.id,
       });
     }),
@@ -85,6 +87,7 @@ export const eventsRouter = router({
       return service.listEvents({
         accessAction: 'admin.audit.events.list',
         actorUserId: ctx.userId!,
+        canSeeConversationEvidence: canSeeConversationEvidence(ctx),
         input,
       });
     }),

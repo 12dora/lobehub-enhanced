@@ -53,6 +53,7 @@ import {
 } from './adminAuditServiceShared';
 import { getUserSummary, listUserTimeline } from './adminAuditServiceUsers';
 import type { AuditExportArtifactStorage } from './exportStorage';
+import { resolveTargetLabels } from './targetLabelResolver';
 import { resolveAuditTimeWindow } from './timeWindow';
 
 export class AdminAuditService {
@@ -193,6 +194,7 @@ export class AdminAuditService {
   listEvents = async (params: {
     accessAction?: 'admin.audit.events.list' | 'admin.audit.list';
     actorUserId: string;
+    canSeeConversationEvidence?: boolean;
     input: AdminAuditEventsListInputParsed;
   }) => {
     const accessAction = params.accessAction ?? 'admin.audit.events.list';
@@ -242,12 +244,19 @@ export class AdminAuditService {
         targetType: 'audit_event',
       });
 
-      const refs = await resolveUserRefs(
-        this.db as LobeChatDatabase,
-        page.items.map((row) => row.actorUserId ?? ''),
-      );
+      const [refs, targetLabels] = await Promise.all([
+        resolveUserRefs(
+          this.db as LobeChatDatabase,
+          page.items.map((row) => row.actorUserId ?? ''),
+        ),
+        resolveTargetLabels(this.db as LobeChatDatabase, page.items, {
+          canSeeConversationEvidence:
+            Boolean(params.canSeeConversationEvidence) && policy.contentAccessMode !== 'disabled',
+          redactionProfile: policy.redactionProfile,
+        }),
+      ]);
       return {
-        items: page.items.map((row) => toEventListItem(row, refs)),
+        items: page.items.map((row) => toEventListItem(row, refs, targetLabels)),
         nextCursor: page.nextCursor,
       };
     } catch (error) {
@@ -266,6 +275,7 @@ export class AdminAuditService {
   getEvent = async (params: {
     accessAction?: 'admin.audit.events.get' | 'admin.audit.get';
     actorUserId: string;
+    canSeeConversationEvidence?: boolean;
     id: string;
   }) => {
     const accessAction = params.accessAction ?? 'admin.audit.events.get';
@@ -299,10 +309,17 @@ export class AdminAuditService {
         targetType: 'audit_event',
       });
 
-      return toEventDetail(
-        row,
-        await resolveUserRefs(this.db as LobeChatDatabase, [row.actorUserId ?? '']),
-      );
+      const [refs, targetLabels] = await Promise.all([
+        resolveUserRefs(this.db as LobeChatDatabase, [row.actorUserId ?? '']),
+        this.policyModel.getOrCreate().then((policy) =>
+          resolveTargetLabels(this.db as LobeChatDatabase, [row], {
+            canSeeConversationEvidence:
+              Boolean(params.canSeeConversationEvidence) && policy.contentAccessMode !== 'disabled',
+            redactionProfile: policy.redactionProfile,
+          }),
+        ),
+      ]);
+      return toEventDetail(row, refs, targetLabels);
     } catch (error) {
       if (isNotFoundError(error)) throw error;
       await appendAuditAccessLog(this.db, {

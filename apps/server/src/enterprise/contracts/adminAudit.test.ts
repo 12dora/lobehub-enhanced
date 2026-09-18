@@ -4,11 +4,13 @@ import { describe, expect, it } from 'vitest';
 import {
   ADMIN_AUDIT_LIST_DEFAULT_LIMIT,
   ADMIN_AUDIT_LIST_MAX_LIMIT,
+  adminAuditConversationListItemSchema,
   adminAuditConversationMessageListItemSchema,
   adminAuditConversationsGetOutputSchema,
   adminAuditConversationsListInputSchema,
   adminAuditConversationsListOutputSchema,
   adminAuditConversationsMessagesOutputSchema,
+  adminAuditEventListItemSchema,
   adminAuditEventsListInputSchema,
   adminAuditExportItemSchema,
   adminAuditExportsCreateInputSchema,
@@ -71,6 +73,46 @@ describe('adminAudit contracts', () => {
         redactionProfile: 'loose',
       }),
     ).toThrow();
+  });
+
+  it('accepts optional targetLabel and conversation agent display fields', () => {
+    const now = new Date();
+    expect(
+      adminAuditEventListItemSchema.parse({
+        action: 'admin.users.ban',
+        actorUser: null,
+        actorUserId: null,
+        configRevision: null,
+        createdAt: now,
+        id: 'e1',
+        ipHash: null,
+        reason: null,
+        requestId: null,
+        result: 'success',
+        targetId: 'user-1',
+        targetLabel: '邵军军',
+        targetType: 'user',
+        userAgent: null,
+      }).targetLabel,
+    ).toBe('邵军军');
+
+    expect(
+      adminAuditConversationListItemSchema.parse({
+        agentId: 'agt-1',
+        agentSlug: 'inbox',
+        agentTitle: 'Support Bot',
+        createdAt: now,
+        description: null,
+        id: 't1',
+        model: null,
+        provider: null,
+        sessionId: null,
+        status: null,
+        title: 'memo',
+        updatedAt: now,
+        userId: 'u1',
+      }),
+    ).toMatchObject({ agentSlug: 'inbox', agentTitle: 'Support Bot' });
   });
 
   it('conversation and timeline envelopes require a known redactionProfile', () => {

@@ -52,6 +52,8 @@ export const adminAuditEventListItemSchema = z
     requestId: z.string().nullable(),
     result: platformAuditResultSchema,
     targetId: z.string().nullable(),
+    /** Server-resolved display name of the target; null for sentinels / missing rows. */
+    targetLabel: z.string().nullable().optional(),
     targetType: z.string(),
     userAgent: z.string().nullable(),
   })
