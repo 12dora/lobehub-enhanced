@@ -5,15 +5,31 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.7.0 (2026-09-18)
+
+审计界面整理：操作日志显示目标名称，实时查看与会话历史改用只读聊天视图。
+
+#### ✨ Features
+
+- 实时查看、会话历史的消息区改为与用户聊天界面一致的只读视图：头像 + 气泡、Markdown 渲染（代码块 / 表格 / 列表），原始 HTML 一律按文本显示；脱敏标记渲染为不可伪造、不会被链接包裹的 chip。
+- 操作日志「目标」列显示目标名称（会话标题 / 用户名 / 助理名等，`global` 显示为「全局」），单行截断，悬停显示全名与原始 ID。会话标题与文件名仅在审计策略未禁用会话访问且查看者具备会话查看权限时返回，并按会话脱敏规则处理。
+- 会话历史：模型行与更新时间合并为一行并显示助理名称（默认助理显示本地化名称），「加载正文」开关移到「实时查看」按钮左侧，邮箱单行截断 + tooltip，无标题会话显示「未命名」。
+
+#### 🐛 Fixes
+
+- 操作日志事件详情抽屉的右侧滑入 / 滑出动画。
+- 实时查看：去掉重复的正文提示横幅，说明改为警告色；左右两栏固定高度、各自滚动；「新消息」跳转按钮始终浮在可视区。
+- 会话历史在策略切为仅元数据后不再显示已缓存的消息正文。
+
 ## 1.6.1 (2026-09-16)
 
 1.6.0 上线后的跟进。
 
 #### 🐛 Fixes
 
-- 定时提醒推送标题改为「<站点标题> · <发起人>提醒你：<摘要>」（工具调用带 ≤12 字的 `title`，缺省截取正文），不再是无信息量的「定时提醒」。
+- 定时提醒推送标题改为「<站点标题>・< 发起人 > 提醒你：< 摘要 >」（工具调用带 ≤12 字的 `title`，缺省截取正文），不再是无信息量的「定时提醒」。
 - 提醒任务不再在到点之前的 cron 容差窗内提前触发（19:28 的提醒曾在 19:25 的扫描就发出）。
-- `createReminder` 的 schedule 入参容忍空字符串/空数组并归一 `H:mm`/`HH:mm:ss`，缺 `time` 时返回明确的字段提示，减少一轮模型重试。
+- `createReminder` 的 schedule 入参容忍空字符串 / 空数组并归一 `H:mm`/`HH:mm:ss`，缺 `time` 时返回明确的字段提示，减少一轮模型重试。
 - 任务助手自动开通时 `DEFAULT_LANG` 为空默认中文名「任务助手」。
 
 ## 1.6.0 (2026-09-16)
@@ -23,10 +39,10 @@ Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/
 #### ✨ Features
 
 - 提醒即任务：自然语言设置的提醒现在创建为一条任务（`config.reminder`，`automation_mode='schedule'`，cron 按 Asia/Shanghai；一次性提醒到点后完成），正文首行以 `@姓名·部门` / `@部门名` 写收件人，其后为提醒内容。调度 tick 与「运行」对提醒任务不再启动 Agent，而是直接投递（服务号工作通知 + 服务号机器人 + 站内铃铛），并在投递前原子认领触发槽（并发 tick / 重复投递 / 到点前一分钟的「立即发送」只发一次）。`reminders` 表成为任务的档案（`task_id`，迁移 0034），遗留行仍由旧扫描触发。
-- 任务详情：提醒任务正文改为显式「保存」（不再每次输入触发），保存后服务端按 `@提及` 确定性解析收件人、用 LLM 重新理解正文里的时间表达并重排 cron（歧义时返回候选「姓名 · 部门」）；`@` 提及选择器接钉钉通讯录；新增收件人/周期/下次发送/上次发送与投递计数面板，可「立即发送」或「取消提醒」；任务列表带 ⏰ 提醒标签。
-- 定时提醒页签改为两张表格：「我发起的」（内容、收件人、周期、下次/上次发送与计数、状态、操作）与「我收到的」（时间、内容、来自、工作通知/机器人渠道状态）。
-- `lobe-reminder` 工具常驻（agent 模式无需 activator 激活回合），`createReminder` 一次调用接受姓名/「姓名·部门」/部门名并在服务端解析，歧义与大受众在同一次调用返回；工具输出时间一律 Asia/Shanghai。
-- 任务助手（内置 `task-agent`）成为平台系统助理 `task-manager`：管理端「助理管理」新增任务助手卡片，管理员发布的名称/头像/提示词/默认模型与思考强度覆盖到每位成员的任务页助手（轻量托管：成员仍可换模型与助理），启动/列表时自动开通，发布换模型时重置成员行；系统助理行不可归档/删除/设为默认。
+- 任务详情：提醒任务正文改为显式「保存」（不再每次输入触发），保存后服务端按 `@提及` 确定性解析收件人、用 LLM 重新理解正文里的时间表达并重排 cron（歧义时返回候选「姓名・部门」）；`@` 提及选择器接钉钉通讯录；新增收件人 / 周期 / 下次发送 / 上次发送与投递计数面板，可「立即发送」或「取消提醒」；任务列表带 ⏰ 提醒标签。
+- 定时提醒页签改为两张表格：「我发起的」（内容、收件人、周期、下次 / 上次发送与计数、状态、操作）与「我收到的」（时间、内容、来自、工作通知 / 机器人渠道状态）。
+- `lobe-reminder` 工具常驻（agent 模式无需 activator 激活回合），`createReminder` 一次调用接受姓名 /「姓名・部门」/ 部门名并在服务端解析，歧义与大受众在同一次调用返回；工具输出时间一律 Asia/Shanghai。
+- 任务助手（内置 `task-agent`）成为平台系统助理 `task-manager`：管理端「助理管理」新增任务助手卡片，管理员发布的名称 / 头像 / 提示词 / 默认模型与思考强度覆盖到每位成员的任务页助手（轻量托管：成员仍可换模型与助理），启动 / 列表时自动开通，发布换模型时重置成员行；系统助理行不可归档 / 删除 / 设为默认。
 
 #### 🐛 Fixes
 
@@ -61,7 +77,7 @@ Follow-up to the first upstream sync: the four "needs real work" items left in t
 
 #### 📝 Ledger
 
-- #17748 / #17754 (stale model state in the selector) were found already implemented in the fork; only the model-redirect half is missing and is intentionally not ported. #17928 (recent-topic preview batching) does not apply: the fork's `recent.ts` has no topic preview and no per-topic subquery.
+- \#17748 / #17754 (stale model state in the selector) were found already implemented in the fork; only the model-redirect half is missing and is intentionally not ported. #17928 (recent-topic preview batching) does not apply: the fork's `recent.ts` has no topic preview and no per-topic subquery.
 
 ## 1.3.0 (2026-09-10)
 
