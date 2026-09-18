@@ -5,6 +5,14 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.7.2 (2026-09-18)
+
+提醒收件人纠错：模型把生僻字姓名写错时，结合上下文直接找回正确的人。
+
+#### ✨ Improvements
+
+- 收件人姓名未找到且有多个近似候选时，若恰好一个候选在用户最近一条消息原文中独立出现（排除错字本身、更长姓名的一部分以及引用的消息内容），或恰好一个与其他已解析收件人同部门，则只返回该候选并注明原因，模型直接用 `staff:` token 重试，无需再问用户。其余情况仍列出候选请用户选择。
+
 ## 1.7.1 (2026-09-18)
 
 定时提醒创建链路整改（同部门多人收件、并发编号、模型纠错）与审计会话历史滚动加载。
