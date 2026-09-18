@@ -129,6 +129,19 @@ Before reviewing a PR / diff / branch change, read the **deep-review** skill. Or
 
 When designing or reviewing user-facing flows (empty/loading/error states, confirmations, async feedback, button hierarchy, lists at scale, pickers), follow LobeHub's design values in [`DESIGN.md`](./DESIGN.md) — Natural / Meaningful / Certainty / Growth (自然 / 意义感 / 确定性 / 成长).
 
+### Release & Deploy (AIHub production)
+
+Never wait on the GitHub `Release Docker Image` workflow (\~23 min). Build locally and deploy the local image:
+
+1. Release commit `🔖 release: vX.Y.Z` (bump `package.json` + `CHANGELOG.md` entry), annotated tag `vX.Y.Z`, push `main` and the tag. CI may still run; do not depend on it.
+2. From the clean tagged tree, start the build asynchronously right away:
+   `docker build -f Dockerfile --label org.opencontainers.image.revision=$(git rev-parse HEAD) --label org.opencontainers.image.version=X.Y.Z -t ghcr.io/12dora/lobehub-enhanced:X.Y.Z -t ghcr.io/12dora/lobehub-enhanced:vX.Y.Z .` (CI passes no build args).
+3. Deploy: back up `/home/ubuntu/apps/aihub/compose.yml` (`compose.yml.bak.<epoch>`), set `image: ghcr.io/12dora/lobehub-enhanced:X.Y.Z`, then in `/home/ubuntu/apps/aihub` run `docker compose up -d --pull never lobehub` and verify container `lobehub-enhanced` becomes healthy. Rollback = switch back to the previous tag.
+
+### Memory limits (agent sessions)
+
+A full type-check (`tsgo --noEmit`, `bun run type-check`, `bun run check --type`) needs \~8 GB RAM and exceeds the agent pane limit. Sub-agents must only run `bun run check --test <files>` + eslint on changed files. The orchestrator runs the single full type-check in a throwaway container (`docker run --rm -m 24g -u 1000:1000 -v "$PWD:$PWD:ro" -w "$PWD" busybox <tsgo binary under node_modules/.pnpm/@typescript+native-preview-linux-x64@*/…/lib/tsgo> --noEmit`; the TS5033 tsbuildinfo write error is expected). The `.githooks/pre-commit` hook runs a full type-check on `main`/`dev`: after the container check passes, run `lint-staged` manually and commit with `HUSKY=0`.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
