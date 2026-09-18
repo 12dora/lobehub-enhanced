@@ -4,6 +4,8 @@ import { isReminderTaskConfig } from '@lobechat/types';
 import type {
   CancelReminderParams,
   CancelReminderState,
+  ClarificationCandidate,
+  CreateReminderClarificationResult,
   CreateReminderParams,
   CreateReminderState,
   DirectoryDepartmentHit,
@@ -47,6 +49,28 @@ export interface IReminderService {
 }
 
 const WEEKDAY_LABELS = ['', '一', '二', '三', '四', '五', '六', '日'];
+
+const CREATE_REMINDER_RETRY_CONTENT =
+  '临时冲突，请用相同参数重试一次 createReminder（收件人已解析成功，无需重新搜索）';
+
+/** LLM-visible copy for unexpected failures. Never include raw error text. */
+export const REMINDER_INTERNAL_TOOL_CONTENT =
+  '提醒操作失败（内部错误），请稍后重试。不要向用户展示技术细节。';
+
+const KNOWN_REMINDER_ERROR_CODES = new Set([
+  'REMINDER_CONTENT_EMPTY',
+  'REMINDER_CREATE_RETRY',
+  'REMINDER_INTERNAL',
+  'REMINDER_NOT_FOUND',
+  'REMINDER_RECIPIENT_UNKNOWN',
+  'REMINDER_SCHEDULE_INVALID',
+  'REMINDER_TIME_PAST',
+]);
+
+interface ReminderToolFailure {
+  code: string;
+  message: string;
+}
 
 const compactJson = (value: unknown): string => JSON.stringify(value);
 
@@ -130,11 +154,153 @@ const errorMessage = (error: unknown): string => {
 const withServerNow = (content: string, serverNow: string): string =>
   content.includes('"serverNow"') ? content : `${content}\n${compactJson({ serverNow })}`;
 
-const failResult = (content: string, error?: unknown): BuiltinServerRuntimeOutput => ({
+const failResult = (content: string, error?: ReminderToolFailure): BuiltinServerRuntimeOutput => ({
   content: `${content}\n${compactJson({ serverNow: formatServerNow() })}`,
   error,
   success: false,
 });
+
+const toStaffToken = (staffId: string): string =>
+  staffId.startsWith('staff:') ? staffId : `staff:${staffId}`;
+
+const formatClarificationCandidate = (candidate: ClarificationCandidate): string => {
+  const token = toStaffToken(candidate.staffId);
+  const dept = candidate.leafDeptName || candidate.deptPath;
+  return dept ? `${candidate.name} · ${dept}（${token}）` : `${candidate.name}（${token}）`;
+};
+
+const isScheduleToolError = (code: string | undefined, message: string): boolean => {
+  if (code === 'REMINDER_SCHEDULE_INVALID') return true;
+  return message.startsWith('Missing required field:') || message.startsWith('Invalid schedule:');
+};
+
+const friendlyReminderErrorContent = (code: string, message: string): string => {
+  switch (code) {
+    case 'REMINDER_TIME_PAST': {
+      return `发送时间无效（REMINDER_TIME_PAST）：${message}`;
+    }
+    case 'REMINDER_CONTENT_EMPTY': {
+      return `提醒内容为空（REMINDER_CONTENT_EMPTY）：${message}`;
+    }
+    case 'REMINDER_RECIPIENT_UNKNOWN': {
+      return `收件人无法解析（REMINDER_RECIPIENT_UNKNOWN）：${message}`;
+    }
+    case 'REMINDER_CREATE_RETRY': {
+      return CREATE_REMINDER_RETRY_CONTENT;
+    }
+    case 'REMINDER_SCHEDULE_INVALID': {
+      return `日程无效（REMINDER_SCHEDULE_INVALID）：${message}`;
+    }
+    case 'REMINDER_NOT_FOUND': {
+      return `未找到提醒（REMINDER_NOT_FOUND）：${message}`;
+    }
+    default: {
+      return REMINDER_INTERNAL_TOOL_CONTENT;
+    }
+  }
+};
+
+/**
+ * Every reminder API funnels failures through this sanitizer. Known REMINDER_*
+ * codes keep their friendly copy; anything else becomes a generic internal
+ * error. The raw error object is never attached to the LLM-visible payload.
+ */
+const sanitizeReminderFailure = (
+  error: unknown,
+): { content: string; error: ReminderToolFailure } => {
+  const code = extractErrorCode(error);
+  const message = errorMessage(error);
+
+  if (code && KNOWN_REMINDER_ERROR_CODES.has(code) && code !== 'REMINDER_INTERNAL') {
+    const content = friendlyReminderErrorContent(code, message);
+    return { content, error: { code, message: content } };
+  }
+
+  if (isScheduleToolError(code, message)) {
+    return {
+      content: message,
+      error: { code: 'REMINDER_SCHEDULE_INVALID', message },
+    };
+  }
+
+  console.error('[lobe-reminder] failed', error);
+  return {
+    content: REMINDER_INTERNAL_TOOL_CONTENT,
+    error: { code: 'REMINDER_INTERNAL', message: REMINDER_INTERNAL_TOOL_CONTENT },
+  };
+};
+
+const reminderFailureResult = (error: unknown): BuiltinServerRuntimeOutput => {
+  const sanitized = sanitizeReminderFailure(error);
+  return failResult(sanitized.content, sanitized.error);
+};
+
+const buildClarificationContent = (
+  result: CreateReminderClarificationResult,
+  serverNow: string,
+): { content: string; state: CreateReminderState } => {
+  const unknown = result.unknown ?? [];
+  const ambiguous = result.ambiguous ?? [];
+  const unknownSuggestions = result.unknownSuggestions;
+  const suggestionByQuery = new Map(
+    (unknownSuggestions ?? []).map((item) => [item.query, item.candidates]),
+  );
+
+  const lines = ['收件人无法唯一解析，未创建提醒。'];
+  const unknownWithoutSuggestions: string[] = [];
+
+  for (const query of unknown) {
+    const candidates = suggestionByQuery.get(query) ?? [];
+    if (candidates.length === 1) {
+      const listed = formatClarificationCandidate(candidates[0]);
+      lines.push(
+        `未找到「${query}」。通讯录中最接近：${listed}。请直接用该 token 重试 createReminder，不要改写汉字、不要询问用户。`,
+      );
+      continue;
+    }
+    if (candidates.length > 1) {
+      const listed = candidates.map(formatClarificationCandidate).join('、');
+      lines.push(
+        `未找到「${query}」。通讯录中最接近：${listed}。请列出候选「姓名 · 部门」请用户选择后再重试，不要自行挑选。`,
+      );
+      continue;
+    }
+    unknownWithoutSuggestions.push(query);
+  }
+
+  if (unknownWithoutSuggestions.length > 0) {
+    const names = unknownWithoutSuggestions.map((query) => `「${query}」`).join('、');
+    lines.push(
+      `未找到${names}。请调用一次 searchDirectory，然后用返回结果中的 staff:<id>/dept:<id> token 原样重试 createReminder（逐字复制，不要改写汉字）。`,
+    );
+  }
+
+  if (ambiguous.length > 0) {
+    lines.push('存在同名人员，请列出候选「姓名 · 部门」请用户选择后再重试。');
+  }
+
+  const payload = {
+    ambiguous,
+    serverNow,
+    status: 'needs_clarification' as const,
+    unknown,
+    ...(unknownSuggestions?.length ? { unknownSuggestions } : {}),
+  };
+  const state: CreateReminderState = {
+    ambiguous,
+    needsClarification: true,
+    serverNow,
+    status: 'needs_clarification',
+    success: true,
+    unknown,
+    ...(unknownSuggestions?.length ? { unknownSuggestions } : {}),
+  };
+
+  return {
+    content: withServerNow(`${lines.join('\n')}\n${compactJson(payload)}`, serverNow),
+    state,
+  };
+};
 
 /**
  * Reminder execution runtime. Accepts ReminderTaskService (or a test double)
@@ -169,7 +335,7 @@ export class ReminderExecutionRuntime {
       };
       const instruction = ambiguous
         ? '存在同名人员，请列出「姓名 · 部门」请用户选择后再调用 createReminder，不要猜测。'
-        : '可使用 staffId / deptId（staff:<id>/dept:<id>）或姓名调用 createReminder。';
+        : '请将返回的 staff:<id>/dept:<id> token 原样传入 createReminder（逐字复制，不要改写汉字）。';
       const state: SearchDirectoryState = {
         ambiguous,
         departmentCount: departments.length,
@@ -183,7 +349,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return failResult(errorMessage(error), error);
+      return reminderFailureResult(error);
     }
   }
 
@@ -193,28 +359,10 @@ export class ReminderExecutionRuntime {
       const serverNow = formatServerNow();
 
       if (isNeedsClarificationResult(result)) {
-        const state: CreateReminderState = {
-          ambiguous: result.ambiguous,
-          needsClarification: true,
-          serverNow,
-          status: 'needs_clarification',
-          success: true,
-          unknown: result.unknown,
-        };
+        const clarification = buildClarificationContent(result, serverNow);
         return {
-          content: withServerNow(
-            [
-              '收件人无法唯一解析，未创建提醒。请列出候选「姓名 · 部门」请用户选择后重试。',
-              compactJson({
-                ambiguous: result.ambiguous,
-                serverNow,
-                status: 'needs_clarification',
-                unknown: result.unknown,
-              }),
-            ].join('\n'),
-            serverNow,
-          ),
-          state,
+          content: clarification.content,
+          state: clarification.state,
           success: true,
         };
       }
@@ -291,17 +439,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      const code = extractErrorCode(error);
-      const message = errorMessage(error);
-      const content =
-        code === 'REMINDER_TIME_PAST'
-          ? `发送时间无效（REMINDER_TIME_PAST）：${message}`
-          : code === 'REMINDER_CONTENT_EMPTY'
-            ? `提醒内容为空（REMINDER_CONTENT_EMPTY）：${message}`
-            : code === 'REMINDER_RECIPIENT_UNKNOWN'
-              ? `收件人无法解析（REMINDER_RECIPIENT_UNKNOWN）：${message}`
-              : message;
-      return failResult(content, error);
+      return reminderFailureResult(error);
     }
   }
 
@@ -359,7 +497,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return failResult(errorMessage(error), error);
+      return reminderFailureResult(error);
     }
   }
 
@@ -374,7 +512,7 @@ export class ReminderExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return failResult(errorMessage(error), error);
+      return reminderFailureResult(error);
     }
   }
 }

@@ -20,7 +20,7 @@ import { ReminderCard, ReminderField } from '../shared';
 /**
  * `createReminder` result:
  * - created → task identifier, recipients 「姓名 · 部门」, schedule, next fire
- * - needs_clarification → candidate list 「姓名 · 部门」
+ * - needs_clarification → candidate list 「姓名 · 部门」, plus near-match suggestions
  * - needs_confirmation → department audience that must be confirmed first
  */
 export const CreateReminderRender = memo<
@@ -31,6 +31,9 @@ export const CreateReminderRender = memo<
   if (pluginState?.needsClarification) {
     const ambiguous = pluginState.ambiguous ?? [];
     const unknown = pluginState.unknown ?? [];
+    const suggestionByQuery = new Map(
+      (pluginState.unknownSuggestions ?? []).map((item) => [item.query, item.candidates]),
+    );
 
     return (
       <ReminderCard
@@ -49,11 +52,30 @@ export const CreateReminderRender = memo<
             ))}
           </ReminderField>
         ))}
-        {unknown.map((name) => (
-          <Text fontSize={13} key={name}>
-            {t('builtins.lobe-reminder.render.clarify.unknown', { name })}
-          </Text>
-        ))}
+        {unknown.map((name) => {
+          const candidates = suggestionByQuery.get(name);
+          if (candidates?.length) {
+            return (
+              <ReminderField
+                key={name}
+                label={t('builtins.lobe-reminder.render.clarify.unknown', { name })}
+              >
+                {candidates.map((candidate) => (
+                  <Text fontSize={13} key={candidate.staffId}>
+                    {candidate.leafDeptName
+                      ? `${candidate.name} · ${candidate.leafDeptName}`
+                      : candidate.name}
+                  </Text>
+                ))}
+              </ReminderField>
+            );
+          }
+          return (
+            <Text fontSize={13} key={name}>
+              {t('builtins.lobe-reminder.render.clarify.unknown', { name })}
+            </Text>
+          );
+        })}
       </ReminderCard>
     );
   }

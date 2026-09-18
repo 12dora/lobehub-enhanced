@@ -138,6 +138,35 @@ describe('CreateReminderRender', () => {
     expect(screen.getByText('未找到：不存在的人')).toBeTruthy();
   });
 
+  it('renders near-match suggestions under unknown recipient queries', () => {
+    const state: CreateReminderState = {
+      ambiguous: [],
+      needsClarification: true,
+      status: 'needs_clarification',
+      success: true,
+      unknown: ['陈柑'],
+      unknownSuggestions: [
+        {
+          candidates: [
+            {
+              deptPath: '捷发 / 外贸组',
+              leafDeptName: '外贸组',
+              name: '陈柠',
+              staffId: '173abc',
+            },
+          ],
+          query: '陈柑',
+        },
+      ],
+    };
+
+    render(<CreateReminderRender {...renderProps(emptyCreateArgs, state)} />);
+
+    expect(screen.getByText('请选择收件人')).toBeTruthy();
+    expect(screen.getByText('未找到：陈柑')).toBeTruthy();
+    expect(screen.getByText('陈柠 · 外贸组')).toBeTruthy();
+  });
+
   it('renders the confirmation notice with department member counts', () => {
     const state: CreateReminderState = {
       audience: [

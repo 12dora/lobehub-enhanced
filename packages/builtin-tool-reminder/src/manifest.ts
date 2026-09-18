@@ -45,7 +45,7 @@ export const ReminderManifest: BuiltinToolManifest = {
   api: [
     {
       description:
-        'Create a timed reminder in one call. Recipients are names, "姓名·部门", department names, or staff:<id>/dept:<id> from searchDirectory. Returns created, needs_clarification (list 「姓名 · 部门」 and retry), or needs_confirmation (ask, then retry with confirmLargeAudience=true). Times are Asia/Shanghai; serverNow is in every result.',
+        'Create one timed reminder for all recipients in a single call — never split per person or call createReminder in parallel. Recipients are names, "我" for the caller, "姓名·部门", department names, or staff:<id>/dept:<id> copied verbatim from searchDirectory (never retype names). Returns created; needs_clarification (exactly 1 suggested staff: token → retry with it, do not ask; 2+ suggestions or 同名多人 → list 「姓名 · 部门」 and ask, do not pick); or needs_confirmation (ask, then retry with confirmLargeAudience=true). Times are Asia/Shanghai; serverNow is in every result.',
       name: ReminderApiName.createReminder,
       parameters: {
         additionalProperties: false,
@@ -60,7 +60,7 @@ export const ReminderManifest: BuiltinToolManifest = {
           },
           recipients: {
             description:
-              'People or departments: name, "姓名·部门", department name, or staff:<id>/dept:<id>.',
+              'All people or departments in this one array: name, "我" (caller), "姓名·部门", department name, or staff:<id>/dept:<id> copied verbatim. Never split across calls.',
             items: { minLength: 1, type: 'string' },
             maxItems: 50,
             minItems: 1,
@@ -83,7 +83,7 @@ export const ReminderManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Search the DingTalk directory for people or departments. Use only for disambiguation or browsing. If several users share a name, ambiguous is true — list "姓名 · 最小部门" and ask; do not guess. serverNow is the current Asia/Shanghai time.',
+        'Search the DingTalk directory for people or departments. Use only for disambiguation or browsing. Copy returned staff:<id>/dept:<id> tokens verbatim into createReminder; never retype names. If several users share a name, ambiguous is true — list "姓名 · 最小部门" and ask; do not guess. serverNow is the current Asia/Shanghai time.',
       name: ReminderApiName.searchDirectory,
       parameters: {
         additionalProperties: false,

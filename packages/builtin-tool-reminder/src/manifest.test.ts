@@ -38,6 +38,14 @@ describe('ReminderManifest', () => {
       'once',
       'weekly',
     ]);
+    expect(create?.description).toContain('never split');
+    expect(create?.description).toContain('verbatim');
+    expect(create?.description).toContain('exactly 1 suggested staff: token');
+    expect(create?.description).toContain('2+ suggestions');
+    expect(create?.description).toContain('do not pick');
+    expect(create?.description).toContain('我');
+    expect(create?.parameters.properties.recipients.description).toContain('verbatim');
+    expect(create?.parameters.properties.recipients.description).toContain('Never split');
   });
 
   it('exposes searchDirectory q and optional kind', () => {
@@ -47,6 +55,7 @@ describe('ReminderManifest', () => {
 
     expect(search?.parameters.required).toEqual(['q']);
     expect(search?.parameters.properties.kind.enum).toEqual(['department', 'user']);
+    expect(search?.description).toContain('verbatim');
   });
 
   it('cancels by taskId', () => {

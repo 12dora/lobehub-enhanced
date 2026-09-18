@@ -24,6 +24,18 @@ describe('reminder systemRole', () => {
     expect(systemPrompt).toContain('空字符串');
   });
 
+  it('puts every recipient in one call and copies search tokens verbatim', () => {
+    expect(systemPrompt).toContain('禁止按人拆分或并行');
+    expect(systemPrompt).toContain('原样复制');
+    expect(systemPrompt).toContain('「提醒我/我/自己」');
+    expect(systemPrompt).toContain('填「我」');
+    expect(systemPrompt).toContain('建议 token');
+    expect(systemPrompt).toContain('仅 1 个');
+    expect(systemPrompt).toContain('2 个及以上');
+    expect(systemPrompt).toContain('同名多人');
+    expect(systemPrompt).toContain('勿自选');
+  });
+
   it('interprets times in Asia/Shanghai using serverNow', () => {
     expect(systemPrompt).toContain('Asia/Shanghai');
     expect(systemPrompt).toContain('serverNow');

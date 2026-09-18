@@ -92,6 +92,7 @@ export interface CreateReminderState {
   status?: 'created' | 'needs_clarification' | 'needs_confirmation';
   success: boolean;
   unknown?: string[];
+  unknownSuggestions?: ClarificationUnknownSuggestion[];
 }
 
 export interface CreateReminderCreatedResult {
@@ -109,10 +110,18 @@ export interface CreateReminderCreatedResult {
   };
 }
 
+/** Near matches for a recipient query that resolved to nobody (typo / near-homograph). */
+export interface ClarificationUnknownSuggestion {
+  candidates: ClarificationCandidate[];
+  query: string;
+}
+
 export interface CreateReminderClarificationResult {
   ambiguous: ClarificationAmbiguous[];
   status: 'needs_clarification';
   unknown: string[];
+  /** One entry per `unknown` query that has near matches; omitted/empty when none. */
+  unknownSuggestions?: ClarificationUnknownSuggestion[];
 }
 
 export interface CreateReminderConfirmationResult {

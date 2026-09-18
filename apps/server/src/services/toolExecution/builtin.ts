@@ -1,3 +1,5 @@
+import { REMINDER_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-reminder/executionRuntime';
+import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder/manifest';
 import { builtinTools } from '@lobechat/builtin-tools';
 import { type LobeChatDatabase } from '@lobechat/database';
 import { type ChatToolPayload } from '@lobechat/types';
@@ -201,6 +203,16 @@ export class BuiltinToolsExecutor implements IToolExecutor {
     } catch (e) {
       const error = e as Error;
       console.error('Error executing builtin tool %s:%s: %O', identifier, apiName, error);
+
+      // Reminder-scoped backstop: anything thrown outside ExecutionRuntime
+      // must not reach the model as raw SQL / drizzle text.
+      if (identifier === ReminderIdentifier) {
+        return {
+          content: REMINDER_INTERNAL_TOOL_CONTENT,
+          error: { code: 'REMINDER_INTERNAL', message: REMINDER_INTERNAL_TOOL_CONTENT },
+          success: false,
+        };
+      }
 
       return { content: error.message, error, success: false };
     }

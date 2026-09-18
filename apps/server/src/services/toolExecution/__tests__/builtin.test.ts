@@ -179,3 +179,63 @@ describe('BuiltinToolsExecutor truncated arguments', () => {
     expect(result.content).toContain('barApi');
   });
 });
+
+describe('BuiltinToolsExecutor reminder error backstop', () => {
+  const executor = new BuiltinToolsExecutor({} as any, 'user-1');
+  const sqlError = new Error('Failed query: select id, name from dingtalk_users where name = $1');
+
+  it('returns a generic REMINDER_INTERNAL result when lobe-reminder throws SQL', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      createReminder: async () => {
+        throw sqlError;
+      },
+    } as any);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const result = await executor.execute(
+        {
+          ...buildPayload(
+            '{"recipients":["陈柠"],"content":"考勤","schedule":{"kind":"once","time":"09:00"}}',
+          ),
+          apiName: 'createReminder',
+          identifier: 'lobe-reminder',
+        },
+        context,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe('REMINDER_INTERNAL');
+      expect(result.content).toContain('内部错误');
+      expect(result.content).not.toContain('Failed query');
+      expect(result.content).not.toContain('dingtalk_');
+      expect(JSON.stringify(result)).not.toContain('Failed query');
+      expect(JSON.stringify(result)).not.toContain('select ');
+      expect(JSON.stringify(result)).not.toContain('dingtalk_');
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('does not rewrite thrown errors for other builtin tools', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      createDocument: async () => {
+        throw sqlError;
+      },
+    } as any);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const result = await executor.execute(buildPayload('{"title":"Report"}'), context);
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('Failed query');
+      expect(result.content).toContain('dingtalk_');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
