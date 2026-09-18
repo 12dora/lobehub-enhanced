@@ -16,14 +16,12 @@ const styles = createStaticStyles(({ css }) => ({
   root: css`
     overflow: auto;
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 6px;
 
-    height: 100%;
+    min-height: 0;
     padding: 8px;
-    border-inline-end: 1px solid ${cssVar.colorBorderSecondary};
-
-    background: ${cssVar.colorBgContainer};
   `,
   item: css`
     cursor: pointer;

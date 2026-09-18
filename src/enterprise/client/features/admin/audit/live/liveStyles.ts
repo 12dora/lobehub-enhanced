@@ -4,33 +4,49 @@ import { createStaticStyles, cssVar } from 'antd-style';
 
 /** Shared by LivePage and its panes/banners so the layout stays one visual system. */
 export const styles = createStaticStyles(({ css }) => ({
+  /**
+   * Two independently scrolling boxes of one fixed height: the page never grows with the
+   * transcript. The offset covers shell header + page header + toolbar.
+   */
   layout: css`
+    display: flex;
+    flex-shrink: 0;
+    gap: 16px;
+    align-items: stretch;
+
+    height: calc(100vh - 240px);
+    min-height: 420px;
+  `,
+  pane: css`
     overflow: hidden;
     display: flex;
-    flex: 1;
+    flex-direction: column;
 
-    height: calc(100vh - 220px);
-    min-height: 480px;
+    min-height: 0;
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadiusLG};
 
     background: ${cssVar.colorBgContainer};
+
+    /* In-pane feed interruptions (LiveGapBanner) sit inset from the pane border. */
+    & > [role='alert'],
+    & > [role='status'] {
+      margin: 8px;
+    }
   `,
   left: css`
     flex: 0 0 320px;
-
     width: 320px;
     min-width: 260px;
     max-width: 360px;
-    min-height: 0;
   `,
   right: css`
-    display: flex;
     flex: 1;
-    flex-direction: column;
-
     min-width: 0;
-    min-height: 0;
+  `,
+  /** Body access is audited — the page description reads as a standing warning. */
+  description: css`
+    color: ${cssVar.colorWarningText};
   `,
   toolbar: css`
     display: flex;
@@ -69,16 +85,9 @@ export const styles = createStaticStyles(({ css }) => ({
       background: ${cssVar.colorTextQuaternary};
     }
   `,
-  banner: css`
-    padding-block: 8px;
-    padding-inline: 12px;
-    border: 1px solid ${cssVar.colorWarningBorder};
-    border-radius: ${cssVar.borderRadius};
-
-    background: ${cssVar.colorWarningBg};
-  `,
   gapBanner: css`
     display: flex;
+    flex-shrink: 0;
     flex-wrap: wrap;
     gap: 8px;
     align-items: center;

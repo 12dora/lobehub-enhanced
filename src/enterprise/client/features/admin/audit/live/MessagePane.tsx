@@ -1,7 +1,6 @@
 'use client';
 
-import { Skeleton, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Button, SkeletonText, Text } from '@lobehub/ui/base-ui';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,8 +10,9 @@ import type {
   AdminAuditConversationMessage,
 } from '@/enterprise/client/services/adminAudit';
 
+import AuditChatMessageList from '../shared/AuditChatMessageList';
 import { sortMessagesChronological } from '../shared/liveMessageUtils';
-import MessageBubble from './MessageBubble';
+import { useTopicModelLine } from '../shared/topicModelLine';
 import MessagePaneHeader from './MessagePaneHeader';
 import { styles } from './messagePaneStyles';
 import { useLiveStreamScroll } from './useLiveStreamScroll';
@@ -33,6 +33,7 @@ const MessagePane = memo<MessagePaneProps>(
   ({ topic, userId, messages, bodyHidden, hasOlder, onLoadOlder, loading, loadingOlder }) => {
     const { t } = useTranslation('admin');
     const reduceMotion = useReducedMotion();
+    const { assistantName } = useTopicModelLine();
 
     const ordered = useMemo(() => sortMessagesChronological(messages), [messages]);
 
@@ -61,37 +62,32 @@ const MessagePane = memo<MessagePaneProps>(
       <div className={styles.root}>
         <MessagePaneHeader topic={topic} userId={userId} />
 
-        <div className={styles.stream} ref={scrollRef} onScroll={onScroll}>
-          {hasOlder ? (
-            <div className={styles.older}>
-              <Button loading={loadingOlder} size="small" type="default" onClick={onLoadOlder}>
-                {t('audit.live.messages.loadOlder')}
-              </Button>
-            </div>
-          ) : null}
-          {loading && !ordered.length ? (
-            <div aria-label={t('primitives.dataTable.loading')} role="status">
-              <Skeleton active={!reduceMotion} paragraph={{ rows: 4 }} title={false} />
-            </div>
-          ) : null}
-          <AnimatePresence initial={false}>
-            {ordered.map((msg) => {
-              const shouldEnter = enterIds.has(msg.id);
-              return (
-                <m.div
-                  animate={{ opacity: 1, y: 0 }}
-                  initial={shouldEnter ? { opacity: 0, y: 6 } : false}
-                  key={msg.id}
-                  transition={{ duration: reduceMotion || !shouldEnter ? 0 : 0.16 }}
-                >
-                  <MessageBubble bodyHidden={bodyHidden} message={msg} />
-                </m.div>
-              );
-            })}
-          </AnimatePresence>
-          {!ordered.length && !loading ? (
-            <Text type="secondary">{t('audit.live.messages.empty')}</Text>
-          ) : null}
+        <div className={styles.streamViewport}>
+          <div className={styles.stream} ref={scrollRef} onScroll={onScroll}>
+            {hasOlder ? (
+              <div className={styles.older}>
+                <Button loading={loadingOlder} size="small" type="default" onClick={onLoadOlder}>
+                  {t('audit.live.messages.loadOlder')}
+                </Button>
+              </div>
+            ) : null}
+            {loading && !ordered.length ? (
+              <div aria-label={t('primitives.dataTable.loading')} role="status">
+                <SkeletonText animated={!reduceMotion} rows={4} />
+              </div>
+            ) : null}
+            <AuditChatMessageList
+              assistantName={assistantName(topic)}
+              bodyHidden={bodyHidden}
+              enterIds={enterIds}
+              messages={ordered}
+              reduceMotion={reduceMotion}
+            />
+            {!ordered.length && !loading ? (
+              <Text type="secondary">{t('audit.live.messages.empty')}</Text>
+            ) : null}
+          </div>
+          {/* Overlay sibling of the scroller: pinned to the box, never in the scrolling flow. */}
           <AnimatePresence initial={false}>
             {showJump ? (
               <m.div

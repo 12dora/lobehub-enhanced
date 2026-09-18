@@ -433,6 +433,14 @@ describe('LivePage access / feed characterization', () => {
     expect(screen.getByTestId('banner').textContent).toBe('');
   });
 
+  it('shows no content-allowed banner; the audited-access warning lives in the description', () => {
+    renderLive('/admin/audit/live?userId=u1&topicId=t1');
+
+    expect(evidence.policy?.contentAccessMode).toBe('content_allowed');
+    expect(screen.getByTestId('banner').textContent).toBe('');
+    expect(screen.getByTestId('description').textContent).toBe('audit.live.page.desc');
+  });
+
   it('purges older pages and SWR head when polled mode flips to metadata_only', async () => {
     renderLive('/admin/audit/live?userId=u1&topicId=t1');
 

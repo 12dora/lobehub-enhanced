@@ -19,7 +19,7 @@ const LiveTopicColumn = memo<LiveTopicColumnProps>(({ feed, onSelect, selectedTo
   const { t } = useTranslation('admin');
 
   return (
-    <div className={styles.left}>
+    <div className={`${styles.pane} ${styles.left}`}>
       <TopicListPane
         hasMore={feed.hasMore}
         items={feed.items}

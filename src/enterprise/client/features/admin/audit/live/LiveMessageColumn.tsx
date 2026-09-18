@@ -19,7 +19,7 @@ const LiveMessageColumn = memo<LiveMessageColumnProps>(({ bodyHidden, feed, user
   const { t } = useTranslation('admin');
 
   return (
-    <div className={styles.right}>
+    <div className={`${styles.pane} ${styles.right}`}>
       {feed.pageError ? (
         <LiveGapBanner
           actionLabel={t('audit.live.errors.retry', { defaultValue: 'Retry' })}

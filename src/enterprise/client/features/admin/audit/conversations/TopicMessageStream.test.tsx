@@ -1,9 +1,11 @@
 /**
  * @vitest-environment happy-dom
  */
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+
+import type { AdminAuditConversationMessage } from '@/enterprise/client/services/adminAudit';
 
 import TopicMessageStream from './TopicMessageStream';
 import type { TopicEvidence } from './useTopicEvidence';
@@ -13,7 +15,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('antd-style', () => ({
-  createStaticStyles: () => new Proxy({}, { get: () => '' }),
+  createStaticStyles: () => new Proxy({}, { get: (_, key) => String(key) }),
   cssVar: {},
 }));
 
@@ -22,19 +24,7 @@ vi.mock('motion/react', () => ({
 }));
 
 vi.mock('@lobehub/ui', () => ({
-  Flexbox: ({
-    'aria-label': ariaLabel,
-    children,
-    role,
-  }: {
-    'aria-label'?: string;
-    'children'?: ReactNode;
-    'role'?: string;
-  }) => (
-    <div aria-label={ariaLabel} role={role}>
-      {children}
-    </div>
-  ),
+  Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -44,161 +34,82 @@ vi.mock('@lobehub/ui/base-ui', () => ({
     </button>
   ),
   SkeletonText: () => <div data-testid="skeleton" />,
-  Tag: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({ children, role }: { children?: ReactNode; role?: string }) => (
+    <span role={role}>{children}</span>
+  ),
 }));
 
-vi.mock('../shared/format', () => ({
-  formatAdminDateTime: () => '2026-01-02 00:00',
+// Turn rendering (markdown, chips, attachments, placeholders) is covered by
+// shared/AuditChatMessageList.test.tsx — here we only check the stream wiring.
+vi.mock('../shared/AuditChatMessageList', () => ({
+  default: ({
+    assistantName,
+    messages,
+  }: {
+    assistantName?: string;
+    messages: AdminAuditConversationMessage[];
+  }) => (
+    <div data-assistant={assistantName} data-testid="chat-list">
+      {messages.map((m) => m.id).join(',')}
+    </div>
+  ),
 }));
 
 type FeedItem = TopicEvidence['messages']['items'][number];
 
-/** Tests only set the fields the component reads; the rest of the DTO is irrelevant here. */
 const feed = (
-  partialItems: Array<Partial<FeedItem> & Pick<FeedItem, 'id'>>,
+  ids: string[],
   patch: Partial<TopicEvidence['messages']> = {},
 ): TopicEvidence['messages'] => ({
-  hasData: partialItems.length > 0,
+  hasData: ids.length > 0,
   hasError: false,
   isLoading: false,
-  items: partialItems as FeedItem[],
+  items: ids.map((id) => ({ id }) as FeedItem),
   retry: vi.fn(),
   ...patch,
 });
 
 describe('TopicMessageStream', () => {
-  it('linkifies absolute http(s) URLs and keeps [REDACTED] chips as plain text', () => {
-    render(
-      <TopicMessageStream
-        feed={feed([
-          {
-            content: 'See https://example.com/a [REDACTED secret] then /f/not-a-link',
-            createdAt: new Date('2026-01-02T00:00:00.000Z'),
-            hasContent: true,
-            id: 'm1',
-            role: 'user',
-          },
-        ])}
-      />,
+  it('renders the page through the shared chat list inside the scroll box', () => {
+    const { container } = render(
+      <TopicMessageStream assistantName="Helper" feed={feed(['m1', 'm2'])} />,
     );
 
-    const link = screen.getByRole('link', { name: 'https://example.com/a' });
-    expect(link.getAttribute('href')).toBe('https://example.com/a');
-    expect(link.getAttribute('target')).toBe('_blank');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
-    expect(screen.getByText('[REDACTED secret]')).toBeTruthy();
-    expect(screen.getByText(/\/f\/not-a-link/)).toBeTruthy();
-    expect(screen.queryByRole('link', { name: '/f/not-a-link' })).toBeNull();
+    const list = screen.getByTestId('chat-list');
+    expect(list.textContent).toBe('m1,m2');
+    expect(list.getAttribute('data-assistant')).toBe('Helper');
+    expect(container.firstElementChild?.className).toBe('streamBox');
   });
 
-  it('renders attachments under the body when the array is non-empty', () => {
-    render(
-      <TopicMessageStream
-        feed={feed([
-          {
-            attachments: [
-              {
-                fileId: 'f1',
-                fileType: 'application/pdf',
-                name: 'notes.pdf',
-                size: 2048,
-                url: '/f/f1',
-              },
-            ],
-            content: 'with file',
-            createdAt: new Date('2026-01-02T00:00:00.000Z'),
-            hasContent: true,
-            id: 'm1',
-            role: 'user',
-          } as TopicEvidence['messages']['items'][number],
-        ])}
-      />,
-    );
+  it('shows a skeleton while the first page loads', () => {
+    render(<TopicMessageStream feed={feed([], { isLoading: true })} />);
 
-    expect(screen.getByText('with file')).toBeTruthy();
-    const fileLink = screen.getByRole('link', {
-      name: 'audit.conversations.message.openAttachment: notes.pdf',
-    });
-    expect(fileLink.getAttribute('href')).toBe('/f/f1');
-    expect(fileLink.getAttribute('title')).toBe('notes.pdf');
+    expect(screen.getByTestId('skeleton')).toBeTruthy();
+    expect(screen.queryByTestId('chat-list')).toBeNull();
+    expect(screen.queryByText('audit.conversations.topic.emptyMessages')).toBeNull();
   });
 
-  it('does not render attachments when the body exists but is not loaded', () => {
-    render(
-      <TopicMessageStream
-        feed={feed([
-          {
-            attachments: [
-              {
-                fileId: 'f1',
-                fileType: 'application/pdf',
-                name: 'notes.pdf',
-                size: 2048,
-                url: '/f/f1',
-              },
-            ],
-            content: null,
-            createdAt: new Date('2026-01-02T00:00:00.000Z'),
-            hasContent: true,
-            id: 'm1',
-            role: 'user',
-          } as TopicEvidence['messages']['items'][number],
-        ])}
-      />,
-    );
+  it('offers retry when the first page fails', () => {
+    const retry = vi.fn();
+    render(<TopicMessageStream feed={feed([], { hasError: true, retry })} />);
 
-    expect(screen.getByText('audit.conversations.topic.bodyNotLoaded')).toBeTruthy();
-    expect(screen.queryByLabelText('audit.conversations.message.attachments')).toBeNull();
-    expect(screen.queryByText('notes.pdf')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toBe('audit.conversations.topic.loadError');
+    fireEvent.click(screen.getByText('primitives.dataTable.retry'));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it('still renders attachments on file-only messages with no body text', () => {
-    render(
-      <TopicMessageStream
-        feed={feed([
-          {
-            attachments: [
-              {
-                fileId: 'f1',
-                fileType: 'application/pdf',
-                name: 'notes.pdf',
-                size: 2048,
-                url: '/f/f1',
-              },
-            ],
-            content: '',
-            createdAt: new Date('2026-01-02T00:00:00.000Z'),
-            hasContent: false,
-            id: 'm1',
-            role: 'user',
-          } as TopicEvidence['messages']['items'][number],
-        ])}
-      />,
-    );
+  it('shows the empty state when the page has no messages', () => {
+    render(<TopicMessageStream feed={feed([])} />);
 
-    expect(screen.getByText('—')).toBeTruthy();
-    expect(
-      screen.getByRole('link', { name: 'audit.conversations.message.openAttachment: notes.pdf' }),
-    ).toBeTruthy();
+    expect(screen.getByText('audit.conversations.topic.emptyMessages')).toBeTruthy();
   });
 
-  it('does not render an attachment list when the field is omitted', () => {
-    render(
-      <TopicMessageStream
-        feed={feed([
-          {
-            content: 'no files',
-            createdAt: new Date('2026-01-02T00:00:00.000Z'),
-            hasContent: true,
-            id: 'm1',
-            role: 'user',
-          },
-        ])}
-      />,
-    );
+  it('scrolls back to the top when a new page replaces the items', () => {
+    const { container, rerender } = render(<TopicMessageStream feed={feed(['m1'])} />);
+    const box = container.firstElementChild as HTMLDivElement;
+    box.scrollTop = 200;
 
-    expect(screen.getByText('no files')).toBeTruthy();
-    expect(screen.queryByLabelText('audit.conversations.message.attachments')).toBeNull();
+    rerender(<TopicMessageStream feed={feed(['m9'])} />);
+    expect(box.scrollTop).toBe(0);
   });
 });

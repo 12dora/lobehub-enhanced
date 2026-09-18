@@ -11,28 +11,42 @@ export const styles = createStaticStyles(({ css }) => ({
 
     background: ${cssVar.colorWarningBg};
   `,
-  message: css`
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  bodyToggle: css`
+    cursor: pointer;
 
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+
+    font-size: 14px;
+    white-space: nowrap;
+  `,
+  /** provider · model · agent · updated — one row that wraps between segments on narrow screens. */
+  metaRow: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    align-items: center;
+
+    font-size: 14px;
+    color: ${cssVar.colorTextSecondary};
+  `,
+  metaSeparator: css`
+    color: ${cssVar.colorTextQuaternary};
+  `,
+  /** Fixed-height transcript box: the page never grows with the conversation. */
+  streamBox: css`
+    overflow: auto;
+    flex-shrink: 0;
+
+    height: calc(100vh - 300px);
+    min-height: 360px;
     padding-block: 12px;
-    padding-inline: 14px;
+    padding-inline: 16px;
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadiusLG};
 
     background: ${cssVar.colorBgContainer};
-  `,
-  body: css`
-    font-family: ${cssVar.fontFamilyCode};
-    font-size: 13px;
-    line-height: 1.55;
-    word-break: break-word;
-    white-space: pre-wrap;
-  `,
-  redacted: css`
-    font-weight: 600;
-    color: ${cssVar.colorWarning};
   `,
   stream: css`
     display: flex;

@@ -1,15 +1,14 @@
 'use client';
 
-import { Text } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import type { AdminAuditConversationDetail } from '@/enterprise/client/services/adminAudit';
-import { useProviderLabel } from '@/utils/modelLabels';
 
 import { formatAdminDateTime } from '../shared/format';
-import { formatTopicModelLine } from '../shared/topicModelLine';
+import { useTopicModelLine } from '../shared/topicModelLine';
 import { styles } from './messagePaneStyles';
 
 export interface MessagePaneHeaderProps {
@@ -20,7 +19,7 @@ export interface MessagePaneHeaderProps {
 /** Topic identity above the live stream, with the deep link to its durable evidence page. */
 const MessagePaneHeader = memo<MessagePaneHeaderProps>(({ topic, userId }) => {
   const { t } = useTranslation('admin');
-  const providerLabel = useProviderLabel();
+  const { formatModelLine } = useTopicModelLine();
 
   return (
     <div className={styles.header}>
@@ -29,7 +28,7 @@ const MessagePaneHeader = memo<MessagePaneHeaderProps>(({ topic, userId }) => {
           {topic.title || t('audit.conversations.untitled')}
         </Text>
         <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
-          {formatTopicModelLine(providerLabel, topic)}
+          {formatModelLine(topic)}
           {' · '}
           {formatAdminDateTime(topic.createdAt)}
         </Text>

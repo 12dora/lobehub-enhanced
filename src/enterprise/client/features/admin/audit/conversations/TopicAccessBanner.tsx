@@ -1,7 +1,5 @@
 'use client';
 
-import { Flexbox } from '@lobehub/ui';
-import { Switch } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -10,40 +8,23 @@ import { styles } from './topicPageStyles';
 
 export interface TopicAccessBannerProps {
   contentAccessMode: AuditContentAccessMode | undefined;
-  includeBody: boolean;
-  onToggleBody: (checked: boolean) => void;
 }
 
 /**
- * States what this policy lets the auditor see: metadata only, or content behind an explicit
- * reveal toggle. Renders nothing for any other mode — `disabled` never reaches this page.
+ * States that this policy only lets the auditor see metadata. The body-reveal switch for
+ * `content_allowed` lives in the page actions (TopicBodyToggle); every other mode renders nothing.
  */
-const TopicAccessBanner = memo<TopicAccessBannerProps>(
-  ({ contentAccessMode, includeBody, onToggleBody }) => {
-    const { t } = useTranslation('admin');
+const TopicAccessBanner = memo<TopicAccessBannerProps>(({ contentAccessMode }) => {
+  const { t } = useTranslation('admin');
 
-    if (contentAccessMode === 'metadata_only') {
-      return (
-        <div className={styles.banner} role="status">
-          {t('audit.conversations.topic.metadataOnlyBanner')}
-        </div>
-      );
-    }
+  if (contentAccessMode !== 'metadata_only') return null;
 
-    if (contentAccessMode === 'content_allowed') {
-      return (
-        <div className={styles.banner} role="status">
-          <Flexbox horizontal align="center" gap={12}>
-            <span>{t('audit.conversations.topic.bodyToggleLabel')}</span>
-            <Switch checked={includeBody} onChange={(checked) => onToggleBody(Boolean(checked))} />
-          </Flexbox>
-        </div>
-      );
-    }
-
-    return null;
-  },
-);
+  return (
+    <div className={styles.banner} role="status">
+      {t('audit.conversations.topic.metadataOnlyBanner')}
+    </div>
+  );
+});
 
 TopicAccessBanner.displayName = 'AuditTopicAccessBanner';
 

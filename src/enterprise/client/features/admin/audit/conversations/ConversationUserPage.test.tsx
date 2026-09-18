@@ -68,12 +68,6 @@ vi.mock('antd-style', () => ({
 }));
 
 vi.mock('@lobehub/ui', () => ({
-  Alert: ({ action, message }: { action?: React.ReactNode; message?: React.ReactNode }) => (
-    <div role="alert">
-      {message}
-      {action}
-    </div>
-  ),
   Flexbox: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   Tag: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
@@ -81,6 +75,12 @@ vi.mock('@lobehub/ui', () => ({
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
+  Alert: ({ action, title }: { action?: React.ReactNode; title?: React.ReactNode }) => (
+    <div role="alert">
+      {title}
+      {action}
+    </div>
+  ),
   Button: ({
     children,
     disabled,
@@ -101,6 +101,7 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   toast: { error: (...args: unknown[]) => evidence.toastError(...args) },
 }));
 

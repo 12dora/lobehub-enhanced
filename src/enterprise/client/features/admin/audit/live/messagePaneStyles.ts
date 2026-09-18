@@ -9,9 +9,9 @@ export const styles = createStaticStyles(({ css }) => ({
     flex-direction: column;
 
     min-width: 0;
-    height: 100%;
+    min-height: 0;
 
-    background: ${cssVar.colorBgLayout};
+    background: ${cssVar.colorBgContainer};
   `,
   header: css`
     display: flex;
@@ -26,15 +26,24 @@ export const styles = createStaticStyles(({ css }) => ({
 
     background: ${cssVar.colorBgContainer};
   `,
-  stream: css`
+  /** Positioning context for the jump overlay; fills the fixed-height pane below the header. */
+  streamViewport: css`
     position: relative;
 
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+
+    min-height: 0;
+  `,
+  stream: css`
     overflow: auto;
     display: flex;
     flex: 1;
     flex-direction: column;
     gap: 10px;
 
+    min-height: 0;
     padding-block: 16px;
     padding-inline: 16px;
   `,
@@ -46,6 +55,7 @@ export const styles = createStaticStyles(({ css }) => ({
 
     padding: 24px;
   `,
+  /** Overlay anchored to the stream viewport (not the scrolled content). */
   jump: css`
     position: absolute;
     z-index: 2;

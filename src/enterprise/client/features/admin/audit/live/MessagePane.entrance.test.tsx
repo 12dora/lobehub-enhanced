@@ -27,12 +27,9 @@ vi.mock('antd-style', () => ({
   cssVar: {},
 }));
 
-vi.mock('@lobehub/ui', () => ({
-  Skeleton: () => null,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-}));
-
 vi.mock('@lobehub/ui/base-ui', () => ({
+  SkeletonText: () => null,
+  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Button: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={onClick}>
       {children}
@@ -53,7 +50,7 @@ vi.mock('motion/react', () => {
   };
 });
 
-vi.mock('./MessageBubble', () => ({
+vi.mock('../shared/AuditChatMessage', () => ({
   default: ({ message }: { message: AdminAuditConversationMessage }) => (
     <div data-testid={`bubble-${message.id}`}>{message.id}</div>
   ),
@@ -142,6 +139,32 @@ describe('MessagePane entrance (XC-ANIM-03)', () => {
     renderPane([msg('m1', '2024-01-01T00:00:00Z')]);
 
     expect(motionInitials.filter(isEntrance)).toHaveLength(0);
+  });
+
+  it('renders the transcript through the shared chat list, entrance wrappers included', () => {
+    renderPane([msg('m2', '2024-01-01T00:01:00Z'), msg('m1', '2024-01-01T00:00:00Z')]);
+
+    const ids = screen.getAllByTestId(/^bubble-/).map((el) => el.textContent);
+    expect(ids).toEqual(['m1', 'm2']);
+    expect(screen.getByRole('list')).toBeInTheDocument();
+  });
+
+  it('shows the agent title rather than its id in the topic header', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <MessagePane
+          bodyHidden={false}
+          hasOlder={false}
+          messages={[]}
+          topic={{ ...topic, agentId: 'agt_raw', agentTitle: 'Helper' } as never}
+          userId="u1"
+          onLoadOlder={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(container.textContent).toContain('OpenAI · gpt · Helper');
+    expect(container.textContent).not.toContain('agt_raw');
   });
 
   it('names the provider in the topic header, keeping a model id model-bank cannot describe', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import type { TFunction } from 'i18next';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { openDangerConfirm } from '../../primitives/DangerConfirm';
 import {
@@ -74,6 +74,18 @@ export const useTopicEvidence = ({
     detail.data?.contentAccessMode ??
     (canAuditRead ? policy.data?.contentAccessMode : undefined);
 
+  // Bodies are only ever shown under content_allowed. If policy tightens after a reveal, drop the
+  // reveal (so the next fetch is metadata-only and re-enabling needs a fresh confirmation);
+  // `bodyHidden` masks any cached bodies in the meantime.
+  // Fail closed for rendering: an unknown mode never paints bodies.
+  const bodyHidden = contentAccessMode !== 'content_allowed';
+  const policyForbidsBodies = contentAccessMode !== undefined && bodyHidden;
+  useEffect(() => {
+    if (!policyForbidsBodies) return;
+    setIncludeBody(false);
+    setCursorStack([]);
+  }, [policyForbidsBodies]);
+
   const redaction = useRedactionAuthority(
     {
       ...emptyRedactionSlots(),
@@ -110,6 +122,7 @@ export const useTopicEvidence = ({
   );
 
   return {
+    bodyHidden,
     contentAccessMode,
     detail: {
       failed: detailFailed,

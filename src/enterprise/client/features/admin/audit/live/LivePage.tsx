@@ -1,6 +1,6 @@
 'use client';
 
-import { Text } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -51,15 +51,8 @@ const LivePage = memo(() => {
   return (
     <AdminPageTemplate
       title={t('audit.live.page.title')}
-      banner={
-        access.showPolicyBanner && access.contentAccessMode === 'content_allowed' ? (
-          <div className={styles.banner} role="status">
-            {t('audit.live.banner.contentAllowed')}
-          </div>
-        ) : null
-      }
       description={
-        <span>
+        <span className={styles.description}>
           {t('audit.live.page.desc')}
           {access.showPolicyBanner && access.contentAccessMode === 'metadata_only' ? (
             <span role="status"> {t('audit.live.banner.metadataOnly')}</span>
