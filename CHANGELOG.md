@@ -5,6 +5,14 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.8.1 (2026-09-21)
+
+企业查询「测试连接」修正。
+
+#### 🐛 Fixes
+
+- 天眼查凭证填写错误时,「测试连接」不再误报正常:天眼查的 MCP 服务在列出工具时不校验凭证,现追加一次不计费的鉴权调用,凭证无效时提示「凭证无效」。企查查不受影响。
+
 ## 1.8.0 (2026-09-21)
 
 助理可以用成员本人的钉钉身份处理审批、待办与日程，并可查询企查查 / 天眼查企业信息。
