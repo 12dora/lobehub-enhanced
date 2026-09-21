@@ -22,6 +22,14 @@ export const QCC_MCP_BASE_URL = 'https://agent.qcc.com/mcp';
 export const TIANYANCHA_MCP_URL = 'https://mcp.tianyancha.com/v1';
 export const TIANYANCHA_CATEGORY = 'default';
 export const QCC_PROBE_CATEGORY: QccCategory = 'company';
+/** Tianyancha authenticates on tools/call, not initialize / tools/list. */
+export const TIANYANCHA_PROBE_TOOL = 'search_companies';
+/** Unique empty query: Tianyancha does not bill error or no-result calls. */
+export const TIANYANCHA_PROBE_ARGUMENTS: Record<string, unknown> = {
+  query: 'aihub-connection-probe-7f3a9c',
+  page: 1,
+  page_size: 1,
+};
 
 export const ENTERPRISE_LOOKUP_PROBE_TIMEOUT_MS = 10_000;
 export const ENTERPRISE_LOOKUP_CALL_TIMEOUT_MS = 60_000;
@@ -144,21 +152,41 @@ const toDescriptor = (tool: McpTool): EnterpriseLookupToolDescriptor => ({
 });
 
 const collectErrorText = (error: unknown): { message: string; name: string; type?: string } => {
+  if (typeof error === 'string') return { message: error, name: '' };
+
   const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
   const data =
     record.data && typeof record.data === 'object'
       ? (record.data as Record<string, unknown>)
       : undefined;
-  const message =
+  const parts: string[] = [];
+  const baseMessage =
     error instanceof Error
       ? error.message
       : typeof record.message === 'string'
         ? record.message
         : '';
+  if (baseMessage) parts.push(baseMessage);
+  if (typeof record.error === 'string') parts.push(record.error);
+  if (typeof record.error_description === 'string') parts.push(record.error_description);
+  // StreamableHTTPError stores the HTTP status on `code` (e.g. 401), not in the message.
+  for (const key of ['code', 'status', 'statusCode'] as const) {
+    const value = record[key];
+    if (typeof value === 'number' || typeof value === 'string') parts.push(String(value));
+  }
+  if (typeof record.content === 'string') {
+    parts.push(record.content);
+  } else if (record.content != null && typeof record.content === 'object') {
+    try {
+      parts.push(JSON.stringify(record.content));
+    } catch {
+      // ignore unserializable MCP payloads
+    }
+  }
   const name =
     error instanceof Error ? error.name : typeof record.name === 'string' ? record.name : '';
   const type = typeof data?.type === 'string' ? data.type : undefined;
-  return { message, name, type };
+  return { message: parts.join(' '), name, type };
 };
 
 /**
@@ -182,7 +210,10 @@ export const classifyEnterpriseLookupProviderError = (
 
   if (
     type === 'AUTHORIZATION_ERROR' ||
-    /\b401\b|\b403\b|unauthorized|forbidden|invalid.?token|invalid.?key|invalid.?api/.test(lower)
+    name === 'UnauthorizedError' ||
+    /\b401\b|\b403\b|unauthorized|forbidden|invalid.?token|invalid.?key|invalid.?api|account_error|tyc error 3000/.test(
+      lower,
+    )
   ) {
     return 'unauthorized';
   }
@@ -203,7 +234,15 @@ export const classifyEnterpriseLookupProviderError = (
   return 'internal';
 };
 
+const remainingMs = (deadlineAt: number): number => Math.max(0, deadlineAt - Date.now());
+
 const withTimeout = async <T>(task: Promise<T>, timeoutMs: number): Promise<T> => {
+  if (timeoutMs <= 0) {
+    void Promise.resolve(task).catch(() => undefined);
+    const error = new Error('timeout');
+    error.name = 'TimeoutError';
+    throw error;
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -294,6 +333,16 @@ const mapProbeReason = (error: unknown): EnterpriseLookupProbeReason => {
   return classified === 'internal' ? 'unreachable' : classified;
 };
 
+const classifyTianyanchaProbeResult = (
+  result: EnterpriseLookupToolCallResult,
+): 'unauthorized' | 'quota_exceeded' | undefined => {
+  if (!result.isError) return undefined;
+  const classified = classifyEnterpriseLookupProviderError(result);
+  if (classified === 'unauthorized' || classified === 'quota_exceeded') return classified;
+  // isError that is not auth/quota still means the key was accepted.
+  return undefined;
+};
+
 export const probeProvider = async (
   provider: EnterpriseLookupProvider,
   apiKey: string,
@@ -301,19 +350,35 @@ export const probeProvider = async (
   if (!apiKey) return { ok: false, reason: 'not_configured' };
 
   const category = provider === 'qcc' ? QCC_PROBE_CATEGORY : TIANYANCHA_CATEGORY;
+  // One budget for initialize + tools/list + the optional Tianyancha auth call.
+  const deadlineAt = Date.now() + ENTERPRISE_LOOKUP_PROBE_TIMEOUT_MS;
   let session: EnterpriseLookupMcpSession | undefined;
   try {
     session = await openSession({
       apiKey,
       category,
       provider,
-      timeoutMs: ENTERPRISE_LOOKUP_PROBE_TIMEOUT_MS,
+      timeoutMs: remainingMs(deadlineAt),
     });
-    const tools = await withTimeout(session.listTools(), ENTERPRISE_LOOKUP_PROBE_TIMEOUT_MS);
+    const tools = await withTimeout(session.listTools(), remainingMs(deadlineAt));
     if (tools.length === 0) {
       // Empty list after initialize is how MCPClient.listTools reports a
       // swallowed transport error. Treat it as unreachable, not success.
       return { ok: false, reason: 'unreachable', toolCount: 0 };
+    }
+    // Tianyancha answers initialize + tools/list even with an invalid key;
+    // only tools/call checks the account. Skip when the tool is not listed.
+    if (provider === 'tianyancha' && tools.some((tool) => tool.name === TIANYANCHA_PROBE_TOOL)) {
+      try {
+        const result = await withTimeout(
+          session.callTool(TIANYANCHA_PROBE_TOOL, { ...TIANYANCHA_PROBE_ARGUMENTS }),
+          remainingMs(deadlineAt),
+        );
+        const reason = classifyTianyanchaProbeResult(result);
+        if (reason) return { ok: false, reason };
+      } catch (error) {
+        return { ok: false, reason: mapProbeReason(error) };
+      }
     }
     return { ok: true, toolCount: tools.length };
   } catch (error) {
