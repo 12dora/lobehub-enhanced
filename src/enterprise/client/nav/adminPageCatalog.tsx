@@ -61,6 +61,10 @@ const SystemPage = lazy(() => import('@/enterprise/client/features/admin/system'
 const SystemGeneralPage = lazy(
   () => import('@/enterprise/client/features/admin/systemGeneral/SystemGeneralPage'),
 );
+const DingtalkApprovalRulesPage = lazy(
+  () =>
+    import('@/enterprise/client/features/admin/dingtalkApprovalRules/DingtalkApprovalRulesPage'),
+);
 const ModulesPage = lazy(() => import('@/enterprise/client/features/admin/modules/ModulesPage'));
 const TemplatesManagementPage = lazy(
   () => import('@/enterprise/client/features/admin/templates/TemplatesManagementPage'),
@@ -200,6 +204,10 @@ export const ADMIN_PAGE_BY_ID: Readonly<
   'system-general': {
     componentId: 'SystemGeneralPage',
     element: withLazy(<SystemGeneralPage />),
+  },
+  'dingtalk-approval-rules': {
+    componentId: 'DingtalkApprovalRulesPage',
+    element: withLazy(<DingtalkApprovalRulesPage />),
   },
   'system-status': { componentId: 'SystemPage', element: withLazy(<SystemPage />) },
   'modules': { componentId: 'ModulesPage', element: withLazy(<ModulesPage />) },

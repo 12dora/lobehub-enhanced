@@ -21,12 +21,14 @@ import {
   MessageCircleIcon,
   MonitorSmartphoneIcon,
   PaletteIcon,
+  ShieldCheckIcon,
   Sparkles,
   TerminalSquare,
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useDingTalkApprovalEnabled } from '@/features/DingTalkApprovalRules/useDingTalkApprovalEnabled';
 import {
   isManagedResourceConfigurationAvailable,
   useManagedResourceCapabilities,
@@ -98,6 +100,7 @@ export const useCategory = () => {
     return avatar;
   }, [avatar, remoteServerUrl]);
   const enableBusinessFeatures = useServerConfigStore(serverConfigSelectors.enableBusinessFeatures);
+  const dingtalkApprovalEnabled = useDingTalkApprovalEnabled();
   const categoryGroups: CategoryGroup[] = useMemo(() => {
     const groups: CategoryGroup[] = [];
 
@@ -205,6 +208,14 @@ export const useCategory = () => {
         key: SettingsTabs.Messenger,
         label: t('tab.messenger'),
       },
+      // Sits next to Messenger because both govern what the assistant may do
+      // inside DingTalk on the user's behalf. Hidden unless the deployment has
+      // DingTalk approval — without it there is nothing to automate.
+      dingtalkApprovalEnabled && {
+        icon: ShieldCheckIcon,
+        key: SettingsTabs.ApprovalRules,
+        label: t('tab.approvalRules'),
+      },
     ].filter(Boolean) as CategoryItem[];
 
     groups.push({
@@ -267,6 +278,7 @@ export const useCategory = () => {
     canConfigureModel,
     canConfigureProvider,
     canConfigureSkill,
+    dingtalkApprovalEnabled,
     isDevMode,
     avatarUrl,
     username,

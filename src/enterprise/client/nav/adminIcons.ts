@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Stamp,
   Timer,
   Users,
 } from 'lucide-react';
@@ -50,6 +51,7 @@ export const ADMIN_NAV_ICONS: Readonly<Record<string, IconProps['icon']>> = {
   'audit-retention': Timer,
   'branding': Palette,
   'content-moderation': ShieldAlert,
+  'dingtalk-approval-rules': Stamp,
   'identity-providers': Fingerprint,
   'managed-resources': ShieldCheck,
   'overview': LayoutDashboard,

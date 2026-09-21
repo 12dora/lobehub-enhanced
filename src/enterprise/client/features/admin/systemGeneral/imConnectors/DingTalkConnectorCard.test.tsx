@@ -12,6 +12,7 @@ import { DingTalkConnectorCard } from './DingTalkConnectorCard';
 import type { ImConnectorMutationService, ImConnectorNotifyAppService } from './service';
 
 const mocks = vi.hoisted(() => ({
+  confirmModal: vi.fn(),
   runAdminMutation: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -50,6 +51,8 @@ vi.mock('@lobehub/ui/base-ui', () => ({
       {children}
     </button>
   ),
+  // The tier confirmation is covered where it is decided (useImConnectorEditor / draft).
+  confirmModal: mocks.confirmModal,
   Input: (props: Record<string, unknown>) => <input {...props} />,
   InputNumber: ({
     disabled,
@@ -72,6 +75,32 @@ vi.mock('@lobehub/ui/base-ui', () => ({
     />
   ),
   InputPassword: (props: Record<string, unknown>) => <input type="password" {...props} />,
+  Select: ({
+    disabled,
+    id,
+    onChange,
+    options,
+    value,
+  }: {
+    disabled?: boolean;
+    id?: string;
+    onChange?: (next: string) => void;
+    options?: { label: string; value: string }[];
+    value?: string;
+  }) => (
+    <select
+      disabled={disabled}
+      id={id}
+      value={value ?? ''}
+      onChange={(event) => onChange?.(event.target.value)}
+    >
+      {(options ?? []).map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
   Switch: ({
     checked,
     disabled,
@@ -155,6 +184,7 @@ vi.mock('./BindingsSection', () => ({
 const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorView => ({
   agentId: null,
   aiCardTemplateId: null,
+  approvalAutomationTier: 'moderate',
   chatEnabled: true,
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
@@ -182,6 +212,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
     state: 'connected',
   },
   updatedAt: '2026-09-15T00:00:00.000Z',
+  workspaceApprovalEnabled: false,
+  workspaceCalendarEnabled: false,
+  workspaceTodoEnabled: false,
   ...overrides,
 });
 
@@ -225,6 +258,7 @@ const notifyService = (overrides: Partial<ImConnectorNotifyAppService> = {}) =>
   };
 
 beforeEach(() => {
+  mocks.confirmModal.mockReset();
   mocks.toastError.mockReset();
   mocks.toastSuccess.mockReset();
   mocks.runAdminMutation.mockReset();
@@ -880,6 +914,79 @@ describe('DingTalkConnectorCard', () => {
       );
       expect(screen.queryByText('systemGeneral.imConnectors.notifyApp.test')).toBeNull();
       expect(screen.queryByText('systemGeneral.imConnectors.notifyApp.directory.sync')).toBeNull();
+    });
+  });
+
+  // 工作台能力 — the section has its own suite; what the card owns is carrying the four fields
+  // through the same 保存, and asking before a tier change reaches rules that already exist.
+  describe('工作台能力 block', () => {
+    const configuredNotifyApp = () =>
+      view({ notifyAppKey: 'notify-key', notifyAppSecretSet: true });
+
+    it('saves the capability switches and the tier with the rest of the row', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={configuredNotifyApp()} />);
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.todo'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        approvalAutomationTier: 'moderate',
+        workspaceApprovalEnabled: false,
+        workspaceCalendarEnabled: false,
+        workspaceTodoEnabled: true,
+      });
+      expect(mocks.confirmModal).not.toHaveBeenCalled();
+    });
+
+    it('asks what a tightened tier does to existing rules before writing it', async () => {
+      const stub = service();
+      let onOk: (() => Promise<void>) | undefined;
+      mocks.confirmModal.mockImplementation((options: { onOk: () => Promise<void> }) => {
+        onOk = options.onOk;
+      });
+      render(<DingTalkConnectorCard canOperate service={stub} view={configuredNotifyApp()} />);
+
+      fireEvent.click(
+        screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.approval'),
+      );
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.tier'), {
+        target: { value: 'strict' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      expect(mocks.confirmModal).toHaveBeenCalledTimes(1);
+      expect(mocks.confirmModal.mock.calls[0]![0].content).toBe(
+        'systemGeneral.imConnectors.workspace.tierConfirm.strict',
+      );
+      // Nothing is written until the consequence has been accepted.
+      expect(stub.upsert).not.toHaveBeenCalled();
+
+      await onOk?.();
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        approvalAutomationTier: 'strict',
+        workspaceApprovalEnabled: true,
+      });
+    });
+
+    it('loosens the tier without a question, because nothing is taken away', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={configuredNotifyApp()} />);
+
+      fireEvent.click(
+        screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.approval'),
+      );
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.tier'), {
+        target: { value: 'relaxed' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(mocks.confirmModal).not.toHaveBeenCalled();
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({ approvalAutomationTier: 'relaxed' });
     });
   });
 

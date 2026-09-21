@@ -40,6 +40,11 @@ export const CONNECTOR_AUTO_REASON = {
   revokeAllBindings: 'admin.connectors.revoke_all_bindings',
 } as const;
 
+/** DingTalk auto-approval rule confirm-only actions (owner-authored, admin-stoppable). */
+export const DINGTALK_APPROVAL_RULE_AUTO_REASON = {
+  disable: 'admin.dingtalk.approval_rule.disable',
+} as const;
+
 /** Identity provider (sign-in method) confirm-only actions. */
 export const IDENTITY_PROVIDER_AUTO_REASON = {
   delete: 'admin.identity_providers.delete',
@@ -112,6 +117,7 @@ const AUTO_REASON_I18N_KEY = new Map<string, string>(
     [CONNECTOR_AUTO_REASON.revokeAllBindings]: 'audit.autoReason.connectorRevokeAllBindings',
     [CONNECTOR_ROLLBACK_AUTO_REASON]: 'audit.autoReason.connectorRollback',
     [CREATE_USER_AUTO_REASON]: 'audit.autoReason.create',
+    [DINGTALK_APPROVAL_RULE_AUTO_REASON.disable]: 'audit.autoReason.dingtalkApprovalRuleDisable',
     [IDENTITY_PROVIDER_AUTO_REASON.delete]: 'audit.autoReason.identityProviderDelete',
     [IDENTITY_PROVIDER_AUTO_REASON.disable]: 'audit.autoReason.identityProviderDisable',
     [IDENTITY_PROVIDER_AUTO_REASON.publish]: 'audit.autoReason.identityProviderPublish',

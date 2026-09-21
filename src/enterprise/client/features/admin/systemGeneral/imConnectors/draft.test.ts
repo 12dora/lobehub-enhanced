@@ -4,6 +4,8 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 
 import {
   fingerprintDingTalkDraft,
+  isDingTalkNotifyAppConfigured,
+  resolveApprovalTierTightening,
   settleDingTalkDraft,
   toDingTalkDraft,
   toDingTalkNotifyTestInput,
@@ -15,6 +17,8 @@ import {
 const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorView => ({
   agentId: null,
   aiCardTemplateId: null,
+  // 工作台能力 as the server answers for a row nobody has configured: the contract defaults them.
+  approvalAutomationTier: 'moderate',
   chatEnabled: true,
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
@@ -41,6 +45,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
     state: 'connected',
   },
   updatedAt: '2026-09-15T00:00:00.000Z',
+  workspaceApprovalEnabled: false,
+  workspaceCalendarEnabled: false,
+  workspaceTodoEnabled: false,
   ...overrides,
 });
 
@@ -323,5 +330,97 @@ describe('DingTalk connector draft', () => {
     const rotated = toDingTalkDraft(view({ clientSecretFingerprint: 'sha256:deadbeef' }));
 
     expect(fingerprintDingTalkDraft(rotated)).not.toBe(fingerprintDingTalkDraft(seed));
+  });
+
+  describe('工作台能力', () => {
+    it('reads an unconfigured row as all off, 适中', () => {
+      const seed = toDingTalkDraft(view());
+
+      expect(seed.workspaceApprovalEnabled).toBe(false);
+      expect(seed.workspaceTodoEnabled).toBe(false);
+      expect(seed.workspaceCalendarEnabled).toBe(false);
+      // The contract's own default: a tier is always in force once approval is switched on.
+      expect(seed.approvalAutomationTier).toBe('moderate');
+    });
+
+    it('seeds the four fields from the row the server returned', () => {
+      const seed = toDingTalkDraft(
+        view({
+          approvalAutomationTier: 'strict',
+          workspaceApprovalEnabled: true,
+          workspaceCalendarEnabled: false,
+          workspaceTodoEnabled: true,
+        }),
+      );
+
+      expect(seed.approvalAutomationTier).toBe('strict');
+      expect(seed.workspaceApprovalEnabled).toBe(true);
+      expect(seed.workspaceTodoEnabled).toBe(true);
+      expect(seed.workspaceCalendarEnabled).toBe(false);
+    });
+
+    it('sends the four fields with the rest of the row', () => {
+      const seed = toDingTalkDraft(view());
+      const input = toDingTalkUpsertInput({
+        ...seed,
+        approvalAutomationTier: 'relaxed',
+        workspaceApprovalEnabled: true,
+        workspaceTodoEnabled: true,
+      });
+
+      expect(input.approvalAutomationTier).toBe('relaxed');
+      expect(input.workspaceApprovalEnabled).toBe(true);
+      expect(input.workspaceTodoEnabled).toBe(true);
+      expect(input.workspaceCalendarEnabled).toBe(false);
+    });
+
+    it('counts them as part of the draft identity', () => {
+      const seed = toDingTalkDraft(view());
+
+      for (const change of [
+        { approvalAutomationTier: 'strict' as const },
+        { workspaceApprovalEnabled: true },
+        { workspaceTodoEnabled: true },
+        { workspaceCalendarEnabled: true },
+      ])
+        expect(fingerprintDingTalkDraft({ ...seed, ...change })).not.toBe(
+          fingerprintDingTalkDraft(seed),
+        );
+    });
+
+    it('treats the notification app as configured once a key and a secret exist', () => {
+      const unconfigured = toDingTalkDraft(view());
+      expect(isDingTalkNotifyAppConfigured(unconfigured)).toBe(false);
+
+      // An AppKey on its own is not enough: the token the capabilities run on needs both halves.
+      expect(isDingTalkNotifyAppConfigured({ ...unconfigured, notifyAppKey: 'notify-key' })).toBe(
+        false,
+      );
+      expect(
+        isDingTalkNotifyAppConfigured(
+          toDingTalkDraft(view({ notifyAppKey: 'notify-key', notifyAppSecretSet: true })),
+        ),
+      ).toBe(true);
+      // A secret typed but not yet saved counts too — the section is usable before the first 保存.
+      expect(
+        isDingTalkNotifyAppConfigured({
+          ...unconfigured,
+          notifyAppKey: 'notify-key',
+          notifyAppSecret: { fingerprint: null, stored: false, value: 'typed' },
+        }),
+      ).toBe(true);
+    });
+
+    it('only calls tightening what takes something away from existing rules', () => {
+      expect(resolveApprovalTierTightening('moderate', 'strict')).toBe('strict');
+      expect(resolveApprovalTierTightening('relaxed', 'off')).toBe('off');
+      expect(resolveApprovalTierTightening('strict', 'off')).toBe('off');
+
+      // Loosening, or a tier that is already in force, costs nothing and saves silently.
+      expect(resolveApprovalTierTightening('strict', 'moderate')).toBeNull();
+      expect(resolveApprovalTierTightening('off', 'strict')).toBeNull();
+      expect(resolveApprovalTierTightening('strict', 'strict')).toBeNull();
+      expect(resolveApprovalTierTightening('moderate', 'relaxed')).toBeNull();
+    });
   });
 });

@@ -7,6 +7,7 @@ import { mapFeatureFlagsEnvToState } from '@/config/featureFlags';
 import { SettingsTabs } from '@/store/global/initialState';
 import { initServerConfigStore, Provider } from '@/store/serverConfig/store';
 import { useUserStore } from '@/store/user';
+import type { GlobalServerConfig } from '@/types/serverConfig';
 
 import { useCategory } from './useCategory';
 
@@ -75,6 +76,32 @@ const createWrapper = (showProvider: boolean) => {
   return Wrapper;
 };
 
+/**
+ * `enterprise.capabilities` is served by the enterprise boot payload and read as
+ * an untrusted object, so the fixture mirrors the wire shape rather than the
+ * (not yet widened) `EnterprisePublicServerConfig` type.
+ */
+const createCapabilityWrapper = (dingtalkApproval: boolean) => {
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <Provider
+      createStore={() =>
+        initServerConfigStore({
+          featureFlags: mapFeatureFlagsEnvToState({ provider_settings: true }),
+          serverConfig: {
+            aiProvider: {},
+            enterprise: { capabilities: { dingtalkApproval }, enabled: true },
+            telemetry: {},
+          } as unknown as GlobalServerConfig,
+        })
+      }
+    >
+      {children}
+    </Provider>
+  );
+
+  return Wrapper;
+};
+
 const getItemKeys = () => {
   const { result } = renderHook(() => useCategory(), {
     wrapper: createWrapper(true),
@@ -130,6 +157,27 @@ describe('settings useCategory', () => {
   it('keeps Skill and Connector navigation when not platform-managed', () => {
     expect(getItemKeys()).toContain(SettingsTabs.Skill);
     expect(getItemKeys()).toContain(SettingsTabs.Connector);
+  });
+
+  it('hides the auto-approval rules tab when the deployment has no DingTalk approval', () => {
+    expect(getItemKeys()).not.toContain(SettingsTabs.ApprovalRules);
+
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createCapabilityWrapper(false),
+    });
+    const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
+
+    expect(keys).not.toContain(SettingsTabs.ApprovalRules);
+  });
+
+  it('shows the auto-approval rules tab next to Messenger when DingTalk approval is on', () => {
+    const { result } = renderHook(() => useCategory(), {
+      wrapper: createCapabilityWrapper(true),
+    });
+    const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
+
+    expect(keys).toContain(SettingsTabs.ApprovalRules);
+    expect(keys.indexOf(SettingsTabs.ApprovalRules)).toBe(keys.indexOf(SettingsTabs.Messenger) + 1);
   });
 
   it('hides Skill navigation while the capability snapshot is unavailable', () => {

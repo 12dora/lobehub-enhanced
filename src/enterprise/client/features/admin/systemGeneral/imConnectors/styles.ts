@@ -70,6 +70,15 @@ export const imConnectorStyles = createStaticStyles(({ css }) => ({
     gap: 12px;
     align-items: center;
   `,
+  /** 检查权限 answers per capability, so the three readings stack instead of running on. */
+  probeList: css`
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    font-size: ${cssVar.fontSizeSM};
+    line-height: 20px;
+  `,
   section: css`
     display: flex;
     flex-direction: column;

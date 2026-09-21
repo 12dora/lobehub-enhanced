@@ -1,6 +1,6 @@
 'use client';
 
-import { toast } from '@lobehub/ui/base-ui';
+import { confirmModal, toast } from '@lobehub/ui/base-ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -15,6 +15,7 @@ import { useUnsavedChangesGuard } from '../../primitives/useUnsavedChangesGuard'
 import {
   type DingTalkConnectorDraft,
   fingerprintDingTalkDraft,
+  resolveApprovalTierTightening,
   settleDingTalkDraft,
   toDingTalkDraft,
   toDingTalkTestInput,
@@ -83,6 +84,11 @@ export const useImConnectorEditor = ({
   const savingRef = useRef(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AdminImConnectorTestOutput | undefined>();
+  /**
+   * The 自动审批档位 the server holds. The confirmation is about existing rules, so it has to
+   * compare against what is stored rather than against the draft the admin is editing.
+   */
+  const savedTierRef = useRef(seed.approvalAutomationTier);
 
   const draftFp = fingerprintDingTalkDraft(draft);
   const dirty = draftFp !== baselineFp;
@@ -96,6 +102,7 @@ export const useImConnectorEditor = ({
     setDraft(seedRef.current);
     setBaselineFp(seedFp);
     setShowErrors(false);
+    savedTierRef.current = seedRef.current.approvalAutomationTier;
   }, [seedFp]);
 
   const unsavedMessages = useMemo(
@@ -131,14 +138,7 @@ export const useImConnectorEditor = ({
     setTestResult(undefined);
   }, []);
 
-  const save = useCallback(async () => {
-    if (!canOperate || savingRef.current) return;
-    setShowErrors(true);
-    if (Object.keys(validationErrors).length > 0) {
-      toast.error(t('systemGeneral.edit.invalidDraft'));
-      return;
-    }
-
+  const commit = useCallback(async () => {
     savingRef.current = true;
     setSaving(true);
     try {
@@ -153,6 +153,9 @@ export const useImConnectorEditor = ({
           setDraft(settled);
           setBaselineFp(fingerprintDingTalkDraft(settled));
           setShowErrors(false);
+          // The tier the server now holds — so a second save of an unrelated field does not ask
+          // about a tightening that has already been applied.
+          savedTierRef.current = settled.approvalAutomationTier;
           // The write has committed. A refresh that fails afterwards is a stale reading, not a
           // failed save, so it must not reach the mutation's error toast.
           try {
@@ -167,7 +170,37 @@ export const useImConnectorEditor = ({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [authMethod, canOperate, draft, onSaved, service, t, validationErrors]);
+  }, [authMethod, draft, onSaved, service, t]);
+
+  const save = useCallback(async () => {
+    if (!canOperate || savingRef.current) return;
+    setShowErrors(true);
+    if (Object.keys(validationErrors).length > 0) {
+      toast.error(t('systemGeneral.edit.invalidDraft'));
+      return;
+    }
+
+    const tightening = resolveApprovalTierTightening(
+      savedTierRef.current,
+      draft.approvalAutomationTier,
+    );
+    if (!tightening) {
+      await commit();
+      return;
+    }
+
+    // Tightening the tier reaches rules that already exist — 严格 shortens their expiry, 关闭 stops
+    // them running — so what it does to them is said before the row is written, not after.
+    confirmModal({
+      cancelText: t('systemGeneral.edit.cancel'),
+      content: t(`systemGeneral.imConnectors.workspace.tierConfirm.${tightening}` as never),
+      okText: t('systemGeneral.edit.save'),
+      onOk: async () => {
+        await commit();
+      },
+      title: t('systemGeneral.imConnectors.workspace.tierConfirm.title'),
+    });
+  }, [canOperate, commit, draft.approvalAutomationTier, t, validationErrors]);
 
   /**
    * The probe runs against the draft, not the saved row: credentials are verified before they are

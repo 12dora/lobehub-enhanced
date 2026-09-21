@@ -10,6 +10,7 @@ import About from '../about';
 import Advanced from '../advanced';
 import APIKey from '../apikey';
 import Appearance from '../appearance';
+import ApprovalRules from '../approval-rules';
 import Connector from '../connector';
 import Creds from '../creds';
 import Devices from '../devices';
@@ -33,6 +34,7 @@ export const componentMap = {
   [SettingsTabs.ServiceModel]: ServiceModel,
   [SettingsTabs.Memory]: Memory,
   [SettingsTabs.Messenger]: Messenger,
+  [SettingsTabs.ApprovalRules]: ApprovalRules,
   [SettingsTabs.Notification]: Notification,
   [SettingsTabs.About]: About,
   [SettingsTabs.Hotkey]: Hotkey,

@@ -19,6 +19,7 @@ import type { AdminSystemInfraDependency } from '@/server/enterprise/contracts/a
 import { BrowserProfileCard } from './infra/BrowserProfileCard';
 import type { BrowserProfileSaveInput } from './infra/browserProfileSelection';
 import { DocumentRenderCard } from './infra/DocumentRenderCard';
+import { EnterpriseLookupCard } from './infra/EnterpriseLookupCard';
 import { MailCard } from './infra/MailCard';
 import { ObjectStorageCard } from './infra/ObjectStorageCard';
 import { SandboxCard } from './infra/SandboxCard';
@@ -139,6 +140,9 @@ export const SystemGeneralPageView = memo<SystemGeneralPageViewProps>(
                   view={data.mail}
                   onTest={() => onTest('mail')}
                 />
+                {/* Owns its own request — see EnterpriseLookupCard; it is not part of the shared
+                    infrastructure snapshot the two cards above render. */}
+                <EnterpriseLookupCard canOperate={canOperate} />
                 {sandboxModuleEnabled === undefined ? null : (
                   <SandboxCard
                     canOperate={canOperate}

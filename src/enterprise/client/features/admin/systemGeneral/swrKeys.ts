@@ -4,6 +4,8 @@ export const ADMIN_SYSTEM_INFRA_SETTINGS_KEY = 'admin.system.getInfraSettings';
 export const ADMIN_SYSTEM_SANDBOX_SETTINGS_KEY = 'admin.system.getSandboxSettings';
 export const ADMIN_SYSTEM_DOCUMENT_RENDER_SETTINGS_KEY = 'admin.system.getDocumentRenderSettings';
 export const ADMIN_SYSTEM_DOCUMENT_RENDER_STATUS_KEY = 'admin.system.getDocumentRenderStatus';
+export const ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY =
+  'admin.system.getEnterpriseLookupSettings';
 export const ADMIN_IM_CONNECTORS_KEY = 'admin.imConnectors.list';
 export const ADMIN_IM_CONNECTOR_BINDINGS_KEY = 'admin.imConnectors.bindings.list';
 export const ADMIN_IM_CONNECTOR_DIRECTORY_STATUS_KEY = 'admin.imConnectors.directoryStatus';
@@ -25,6 +27,9 @@ export const buildAdminDocumentRenderSettingsKey = (enabled: boolean) =>
 
 export const buildAdminDocumentRenderStatusKey = (enabled: boolean) =>
   enabled ? ([ADMIN_SYSTEM_DOCUMENT_RENDER_STATUS_KEY] as const) : null;
+
+export const buildAdminEnterpriseLookupSettingsKey = (enabled: boolean) =>
+  enabled ? ([ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY] as const) : null;
 
 export const buildAdminImConnectorsKey = (enabled: boolean) =>
   enabled ? ([ADMIN_IM_CONNECTORS_KEY] as const) : null;

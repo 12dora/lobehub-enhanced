@@ -28,6 +28,10 @@ import type {
 } from './service';
 import { imConnectorStyles as styles } from './styles';
 import { useImConnectorEditor } from './useImConnectorEditor';
+import {
+  type ImConnectorWorkspaceService,
+  WorkspaceCapabilitiesSection,
+} from './WorkspaceCapabilitiesSection';
 
 /** `tone: undefined` is the neutral tag — the connector is simply not running. */
 const STATUS_PRESENTATION: Record<
@@ -52,6 +56,8 @@ export interface DingTalkConnectorCardProps {
   /** Injectable for tests. */
   service?: ImConnectorMutationService;
   view: AdminImConnectorView;
+  /** Injectable for tests — the 工作台能力 permission probe. */
+  workspaceService?: ImConnectorWorkspaceService;
 }
 
 /**
@@ -62,7 +68,7 @@ export interface DingTalkConnectorCardProps {
  * for the first time fills them in together.
  */
 export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
-  ({ bindingsService, canOperate, notifyAppService, onSaved, service, view }) => {
+  ({ bindingsService, canOperate, notifyAppService, onSaved, service, view, workspaceService }) => {
     const { t } = useTranslation('admin');
     const editor = useImConnectorEditor({ canOperate, onSaved, service, view });
     const { draft, errors } = editor;
@@ -212,6 +218,15 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
             draft={draft}
             errors={errors}
             service={notifyAppService}
+            onPatch={editor.patch}
+          />
+
+          {/* Right after the app they run on: every workspace call is made with the 服务号 token. */}
+          <WorkspaceCapabilitiesSection
+            canOperate={canOperate}
+            disabled={locked}
+            draft={draft}
+            service={workspaceService}
             onPatch={editor.patch}
           />
 

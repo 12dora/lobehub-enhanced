@@ -64,6 +64,7 @@ vi.mock('./DingTalkConnectorCard', () => ({
 
 const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorView => ({
   aiCardTemplateId: null,
+  approvalAutomationTier: 'moderate',
   chatEnabled: true,
   clientId: null,
   clientSecretFingerprint: null,
@@ -90,6 +91,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
     state: 'disabled',
   },
   updatedAt: null,
+  workspaceApprovalEnabled: false,
+  workspaceCalendarEnabled: false,
+  workspaceTodoEnabled: false,
   ...overrides,
 });
 

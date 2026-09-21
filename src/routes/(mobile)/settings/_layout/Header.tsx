@@ -18,6 +18,7 @@ import { mobileHeaderSticky } from '@/styles/mobileHeader';
 //   Without an explicit entry, `setting:tab.${tab}` would resolve to a missing key and render the raw string.
 // - Profile: prefer shorter "Profile" (`auth:profile.title`) over "My Account" (`auth:tab.profile`) on mobile.
 const TAB_TITLE_KEY: Partial<Record<SettingsTabs, string>> = {
+  [SettingsTabs.ApprovalRules]: 'setting:tab.approvalRules',
   [SettingsTabs.Billing]: 'subscription:tab.billing',
   [SettingsTabs.Credits]: 'subscription:tab.credits',
   [SettingsTabs.Plans]: 'subscription:tab.plans',

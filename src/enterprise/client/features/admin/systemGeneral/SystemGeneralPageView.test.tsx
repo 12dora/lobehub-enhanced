@@ -84,6 +84,14 @@ vi.mock('@/enterprise/client/providers/AdminAccessProvider', () => ({
 
 vi.mock('./infra/service', () => ({ infraSettingsMutationService: {} }));
 
+/**
+ * The 企业查询 card owns its own request rather than the shared snapshot this page view passes
+ * down, so it is exercised in EnterpriseLookupCard.test.tsx; here only its placement matters.
+ */
+vi.mock('./infra/EnterpriseLookupCard', () => ({
+  EnterpriseLookupCard: () => <div data-testid="enterprise-lookup-card" />,
+}));
+
 vi.mock('./infra/invalidate', () => ({
   invalidateAdminInfraSettings: () => Promise.resolve(),
 }));
@@ -304,6 +312,8 @@ describe('SystemGeneralPageView', () => {
     expect(screen.getByText('systemGeneral.objectStorage.title')).toBeTruthy();
     expect(screen.getByText('systemGeneral.mail.title')).toBeTruthy();
     expect(screen.queryByText('systemGeneral.keyManagement.title')).toBeNull();
+    // 企业查询 sits in the same grid, right after 邮件服务.
+    expect(screen.getByTestId('enterprise-lookup-card')).toBeTruthy();
   });
 
   it('runs a live probe from the object-storage card', () => {

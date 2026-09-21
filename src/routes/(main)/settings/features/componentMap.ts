@@ -32,6 +32,9 @@ export const componentMap = {
   [SettingsTabs.Messenger]: dynamic(() => import('../messenger'), {
     loading: loading('Settings > Messenger'),
   }),
+  [SettingsTabs.ApprovalRules]: dynamic(() => import('../approval-rules'), {
+    loading: loading('Settings > ApprovalRules'),
+  }),
   [SettingsTabs.Notification]: dynamic(
     () => import('@/business/client/BusinessSettingPages/Notification'),
     {

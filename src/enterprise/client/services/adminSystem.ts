@@ -12,6 +12,7 @@ import type {
   AdminSystemCancelJobInput,
   adminSystemGetDocumentRenderSettingsOutputSchema,
   adminSystemGetDocumentRenderStatusOutputSchema,
+  adminSystemGetEnterpriseLookupSettingsOutputSchema,
   adminSystemGetInfraSettingsOutputSchema,
   AdminSystemGetInstanceRevisionsInput,
   adminSystemGetInstanceRevisionsOutputSchema,
@@ -26,7 +27,10 @@ import type {
   AdminSystemRunDocumentRenderGcOutput,
   AdminSystemTestDependencyInput,
   adminSystemTestDependencyOutputSchema,
+  AdminSystemTestEnterpriseLookupProviderInput,
+  AdminSystemTestEnterpriseLookupProviderOutput,
   AdminSystemUpdateDocumentRenderSettingsInput,
+  AdminSystemUpdateEnterpriseLookupSettingsInput,
   AdminSystemUpdateInfraSettingsInput,
   AdminSystemUpdateInfraSettingsOutput,
   AdminSystemUpdateSandboxSettingsInput,
@@ -131,6 +135,30 @@ export interface AdminDocumentRenderSettingsService {
   ) => Promise<AdminSystemDocumentRenderSettings>;
 }
 
+/**
+ * 企业查询 (enterprise lookup) admin contract — v1.8.0 §2.3.
+ *
+ * Inferred from the server schemas, like every other card on this page, so the 企业查询 form and the
+ * procedures can never drift apart. The secrets are write-only: the read answers with
+ * `apiKeyStored` + a digest, never the key.
+ */
+export type AdminSystemEnterpriseLookupSettings = z.infer<
+  typeof adminSystemGetEnterpriseLookupSettingsOutputSchema
+>;
+export type AdminSystemEnterpriseLookupConfigView = AdminSystemEnterpriseLookupSettings['config'];
+/** MCP `initialize` + `tools/list` against one endpoint; `toolCount` is what the probe saw. */
+export type AdminSystemEnterpriseLookupProbeResult = AdminSystemTestEnterpriseLookupProviderOutput;
+
+export interface AdminEnterpriseLookupSettingsService {
+  getEnterpriseLookupSettings: () => Promise<AdminSystemEnterpriseLookupSettings>;
+  testEnterpriseLookupProvider: (
+    input: AdminSystemTestEnterpriseLookupProviderInput,
+  ) => Promise<AdminSystemEnterpriseLookupProbeResult>;
+  updateEnterpriseLookupSettings: (
+    input: AdminSystemUpdateEnterpriseLookupSettingsInput,
+  ) => Promise<AdminSystemEnterpriseLookupSettings>;
+}
+
 export interface AdminBrowserProfileService {
   getBrowserProfile: () => Promise<AdminBrowserProfileSummary>;
   /** The curated pools a fingerprint may be composed from — the card never posts raw values. */
@@ -149,7 +177,8 @@ class AdminSystemServiceImpl
     AdminInfraSettingsService,
     AdminBrowserProfileService,
     AdminSandboxSettingsService,
-    AdminDocumentRenderSettingsService
+    AdminDocumentRenderSettingsService,
+    AdminEnterpriseLookupSettingsService
 {
   cancelDocumentRenderJob = (input: AdminSystemDocumentRenderJobActionInput) =>
     lambdaClient.admin.system.cancelDocumentRenderJob.mutate(input);
@@ -173,6 +202,14 @@ class AdminSystemServiceImpl
 
   updateDocumentRenderSettings = (input: AdminSystemUpdateDocumentRenderSettingsInput) =>
     lambdaClient.admin.system.updateDocumentRenderSettings.mutate(input);
+
+  getEnterpriseLookupSettings = () => lambdaClient.admin.system.getEnterpriseLookupSettings.query();
+
+  testEnterpriseLookupProvider = (input: AdminSystemTestEnterpriseLookupProviderInput) =>
+    lambdaClient.admin.system.testEnterpriseLookupProvider.mutate(input);
+
+  updateEnterpriseLookupSettings = (input: AdminSystemUpdateEnterpriseLookupSettingsInput) =>
+    lambdaClient.admin.system.updateEnterpriseLookupSettings.mutate(input);
 
   getInfraSettings = () => lambdaClient.admin.system.getInfraSettings.query();
 
@@ -214,7 +251,8 @@ export const adminSystemService: AdminSystemService &
   AdminInfraSettingsService &
   AdminBrowserProfileService &
   AdminSandboxSettingsService &
-  AdminDocumentRenderSettingsService = new AdminSystemServiceImpl();
+  AdminDocumentRenderSettingsService &
+  AdminEnterpriseLookupSettingsService = new AdminSystemServiceImpl();
 
 export type {
   AdminSystemCancelJobInput,
@@ -223,7 +261,9 @@ export type {
   AdminSystemGetSandboxPackageStatsInput,
   AdminSystemRetryJobInput,
   AdminSystemTestDependencyInput,
+  AdminSystemTestEnterpriseLookupProviderInput,
   AdminSystemUpdateDocumentRenderSettingsInput,
+  AdminSystemUpdateEnterpriseLookupSettingsInput,
   AdminSystemUpdateInfraSettingsInput,
   AdminSystemUpdateInfraSettingsOutput,
   AdminSystemUpdateSandboxSettingsInput,

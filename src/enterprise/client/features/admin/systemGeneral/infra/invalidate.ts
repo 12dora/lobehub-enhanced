@@ -5,6 +5,7 @@ import { mutate } from '@/libs/swr';
 import {
   ADMIN_SYSTEM_DOCUMENT_RENDER_SETTINGS_KEY,
   ADMIN_SYSTEM_DOCUMENT_RENDER_STATUS_KEY,
+  ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY,
   ADMIN_SYSTEM_INFRA_SETTINGS_KEY,
   ADMIN_SYSTEM_SANDBOX_SETTINGS_KEY,
 } from '../swrKeys';
@@ -23,6 +24,9 @@ export const invalidateAdminSandboxSettings = (): Promise<unknown> =>
 
 export const invalidateAdminDocumentRenderSettings = (): Promise<unknown> =>
   mutate((key) => Array.isArray(key) && key[0] === ADMIN_SYSTEM_DOCUMENT_RENDER_SETTINGS_KEY);
+
+export const invalidateAdminEnterpriseLookupSettings = (): Promise<unknown> =>
+  mutate((key) => Array.isArray(key) && key[0] === ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY);
 
 /**
  * The queue answer is derived from the settings, so a save has to drop it too — otherwise a card

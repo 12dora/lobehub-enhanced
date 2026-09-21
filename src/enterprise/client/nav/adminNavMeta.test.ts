@@ -69,6 +69,8 @@ describe('adminNavMeta', () => {
     expect(system?.children?.some((c) => c.id === system.indexRedirectTo)).toBe(true);
     expect(system?.children?.filter((c) => !c.hideFromNav).map((c) => c.id)).toEqual([
       'system-general',
+      // 自动审批规则 follows 通用设置, where the DingTalk automation tier is set.
+      'dingtalk-approval-rules',
       'users',
       'unified-management',
       // 模块 sits next to the other deployment-level surfaces, above 系统状态.

@@ -4,9 +4,11 @@ import {
   ADMIN_BROWSER_PROFILE_KEY,
   ADMIN_IM_CONNECTOR_BINDINGS_KEY,
   ADMIN_IM_CONNECTORS_KEY,
+  ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY,
   ADMIN_SYSTEM_INFRA_SETTINGS_KEY,
   ADMIN_SYSTEM_SANDBOX_SETTINGS_KEY,
   buildAdminBrowserProfileKey,
+  buildAdminEnterpriseLookupSettingsKey,
   buildAdminImConnectorBindingsKey,
   buildAdminImConnectorsKey,
   buildAdminInfraSettingsKey,
@@ -26,6 +28,15 @@ describe('admin infra settings SWR keys', () => {
     expect(buildAdminSandboxSettingsKey(false)).toBeNull();
     expect(buildAdminImConnectorsKey(true)).toEqual([ADMIN_IM_CONNECTORS_KEY]);
     expect(buildAdminImConnectorsKey(false)).toBeNull();
+  });
+
+  /** The 企业查询 card owns its own request, so its key has to stay distinct from the shared one. */
+  it('keys the enterprise lookup settings separately from the infra snapshot', () => {
+    expect(buildAdminEnterpriseLookupSettingsKey(false)).toBeNull();
+    expect(buildAdminEnterpriseLookupSettingsKey(true)).toEqual([
+      ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY,
+    ]);
+    expect(ADMIN_SYSTEM_ENTERPRISE_LOOKUP_SETTINGS_KEY).not.toBe(ADMIN_SYSTEM_INFRA_SETTINGS_KEY);
   });
 });
 

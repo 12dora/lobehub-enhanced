@@ -2,6 +2,8 @@ import { matchPath } from 'react-router';
 
 import type { PlatformModuleId } from '@/const/platform/modules';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
+import { readDingTalkApprovalCapability } from '@/features/DingTalkApprovalRules/capability';
+import { getServerConfigStoreState } from '@/store/serverConfig';
 
 /** i18n keys used by the admin nav catalog (`admin` namespace). */
 export type AdminNavLabelKey =
@@ -42,16 +44,30 @@ export type AdminNavLabelKey =
   | 'nav.auditRetention'
   | 'nav.system'
   | 'nav.systemGeneral'
+  | 'nav.dingtalkApprovalRules'
   | 'nav.systemStatus'
   | 'nav.modules'
   | 'nav.taskTemplates'
   | 'nav.templates';
 
 /**
+ * Deployment capability flags (`enterprise.capabilities.*` on the server config) a
+ * surface can depend on. Not the same thing as a platform module: a module is an
+ * administrable on/off switch, a capability reports whether the integration behind
+ * the surface exists at all.
+ */
+export type AdminNavCapabilityId = 'dingtalkApproval';
+
+/**
  * Single source of truth for admin nav + route permission declarations.
  * Menu visibility and route guards must both read from this catalog so they cannot drift.
  */
 export interface AdminNavItem {
+  /**
+   * Deployment capability this surface needs. Fail-closed: the item is hidden while
+   * the flag is anything but `true`, because the page would have no data to govern.
+   */
+  capabilityId?: AdminNavCapabilityId;
   /** Nested items (e.g. AI providers / models). */
   children?: AdminNavItem[];
   /** Hide from side nav while still registering a route (detail pages). */
@@ -312,6 +328,18 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
         requiredPermissions: [PLATFORM_PERMISSIONS.SYSTEM_READ],
       },
       {
+        // Sits right below 通用设置, where the DingTalk connector and its automation
+        // tier are configured: this is the data those switches govern. Like the IM
+        // connector surfaces it is a core SYSTEM_* page, so it carries no `moduleId`
+        // — but it is hidden where the deployment has no DingTalk approval at all,
+        // exactly as the owner-facing settings tab is.
+        capabilityId: 'dingtalkApproval',
+        id: 'dingtalk-approval-rules',
+        labelKey: 'nav.dingtalkApprovalRules',
+        path: '/admin/system/dingtalk-approval-rules',
+        requiredPermissions: [PLATFORM_PERMISSIONS.SYSTEM_READ],
+      },
+      {
         id: 'users',
         labelKey: 'nav.users',
         path: '/admin/users',
@@ -483,26 +511,57 @@ export const findAdminNavModuleId = (pathname: string): PlatformModuleId | undef
   findAdminNavItemByPath(pathname)?.moduleId;
 
 /**
+ * Deployment runtime capabilities (server config) a nav entry depends on, beyond
+ * RBAC and the module switches. Unlike a module, these are not administrable here:
+ * they report whether the underlying integration is configured and switched on.
+ */
+export type AdminNavCapabilities = Readonly<Record<AdminNavCapabilityId, boolean>>;
+
+/**
+ * Live capability snapshot, read fail-closed from the injected server config with
+ * the same reader the owner-facing page uses. The payload is seeded synchronously
+ * before the SPA entry evaluates and does not change during a session, so the nav
+ * can read it outside React without flashing an entry on and off.
+ */
+export const readAdminNavCapabilities = (): AdminNavCapabilities => {
+  const enterprise = getServerConfigStoreState()?.serverConfig.enterprise;
+
+  return { dingtalkApproval: readDingTalkApprovalCapability(enterprise) };
+};
+
+/** Whether this catalog entry needs a deployment capability that is off / unreported. */
+export const isAdminNavItemCapabilityOff = (
+  item: AdminNavItem | undefined,
+  capabilities: AdminNavCapabilities,
+): boolean => Boolean(item?.capabilityId && !capabilities[item.capabilityId]);
+
+/**
  * Filter nav tree by granted permissions.
  * Parent groups without a direct permission stay when any child is visible.
  * Hidden detail routes are never shown in the menu.
  *
  * `disabledModules` additionally drops surfaces whose module is switched off for this
  * deployment. Defaults to empty, so every existing caller keeps today's behaviour.
+ *
+ * `capabilities` drops surfaces whose deployment capability is off — fail-closed, so
+ * a deployment that reports nothing hides them rather than offering a page whose
+ * data cannot exist.
  */
 export const filterAdminNavByPermissions = (
   items: readonly AdminNavItem[],
   granted: readonly string[],
   disabledModules: ReadonlySet<PlatformModuleId> = NO_DISABLED_MODULES,
+  capabilities: AdminNavCapabilities = readAdminNavCapabilities(),
 ): AdminNavItem[] => {
   const result: AdminNavItem[] = [];
 
   for (const item of items) {
     if (item.hideFromNav) continue;
     if (isAdminNavItemModuleDisabled(item, disabledModules)) continue;
+    if (isAdminNavItemCapabilityOff(item, capabilities)) continue;
 
     const children = item.children
-      ? filterAdminNavByPermissions(item.children, granted, disabledModules)
+      ? filterAdminNavByPermissions(item.children, granted, disabledModules, capabilities)
       : undefined;
 
     const selfAllowed = hasAllPermissions(granted, item.requiredPermissions);
