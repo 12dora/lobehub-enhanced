@@ -5,6 +5,19 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.8.2 (2026-09-21)
+
+企业查询凭证与编辑弹窗修正,镜像构建提速。
+
+#### 🐛 Fixes
+
+- 企业查询凭证连同「Bearer 」前缀一起粘贴时,「测试连接」与查询不再失败:保存、测试和请求时统一去除前缀、引号与首尾空白。
+- 企业查询编辑弹窗移除额度说明文字;修复弹窗底部输入框下边缘与焦点环被裁切的问题。
+
+#### ⚡ Build
+
+- Docker 构建复用 Next 编译缓存与 pnpm store(BuildKit 缓存挂载),三个 SPA 包支持并行构建。
+
 ## 1.8.1 (2026-09-21)
 
 企业查询「测试连接」修正。
