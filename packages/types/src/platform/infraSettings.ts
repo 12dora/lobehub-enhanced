@@ -9,6 +9,12 @@ import {
   INFRA_SETTINGS_IDS,
   INFRA_SETTINGS_LIMITS,
 } from '../../../const/src/platform/infraSettings';
+import {
+  createDefaultEnterpriseLookupConfig,
+  ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID,
+  type EnterpriseLookupPersistedConfig,
+  normalizeEnterpriseLookupConfig,
+} from './enterpriseLookup';
 
 export type { InfraSettingsId };
 
@@ -83,7 +89,8 @@ export const mailPersistedSchema = z
   .strict();
 export type MailPersisted = z.infer<typeof mailPersistedSchema>;
 
-export type InfraSettingsPersistedConfig = MailPersisted | ObjectStoragePersisted;
+export type InfraSettingsPersistedConfig =
+  EnterpriseLookupPersistedConfig | MailPersisted | ObjectStoragePersisted;
 
 export const createDefaultObjectStorageConfig = (): ObjectStoragePersisted => ({
   enabled: false,
@@ -97,10 +104,13 @@ export const createDefaultMailConfig = (): MailPersisted => ({
   provider: 'smtp',
 });
 
-export const createDefaultInfraConfig = (id: InfraSettingsId): InfraSettingsPersistedConfig =>
-  id === INFRA_SETTINGS_ID_OBJECT_STORAGE
-    ? createDefaultObjectStorageConfig()
-    : createDefaultMailConfig();
+export const createDefaultInfraConfig = (
+  id: InfraSettingsId | typeof ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID,
+): InfraSettingsPersistedConfig => {
+  if (id === INFRA_SETTINGS_ID_OBJECT_STORAGE) return createDefaultObjectStorageConfig();
+  if (id === ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID) return createDefaultEnterpriseLookupConfig();
+  return createDefaultMailConfig();
+};
 
 export const normalizeObjectStorageConfig = (raw: unknown): ObjectStoragePersisted => {
   const defaults = createDefaultObjectStorageConfig();
@@ -117,12 +127,13 @@ export const normalizeMailConfig = (raw: unknown): MailPersisted => {
 };
 
 export const normalizeInfraConfig = (
-  id: InfraSettingsId,
+  id: InfraSettingsId | typeof ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID,
   raw: unknown,
-): InfraSettingsPersistedConfig =>
-  id === INFRA_SETTINGS_ID_OBJECT_STORAGE
-    ? normalizeObjectStorageConfig(raw)
-    : normalizeMailConfig(raw);
+): InfraSettingsPersistedConfig => {
+  if (id === INFRA_SETTINGS_ID_OBJECT_STORAGE) return normalizeObjectStorageConfig(raw);
+  if (id === ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID) return normalizeEnterpriseLookupConfig(raw);
+  return normalizeMailConfig(raw);
+};
 
 // ---------------------------------------------------------------------------
 // Admin-facing view (never leaks ciphertext / plaintext secrets)

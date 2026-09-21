@@ -13,12 +13,14 @@ import {
 import { agentShares } from './agentShare';
 import { asyncTasks } from './asyncTask';
 import { chatGroups, chatGroupsAgents } from './chatGroup';
+import { dingtalkApprovalRuleRuns, dingtalkApprovalRules } from './dingtalkApprovalRule';
 import {
   dingtalkDepartments,
   dingtalkDirectoryUsers,
   dingtalkUserDepartments,
 } from './dingtalkDirectory';
 import { documentHistories } from './documentHistory';
+import { enterpriseLookupDailyUsage } from './enterpriseLookup';
 import { documents, files, knowledgeBases } from './file';
 import { generationBatches, generations, generationTopics } from './generation';
 import { messageGroups, messages, messagesFiles, messageTranslates } from './message';
@@ -458,6 +460,26 @@ export const dingtalkUserDepartmentsRelations = relations(dingtalkUserDepartment
     references: [dingtalkDirectoryUsers.staffId],
   }),
 }));
+
+export const dingtalkApprovalRulesRelations = relations(dingtalkApprovalRules, ({ one, many }) => ({
+  runs: many(dingtalkApprovalRuleRuns),
+  user: one(users, { fields: [dingtalkApprovalRules.userId], references: [users.id] }),
+}));
+
+export const dingtalkApprovalRuleRunsRelations = relations(dingtalkApprovalRuleRuns, ({ one }) => ({
+  rule: one(dingtalkApprovalRules, {
+    fields: [dingtalkApprovalRuleRuns.ruleId],
+    references: [dingtalkApprovalRules.id],
+  }),
+  user: one(users, { fields: [dingtalkApprovalRuleRuns.userId], references: [users.id] }),
+}));
+
+export const enterpriseLookupDailyUsageRelations = relations(
+  enterpriseLookupDailyUsage,
+  ({ one }) => ({
+    user: one(users, { fields: [enterpriseLookupDailyUsage.userId], references: [users.id] }),
+  }),
+);
 
 export const remindersRelations = relations(reminders, ({ one, many }) => ({
   creator: one(users, {

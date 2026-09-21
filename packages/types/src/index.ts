@@ -13,6 +13,7 @@ export * from './clientDB';
 export * from './conversation';
 export * from './creds';
 export * from './device';
+export * from './dingtalk/approvalRule';
 export * from './discover';
 export * from './document';
 export * from './eval';

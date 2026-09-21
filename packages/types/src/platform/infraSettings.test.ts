@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createDefaultEnterpriseLookupConfig,
+  ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID,
+} from './enterpriseLookup';
+import {
+  createDefaultInfraConfig,
   createDefaultMailConfig,
   createDefaultObjectStorageConfig,
   infraSecretActionSchema,
   mailPersistedSchema,
   mailUpdateSchema,
+  normalizeInfraConfig,
   normalizeMailConfig,
   normalizeObjectStorageConfig,
   objectStoragePersistedSchema,
@@ -115,5 +121,19 @@ describe('infraSettings types', () => {
         resend: { apiKey: { action: 'replace', value: 're_xxx' } },
       }).success,
     ).toBe(true);
+  });
+
+  it('widens the persisted union with the enterprise-lookup default', () => {
+    const config = createDefaultInfraConfig(ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID);
+    expect(config).toEqual(createDefaultEnterpriseLookupConfig());
+    expect(
+      normalizeInfraConfig(ENTERPRISE_LOOKUP_INFRA_SETTINGS_ID, {
+        dailyLimitPerUser: 12,
+        defaultProvider: 'qcc',
+        fallbackEnabled: true,
+        qcc: { categories: ['company'], enabled: false },
+        tianyancha: { enabled: false },
+      }),
+    ).toMatchObject({ dailyLimitPerUser: 12 });
   });
 });

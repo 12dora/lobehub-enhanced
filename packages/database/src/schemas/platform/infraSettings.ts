@@ -7,9 +7,11 @@ import { createdAt, updatedAt } from '../_helpers';
 
 export const INFRA_SETTINGS_OBJECT_STORAGE_ID = 'object_storage';
 export const INFRA_SETTINGS_MAIL_ID = 'mail';
+export const INFRA_SETTINGS_ENTERPRISE_LOOKUP_ID = 'enterprise_lookup';
 
 /**
- * Per-card infrastructure settings. `id` is `'object_storage'` or `'mail'`.
+ * Per-card infrastructure settings. `id` is `'object_storage'`, `'mail'`,
+ * or `'enterprise_lookup'`.
  * `revision` is a monotonic CAS token — writers must supply expectedRevision.
  * Secrets live as ciphertext fields inside `config` jsonb.
  */
@@ -29,7 +31,10 @@ export const platformInfraSettings = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    check('platform_infra_settings_id_check', sql`${t.id} IN ('object_storage', 'mail')`),
+    check(
+      'platform_infra_settings_id_check',
+      sql`${t.id} IN ('object_storage', 'mail', 'enterprise_lookup')`,
+    ),
     check('platform_infra_settings_revision_check', sql`${t.revision} >= 0`),
   ],
 );

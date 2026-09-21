@@ -3,11 +3,12 @@
  * Design: docs/enterprise/infra-settings.md.
  */
 
-export const INFRA_SETTINGS_IDS = ['object_storage', 'mail'] as const;
+export const INFRA_SETTINGS_IDS = ['object_storage', 'mail', 'enterprise_lookup'] as const;
 export type InfraSettingsId = (typeof INFRA_SETTINGS_IDS)[number];
 
 export const INFRA_SETTINGS_ID_OBJECT_STORAGE = 'object_storage' satisfies InfraSettingsId;
 export const INFRA_SETTINGS_ID_MAIL = 'mail' satisfies InfraSettingsId;
+export const INFRA_SETTINGS_ID_ENTERPRISE_LOOKUP = 'enterprise_lookup' satisfies InfraSettingsId;
 
 /** `PlatformConfigInvalidationEvent.scopes` entry used to fan out effective S3 / mail bags. */
 export const INFRA_SETTINGS_INVALIDATION_SCOPE = 'infra_settings';

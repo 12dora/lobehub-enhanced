@@ -7,6 +7,7 @@ import { createDefaultInfraConfig, normalizeInfraConfig } from '@/types/platform
 
 import { inTransaction } from '../../repositories/platform/tx';
 import {
+  INFRA_SETTINGS_ENTERPRISE_LOOKUP_ID,
   INFRA_SETTINGS_MAIL_ID,
   INFRA_SETTINGS_OBJECT_STORAGE_ID,
   platformInfraSettings,
@@ -14,7 +15,11 @@ import {
 import type { LobeChatDatabase, Transaction } from '../../type';
 import { PlatformRevisionConflictError } from './errors';
 
-export { INFRA_SETTINGS_MAIL_ID, INFRA_SETTINGS_OBJECT_STORAGE_ID };
+export {
+  INFRA_SETTINGS_ENTERPRISE_LOOKUP_ID,
+  INFRA_SETTINGS_MAIL_ID,
+  INFRA_SETTINGS_OBJECT_STORAGE_ID,
+};
 
 const isInfraSettingsId = (id: string): id is InfraSettingsId =>
   (INFRA_SETTINGS_IDS as readonly string[]).includes(id);

@@ -197,6 +197,13 @@
       "when": 1789568000000,
       "tag": "0035_reminder_recipients_kind_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789580000000,
+      "tag": "0036_enterprise_lookup_dingtalk_workflow",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,7 @@ import {
 
 describe('infraSettings const', () => {
   it('pins the two row ids and the invalidation scope', () => {
-    expect(INFRA_SETTINGS_IDS).toEqual(['object_storage', 'mail']);
+    expect(INFRA_SETTINGS_IDS).toEqual(['object_storage', 'mail', 'enterprise_lookup']);
     expect(INFRA_SETTINGS_ID_OBJECT_STORAGE).toBe('object_storage');
     expect(INFRA_SETTINGS_ID_MAIL).toBe('mail');
     expect(INFRA_SETTINGS_INVALIDATION_SCOPE).toBe('infra_settings');
