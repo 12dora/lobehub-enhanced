@@ -5,6 +5,17 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.8.7 (2026-09-22)
+
+#### 🐛 Fixes
+
+- 确认卡片按名称显示操作对象(审批模板、规则、待办、日程、退回节点),不再显示内部编号;操作日志「目标」列同步显示名称。
+- 发布新版本后,已打开的页面在跳转时可能进入错误页:自动刷新保护此前每个标签页只生效一次,现改为可重复生效。
+
+#### ✨ Improvements
+
+- 待批准卡片右上角新增「取消此操作」按钮。
+
 ## 1.8.6 (2026-09-21)
 
 #### 🐛 Fixes
