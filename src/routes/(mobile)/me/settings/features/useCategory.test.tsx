@@ -120,7 +120,9 @@ describe('mobile settings useCategory', () => {
     expect(keys).not.toContain(SettingsTabs.Provider);
   });
 
-  it('hides Skill and Connector when platform-managed', () => {
+  // Managed connectors still need each user to authorize their own OAuth
+  // accounts, so only Skill disappears.
+  it('hides Skill but keeps Connector when platform-managed', () => {
     managedResourcesRef.current.capabilities.skills = true;
     managedResourcesRef.current.capabilities.connectors = true;
 
@@ -131,6 +133,6 @@ describe('mobile settings useCategory', () => {
     const keys = result.current.flatMap((group) => group.items.map((item) => item.key));
 
     expect(keys).not.toContain(SettingsTabs.Skill);
-    expect(keys).not.toContain(SettingsTabs.Connector);
+    expect(keys).toContain(SettingsTabs.Connector);
   });
 });

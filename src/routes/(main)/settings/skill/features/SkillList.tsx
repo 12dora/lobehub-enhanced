@@ -38,6 +38,10 @@ import { type LobeToolType } from '@/types/tool/tool';
 
 import AgentSkillItem from './AgentSkillItem';
 import BuiltinSkillItem from './BuiltinSkillItem';
+import {
+  isBuiltinToolAvailableInDeployment,
+  isPlatformManagedBuiltinTool,
+} from './builtinToolVisibility';
 import ComposioSkillItem from './ComposioSkillItem';
 import LobehubSkillItem from './LobehubSkillItem';
 import { isConnectorSectionVisible } from './managedConnectorPresentation';
@@ -100,6 +104,10 @@ const LegacySkillList = memo<SkillListProps>(
 
     const isLobehubSkillEnabled = useServerConfigStore(serverConfigSelectors.enableLobehubSkill);
     const isComposioEnabled = useServerConfigStore(serverConfigSelectors.enableComposio);
+    const enterpriseCapabilities = useServerConfigStore(
+      serverConfigSelectors.enterpriseCapabilities,
+      isEqual,
+    );
     const storeLobehubSkillServers = useToolStore(lobehubSkillStoreSelectors.getServers, isEqual);
     const storeComposioServers = useToolStore(composioStoreSelectors.getServers, isEqual);
     const storePluginList = useToolStore(pluginSelectors.installedPluginMetaList, isEqual);
@@ -190,6 +198,20 @@ const LegacySkillList = memo<SkillListProps>(
       return !uninstalledBuiltinTools.includes(identifier);
     };
 
+    /**
+     * A builtin tool belongs in the list when it is not an internal helper
+     * (`hidden`) and the deployment actually has its backend. Capability-gated
+     * tools (DingTalk workspace / approval, enterprise lookup) fail closed, so a
+     * switched-off deployment never advertises a tool that cannot run.
+     *
+     * The admin catalog reports org-wide availability instead and is left as-is.
+     */
+    const isBuiltinToolListable = (tool: LobeBuiltinTool) => {
+      if (tool.hidden) return false;
+      if (adminScope) return true;
+      return isBuiltinToolAvailableInDeployment(tool.identifier, enterpriseCapabilities);
+    };
+
     // Separate skills into three categories:
     // 1. Integrations (Builtin, LobeHub and Composio skills)
     // 2. Community MCP Tools (type === 'plugin')
@@ -217,7 +239,7 @@ const LegacySkillList = memo<SkillListProps>(
         for (const skill of RECOMMENDED_SKILLS) {
           if (skill.type === RecommendedSkillType.Builtin) {
             const builtinTool = getBuiltinToolByIdentifier(skill.id);
-            if (builtinTool && !builtinTool.hidden) {
+            if (builtinTool && isBuiltinToolListable(builtinTool)) {
               integrationItems.push({ builtinTool, type: 'builtin' });
               addedBuiltinIds.add(skill.id);
             }
@@ -236,15 +258,17 @@ const LegacySkillList = memo<SkillListProps>(
           }
         }
 
-        // Also add installed builtin tools that are not in RECOMMENDED_SKILLS
+        // Also add the builtin tools that are not in RECOMMENDED_SKILLS. Users
+        // get them regardless of install state: everything outside the curated
+        // set defaults to uninstalled, so an installed-only list made tools like
+        // the calculator or Creds impossible to find — and therefore impossible
+        // to switch on. The row carries its own enable control.
+        // The admin catalog keeps reporting org-wide availability instead.
         for (const tool of allBuiltinTools) {
-          if (
-            !tool.hidden &&
-            isBuiltinToolInstalled(tool.identifier) &&
-            !addedBuiltinIds.has(tool.identifier)
-          ) {
-            integrationItems.push({ builtinTool: tool, type: 'builtin' });
-          }
+          if (!isBuiltinToolListable(tool) || addedBuiltinIds.has(tool.identifier)) continue;
+          if (adminScope && !isBuiltinToolInstalled(tool.identifier)) continue;
+          integrationItems.push({ builtinTool: tool, type: 'builtin' });
+          addedBuiltinIds.add(tool.identifier);
         }
 
         // Also add every other Lobehub skill provider so users can discover and
@@ -272,9 +296,9 @@ const LegacySkillList = memo<SkillListProps>(
           }
         }
       } else {
-        // Default behavior: add all non-hidden builtin tools
+        // Default behavior: add all listable builtin tools
         for (const tool of allBuiltinTools) {
-          if (!tool.hidden) {
+          if (isBuiltinToolListable(tool)) {
             integrationItems.push({ builtinTool: tool, type: 'builtin' });
           }
         }
@@ -312,6 +336,11 @@ const LegacySkillList = memo<SkillListProps>(
             return isBuiltinToolInstalled(item.builtinAgentSkill.identifier);
           }
           case 'builtin': {
+            // Administrator-governed tools are only listed while their capability
+            // flag is on, and the tools engine then runs them regardless of the
+            // per-user list — so they belong with the active ones.
+            if (!adminScope && isPlatformManagedBuiltinTool(item.builtinTool.identifier))
+              return true;
             return isBuiltinToolInstalled(item.builtinTool.identifier);
           }
           case 'lobehub': {
@@ -356,6 +385,7 @@ const LegacySkillList = memo<SkillListProps>(
       allBuiltinTools,
       uninstalledBuiltinTools,
       builtinSkills,
+      enterpriseCapabilities,
     ]);
 
     const hasAnySkills =

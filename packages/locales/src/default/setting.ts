@@ -3222,6 +3222,7 @@ When I am ___, I need ___
   'tools.skillEnabled.mandatory': 'Required by your organization',
   'tools.skillEnabled.off': 'Disabled',
   'tools.skillEnabled.on': 'Enabled',
+  'tools.skillEnabled.platformManaged': 'Enabled by your administrator',
   'tools.skillEnabled.saveFailed': 'Could not update the skill. Please try again.',
   'tools.skillEnabled.tooltip': 'Disabled skills cannot be invoked by the assistant',
   'tools.activation.auto': 'Auto',

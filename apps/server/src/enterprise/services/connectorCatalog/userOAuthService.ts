@@ -1,5 +1,6 @@
 import { randomBytes as cryptoRandomBytes, randomUUID } from 'node:crypto';
 
+import debug from 'debug';
 import type { z } from 'zod';
 
 import {
@@ -37,6 +38,10 @@ import type { ConnectorOAuthRuntimeDependencies } from './oauthRuntime';
 import { MANAGED_CONNECTOR_OAUTH_STATE_PREFIX } from './oauthRuntime';
 
 const AUTHORIZATION_TTL_MS = 9 * 60 * 1000;
+/** Catalog pages read while refilling around snapshots the public batch dropped. */
+const LIST_MANAGED_MAX_PAGE_FETCHES = 4;
+
+const log = debug('lobe-server:connector-oauth-user');
 
 type ListManagedInput = z.input<typeof userConnectorListManagedInputSchema>;
 type StartAuthorizationInput = z.input<typeof userConnectorStartAuthorizationInputSchema>;
@@ -62,33 +67,55 @@ export class UserConnectorOAuthService {
 
   listManaged = async (input: ListManagedInput) => {
     const command = userConnectorListManagedInputSchema.parse(input);
-    const page = await this.catalog.listConnectors({
-      cursor: command.cursor,
-      enabled: true,
-      limit: command.limit,
-      query: command.query,
-      status: 'published',
-    });
-    // Batch binding + published snapshot lookups once per page (no N+1).
-    const connectorIds = page.items.map((connector) => connector.id);
-    const [bindingsByConnectorId, publishedById] = await Promise.all([
-      this.bindings.getBindingsForConnectors(connectorIds),
-      this.read.getPublicPublishedBatch(connectorIds),
-    ]);
-    const items = page.items.map((connector) => {
-      const published = publishedById.get(connector.id);
-      if (!published) {
-        throw new PlatformConnectorContractError('PLATFORM_CONNECTOR_NOT_PUBLISHED');
+    const items: z.infer<typeof userConnectorListManagedOutputSchema>['items'] = [];
+    // String on the first page (client cursor); object after that (catalog tie-break).
+    let cursor: { connectorKey: string; id: string } | string | undefined = command.cursor;
+
+    for (let pageIndex = 0; pageIndex < LIST_MANAGED_MAX_PAGE_FETCHES; pageIndex += 1) {
+      const page = await this.catalog.listConnectors({
+        cursor,
+        enabled: true,
+        limit: command.limit,
+        query: command.query,
+        status: 'published',
+      });
+      // Batch binding + published snapshot lookups once per page (no N+1).
+      const connectorIds = page.items.map((connector) => connector.id);
+      const [bindingsByConnectorId, publishedById] = await Promise.all([
+        this.bindings.getBindingsForConnectors(connectorIds),
+        this.read.getPublicPublishedBatch(connectorIds),
+      ]);
+
+      for (const [index, connector] of page.items.entries()) {
+        const published = publishedById.get(connector.id);
+        if (!published) {
+          // Invalid snapshot or payload.connector.enabled === false. Skip this id only.
+          log('skip managed connector missing published snapshot connectorId=%s', connector.id);
+          continue;
+        }
+        items.push({
+          ...published,
+          binding: toBindingProjection(bindingsByConnectorId.get(connector.id)),
+        });
+        if (items.length >= command.limit) {
+          const more = index < page.items.length - 1 || page.nextCursor !== null;
+          return userConnectorListManagedOutputSchema.parse({
+            items,
+            nextCursor: more ? connector.connectorKey : null,
+          });
+        }
       }
-      return {
-        ...published,
-        binding: toBindingProjection(bindingsByConnectorId.get(connector.id)),
-      };
-    });
-    return userConnectorListManagedOutputSchema.parse({
-      items,
-      nextCursor: page.nextCursor?.connectorKey ?? null,
-    });
+
+      if (!page.nextCursor) {
+        return userConnectorListManagedOutputSchema.parse({ items, nextCursor: null });
+      }
+      // Keep the catalog cursor even when this page contributed no rows. Stopping
+      // here would hide every connector after the fetch bound.
+      cursor = page.nextCursor;
+    }
+
+    const nextCursor = cursor && typeof cursor !== 'string' ? cursor.connectorKey : null;
+    return userConnectorListManagedOutputSchema.parse({ items, nextCursor });
   };
 
   getAuthorizationStatus = async (input: GetAuthorizationStatusInput) => {

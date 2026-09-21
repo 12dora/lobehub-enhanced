@@ -1,6 +1,6 @@
 import { getComposioAppByIdentifier, getLobehubSkillProviderById } from '@lobechat/const';
 import { Button, confirmModal } from '@lobehub/ui/base-ui';
-import { PencilIcon, RefreshCwIcon, Trash2 } from 'lucide-react';
+import { DownloadIcon, PencilIcon, RefreshCwIcon, Trash2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,7 +8,11 @@ import { useTranslation } from 'react-i18next';
 import type { ConnectorToolPermission } from '@/database/schemas';
 import { ConnectorSourceType } from '@/database/schemas';
 import { useAdminToolScope } from '@/features/AdminToolScope';
+// Shared with the settings catalog list so the two surfaces cannot disagree
+// about which builtin tools the administrator governs.
+import { isPlatformManagedBuiltinTool } from '@/routes/(main)/settings/skill/features/builtinToolVisibility';
 import { useToolStore } from '@/store/tool';
+import { builtinToolSelectors } from '@/store/tool/selectors';
 import { connectorSelectors } from '@/store/tool/slices/connector';
 
 import CustomConnectorModal from '../CustomConnectorModal';
@@ -39,6 +43,7 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
     const storeResetConnectorPermissions = useToolStore((s) => s.resetConnectorPermissions);
     const disconnectConnector = useToolStore((s) => s.disconnectConnector);
     const storeDeleteConnector = useToolStore((s) => s.deleteConnector);
+    const installBuiltinTool = useToolStore((s) => s.installBuiltinTool);
     const uninstallBuiltinTool = useToolStore((s) => s.uninstallBuiltinTool);
     const uninstallMCPPlugin = useToolStore((s) => s.uninstallMCPPlugin);
     const fetchConnectors = useToolStore((s) => s.fetchConnectors);
@@ -76,6 +81,23 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
     const isMcpConnector = connector?.sourceType === ConnectorSourceType.custom;
     const isBuiltin = connector?.sourceType === ConnectorSourceType.builtin;
     const isMarketplace = connector?.sourceType === ConnectorSourceType.marketplace;
+
+    // Builtin tools are listed whether installed or not, so this header has to
+    // offer the matching action — Uninstall on an already-uninstalled tool was a
+    // no-op. `''` is never a real identifier; the selector short-circuits to
+    // "installed" and the buttons below are gated on `isBuiltin` anyway.
+    const isBuiltinInstalled = useToolStore(
+      builtinToolSelectors.isSkillEnabled(connector?.identifier ?? '', 'builtin'),
+    );
+    // Administrator-governed builtin tools have no per-user lifecycle at all:
+    // the tools engine keys them on the deployment capability flag.
+    const isPlatformManaged =
+      isBuiltin && isPlatformManagedBuiltinTool(connector?.identifier ?? '');
+
+    const handleInstall = () => {
+      if (!connector) return;
+      void installBuiltinTool(connector.identifier);
+    };
 
     const handleSync = useCallback(async () => {
       if (!connector) return;
@@ -242,12 +264,21 @@ const ConnectorDetail = memo<ConnectorDetailProps>(
                     </Button>
                   </>
                 )}
-                {/* Uninstall for builtin and marketplace tools */}
-                {(isBuiltin || isMarketplace) && (
+                {/* Lifecycle for builtin and marketplace tools. An administrator-
+                    governed builtin has none — say who owns the decision. */}
+                {isPlatformManaged ? (
+                  <span style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12 }}>
+                    {ts('tools.skillEnabled.platformManaged')}
+                  </span>
+                ) : isBuiltin && !isBuiltinInstalled ? (
+                  <Button icon={<DownloadIcon size={14} />} size="small" onClick={handleInstall}>
+                    {ts('tools.builtins.install')}
+                  </Button>
+                ) : isBuiltin || isMarketplace ? (
                   <Button danger icon={<Trash2 size={14} />} size="small" onClick={handleUninstall}>
                     {t('connector.uninstall')}
                   </Button>
-                )}
+                ) : null}
               </>
             ) : null}
           </div>

@@ -34,11 +34,13 @@ const mocks = vi.hoisted(() => ({
     deleteConnector: vi.fn(),
     disconnectConnector: vi.fn(),
     fetchConnectors: vi.fn(),
+    installBuiltinTool: vi.fn(),
     resetConnectorPermissions: vi.fn(),
     syncBuiltinTool: vi.fn(),
     syncConnectorTools: vi.fn(),
     syncPluginTools: vi.fn(),
     syncing: false,
+    uninstalledBuiltinTools: [] as string[],
     uninstallBuiltinTool: vi.fn(),
     uninstallMCPPlugin: vi.fn(),
     updateToolPermission: vi.fn(),
@@ -80,6 +82,15 @@ vi.mock('@lobehub/ui/base-ui', () => ({
 vi.mock('@/store/tool', () => ({
   useToolStore<T>(selector: (state: typeof mocks.toolState) => T): T {
     return selector(mocks.toolState);
+  },
+}));
+
+vi.mock('@/store/tool/selectors', () => ({
+  builtinToolSelectors: {
+    isSkillEnabled:
+      (identifier: string) =>
+      (state: typeof mocks.toolState): boolean =>
+        !state.uninstalledBuiltinTools.includes(identifier),
   },
 }));
 
@@ -157,6 +168,61 @@ describe('ConnectorDetail', () => {
       },
     ];
     mocks.toolState.syncing = false;
+    mocks.toolState.uninstalledBuiltinTools = [];
+  });
+
+  /**
+   * Builtin tools are listed whether or not they are installed, so the header
+   * has to offer the action that matches the row's actual state.
+   */
+  describe('builtin tool lifecycle', () => {
+    const mountBuiltin = (identifier: string) => {
+      mocks.toolState.connectors = [
+        {
+          id: 'connector-1',
+          identifier,
+          name: identifier,
+          sourceType: ConnectorSourceType.builtin,
+        },
+      ];
+      render(<ConnectorDetail connectorId="connector-1" />);
+    };
+
+    it('offers Uninstall while the builtin tool is installed', () => {
+      mountBuiltin('lobe-calculator');
+
+      expect(screen.getByRole('button', { name: 'connector.uninstall' })).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'tools.builtins.install' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('offers Install instead of a no-op Uninstall while it is uninstalled', () => {
+      mocks.toolState.uninstalledBuiltinTools = ['lobe-calculator'];
+      mountBuiltin('lobe-calculator');
+
+      expect(screen.queryByRole('button', { name: 'connector.uninstall' })).not.toBeInTheDocument();
+      screen.getByRole('button', { name: 'tools.builtins.install' }).click();
+
+      expect(mocks.toolState.installBuiltinTool).toHaveBeenCalledWith('lobe-calculator');
+    });
+
+    // Administrator-governed tools have no per-user lifecycle at all.
+    it.each(['lobe-dingtalk-approval', 'lobe-dingtalk-workspace', 'lobe-enterprise-lookup'])(
+      'replaces both actions with an administrator note for %s',
+      (identifier) => {
+        mocks.toolState.uninstalledBuiltinTools = [identifier];
+        mountBuiltin(identifier);
+
+        expect(
+          screen.queryByRole('button', { name: 'connector.uninstall' }),
+        ).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole('button', { name: 'tools.builtins.install' }),
+        ).not.toBeInTheDocument();
+        expect(screen.getByText('tools.skillEnabled.platformManaged')).toBeInTheDocument();
+      },
+    );
   });
 
   it('uses lifecycle actions instead of the generic marketplace uninstall action', () => {

@@ -23,6 +23,12 @@ export const styles = createStaticStyles(({ css, cssVar }) => ({
     font-size: 12px;
     color: ${cssVar.colorError};
   `,
+  /** Administrator-governed row: states why there is no control to operate. */
+  managedNote: css`
+    flex-shrink: 0;
+    font-size: 12px;
+    color: ${cssVar.colorTextTertiary};
+  `,
   icon: css`
     overflow: hidden;
     display: flex;

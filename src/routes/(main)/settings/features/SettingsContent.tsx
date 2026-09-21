@@ -64,10 +64,16 @@ const SettingsContent = ({ mobile, activeTab }: SettingsContentProps) => {
 
     const content = <Component {...componentProps} />;
     const managedResource = getManagedResourceForSettingsTab(tab);
-    // All managed resources (providers, models, skills, connectors) block
-    // ordinary user configuration when platform-managed. Direct deep links
-    // hit ManagedResourceBoundary here; route-level guards cover workspace paths.
-    if (managedResource) {
+    // Managed providers / models / skills block ordinary user configuration.
+    // Direct deep links hit ManagedResourceBoundary here; route-level guards
+    // cover workspace paths.
+    //
+    // Connectors are exempt: even fully managed, each user still has to
+    // authorize their own OAuth accounts, and the connector route already
+    // switches between that authorization list and the ordinary catalog on
+    // `useManagedResource('connectors')`. Blocking it here would strand users
+    // with no way to connect an account.
+    if (managedResource && tab !== SettingsTabs.Connector) {
       return (
         <ManagedResourceBoundary resource={managedResource}>{content}</ManagedResourceBoundary>
       );

@@ -148,10 +148,13 @@ describe('settings useCategory', () => {
     expect(getItemKeys()).not.toContain(SettingsTabs.Skill);
   });
 
-  it('hides Connector navigation when connectors are platform-managed', () => {
+  // Managed connectors still need each user to authorize their own OAuth
+  // accounts, so the entry has to stay reachable — the route decides which
+  // surface to render.
+  it('keeps Connector navigation when connectors are platform-managed', () => {
     managedResourcesRef.current.capabilities.connectors = true;
 
-    expect(getItemKeys()).not.toContain(SettingsTabs.Connector);
+    expect(getItemKeys()).toContain(SettingsTabs.Connector);
   });
 
   it('keeps Skill and Connector navigation when not platform-managed', () => {
@@ -184,6 +187,11 @@ describe('settings useCategory', () => {
     managedResourcesRef.current.loading = true;
 
     expect(getItemKeys()).not.toContain(SettingsTabs.Skill);
-    expect(getItemKeys()).not.toContain(SettingsTabs.Connector);
+  });
+
+  it('keeps Connector navigation while the capability snapshot is unavailable', () => {
+    managedResourcesRef.current.loading = true;
+
+    expect(getItemKeys()).toContain(SettingsTabs.Connector);
   });
 });

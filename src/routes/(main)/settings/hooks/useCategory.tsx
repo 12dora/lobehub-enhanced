@@ -77,13 +77,12 @@ export const useCategory = () => {
     managedResources,
   );
   const canConfigureModel = isManagedResourceConfigurationAvailable('aiModels', managedResources);
-  // Platform-managed skills/connectors hide ordinary user settings entries.
-  // Per-user OAuth (if needed later) must not reuse these config surfaces.
+  // Platform-managed skills hide the ordinary user settings entry — there is
+  // nothing left for a user to configure there.
+  // Connectors are different: managed deployments still need each user to
+  // authorize their own OAuth accounts, so the entry always stays. The route
+  // itself switches between the authorization list and the ordinary catalog.
   const canConfigureSkill = isManagedResourceConfigurationAvailable('skills', managedResources);
-  const canConfigureConnector = isManagedResourceConfigurationAvailable(
-    'connectors',
-    managedResources,
-  );
   const { hideDocs, showApiKeyManage, showProvider } = useServerConfigStore(featureFlagsSelectors);
   const [avatar, username] = useUserStore((s) => [
     userProfileSelectors.userAvatar(s),
@@ -183,7 +182,7 @@ export const useCategory = () => {
         key: SettingsTabs.Skill,
         label: t('tab.skill'),
       },
-      canConfigureConnector && {
+      {
         icon: Blocks,
         key: SettingsTabs.Connector,
         label: t('tab.connector'),
@@ -274,7 +273,6 @@ export const useCategory = () => {
     mobile,
     showApiKeyManage,
     showProvider,
-    canConfigureConnector,
     canConfigureModel,
     canConfigureProvider,
     canConfigureSkill,

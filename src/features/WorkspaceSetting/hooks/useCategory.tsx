@@ -58,10 +58,6 @@ export const useWorkspaceSettingCategory = (): WorkspaceSettingCategoryGroup[] =
   );
   const canConfigureModel = isManagedResourceConfigurationAvailable('aiModels', managedResources);
   const canConfigureSkill = isManagedResourceConfigurationAvailable('skills', managedResources);
-  const canConfigureConnector = isManagedResourceConfigurationAvailable(
-    'connectors',
-    managedResources,
-  );
 
   return useMemo(
     () =>
@@ -135,7 +131,9 @@ export const useWorkspaceSettingCategory = (): WorkspaceSettingCategoryGroup[] =
               key: WorkspaceSettingsTabs.Skill,
               label: t('workspaceSetting.tab.skill'),
             },
-            canConfigureConnector && {
+            // Always listed: platform-managed deployments still need each user
+            // to authorize their own OAuth accounts on this route.
+            {
               icon: Blocks,
               key: WorkspaceSettingsTabs.Connector,
               label: t('workspaceSetting.tab.connector'),
@@ -187,7 +185,6 @@ export const useWorkspaceSettingCategory = (): WorkspaceSettingCategoryGroup[] =
       canConfigureProvider,
       canConfigureModel,
       canConfigureSkill,
-      canConfigureConnector,
     ],
   );
 };

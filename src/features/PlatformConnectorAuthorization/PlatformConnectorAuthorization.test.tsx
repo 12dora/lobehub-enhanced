@@ -173,7 +173,7 @@ describe('PlatformConnectorAuthorization search sync', () => {
     );
   });
 
-  it('renders authorization from both production routes only when Connectors are managed', () => {
+  it('renders authorization on both production routes and keeps published connectors visible when unmanaged', () => {
     const personal = renderAt('/settings/connector');
     expect(screen.getByTestId('connector-card')).toBeTruthy();
     expect(
@@ -188,7 +188,8 @@ describe('PlatformConnectorAuthorization search sync', () => {
     managedResource.managed = false;
     const unmanaged = renderAt('/settings/connector');
     expect(screen.getByTestId('ordinary-tool-settings')).toBeTruthy();
-    expect(screen.queryByTestId('connector-card')).toBeNull();
+    // Published org connectors stay reachable next to the ordinary tool settings.
+    expect(screen.getByTestId('connector-card')).toBeTruthy();
     expect(
       unmanaged.container.querySelector('[data-managed-resource-state="content"]'),
     ).toBeTruthy();

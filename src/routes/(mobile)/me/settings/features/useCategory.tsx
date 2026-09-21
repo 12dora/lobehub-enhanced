@@ -65,10 +65,6 @@ export const useCategory = (): CategoryGroup[] => {
   );
   const canConfigureModel = isManagedResourceConfigurationAvailable('aiModels', managedResources);
   const canConfigureSkill = isManagedResourceConfigurationAvailable('skills', managedResources);
-  const canConfigureConnector = isManagedResourceConfigurationAvailable(
-    'connectors',
-    managedResources,
-  );
 
   return useMemo(() => {
     const navigateTo = (key: SettingsTabs) =>
@@ -129,8 +125,9 @@ export const useCategory = (): CategoryGroup[] => {
         }),
       canConfigureSkill &&
         makeItem({ icon: SkillsIcon, key: SettingsTabs.Skill, label: t('setting:tab.skill') }),
-      canConfigureConnector &&
-        makeItem({ icon: Blocks, key: SettingsTabs.Connector, label: t('setting:tab.connector') }),
+      // Always listed: platform-managed deployments still need each user to
+      // authorize their own OAuth accounts on this route.
+      makeItem({ icon: Blocks, key: SettingsTabs.Connector, label: t('setting:tab.connector') }),
       makeItem({ icon: BrainCircuit, key: SettingsTabs.Memory, label: t('setting:tab.memory') }),
       makeItem({ icon: KeyRound, key: SettingsTabs.Creds, label: t('setting:tab.creds') }),
       showApiKeyManage &&
@@ -170,6 +167,5 @@ export const useCategory = (): CategoryGroup[] => {
     canConfigureProvider,
     canConfigureModel,
     canConfigureSkill,
-    canConfigureConnector,
   ]);
 };
