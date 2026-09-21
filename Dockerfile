@@ -217,12 +217,16 @@ WORKDIR /app
 # source edits under packages/ and release version bumps no longer invalidate it.
 COPY --from=manifests /manifests/ ./
 
-RUN set -e && \
+# The pnpm store lives in a BuildKit cache mount: when manifests change, packages
+# already fetched by an earlier build are reused instead of downloaded again.
+RUN --mount=type=cache,id=aihub-pnpm-store,target=/pnpm-store,sharing=locked \
+    set -e && \
     if [ "${USE_CN_MIRROR:-false}" = "true" ]; then \
         export SENTRYCLI_CDNURL="https://npmmirror.com/mirrors/sentry-cli"; \
         npm config set registry "https://registry.npmmirror.com/"; \
         echo 'canvas_binary_host_mirror=https://npmmirror.com/mirrors/canvas' >> .npmrc; \
     fi && \
+    echo 'store-dir=/pnpm-store' >> .npmrc && \
     export COREPACK_NPM_REGISTRY=$(npm config get registry | sed 's/\/$//') && \
     npm i -g corepack@latest && \
     corepack enable && \
@@ -231,6 +235,7 @@ RUN set -e && \
     mkdir -p /deps && \
     cd /deps && \
     echo '{"name":"deps","private":true}' > package.json && \
+    echo 'store-dir=/pnpm-store' > .npmrc && \
     pnpm add pg drizzle-orm
 
 COPY . .
@@ -240,7 +245,12 @@ RUN pnpm exec tsx scripts/dockerPrebuild.mts
 RUN rm -rf src/app/desktop "src/app/(backend)/trpc/desktop"
 
 # run build standalone for docker version
-RUN npm run build:docker
+# `.next/cache` (the bundler's persistent cache) is a BuildKit cache mount, so a
+# source-only rebuild recompiles incrementally. Nothing from it ships in the image.
+# SPA_BUILD_CONCURRENCY>1 builds the three SPA bundles side by side (needs ~6 GB each).
+ARG SPA_BUILD_CONCURRENCY=1
+RUN --mount=type=cache,id=aihub-next-cache,target=/app/.next/cache,sharing=locked \
+    SPA_BUILD_CONCURRENCY=${SPA_BUILD_CONCURRENCY} npm run build:docker
 
 ## Application image, copy all the files for production
 FROM busybox:latest AS app
