@@ -200,6 +200,37 @@ export const messageRouter = router({
       });
     }),
 
+  /**
+   * Single-winner cancel of a pending tool approval.
+   *
+   * Delegates to the compare-and-swap in `MessageModel.rejectPendingMessagePlugin`,
+   * which flips the row only while it is still `status = 'pending'` **and**
+   * `kind = 'approval'`, and writes `reason` into the tool `content` in the same
+   * transaction. That makes the cancel atomic and mutually exclusive with an
+   * approve: `success = false` means the user lost the race (already approved or
+   * rejected, not their message, or a human-answer tool), so the caller must
+   * reconcile from the server instead of showing the action as cancelled.
+   *
+   * `reason` becomes the tool result the model reads on the next turn, hence the
+   * bounded length rather than free-form text.
+   */
+  cancelPendingApproval: messageProcedure
+    .use(withScopedPermission('message:update'))
+    .input(
+      z.object({
+        id: z.string().min(1),
+        reason: z.string().min(1).max(2000),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const success = await ctx.messageModel.rejectPendingMessagePlugin(input.id, {
+        content: input.reason,
+        rejectedReason: input.reason,
+      });
+
+      return { success };
+    }),
+
   listAll: messageProcedure
     .input(
       z

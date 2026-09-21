@@ -44,10 +44,18 @@ export class ToolActionImpl {
     }
   };
 
-  cancelToolInteraction = async (toolMessageId: string): Promise<void> => {
+  /**
+   * Cancel a pending intervention without letting the assistant reply.
+   *
+   * `reason` is persisted as the tool result the model reads on the user's next
+   * turn, so callers pass a model-facing English sentence rather than localized
+   * UI copy. Passing this conversation's own `context` keeps the write on the
+   * card's agent / topic instead of whatever conversation is on screen.
+   */
+  cancelToolInteraction = async (toolMessageId: string, reason?: string): Promise<void> => {
     const { context } = this.#get();
     const chatStore = useChatStore.getState();
-    await chatStore.cancelToolInteraction(toolMessageId, context);
+    await chatStore.cancelToolInteraction(toolMessageId, reason, context);
   };
 
   rejectAndContinueToolCall = async (toolMessageId: string, reason?: string): Promise<void> => {

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { lambdaClient } from '@/libs/trpc/client';
 import { heterogeneousAgentService } from '@/services/electron/heterogeneousAgent';
+import { messageService } from '@/services/message';
 
 import { useChatStore } from '../../../../store';
 import { messageMapKey } from '../../../../utils/messageMapKey';
@@ -2051,6 +2052,274 @@ describe('ConversationControl actions', () => {
 
       expect(internal_createAgentStateSpy).not.toHaveBeenCalled();
       expect(executeClientAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cancelToolInteraction', () => {
+    const agentId = 'cancel-agent';
+    const topicId = 'cancel-topic';
+    const chatKey = messageMapKey({ agentId, topicId });
+    const REASON = 'The user cancelled this action. It was not executed.';
+
+    /**
+     * One assistant message owning two pending `approval`-kind tool calls, so
+     * every case can also assert the sibling is left alone.
+     */
+    const seedPendingPair = (options?: { kind?: 'approval' | 'toolResult' }) => {
+      const { result } = renderHook(() => useChatStore());
+      const kind = options?.kind ?? 'approval';
+      const updateTopicStatus = vi.fn().mockResolvedValue(undefined);
+
+      const assistantMessage = createMockMessage({ id: 'assistant-msg-1', role: 'assistant' });
+      const toolMessage = createMockMessage({
+        id: 'tool-msg-1',
+        parentId: assistantMessage.id,
+        pluginIntervention: { kind, status: 'pending' },
+        role: 'tool',
+        tool_call_id: 'call_1',
+      } as any);
+      const siblingToolMessage = createMockMessage({
+        id: 'tool-msg-2',
+        parentId: assistantMessage.id,
+        pluginIntervention: { kind, status: 'pending' },
+        role: 'tool',
+        tool_call_id: 'call_2',
+      } as any);
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          activeTopicId: topicId,
+          activeThreadId: undefined,
+          dbMessagesMap: { [chatKey]: [assistantMessage, toolMessage, siblingToolMessage] },
+          messagesMap: { [chatKey]: [assistantMessage, toolMessage, siblingToolMessage] },
+          updateTopicStatus,
+        });
+      });
+
+      return { result, updateTopicStatus };
+    };
+
+    /** Leave `tool-msg-1` as the only pending approval in the bucket. */
+    const dropSibling = () => {
+      act(() => {
+        const messages = (useChatStore.getState().dbMessagesMap[chatKey] ?? []).filter(
+          (m) => m.id !== 'tool-msg-2',
+        );
+        useChatStore.setState({
+          dbMessagesMap: { [chatKey]: messages },
+          messagesMap: { [chatKey]: messages },
+        });
+      });
+    };
+
+    const spyCancelPath = (result: { current: ReturnType<typeof useChatStore.getState> }) => ({
+      dispatch: vi.spyOn(result.current, 'internal_dispatchMessage').mockReturnValue(undefined),
+      executeClientAgent: vi
+        .spyOn(result.current, 'executeClientAgent')
+        .mockResolvedValue(undefined),
+      executeGatewayAgent: vi
+        .spyOn(result.current, 'executeGatewayAgent')
+        .mockResolvedValue({} as any),
+      refreshMessages: vi.spyOn(result.current, 'refreshMessages').mockResolvedValue(undefined),
+      updatePlugin: vi
+        .spyOn(result.current, 'optimisticUpdateMessagePlugin')
+        .mockResolvedValue(undefined),
+      updateContent: vi
+        .spyOn(result.current, 'optimisticUpdateMessageContent')
+        .mockResolvedValue(undefined),
+      createMessage: vi
+        .spyOn(result.current, 'optimisticCreateMessage')
+        .mockResolvedValue(undefined as any),
+    });
+
+    const cancelOperations = () =>
+      Object.values(useChatStore.getState().operations).filter(
+        (op) => op.type === 'cancelToolInteraction',
+      );
+
+    it('persists through the server compare-and-swap, then projects it locally', async () => {
+      const { result } = seedPendingPair();
+      const spies = spyCancelPath(result);
+      const cas = vi
+        .spyOn(messageService, 'cancelPendingApproval')
+        .mockResolvedValue({ success: true });
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1', REASON);
+      });
+
+      // Single atomic write: content + rejectedReason land in one transaction,
+      // and the client never re-writes the plugin JSON (which would drop `kind`).
+      expect(cas).toHaveBeenCalledWith('tool-msg-1', REASON);
+      expect(spies.updatePlugin).not.toHaveBeenCalled();
+      expect(spies.updateContent).not.toHaveBeenCalled();
+
+      const intervention = { rejectedReason: REASON, status: 'rejected' };
+      expect(spies.dispatch).toHaveBeenCalledWith(
+        { id: 'tool-msg-1', type: 'updateMessagePlugin', value: { intervention } },
+        expect.objectContaining({ operationId: expect.any(String) }),
+      );
+      expect(spies.dispatch).toHaveBeenCalledWith(
+        { id: 'tool-msg-1', type: 'updateMessage', value: { content: REASON } },
+        expect.anything(),
+      );
+      // The parent assistant group renders its own copy of the tool payload.
+      expect(spies.dispatch).toHaveBeenCalledWith(
+        {
+          id: 'assistant-msg-1',
+          type: 'updateMessageTools',
+          tool_call_id: 'call_1',
+          value: { intervention },
+        },
+        expect.anything(),
+      );
+
+      // No reply: no local run, no gateway resume, no synthetic user message.
+      expect(spies.executeClientAgent).not.toHaveBeenCalled();
+      expect(spies.executeGatewayAgent).not.toHaveBeenCalled();
+      expect(spies.createMessage).not.toHaveBeenCalled();
+
+      // The sibling tool call is never touched.
+      expect(spies.dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tool-msg-2' }),
+        expect.anything(),
+      );
+
+      expect(spies.refreshMessages).toHaveBeenCalled();
+      expect(cancelOperations()[0].status).toBe('completed');
+    });
+
+    it('does not show the action as cancelled when it loses the race to an approve', async () => {
+      const { result, updateTopicStatus } = seedPendingPair();
+      const spies = spyCancelPath(result);
+      vi.spyOn(messageService, 'cancelPendingApproval').mockResolvedValue({ success: false });
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1', REASON);
+      });
+
+      // Nothing local flips, so the card reflects the approve rather than
+      // disappearing while the row is still executable.
+      expect(spies.dispatch).not.toHaveBeenCalled();
+      expect(updateTopicStatus).not.toHaveBeenCalled();
+      // The server is authoritative now — re-read it.
+      expect(spies.refreshMessages).toHaveBeenCalled();
+      expect(cancelOperations()[0].status).toBe('completed');
+    });
+
+    it('keeps the card pending and fails the operation when the persist errors', async () => {
+      const { result } = seedPendingPair();
+      const spies = spyCancelPath(result);
+      vi.spyOn(messageService, 'cancelPendingApproval').mockRejectedValue(new Error('offline'));
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1', REASON);
+      });
+
+      expect(spies.dispatch).not.toHaveBeenCalled();
+      const [operation] = cancelOperations();
+      expect(operation.status).toBe('failed');
+      expect(operation.metadata.error).toEqual(
+        expect.objectContaining({ message: 'offline', type: 'cancelToolInteraction' }),
+      );
+    });
+
+    it('keeps human-answer (toolResult) tools on the legacy optimistic path', async () => {
+      const { result } = seedPendingPair({ kind: 'toolResult' });
+      const spies = spyCancelPath(result);
+      const cas = vi.spyOn(messageService, 'cancelPendingApproval');
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1');
+      });
+
+      // The approval CAS refuses `toolResult` rows, so the ask-user cancel must
+      // not route through it — and its default copy stays unchanged.
+      expect(cas).not.toHaveBeenCalled();
+      expect(spies.updatePlugin).toHaveBeenCalledWith(
+        'tool-msg-1',
+        { intervention: { rejectedReason: 'User cancelled interaction', status: 'rejected' } },
+        expect.anything(),
+      );
+      expect(spies.updateContent).toHaveBeenCalledWith(
+        'tool-msg-1',
+        'User cancelled this interaction.',
+        undefined,
+        expect.anything(),
+      );
+      expect(cancelOperations()[0].status).toBe('completed');
+    });
+
+    it('carries the full conversation context so group buckets resolve', async () => {
+      const { result } = seedPendingPair();
+      spyCancelPath(result);
+      vi.spyOn(messageService, 'cancelPendingApproval').mockResolvedValue({ success: true });
+
+      const groupContext = {
+        agentId,
+        groupId: 'group-1',
+        scope: 'group',
+        threadId: null,
+        topicId,
+      } as unknown as ConversationContext;
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1', REASON, groupContext);
+      });
+
+      expect(cancelOperations()[0].context).toEqual(
+        expect.objectContaining({
+          agentId,
+          groupId: 'group-1',
+          messageId: 'tool-msg-1',
+          scope: 'group',
+          topicId,
+        }),
+      );
+    });
+
+    it('leaves the topic waiting for human while a sibling approval is still pending', async () => {
+      const { result, updateTopicStatus } = seedPendingPair();
+      spyCancelPath(result);
+      vi.spyOn(messageService, 'cancelPendingApproval').mockResolvedValue({ success: true });
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1', REASON);
+      });
+
+      // Flipping to `active` here would drop the sidebar's pending marker while
+      // the sibling card is still on screen.
+      expect(updateTopicStatus).not.toHaveBeenCalled();
+    });
+
+    it('clears the waiting status once it resolves the last pending approval', async () => {
+      const { result, updateTopicStatus } = seedPendingPair();
+      dropSibling();
+      spyCancelPath(result);
+      vi.spyOn(messageService, 'cancelPendingApproval').mockResolvedValue({ success: true });
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('tool-msg-1', REASON);
+      });
+
+      expect(updateTopicStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId, status: 'active', topicId }),
+      );
+    });
+
+    it('is a no-op for an unknown tool message', async () => {
+      const { result } = seedPendingPair();
+      const spies = spyCancelPath(result);
+      const cas = vi.spyOn(messageService, 'cancelPendingApproval');
+
+      await act(async () => {
+        await result.current.cancelToolInteraction('missing-msg', REASON);
+      });
+
+      expect(cas).not.toHaveBeenCalled();
+      expect(spies.dispatch).not.toHaveBeenCalled();
+      expect(cancelOperations()).toHaveLength(0);
     });
   });
 

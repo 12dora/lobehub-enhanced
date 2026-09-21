@@ -540,4 +540,63 @@ describe('messageRouter', () => {
       expect(mockQuery).toHaveBeenCalledWith({ topicId: 'shared-topic' }, {});
     });
   });
+
+  describe('cancelPendingApproval', () => {
+    const CANCEL_REASON = 'The user cancelled this action. It was not executed.';
+
+    const callerFor = () => messageRouter.createCaller({ serverDB: {}, userId: 'user1' } as never);
+
+    const mockCas = (result: boolean | Error) => {
+      const rejectPendingMessagePlugin = vi.fn(() =>
+        result instanceof Error ? Promise.reject(result) : Promise.resolve(result),
+      );
+      vi.mocked(MessageModel).mockImplementation(() => ({ rejectPendingMessagePlugin }) as any);
+      return rejectPendingMessagePlugin;
+    };
+
+    it('delegates to the ownership-scoped compare-and-swap and reports the winner', async () => {
+      const rejectPendingMessagePlugin = mockCas(true);
+
+      const result = await callerFor().cancelPendingApproval({
+        id: 'msg-1',
+        reason: CANCEL_REASON,
+      });
+
+      // Ownership comes from the model's own userId/workspace predicates, so a
+      // caller can never cancel somebody else's approval.
+      expect(MessageModel).toHaveBeenCalledWith({}, 'user1', undefined);
+      // content and rejectedReason are written in the same transaction.
+      expect(rejectPendingMessagePlugin).toHaveBeenCalledWith('msg-1', {
+        content: CANCEL_REASON,
+        rejectedReason: CANCEL_REASON,
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it('reports failure when the row is no longer a pending approval', async () => {
+      // false covers every fail-closed case of the CAS: already approved or
+      // rejected, another user's message, or a human-answer (`toolResult`) tool.
+      mockCas(false);
+
+      await expect(
+        callerFor().cancelPendingApproval({ id: 'msg-1', reason: CANCEL_REASON }),
+      ).resolves.toEqual({ success: false });
+    });
+
+    it('rejects an empty or oversized reason before touching the database', async () => {
+      const rejectPendingMessagePlugin = mockCas(true);
+
+      await expect(
+        callerFor().cancelPendingApproval({ id: 'msg-1', reason: '' }),
+      ).rejects.toBeDefined();
+      await expect(
+        callerFor().cancelPendingApproval({ id: 'msg-1', reason: 'x'.repeat(2001) }),
+      ).rejects.toBeDefined();
+      await expect(
+        callerFor().cancelPendingApproval({ id: '', reason: CANCEL_REASON }),
+      ).rejects.toBeDefined();
+
+      expect(rejectPendingMessagePlugin).not.toHaveBeenCalled();
+    });
+  });
 });

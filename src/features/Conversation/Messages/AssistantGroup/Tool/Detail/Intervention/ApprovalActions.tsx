@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { useUserStore } from '@/store/user';
 
 import { useConversationStore } from '../../../../../store';
+import CancelInterventionButton, { CANCEL_INTERVENTION_REASON } from './CancelInterventionButton';
 import { type ApprovalMode } from './index';
 
 interface ApprovalActionsProps {
@@ -27,13 +28,29 @@ interface ApprovalActionsProps {
 
 type Choice = 'approve' | 'approve-remember' | 'reject';
 
+/**
+ * Which request is in flight. One lock for approve / reject / cancel: each of
+ * them resolves the same tool call on the server, so a second decision fired
+ * while the first is still travelling could execute an action the user believes
+ * they cancelled (or vice versa).
+ */
+type Busy = 'cancel' | 'submit' | null;
+
+/**
+ * Overlays that own the keyboard while open — a card shortcut (Esc above all)
+ * must never fire underneath one.
+ */
+const KEYBOARD_OWNING_OVERLAY_SELECTOR =
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
+
 const styles = createStaticStyles(({ css, cssVar }) => ({
   container: css`
     width: 100%;
   `,
   footer: css`
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
     margin-block-start: 8px;
   `,
   number: css`
@@ -131,10 +148,15 @@ const ApprovalActions = memo<ApprovalActionsProps>(
     const { t } = useTranslation('chat');
     const [choice, setChoice] = useState<Choice>('approve');
     const [reason, setReason] = useState('');
-    const [loading, setLoading] = useState(false);
+    const [busy, setBusy] = useState<Busy>(null);
     const rejectInputRef = useRef<HTMLInputElement>(null);
+    // `busy` only commits on the next render; this ref closes the same-tick
+    // window where a double click / click + Esc would start two decisions.
+    const inFlightRef = useRef(false);
 
+    const isBusy = busy !== null;
     const isMessageCreating = messageId.startsWith('tmp_');
+    const isLocked = isBusy || isMessageCreating;
     const isAllowListMode = approvalMode === 'allow-list';
 
     // Ordered choices drive both the numbered rows and the 1/2/3 shortcuts.
@@ -145,15 +167,18 @@ const ApprovalActions = memo<ApprovalActionsProps>(
       [isAllowListMode],
     );
 
-    const [approveToolCall, rejectAndContinueToolCall] = useConversationStore((s) => [
-      s.approveToolCall,
-      s.rejectAndContinueToolCall,
-    ]);
+    const [approveToolCall, cancelToolInteraction, rejectAndContinueToolCall] =
+      useConversationStore((s) => [
+        s.approveToolCall,
+        s.cancelToolInteraction,
+        s.rejectAndContinueToolCall,
+      ]);
     const addToolToAllowList = useUserStore((s) => s.addToolToAllowList);
 
     const handleSubmit = useCallback(async () => {
-      if (loading || isMessageCreating) return;
-      setLoading(true);
+      if (isLocked || inFlightRef.current) return;
+      inFlightRef.current = true;
+      setBusy('submit');
       try {
         if (choice === 'reject') {
           await rejectAndContinueToolCall(messageId, reason.trim() || undefined);
@@ -172,7 +197,8 @@ const ApprovalActions = memo<ApprovalActionsProps>(
           }
         }
       } finally {
-        setLoading(false);
+        inFlightRef.current = false;
+        setBusy(null);
       }
     }, [
       addToolToAllowList,
@@ -182,13 +208,33 @@ const ApprovalActions = memo<ApprovalActionsProps>(
       choice,
       identifier,
       isAllowListMode,
-      isMessageCreating,
-      loading,
+      isLocked,
       messageId,
       onBeforeApprove,
       reason,
       rejectAndContinueToolCall,
     ]);
+
+    /**
+     * Esc — cancel this action. Resolves the tool call and stops there: no
+     * assistant reply, unlike the numbered "Reject" option which is an explicit
+     * "reject and let the assistant respond". Shared with the footer's X, and
+     * under the same lock as Submit — the server resolves the tool call once, so
+     * two decisions must never be in flight together.
+     */
+    const handleCancel = useCallback(async () => {
+      if (isLocked || inFlightRef.current) return;
+      inFlightRef.current = true;
+      setBusy('cancel');
+      try {
+        await cancelToolInteraction(messageId, CANCEL_INTERVENTION_REASON);
+      } finally {
+        // A cancel that wins drops this intervention out of the pending list, so
+        // this may run after unmount — a no-op in React.
+        inFlightRef.current = false;
+        setBusy(null);
+      }
+    }, [cancelToolInteraction, isLocked, messageId]);
 
     // When choice flips to reject (via click on row, '2', or arrow), pull focus
     // into the inline input so the user can start typing the reason immediately.
@@ -209,11 +255,17 @@ const ApprovalActions = memo<ApprovalActionsProps>(
     useEffect(() => {
       onKeyDownRef.current = (e: KeyboardEvent) => {
         if (e.defaultPrevented) return;
+        // Never hijack a keystroke the user is aiming somewhere else: text entry
+        // (chat composer, this card's own reject-reason input — which handles Esc
+        // itself to leave reason mode), IME composition, or an overlay that owns
+        // the keyboard while it is open.
         const target = e.target as HTMLElement | null;
         if (target) {
           const tag = target.tagName;
           if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return;
         }
+        if (target instanceof Element && target.closest(KEYBOARD_OWNING_OVERLAY_SELECTOR)) return;
+        if (e.isComposing || e.keyCode === 229) return;
         if (e.metaKey || e.ctrlKey || e.altKey) return;
         // Digit keys select the matching numbered row directly.
         if (/^[1-9]$/.test(e.key)) {
@@ -242,10 +294,16 @@ const ApprovalActions = memo<ApprovalActionsProps>(
             void handleSubmit();
             break;
           }
+          case 'Escape': {
+            if (isLocked) return;
+            e.preventDefault();
+            void handleCancel();
+            break;
+          }
           // No default
         }
       };
-    }, [choices, handleSubmit]);
+    }, [choices, handleCancel, handleSubmit, isLocked]);
 
     // One registration per mount: the shared arbiter dispatches each keypress
     // to exactly one pending card (containment first, then newest
@@ -277,6 +335,14 @@ const ApprovalActions = memo<ApprovalActionsProps>(
         const prev = choices[idx - 1];
         if (prev) setChoice(prev);
         rejectInputRef.current?.blur();
+      } else if (e.key === 'Escape') {
+        // Inside the reason input Esc only leaves reason mode — it must not
+        // cancel the whole action. `preventDefault` also stops the shared
+        // arbiter from treating this as a card-level Esc.
+        if (e.nativeEvent.isComposing) return;
+        e.preventDefault();
+        setChoice(choices[0]);
+        rejectInputRef.current?.blur();
       }
     };
 
@@ -307,7 +373,7 @@ const ApprovalActions = memo<ApprovalActionsProps>(
                   <input
                     aria-label={t('tool.intervention.rejectReasonPlaceholder')}
                     className={styles.rejectInput}
-                    disabled={loading || isMessageCreating}
+                    disabled={isLocked}
                     placeholder={t('tool.intervention.rejectReasonPlaceholder')}
                     ref={rejectInputRef}
                     type="text"
@@ -337,10 +403,22 @@ const ApprovalActions = memo<ApprovalActionsProps>(
         </div>
 
         <div className={styles.footer}>
+          {/*
+            Cancel lives here rather than in a host header so it renders for
+            exactly the cards that offer approve / reject — builtin intervention
+            renderers, the raw-JSON fallback and the error-boundary fallback.
+            Custom interactions (ask-user …) never mount ApprovalActions and keep
+            their own close / skip affordance and their own Esc handling.
+          */}
+          <CancelInterventionButton
+            disabled={isLocked}
+            loading={busy === 'cancel'}
+            onCancel={handleCancel}
+          />
           <Button
             className={styles.submitButton}
-            disabled={isMessageCreating}
-            loading={loading}
+            disabled={isLocked}
+            loading={busy === 'submit'}
             size={'middle'}
             type={'primary'}
             onClick={handleSubmit}

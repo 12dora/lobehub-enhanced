@@ -76,6 +76,18 @@ export class MessageService {
     return lambdaClient.message.createMessage.mutate(params as any);
   };
 
+  /**
+   * Cancel a pending tool approval through the server's compare-and-swap.
+   *
+   * `reason` is persisted as the tool result the model reads next turn. Resolves
+   * `{ success: false }` — rather than throwing — when the row is no longer a
+   * pending approval (already approved / rejected elsewhere), so the caller can
+   * reconcile from the server instead of claiming the action was cancelled.
+   */
+  cancelPendingApproval = async (id: string, reason: string): Promise<{ success: boolean }> => {
+    return lambdaClient.message.cancelPendingApproval.mutate({ id, reason });
+  };
+
   getMessages = async (params: MessageQueryContext): Promise<UIChatMessage[]> => {
     const data = await lambdaClient.message.getMessages.query(params);
 

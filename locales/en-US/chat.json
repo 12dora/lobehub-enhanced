@@ -219,7 +219,6 @@
   "gatewayMode.desc": "Run agents in the cloud through Agent Gateway. Tasks keep running even after you close the page.",
   "generatedFileUploadFailed": "Failed to save the generated file {{name}}. Please try again.",
   "globalApproval.cancel": "Cancel this action",
-  "globalApproval.cancelReason": "The user cancelled this action.",
   "globalApproval.collapse": "Collapse",
   "globalApproval.goToConversation": "Open conversation",
   "globalApproval.moreCount_one": "{{count}} more pending",

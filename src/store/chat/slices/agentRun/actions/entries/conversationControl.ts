@@ -2,14 +2,17 @@
 import { type AgentRuntimeContext } from '@lobechat/agent-runtime';
 import { MESSAGE_CANCEL_FLAT } from '@lobechat/const';
 import {
+  type ChatToolPayload,
   type ChatTopicStatus,
   type ConversationContext,
   type MessageMetadata,
+  type ToolIntervention,
   type UIChatMessage,
 } from '@lobechat/types';
 
 import { type ChatInputEditor } from '@/features/ChatInput';
 import { lambdaClient } from '@/libs/trpc/client';
+import { messageService } from '@/services/message';
 import { getAgentStoreState } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { displayMessageSelectors } from '@/store/chat/selectors';
@@ -203,6 +206,72 @@ export class ConversationControlActionImpl {
     void statusWrite?.catch((error) => {
       console.error('[conversationControl] updateTopicStatus failed:', error);
     });
+  };
+
+  /**
+   * Whether another tool call in this conversation is still waiting for the user.
+   *
+   * Resolving one card must not clear the topic's `waitingForHuman` marker while a
+   * sibling approval is still on screen — the sidebar's pending bucket keys off
+   * that status, so flipping it to `active` too early hides a conversation that
+   * still needs an answer.
+   */
+  #hasOtherPendingIntervention = (
+    context: ConversationContext,
+    excludeMessageId: string,
+  ): boolean => {
+    const messages = this.#get().dbMessagesMap[messageMapKey(context)] ?? [];
+
+    return messages.some((message) => {
+      if (message.role === 'tool')
+        return message.id !== excludeMessageId && message.pluginIntervention?.status === 'pending';
+
+      // Tools nested in an assistant group's blocks carry their own intervention.
+      return (message.children ?? []).some((block) =>
+        (block.tools ?? []).some(
+          (tool) =>
+            tool.result_msg_id !== excludeMessageId && tool.intervention?.status === 'pending',
+        ),
+      );
+    });
+  };
+
+  /**
+   * Local-only projection of a settled cancel: the tool row's intervention +
+   * content, plus the copy the parent assistant group renders from. Used after the
+   * server compare-and-swap has already committed, so it must not issue further
+   * writes — a second `updateMessagePlugin` would overwrite the whole plugin JSON
+   * and drop the server-owned `intervention.kind`.
+   */
+  #dispatchCancelledIntervention = (
+    toolMessageId: string,
+    intervention: ToolIntervention,
+    content: string,
+    optimisticContext: OptimisticUpdateContext,
+  ): void => {
+    const { internal_dispatchMessage } = this.#get();
+    const toolMessage = dbMessageSelectors.getDbMessageById(toolMessageId)(this.#get());
+
+    internal_dispatchMessage(
+      { id: toolMessageId, type: 'updateMessagePlugin', value: { intervention } },
+      optimisticContext,
+    );
+    internal_dispatchMessage(
+      { id: toolMessageId, type: 'updateMessage', value: { content } },
+      optimisticContext,
+    );
+
+    if (toolMessage?.parentId && toolMessage.tool_call_id) {
+      internal_dispatchMessage(
+        {
+          id: toolMessage.parentId,
+          type: 'updateMessageTools',
+          tool_call_id: toolMessage.tool_call_id,
+          value: { intervention } as Partial<ChatToolPayload>,
+        },
+        optimisticContext,
+      );
+    }
   };
 
   stopGenerateMessage = (): void => {
@@ -883,11 +952,43 @@ export class ConversationControlActionImpl {
     }
   };
 
+  /**
+   * Cancel one pending tool interaction **without resuming the run**.
+   *
+   * Unlike `rejectToolCalling` / `rejectAndContinueToolCalling`, this never
+   * starts a follow-up turn: no synthetic user message, no `executeClientAgent`,
+   * and deliberately no gateway `resumeApproval` op (a `rejected` /
+   * `rejected_continue` decision always lands the server in `phase: 'user_input'`,
+   * i.e. the assistant would answer). The user gets silence, which is what a
+   * cancel means.
+   *
+   * The model still learns about it on the user's *next* turn: only the tool
+   * message `content` reaches the LLM (`pluginIntervention` is stripped by
+   * MessageCleanup), so `reason` is written to **both** the content and
+   * `intervention.rejectedReason`. Callers therefore pass a model-facing English
+   * sentence, not localized copy.
+   *
+   * Sibling pending tool calls of the same assistant message are untouched — one
+   * cancel resolves one row.
+   *
+   * **Single winner.** For `approval`-kind rows the persist goes through the
+   * server's compare-and-swap (`message.cancelPendingApproval` →
+   * `MessageModel.rejectPendingMessagePlugin`), which flips the row only while it
+   * is still pending and writes the content in the same transaction. Local state
+   * is touched *only after* that commits, so a cancel racing an approve either
+   * wins outright or shows the approve's outcome — never a card that looks
+   * cancelled while the DB row is still approvable. On failure the card stays
+   * pending and the operation fails, rather than silently disappearing.
+   *
+   * Human-ANSWER tools (ask-user …) carry `kind: 'toolResult'`, which that CAS
+   * deliberately refuses, so they keep the original optimistic path.
+   */
   cancelToolInteraction = async (
     toolMessageId: string,
+    reason?: string,
     context?: ConversationContext,
   ): Promise<void> => {
-    const { startOperation, completeOperation } = this.#get();
+    const { startOperation, completeOperation, failOperation, refreshMessages } = this.#get();
 
     const effectiveContext: ConversationContext = context ?? {
       agentId: this.#get().activeAgentId,
@@ -895,41 +996,77 @@ export class ConversationControlActionImpl {
       threadId: this.#get().activeThreadId,
     };
 
-    const { agentId, topicId, threadId, scope } = effectiveContext;
-
     const toolMessage = dbMessageSelectors.getDbMessageById(toolMessageId)(this.#get());
     if (!toolMessage) return;
 
     const { operationId } = startOperation({
       type: 'cancelToolInteraction',
+      // Carry the full effective context (groupId / documentId / scope / …) so the
+      // optimistic dispatch and `replaceMessages` land in the same messageMapKey
+      // bucket the UI reads. Mirrors approveToolCalling.
       context: {
-        agentId,
-        topicId: topicId ?? undefined,
-        threadId: threadId ?? undefined,
-        scope,
+        ...effectiveContext,
         messageId: toolMessageId,
       },
     });
 
-    const optimisticContext = { operationId };
+    const optimisticContext: OptimisticUpdateContext = { operationId };
+    const content = reason ?? 'User cancelled this interaction.';
+    const intervention: ToolIntervention = {
+      rejectedReason: reason ?? 'User cancelled interaction',
+      status: 'rejected',
+    };
 
-    this.#writeTopicStatus(effectiveContext, 'active');
+    // Only the server-owned `approval` kind is eligible for the CAS; a missing
+    // kind (legacy row) also falls back so old data keeps working.
+    const isApprovalKind = toolMessage.pluginIntervention?.kind === 'approval';
 
-    await this.#get().optimisticUpdateMessagePlugin(
-      toolMessageId,
-      { intervention: { rejectedReason: 'User cancelled interaction', status: 'rejected' } },
-      optimisticContext,
-    );
+    try {
+      if (isApprovalKind) {
+        const result = await messageService.cancelPendingApproval(toolMessageId, content);
 
-    const toolContent = 'User cancelled this interaction.';
-    await this.#get().optimisticUpdateMessageContent(
-      toolMessageId,
-      toolContent,
-      undefined,
-      optimisticContext,
-    );
+        if (result?.success) {
+          this.#dispatchCancelledIntervention(
+            toolMessageId,
+            intervention,
+            content,
+            optimisticContext,
+          );
+          if (!this.#hasOtherPendingIntervention(effectiveContext, toolMessageId)) {
+            this.#writeTopicStatus(effectiveContext, 'active');
+          }
+        }
 
-    completeOperation(operationId);
+        // Either way the server is authoritative now: re-read so a lost race
+        // (approved elsewhere) surfaces the real outcome instead of vanishing.
+        await refreshMessages(effectiveContext);
+      } else {
+        if (!this.#hasOtherPendingIntervention(effectiveContext, toolMessageId)) {
+          this.#writeTopicStatus(effectiveContext, 'active');
+        }
+
+        await this.#get().optimisticUpdateMessagePlugin(
+          toolMessageId,
+          { intervention },
+          optimisticContext,
+        );
+        await this.#get().optimisticUpdateMessageContent(
+          toolMessageId,
+          content,
+          undefined,
+          optimisticContext,
+        );
+      }
+
+      completeOperation(operationId);
+    } catch (error) {
+      const err = error as Error;
+      console.error('[cancelToolInteraction] Error cancelling tool interaction:', err);
+      failOperation(operationId, {
+        type: 'cancelToolInteraction',
+        message: err.message || 'Unknown error',
+      });
+    }
   };
 
   /**
