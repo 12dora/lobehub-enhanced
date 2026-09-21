@@ -5,6 +5,18 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.8.3 (2026-09-21)
+
+钉钉审批、待办、日程对接真实接口后的修正。
+
+#### 🐛 Fixes
+
+- 钉钉带分页参数的请求(可见审批模板、日程与会议室分页等)不再被出站安全策略误拦;请求固定为钉钉官方域名并禁止重定向。
+- 「检查权限」逐个权限点检测(含写权限),并显示钉钉返回的缺失权限点;此前缺少日程写入、忙闲读取权限时仍显示正常。
+- 审批表单的下拉选项显示为可读文本。
+- 未购买 OA 审批高级版时,「待我处理」「我发起的」不再因钉钉限流而误报为空:按接口限速扫描,结果不完整时明确提示。
+- 待办列表首页查询不再触发钉钉接口错误。
+
 ## 1.8.2 (2026-09-21)
 
 企业查询凭证与编辑弹窗修正,镜像构建提速。
