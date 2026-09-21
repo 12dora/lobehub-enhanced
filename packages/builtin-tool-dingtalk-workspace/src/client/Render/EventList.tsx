@@ -12,11 +12,13 @@ import { RESULT_VISIBLE_ROW_LIMIT } from '../components/constants';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultRow } from '../components/ResultCard';
 import { toEventRows } from './rows';
+import { useUnnamedText } from './unnamed';
 
 /** `listEvents` result: dense rows with time range and location. */
 const EventList = memo<BuiltinRenderProps<Record<string, unknown>, ListEventsState>>(
   ({ pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
 
@@ -45,7 +47,7 @@ const EventList = memo<BuiltinRenderProps<Record<string, unknown>, ListEventsSta
               <ResultRow
                 key={row.key}
                 meta={[row.timeRange, row.location].filter(Boolean).join(' · ')}
-                title={row.summary}
+                title={row.summary ?? unnamed.event}
                 tag={
                   row.isAllDay ? t('builtins.lobe-dingtalk-workspace.ui.render.allDay') : undefined
                 }

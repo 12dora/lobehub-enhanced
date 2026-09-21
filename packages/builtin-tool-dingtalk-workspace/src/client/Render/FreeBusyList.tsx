@@ -11,6 +11,7 @@ import type { QueryFreeBusyState } from '../../types';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultRow } from '../components/ResultCard';
 import { toFreeBusyRows } from './rows';
+import { useUnnamedText } from './unnamed';
 
 /**
  * `queryFreeBusy` result: one row per person with their busy blocks. Titles and
@@ -19,6 +20,7 @@ import { toFreeBusyRows } from './rows';
 const FreeBusyList = memo<BuiltinRenderProps<Record<string, unknown>, QueryFreeBusyState>>(
   ({ pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
 
@@ -39,7 +41,7 @@ const FreeBusyList = memo<BuiltinRenderProps<Record<string, unknown>, QueryFreeB
               <ResultRow
                 key={row.key}
                 meta={row.ranges || undefined}
-                title={row.name}
+                title={row.name ?? unnamed.person}
                 tag={
                   row.blockCount > 0
                     ? t('builtins.lobe-dingtalk-workspace.ui.render.busyBlocks', {

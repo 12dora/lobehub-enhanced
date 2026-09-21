@@ -12,11 +12,13 @@ import { RESULT_VISIBLE_ROW_LIMIT } from '../components/constants';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultRow } from '../components/ResultCard';
 import { toRoomRows } from './rows';
+import { useUnnamedText } from './unnamed';
 
 /** `listMeetingRooms` result: dense rows with capacity. */
 const RoomList = memo<BuiltinRenderProps<Record<string, unknown>, ListMeetingRoomsState>>(
   ({ pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
 
@@ -44,7 +46,7 @@ const RoomList = memo<BuiltinRenderProps<Record<string, unknown>, ListMeetingRoo
             {visible.map((row) => (
               <ResultRow
                 key={row.key}
-                title={row.name}
+                title={row.name ?? unnamed.room}
                 meta={
                   row.capacity
                     ? t('builtins.lobe-dingtalk-workspace.ui.render.capacity', {

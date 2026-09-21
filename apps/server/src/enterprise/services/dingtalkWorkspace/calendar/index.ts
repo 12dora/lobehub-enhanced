@@ -165,6 +165,13 @@ const formatDateTime = (value: DingtalkDateTime): string => {
   return '';
 };
 
+const eventPreviewHeadline = (event: DingtalkCalendarEvent): string => {
+  const summary = event.summary.trim();
+  if (summary) return summary;
+  const start = formatDateTime(event.start);
+  return start ? `(无主题) · ${start}` : '(无主题)';
+};
+
 const mapDateTime = (value: unknown): DingtalkDateTime => {
   const row = asRecord(value);
   const mapped: DingtalkDateTime = {};
@@ -945,7 +952,7 @@ export class DingtalkCalendarService {
       const parsed = parseUpdateInput(args);
       const people = parsed.attendeeTokens ? await attendeesLine(parsed.attendeeTokens) : '';
       const lines: DingtalkWorkspacePreviewLine[] = [
-        { label: '日程', value: existing.summary || eventId },
+        { label: '日程', value: eventPreviewHeadline(existing) },
         ...(parsed.summary ? [{ label: '主题', value: parsed.summary }] : []),
         ...(parsed.start
           ? [
@@ -981,7 +988,7 @@ export class DingtalkCalendarService {
         actingAs,
         danger: true,
         lines: [
-          { label: '日程', value: existing.summary || eventId },
+          { label: '日程', value: eventPreviewHeadline(existing) },
           { label: '开始', value: formatDateTime(existing.start) },
           { label: '结束', value: formatDateTime(existing.end) },
         ],
@@ -995,18 +1002,25 @@ export class DingtalkCalendarService {
     if (!eventId || !responseStatus || !RESPONSE_STATUS.has(responseStatus)) {
       return failWorkspace('DINGTALK_INVALID');
     }
-    const existing = await this.loadEvent(identity.unionId, eventId);
+    const existing = await this.presentEvent(await this.loadEvent(identity.unionId, eventId));
     const statusLabel: Record<string, string> = {
       accepted: '接受',
       declined: '拒绝',
       needsAction: '未回复',
       tentative: '待定',
     };
+    const organizerName =
+      existing.organizer?.displayName?.trim() ||
+      (existing.organizer?.self ? actingAs.name : '') ||
+      '组织者';
     return {
       actingAs,
       danger: false,
       lines: [
-        { label: '日程', value: existing.summary || eventId },
+        { label: '日程', value: eventPreviewHeadline(existing) },
+        { label: '组织者', value: organizerName },
+        { label: '开始', value: formatDateTime(existing.start) },
+        { label: '结束', value: formatDateTime(existing.end) },
         { label: '回复', value: statusLabel[responseStatus] ?? responseStatus },
       ],
       title: '回复日程',

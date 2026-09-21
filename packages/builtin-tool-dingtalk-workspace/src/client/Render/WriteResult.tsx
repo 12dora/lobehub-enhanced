@@ -27,6 +27,8 @@ const WriteResult = memo<BuiltinRenderProps<Record<string, unknown>>>(
     if (!apiName) return null;
 
     const api = apiName as DingtalkWorkspaceWriteApiName;
+    // No fact at all is the right outcome for an id-only call: 「已删除待办」 already
+    // says what happened, and the todo id it happened to would say nothing.
     const fact = argHint(args);
 
     return (

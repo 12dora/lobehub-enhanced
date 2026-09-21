@@ -14,7 +14,7 @@ import { dingtalkApprovalRules as approvalRulesTable } from '@/database/schemas/
 import { dingtalkUserDepartments } from '@/database/schemas/dingtalkDirectory';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
 
-import { AUDIT_ACTION } from '../../audit/auditActionCatalog';
+import { AUDIT_ACTION, AUDIT_TARGET_TYPE } from '../../audit/auditActionCatalog';
 import { PlatformAuditService } from '../../platformAudit';
 import {
   addCommentAs,
@@ -215,7 +215,9 @@ export interface ApprovalRuleCycleDeps {
   writeAudit?: (input: {
     action: ApprovalRuleAction;
     processInstanceId: string;
+    processName?: string;
     ruleId: string;
+    ruleName?: string;
     taskId: string;
     title?: string;
     userId: string;
@@ -422,13 +424,15 @@ export const runApprovalRulesCycle = async (
         afterDiff: {
           action: input.action,
           processInstanceId: input.processInstanceId,
+          processName: input.processName ?? null,
           ruleId: input.ruleId,
+          ruleName: input.ruleName ?? null,
           taskId: input.taskId,
           title: input.title ?? null,
         },
         result: 'success',
         targetId: input.processInstanceId,
-        targetType: 'user',
+        targetType: AUDIT_TARGET_TYPE.DINGTALK_APPROVAL,
       });
     });
 
@@ -837,7 +841,9 @@ export const runApprovalRulesCycle = async (
               await writeAudit({
                 action: rule.action,
                 processInstanceId: instanceId,
+                processName: rule.processName,
                 ruleId: rule.id,
+                ruleName: rule.name,
                 taskId,
                 title,
                 userId: rule.userId,

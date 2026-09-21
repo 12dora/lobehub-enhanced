@@ -2,7 +2,14 @@
  * Pure helpers that turn a tool result into dense list rows. The runtime owns
  * the exact `pluginState` shape, so we read a small set of well-known keys and
  * degrade to nothing rather than guessing.
+ *
+ * Names and free text go through `maskIdentifiers` on the way out, so a row whose
+ * only "title" is a `processCode` reports no title and the card shows a neutral noun
+ * in its place. The mask is narrow by design: a form value that merely looks like a
+ * long serial is the user's own data and is passed through untouched.
  */
+import type { MaskIdentifiersOptions } from '../components/displayText';
+import { maskIdentifiers } from '../components/displayText';
 
 export type ResultRowTag = 'disabled' | 'done' | 'enabled' | 'pending';
 
@@ -10,7 +17,8 @@ export interface ResultRowData {
   key: string;
   meta?: string;
   tag?: ResultRowTag;
-  title: string;
+  /** Absent when the payload carried no readable name — never an id. */
+  title?: string;
 }
 
 export interface ResultRowList {
@@ -78,16 +86,23 @@ export const formatDateTime = (value: unknown): string | undefined => {
   return value.trim() || undefined;
 };
 
-const pickTitle = (row: Record<string, unknown>): string | undefined => {
+const pickTitle = (
+  row: Record<string, unknown>,
+  options?: MaskIdentifiersOptions,
+): { field?: string; title?: string } => {
   for (const field of TITLE_FIELDS) {
-    const value = row[field];
-    if (typeof value === 'string' && value.trim()) return value.trim();
+    const title = maskIdentifiers(row[field], options);
+    if (title) return { field, title };
   }
 
-  return undefined;
+  return {};
 };
 
-const pickMeta = (row: Record<string, unknown>, titleField?: string): string | undefined => {
+const pickMeta = (
+  row: Record<string, unknown>,
+  titleField?: string,
+  options?: MaskIdentifiersOptions,
+): string | undefined => {
   const parts: string[] = [];
 
   for (const field of META_FIELDS) {
@@ -98,11 +113,9 @@ const pickMeta = (row: Record<string, unknown>, titleField?: string): string | u
     const value =
       field === 'createdAt' || field === 'dueTime' || field === 'expiresAt'
         ? formatDateTime(raw)
-        : typeof raw === 'string' && raw.trim()
-          ? raw.trim()
-          : typeof raw === 'number'
-            ? String(raw)
-            : undefined;
+        : typeof raw === 'number'
+          ? String(raw)
+          : maskIdentifiers(raw, options);
 
     if (value) parts.push(value);
   }
@@ -132,19 +145,25 @@ export const pickRowArray = (state?: unknown): Record<string, unknown>[] => {
   return [];
 };
 
-/** Map a list result into dense rows plus its real total. */
-export const toResultRowList = (state?: unknown): ResultRowList => {
+/**
+ * Map a list result into dense rows plus its real total. A row with no readable
+ * name keeps its place — the card names it with a neutral noun, because dropping
+ * it silently would make the list disagree with the count next to it.
+ */
+export const toResultRowList = (
+  state?: unknown,
+  options?: MaskIdentifiersOptions,
+): ResultRowList => {
   const source = pickRowArray(state);
 
   const rows = source.map((row, index) => {
-    const title = pickTitle(row);
-    const titleField = TITLE_FIELDS.find((field) => row[field] === title);
+    const { field, title } = pickTitle(row, options);
 
     return {
       key: String(row.id ?? row.taskId ?? row.processInstanceId ?? row.processCode ?? index),
-      meta: pickMeta(row, titleField),
+      meta: pickMeta(row, field, options),
       tag: pickTag(row),
-      title: title ?? '',
+      title,
     } satisfies ResultRowData;
   });
 
@@ -152,7 +171,7 @@ export const toResultRowList = (state?: unknown): ResultRowList => {
   const declaredTotal = stateRecord.total ?? stateRecord.count;
 
   return {
-    rows: rows.filter((row) => !!row.title),
+    rows,
     total: typeof declaredTotal === 'number' ? declaredTotal : rows.length,
     truncated: stateRecord.truncated === true,
   };
@@ -166,19 +185,28 @@ export interface LabelValue {
 /** Where a detail result keeps its human-readable label/value pairs. */
 const PAIR_PATHS = ['lines', 'summary', 'formValues', 'values'] as const;
 
-const toPairValue = (value: unknown): string | undefined => {
-  if (typeof value === 'string') return value.trim() || undefined;
+const toPairValue = (value: unknown, options?: MaskIdentifiersOptions): string | undefined => {
+  if (typeof value === 'string') return maskIdentifiers(value, options);
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) {
-    const parts = value.map(toPairValue).filter(Boolean);
+    const parts = value.map((item) => toPairValue(item, options)).filter(Boolean);
     return parts.length > 0 ? parts.join('、') : undefined;
   }
 
   return undefined;
 };
 
-/** Read the label/value pairs of a detail result, ignoring unknown shapes. */
-export const pickLabelValuePairs = (state?: unknown): LabelValue[] => {
+/**
+ * Read the label/value pairs of a detail result, ignoring unknown shapes. A form
+ * value that was only an identifier — a person picker still holding `staff:<id>` —
+ * is renamed rather than removed: the field was part of what the user submitted, so
+ * the card keeps reporting that it exists.
+ */
+export const pickLabelValuePairs = (
+  state?: unknown,
+  options?: MaskIdentifiersOptions,
+  unnamedValue?: string,
+): LabelValue[] => {
   if (!isRecord(state)) return [];
 
   for (const path of PAIR_PATHS) {
@@ -186,11 +214,16 @@ export const pickLabelValuePairs = (state?: unknown): LabelValue[] => {
     if (!Array.isArray(value)) continue;
 
     const pairs = value.filter(isRecord).flatMap((row) => {
-      const label = row.label ?? row.name ?? row.key;
-      const pairValue = toPairValue(row.value ?? row.text);
-      if (typeof label !== 'string' || !label.trim() || !pairValue) return [];
+      const label = maskIdentifiers(row.label ?? row.name ?? row.key, options);
+      const raw = row.value ?? row.text;
+      // A field the payload never filled in stays out; a field whose value *was*
+      // one of our identifiers is named instead.
+      const pairValue =
+        toPairValue(raw, options) ??
+        (typeof raw === 'string' && raw.trim() ? unnamedValue : undefined);
+      if (!label || !pairValue) return [];
 
-      return [{ label: label.trim(), value: pairValue } satisfies LabelValue];
+      return [{ label, value: pairValue } satisfies LabelValue];
     });
 
     if (pairs.length > 0) return pairs;
@@ -200,7 +233,10 @@ export const pickLabelValuePairs = (state?: unknown): LabelValue[] => {
 };
 
 /** Key facts of a write result, shown under the success line. */
-export const toWriteFacts = (state?: unknown): { meta?: string; title?: string } => {
+export const toWriteFacts = (
+  state?: unknown,
+  options?: MaskIdentifiersOptions,
+): { meta?: string; title?: string } => {
   if (!isRecord(state)) return {};
 
   const scope = isRecord(state.instance)
@@ -211,8 +247,7 @@ export const toWriteFacts = (state?: unknown): { meta?: string; title?: string }
         ? state.template
         : state;
 
-  const title = pickTitle(scope);
-  const titleField = TITLE_FIELDS.find((field) => scope[field] === title);
+  const { field, title } = pickTitle(scope, options);
 
-  return { meta: pickMeta(scope, titleField), title };
+  return { meta: pickMeta(scope, field, options), title };
 };

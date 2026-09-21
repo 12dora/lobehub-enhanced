@@ -31,7 +31,7 @@ vi.mock('@/server/enterprise/services/platformAudit', () => ({
   PlatformAuditService: vi.fn(() => ({ append: mockAppend })),
 }));
 
-const { DingtalkTodoService } = await import('./index');
+const { DingtalkTodoService, resetTodoListCacheForTest } = await import('./index');
 const { DingtalkWorkspaceError } = await import('../errors');
 
 const identity = { name: '张三', staffId: 'staff-me', unionId: 'union-me' };
@@ -41,6 +41,7 @@ describe('DingtalkTodoService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetTodoListCacheForTest();
     mockAssertFeature.mockResolvedValue(undefined);
     mockRequireIdentity.mockResolvedValue(identity);
     mockAppend.mockResolvedValue({});
@@ -176,9 +177,56 @@ describe('DingtalkTodoService', () => {
   });
 
   it('preview(deleteTodo) is dangerous', async () => {
+    mockRequest.mockResolvedValueOnce({
+      todoCards: [
+        {
+          dueTime: Date.parse('2026-09-22T18:00:00+08:00'),
+          subject: '写周报',
+          taskId: 't1',
+        },
+      ],
+    });
     const preview = await service.preview({ apiName: 'deleteTodo', args: { taskId: 't1' } });
     expect(preview.danger).toBe(true);
     expect(preview.title).toBe('删除待办');
+    expect(preview.lines).toEqual([
+      { label: '待办', value: '写周报' },
+      { label: '截止时间', value: '2026-09-22 18:00' },
+    ]);
+    expect(JSON.stringify(preview.lines)).not.toContain('t1');
+  });
+
+  it('preview(updateTodo) resolves the subject from the cached list', async () => {
+    mockRequest.mockResolvedValueOnce({
+      todoCards: [{ subject: '写周报', taskId: 't1' }],
+    });
+    const preview = await service.preview({
+      apiName: 'updateTodo',
+      args: { subject: '改标题', taskId: 't1' },
+    });
+    expect(preview.lines).toEqual(
+      expect.arrayContaining([
+        { label: '待办', value: '写周报' },
+        { label: '标题', value: '改标题' },
+      ]),
+    );
+    expect(JSON.stringify(preview.lines)).not.toContain('t1');
+  });
+
+  it('preview(deleteTodo) reuses the per-user list cache', async () => {
+    mockRequest.mockResolvedValue({
+      todoCards: [{ subject: '写周报', taskId: 't1' }],
+    });
+    await service.preview({ apiName: 'deleteTodo', args: { taskId: 't1' } });
+    await service.preview({ apiName: 'completeTodo', args: { taskId: 't1' } });
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('preview throws DINGTALK_NOT_FOUND for an unknown todo id', async () => {
+    mockRequest.mockResolvedValueOnce({ todoCards: [] });
+    await expect(
+      service.preview({ apiName: 'deleteTodo', args: { taskId: 'missing' } }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_NOT_FOUND' });
   });
 
   it('updateTodo accepts 101 executors and dueTime null to clear', async () => {

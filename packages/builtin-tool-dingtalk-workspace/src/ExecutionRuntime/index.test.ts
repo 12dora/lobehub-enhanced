@@ -105,9 +105,40 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
       subject: '交周报',
     });
     expect(result.success).toBe(true);
-    expect(result.content).toContain('已创建待办');
+    expect(result.content).toContain('已创建待办「交周报」');
+    expect(result.content.split('\n')[0]).not.toContain('todo-1');
     expect(result.content).toContain('"serverNow"');
     expect(result.content).toContain('todo-1');
+  });
+
+  it('names todo and calendar write success text without echoing ids', async () => {
+    const runtime = createDingtalkWorkspaceRuntime(
+      makeService({
+        completeTodo: vi.fn().mockResolvedValue({ ok: true, subject: '写周报', taskId: 'todo-1' }),
+        deleteEvent: vi.fn().mockResolvedValue({ eventId: 'evt-1', ok: true, summary: '周会' }),
+        updateEvent: vi.fn().mockResolvedValue({ id: 'evt-1', summary: '同步会' }),
+        updateTodo: vi.fn().mockResolvedValue({ ok: true, subject: '对账', taskId: 'todo-2' }),
+      }),
+    );
+
+    const completed = await runtime.completeTodo({ taskId: 'todo-1' });
+    expect(completed.content.split('\n')[0]).toBe('已完成待办「写周报」');
+    expect(completed.content.split('\n')[0]).not.toContain('todo-1');
+
+    const updatedTodo = await runtime.updateTodo({ subject: '对账', taskId: 'todo-2' });
+    expect(updatedTodo.content.split('\n')[0]).toBe('已更新待办「对账」');
+    expect(updatedTodo.content.split('\n')[0]).not.toContain('todo-2');
+
+    const updatedEvent = await runtime.updateEvent({
+      eventId: 'evt-1',
+      summary: '同步会',
+    });
+    expect(updatedEvent.content.split('\n')[0]).toBe('已更新日程「同步会」');
+    expect(updatedEvent.content.split('\n')[0]).not.toContain('evt-1');
+
+    const deletedEvent = await runtime.deleteEvent({ eventId: 'evt-1' });
+    expect(deletedEvent.content.split('\n')[0]).toBe('已删除日程「周会」');
+    expect(deletedEvent.content.split('\n')[0]).not.toContain('evt-1');
   });
 
   it('strips titles from queryFreeBusy content instruction', async () => {

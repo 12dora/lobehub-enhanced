@@ -7,9 +7,11 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { CalendarEventView, GetEventState } from '../../types';
+import { maskIdentifiers } from '../components/displayText';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultField } from '../components/ResultCard';
 import { formatDateTime, formatTimeRange } from './rows';
+import { useUnnamedText } from './unnamed';
 
 const MAX_DESCRIPTION_LENGTH = 160;
 
@@ -31,6 +33,7 @@ const readEvent = (state?: EventDetailState): CalendarEventView | undefined => {
 const EventDetail = memo<BuiltinRenderProps<Record<string, unknown>, EventDetailState>>(
   ({ pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
 
@@ -45,12 +48,13 @@ const EventDetail = memo<BuiltinRenderProps<Record<string, unknown>, EventDetail
           .filter(Boolean)
           .join(' · ')
       : formatTimeRange(event.start, event.end);
-    const description = event.description?.trim();
+    const description = maskIdentifiers(event.description, unnamed.mask);
+    const location = maskIdentifiers(event.location, unnamed.mask);
 
     return (
       <ResultCard
         icon={CalendarDays}
-        title={event.summary?.trim() || t('builtins.lobe-dingtalk-workspace.ui.apiLabel.getEvent')}
+        title={maskIdentifiers(event.summary, unnamed.mask) ?? unnamed.event}
       >
         <Flexbox gap={6}>
           {time && (
@@ -58,9 +62,9 @@ const EventDetail = memo<BuiltinRenderProps<Record<string, unknown>, EventDetail
               {time}
             </ResultField>
           )}
-          {event.location && (
+          {location && (
             <ResultField label={t('builtins.lobe-dingtalk-workspace.ui.render.field.location')}>
-              {event.location}
+              {location}
             </ResultField>
           )}
           {event.attendees && event.attendees.length > 0 && (

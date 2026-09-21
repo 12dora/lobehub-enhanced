@@ -210,8 +210,40 @@ describe('DingtalkApprovalService', () => {
     expect(mockAppendAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'dingtalk.approval.create',
+        afterDiff: { title: '出差' },
         targetId: 'inst-new',
         targetType: 'dingtalk_approval',
+      }),
+    );
+  });
+
+  it('audits deleteTemplate with the cached template name, never the processCode', async () => {
+    mockDeleteForm.mockResolvedValueOnce(undefined);
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.deleteTemplate({ processCode: 'PROC-1' });
+    expect(mockLoadTemplates).toHaveBeenCalled();
+    expect(mockDeleteForm).toHaveBeenCalledWith('PROC-1');
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.delete_template',
+        afterDiff: { name: '出差', title: '出差' },
+        targetId: 'PROC-1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
+  });
+
+  it('omits deleteTemplate audit title when the cached list has no matching name', async () => {
+    mockLoadTemplates.mockResolvedValueOnce([]);
+    mockDeleteForm.mockResolvedValueOnce(undefined);
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.deleteTemplate({ processCode: 'PROC-MISSING' });
+    expect(mockDeleteForm).toHaveBeenCalledWith('PROC-MISSING');
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.delete_template',
+        afterDiff: null,
+        targetId: 'PROC-MISSING',
       }),
     );
   });

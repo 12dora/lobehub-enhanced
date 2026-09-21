@@ -27,6 +27,14 @@ export const cardStyles = createStaticStyles(({ css, cssVar }) => ({
   dangerCard: css`
     border-color: ${cssVar.colorErrorBorder};
   `,
+  /** Diagnostics affordance ("show arguments"): present, never competing for attention. */
+  diagnosticButton: css`
+    align-self: flex-start;
+    height: 22px;
+    padding-inline: 0;
+    font-size: 12px;
+    color: ${cssVar.colorTextTertiary};
+  `,
   footerButton: css`
     align-self: flex-start;
     height: 22px;

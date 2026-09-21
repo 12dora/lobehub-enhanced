@@ -47,6 +47,14 @@ const MAX_CREATE_EXECUTORS = 100;
 const MAX_UPDATE_EXECUTORS = 1000;
 const MAX_LIST_PAGES = 10;
 const MAX_LIST_ITEMS = 200;
+const TODO_LIST_CACHE_MS = 60_000;
+
+type CachedTodoList = { expiresAt: number; items: DingtalkTodoCard[] };
+const todoListCache = new Map<string, CachedTodoList>();
+
+export const resetTodoListCacheForTest = (): void => {
+  todoListCache.clear();
+};
 const PRIORITY_VALUES = new Set([10, 20, 30, 40]);
 const PRIORITY_LABEL: Record<number, string> = {
   10: '较低',
@@ -177,6 +185,57 @@ export class DingtalkTodoService {
     private readonly userId: string,
   ) {}
 
+  private cachedTodos(): DingtalkTodoCard[] | undefined {
+    const entry = todoListCache.get(this.userId);
+    if (!entry || entry.expiresAt <= Date.now()) return undefined;
+    return entry.items;
+  }
+
+  private storeTodos(items: DingtalkTodoCard[]): void {
+    todoListCache.set(this.userId, { expiresAt: Date.now() + TODO_LIST_CACHE_MS, items });
+  }
+
+  private rememberTodo(card: DingtalkTodoCard): void {
+    const current = this.cachedTodos() ?? [];
+    const items = [card, ...current.filter((item) => item.taskId !== card.taskId)];
+    this.storeTodos(items);
+  }
+
+  private patchCachedTodo(
+    taskId: string,
+    patch: Partial<DingtalkTodoCard>,
+  ): DingtalkTodoCard | undefined {
+    const current = this.cachedTodos();
+    if (!current) return undefined;
+    let matched: DingtalkTodoCard | undefined;
+    const items = current.map((item) => {
+      if (item.taskId !== taskId) return item;
+      matched = { ...item, ...patch };
+      return matched;
+    });
+    this.storeTodos(items);
+    return matched;
+  }
+
+  private forgetTodo(taskId: string): void {
+    const current = this.cachedTodos();
+    if (!current) return;
+    this.storeTodos(current.filter((item) => item.taskId !== taskId));
+  }
+
+  private findCachedTodo(taskId: string): DingtalkTodoCard | undefined {
+    return this.cachedTodos()?.find((item) => item.taskId === taskId);
+  }
+
+  private async requireTodo(taskId: string): Promise<DingtalkTodoCard> {
+    const cached = this.findCachedTodo(taskId);
+    if (cached) return cached;
+    const listed = await this.listTodos();
+    const found = listed.items.find((item) => item.taskId === taskId);
+    if (!found) return failWorkspace('DINGTALK_NOT_FOUND');
+    return found;
+  }
+
   private async actor(): Promise<DingtalkTodoIdentity> {
     await assertDingtalkFeature('todo');
     const identity = await requireVerifiedDingtalkIdentity(this.db, this.userId);
@@ -231,12 +290,18 @@ export class DingtalkTodoService {
       const token = asString(response.nextToken);
       if (items.length >= MAX_LIST_ITEMS) {
         truncated = items.length > MAX_LIST_ITEMS || Boolean(token);
-        return { items: items.slice(0, MAX_LIST_ITEMS), truncated };
+        const capped = items.slice(0, MAX_LIST_ITEMS);
+        if (typeof input.done !== 'boolean') this.storeTodos(capped);
+        return { items: capped, truncated };
       }
-      if (!token) return { items, truncated };
+      if (!token) {
+        if (typeof input.done !== 'boolean') this.storeTodos(items);
+        return { items, truncated };
+      }
       nextToken = token;
     }
     truncated = true;
+    if (typeof input.done !== 'boolean') this.storeTodos(items);
     return { items, truncated };
   };
 
@@ -268,11 +333,14 @@ export class DingtalkTodoService {
     });
     const card = mapTodoCard(created);
     if (!card) return failWorkspace('DINGTALK_UNAVAILABLE');
+    this.rememberTodo(card);
     await this.audit('create', card.taskId, card.subject);
     return card;
   };
 
-  updateTodo = async (input: DingtalkTodoUpdateInput): Promise<{ ok: boolean; taskId: string }> => {
+  updateTodo = async (
+    input: DingtalkTodoUpdateInput,
+  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
     const identity = await this.actor();
     if (!input.taskId.trim()) return failWorkspace('DINGTALK_INVALID');
     const executors = await resolveStaffTokens(this.db, input.executorTokens, MAX_UPDATE_EXECUTORS);
@@ -291,11 +359,27 @@ export class DingtalkTodoService {
       path: todoPath(identity.unionId, `/tasks/${encodeURIComponent(input.taskId)}`),
       query: { operatorId: identity.unionId },
     });
+    const dueTime =
+      input.dueTime === null
+        ? undefined
+        : input.dueTime !== undefined
+          ? parseDueTimeMs(input.dueTime)
+          : undefined;
+    const patched = this.patchCachedTodo(input.taskId, {
+      ...(input.subject !== undefined ? { subject: input.subject.trim() } : {}),
+      ...(input.done !== undefined ? { done: input.done } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.dueTime === null ? { dueTime: undefined } : {}),
+      ...(dueTime !== undefined ? { dueTime } : {}),
+    });
+    const subject = patched?.subject ?? input.subject ?? this.findCachedTodo(input.taskId)?.subject;
     await this.audit('update', input.taskId, input.subject);
-    return { ok: true, taskId: input.taskId };
+    return { ok: true, subject, taskId: input.taskId };
   };
 
-  completeTodo = async (input: DingtalkTodoIdInput): Promise<{ ok: boolean; taskId: string }> => {
+  completeTodo = async (
+    input: DingtalkTodoIdInput,
+  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
     const identity = await this.actor();
     if (!input.taskId.trim()) return failWorkspace('DINGTALK_INVALID');
     await dingtalkWorkspaceRequest({
@@ -305,11 +389,15 @@ export class DingtalkTodoService {
       path: todoPath(identity.unionId, `/tasks/${encodeURIComponent(input.taskId)}`),
       query: { operatorId: identity.unionId },
     });
+    const patched = this.patchCachedTodo(input.taskId, { done: true });
+    const subject = patched?.subject ?? this.findCachedTodo(input.taskId)?.subject;
     await this.audit('complete', input.taskId);
-    return { ok: true, taskId: input.taskId };
+    return { ok: true, subject, taskId: input.taskId };
   };
 
-  deleteTodo = async (input: DingtalkTodoIdInput): Promise<{ ok: boolean; taskId: string }> => {
+  deleteTodo = async (
+    input: DingtalkTodoIdInput,
+  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
     const identity = await this.actor();
     if (!input.taskId.trim()) return failWorkspace('DINGTALK_INVALID');
     await dingtalkWorkspaceRequest({
@@ -318,8 +406,10 @@ export class DingtalkTodoService {
       path: todoPath(identity.unionId, `/tasks/${encodeURIComponent(input.taskId)}`),
       query: { operatorId: identity.unionId },
     });
+    const subject = this.findCachedTodo(input.taskId)?.subject;
+    this.forgetTodo(input.taskId);
     await this.audit('delete', input.taskId);
-    return { ok: true, taskId: input.taskId };
+    return { ok: true, subject, taskId: input.taskId };
   };
 
   preview = async (input: {
@@ -360,6 +450,7 @@ export class DingtalkTodoService {
 
     if (input.apiName === 'updateTodo') {
       const parsed = parseUpdateInput(args);
+      const existing = await this.requireTodo(parsed.taskId);
       const executors = await resolveStaffTokens(
         this.db,
         parsed.executorTokens,
@@ -367,10 +458,14 @@ export class DingtalkTodoService {
       );
       const dueMs =
         parsed.dueTime === null ? undefined : parseDueTimeMs(parsed.dueTime ?? undefined);
+      const changingDue = parsed.dueTime === null || dueMs !== undefined;
       const lines = [
-        { label: '待办', value: parsed.taskId },
+        { label: '待办', value: existing.subject },
         ...(parsed.subject ? [{ label: '标题', value: parsed.subject }] : []),
         ...(parsed.description ? [{ label: '说明', value: parsed.description }] : []),
+        ...(!changingDue && existing.dueTime
+          ? [{ label: '截止时间', value: formatDueTime(existing.dueTime) }]
+          : []),
         ...(parsed.dueTime === null ? [{ label: '截止时间', value: '清除' }] : []),
         ...(dueMs ? [{ label: '截止时间', value: formatDueTime(dueMs) }] : []),
         ...(parsed.executorTokens
@@ -393,11 +488,16 @@ export class DingtalkTodoService {
 
     const taskId = asString(args.taskId)?.trim();
     if (!taskId) return failWorkspace('DINGTALK_INVALID');
+    const existing = await this.requireTodo(taskId);
+    const lines = [
+      { label: '待办', value: existing.subject },
+      ...(existing.dueTime ? [{ label: '截止时间', value: formatDueTime(existing.dueTime) }] : []),
+    ];
     if (input.apiName === 'completeTodo') {
       return {
         actingAs,
         danger: false,
-        lines: [{ label: '待办', value: taskId }],
+        lines,
         title: '完成待办',
         warnings,
       };
@@ -405,7 +505,7 @@ export class DingtalkTodoService {
     return {
       actingAs,
       danger: true,
-      lines: [{ label: '待办', value: taskId }],
+      lines,
       title: '删除待办',
       warnings,
     };

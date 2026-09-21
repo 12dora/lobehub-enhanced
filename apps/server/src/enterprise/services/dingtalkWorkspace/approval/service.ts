@@ -74,15 +74,28 @@ const appendApprovalAudit = async (input: {
     | typeof AUDIT_ACTION.DINGTALK_APPROVAL_SAVE_TEMPLATE
     | typeof AUDIT_ACTION.DINGTALK_APPROVAL_TERMINATE;
   db: LobeChatDatabase;
+  name?: string;
+  processName?: string;
   targetId: string;
   title?: string;
   userId: string;
 }): Promise<void> => {
+  const title = input.title?.trim() || undefined;
+  const name = input.name?.trim() || undefined;
+  const processName = input.processName?.trim() || undefined;
+  const afterDiff =
+    title || name || processName
+      ? {
+          ...(name ? { name } : {}),
+          ...(processName ? { processName } : {}),
+          ...(title ? { title } : {}),
+        }
+      : null;
   try {
     await new PlatformAuditService(input.db).append({
       action: input.action,
       actorUserId: input.userId,
-      afterDiff: input.title ? { title: input.title } : null,
+      afterDiff,
       reason: null,
       result: 'success',
       targetId: input.targetId,
@@ -93,6 +106,19 @@ const appendApprovalAudit = async (input: {
       action: input.action,
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     });
+  }
+};
+
+const cachedTemplateName = async (
+  userId: string,
+  staffId: string,
+  processCode: string,
+): Promise<string | undefined> => {
+  try {
+    const templates = await loadVisibleTemplatesCached(userId, staffId, TEMPLATE_CACHE_TTL_MS);
+    return templates.find((item) => item.processCode === processCode)?.name;
+  } catch {
+    return undefined;
   }
 };
 
@@ -433,20 +459,25 @@ export class DingtalkApprovalService {
     };
   };
 
-  deleteTemplate = async (input: { processCode: string }): Promise<void> => {
+  deleteTemplate = async (input: {
+    processCode: string;
+  }): Promise<{ name?: string; processCode: string }> => {
     const identity = await this.prepare();
     await this.requireApprovalAdmin(identity.staffId);
     const processCode = input.processCode.trim();
     if (!processCode) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+    const title = await cachedTemplateName(this.userId, identity.staffId, processCode);
     await deleteFormTemplate(processCode);
     invalidateApprovalListCache(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_DELETE_TEMPLATE,
       db: this.db,
+      name: title,
       targetId: processCode,
-      title: processCode,
+      title,
       userId: this.userId,
     });
+    return { name: title || undefined, processCode };
   };
 
   preview = async (input: ApprovalPreviewInput): Promise<ApprovalPreview> => {

@@ -14,6 +14,7 @@ import { dingtalkWorkspaceService } from '@/services/dingtalkWorkspace';
 import type { DingtalkWorkspaceApiNameType } from '../apiNames';
 import { DINGTALK_WORKSPACE_DANGER_API_NAMES } from '../apiNames';
 import { CONFIRM_VISIBLE_LINE_LIMIT } from './constants';
+import { maskIdentifiers } from './displayText';
 import { resolveDingtalkErrorCode } from './previewError';
 import { cardStyles } from './styles';
 
@@ -112,13 +113,14 @@ const ConfirmCard = memo<ConfirmCardProps>(({ apiName, args, registerBeforeAppro
 
   const actionLabel = t(`builtins.lobe-dingtalk-workspace.ui.apiLabel.${apiName}` as const);
 
-  // Only offered on the error path: a successful summary already says what the
-  // call does in plain words, while the raw payload carries ids and `staff:`
-  // tokens the rest of the UI deliberately strips.
+  // Diagnostics only, offered on the error path: a successful summary already says
+  // what the call does in plain words, while the raw payload carries ids and
+  // `staff:` tokens the rest of the UI deliberately strips. Collapsed until asked
+  // for, and styled below the error it sits under.
   const rawArgs = (
     <Flexbox gap={6}>
       <Button
-        className={cardStyles.footerButton}
+        className={cardStyles.diagnosticButton}
         size={'small'}
         type={'text'}
         onClick={() => setShowRawArgs((open) => !open)}
@@ -173,13 +175,31 @@ const ConfirmCard = memo<ConfirmCardProps>(({ apiName, args, registerBeforeAppro
   }
 
   const danger = preview.danger ?? DINGTALK_WORKSPACE_DANGER_API_NAMES.has(apiName);
-  const lines = preview.lines ?? [];
+  // The server resolves names into `title` / `lines`; masking here is the backstop
+  // that keeps a regression there from reading as 「删除待办「task6b1f0a9c…」」.
+  const person = t('builtins.lobe-dingtalk-workspace.ui.render.unnamed.person');
+  const department = t('builtins.lobe-dingtalk-workspace.ui.render.unnamed.department');
+  const unnamedItem = t('builtins.lobe-dingtalk-workspace.ui.render.unnamed.item');
+  const mask = { department, person };
+  const previewTitle = maskIdentifiers(preview.title, mask);
+  // A line is never dropped: the user is confirming these rows, and a row that
+  // vanished would be a row they approved without reading. Only a value that was
+  // *nothing but* one of our identifiers is renamed.
+  const lines = (preview.lines ?? []).flatMap((line) => {
+    const label = maskIdentifiers(line.label, mask) ?? line.label?.trim();
+    if (!label) return [];
+
+    return [{ label, value: maskIdentifiers(line.value, mask) ?? unnamedItem }];
+  });
   const visibleLines = showAllLines ? lines : lines.slice(0, CONFIRM_VISIBLE_LINE_LIMIT);
   const hiddenLineCount = lines.length - visibleLines.length;
-  const warnings = preview.warnings ?? [];
+  const warnings = (preview.warnings ?? [])
+    .map((warning) => maskIdentifiers(warning, mask))
+    .filter((warning): warning is string => !!warning);
   // An empty name would render as「以  的钉钉身份执行」, which reads as an unidentified
   // identity rather than the caller's own — say it without the name instead.
-  const actingAsName = preview.actingAs?.name?.trim();
+  const actingAsName = maskIdentifiers(preview.actingAs?.name);
+  const deptPath = maskIdentifiers(preview.actingAs?.deptPath);
   const actingAsText = actingAsName
     ? t('builtins.lobe-dingtalk-workspace.ui.confirm.actingAs', { name: actingAsName })
     : t('builtins.lobe-dingtalk-workspace.ui.confirm.actingAsUnknown');
@@ -188,13 +208,11 @@ const ConfirmCard = memo<ConfirmCardProps>(({ apiName, args, registerBeforeAppro
     <Block className={cx(danger && cardStyles.dangerCard)} variant={'outlined'} width={'100%'}>
       <div className={cardStyles.header}>
         <span className={cardStyles.headerText}>{actingAsText}</span>
-        {preview.actingAs?.deptPath && (
-          <span className={cardStyles.headerMeta}>{preview.actingAs.deptPath}</span>
-        )}
+        {deptPath && <span className={cardStyles.headerMeta}>{deptPath}</span>}
       </div>
       <div className={cardStyles.body}>
         <div className={cardStyles.titleRow}>
-          <span className={cardStyles.title}>{preview.title || actionLabel}</span>
+          <span className={cardStyles.title}>{previewTitle || actionLabel}</span>
           <Tag className={cardStyles.actionTag} color={danger ? 'error' : undefined}>
             {actionLabel}
           </Tag>

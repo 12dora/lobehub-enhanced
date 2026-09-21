@@ -55,9 +55,10 @@ vi.mock('@/database/models/dingtalkDirectory', () => ({
     getUsers = vi.fn(async () => [{ name: '王五' }]);
   },
 }));
+const mockAppendAudit = vi.hoisted(() => vi.fn());
 vi.mock('../../platformAudit', () => ({
   PlatformAuditService: class {
-    append = vi.fn();
+    append = (...args: unknown[]) => mockAppendAudit(...args);
   },
 }));
 
@@ -174,6 +175,7 @@ describe('runApprovalRulesCycle', () => {
     notify.mockResolvedValue(undefined);
     disable.mockResolvedValue(rule);
     writeAudit.mockResolvedValue(undefined);
+    mockAppendAudit.mockResolvedValue(undefined);
   });
 
   it('skips when approval is off or the tier is off', async () => {
@@ -223,7 +225,17 @@ describe('runApprovalRulesCycle', () => {
       expect.anything(),
       expect.objectContaining({ status: 'succeeded', taskId: '99' }),
     );
-    expect(writeAudit).toHaveBeenCalled();
+    expect(writeAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'agree',
+        processInstanceId: 'inst_1',
+        processName: '差旅',
+        ruleId: 'rule_1',
+        ruleName: '自动同意',
+        title: '差旅报销',
+        userId: 'user_1',
+      }),
+    );
     expect(notify).toHaveBeenCalledWith(
       'staff_me',
       expect.objectContaining({
@@ -231,6 +243,22 @@ describe('runApprovalRulesCycle', () => {
       }),
     );
     expect(mockInvalidatePendingCaches).toHaveBeenCalledWith('user_1');
+  });
+
+  it('stores instance title and rule name on the default rule_executed audit append', async () => {
+    await run({ writeAudit: undefined });
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.rule_executed',
+        afterDiff: expect.objectContaining({
+          processName: '差旅',
+          ruleName: '自动同意',
+          title: '差旅报销',
+        }),
+        targetId: 'inst_1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
   });
 
   it('skips DingTalk when the (rule, task) row is already claimed', async () => {

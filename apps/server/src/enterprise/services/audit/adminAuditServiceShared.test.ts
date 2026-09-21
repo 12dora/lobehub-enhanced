@@ -101,8 +101,122 @@ describe('admin audit serializers', () => {
     ).toBe('Q3 notes');
     expect(toEventListItem(event, refs, labels).targetLabel).toBeNull();
     expect(
+      toEventListItem({ ...event, afterDiff: { title: 'Should not leak' } }, refs, labels)
+        .targetLabel,
+    ).toBeNull();
+    expect(
       toEventDetail({ ...event, targetId: 'missing', targetType: 'topic' }, refs, labels)
         .targetLabel,
+    ).toBeNull();
+  });
+
+  it('derives DingTalk targetLabel from afterDiff/beforeDiff when the batch map misses', () => {
+    const approval = {
+      ...event,
+      action: 'dingtalk.approval.agree',
+      afterDiff: { title: '出差申请' },
+      targetId: 'inst-1',
+      targetType: 'dingtalk_approval',
+    };
+    const todo = {
+      ...event,
+      action: 'dingtalk.todo.create',
+      afterDiff: { subject: '提交周报' },
+      targetId: 'task-1',
+      targetType: 'dingtalk_todo',
+    };
+    const calendar = {
+      ...event,
+      action: 'dingtalk.calendar.create',
+      afterDiff: { summary: '项目评审' },
+      targetId: 'evt-cal-1',
+      targetType: 'dingtalk_calendar',
+    };
+    const fromBefore = {
+      ...event,
+      action: 'dingtalk.approval.delete_template',
+      afterDiff: { title: '   ' },
+      beforeDiff: { name: '请假模板' },
+      targetId: 'PROC-1',
+      targetType: 'dingtalk_approval',
+    };
+    const ruleExecuted = {
+      ...event,
+      action: 'dingtalk.approval.rule_executed',
+      afterDiff: { ruleName: '自动同意', title: '差旅报销' },
+      targetId: 'inst-9',
+      targetType: 'user',
+    };
+
+    expect(toEventListItem(approval, refs).targetLabel).toBe('出差申请');
+    expect(toEventListItem(todo, refs).targetLabel).toBe('提交周报');
+    expect(toEventListItem(calendar, refs).targetLabel).toBe('项目评审');
+    expect(toEventListItem(fromBefore, refs).targetLabel).toBe('请假模板');
+    expect(toEventListItem(ruleExecuted, refs).targetLabel).toBe('差旅报销');
+    expect(
+      toEventDetail({ ...approval, afterDiff: { processName: '差旅' }, targetId: 'PROC-2' }, refs)
+        .targetLabel,
+    ).toBe('差旅');
+  });
+
+  it('prefers batch map labels, key order, clips to 80, and redacts secrets on DingTalk diffs', () => {
+    const labels = new Map([['dingtalk_approval:inst-1', 'From map']]);
+    const mapped = {
+      ...event,
+      action: 'dingtalk.approval.agree',
+      afterDiff: { title: 'From diff' },
+      targetId: 'inst-1',
+      targetType: 'dingtalk_approval',
+    };
+    expect(toEventListItem(mapped, refs, labels).targetLabel).toBe('From map');
+
+    const keyed = {
+      ...event,
+      action: 'dingtalk.approval.save_template',
+      afterDiff: {
+        name: '模板名',
+        processName: '流程名',
+        ruleName: '规则名',
+        subject: '主题',
+        summary: '摘要',
+        title: '标题',
+      },
+      targetId: 'PROC-9',
+      targetType: 'dingtalk_approval',
+    };
+    expect(toEventListItem(keyed, refs).targetLabel).toBe('标题');
+    expect(
+      toEventListItem(
+        { ...keyed, afterDiff: { name: '模板名', processName: '流程名', ruleName: '规则名' } },
+        refs,
+      ).targetLabel,
+    ).toBe('模板名');
+
+    const longTitle = '钉'.repeat(90);
+    expect(toEventListItem({ ...keyed, afterDiff: { title: longTitle } }, refs).targetLabel).toBe(
+      '钉'.repeat(80),
+    );
+
+    const secret = 'sk-abcdefghijklmnopqrstuvwxyz012345';
+    const redacted = toEventListItem(
+      { ...keyed, afterDiff: { title: `Keys ${secret} keep ACME` } },
+      refs,
+    ).targetLabel;
+    expect(redacted).toContain('ACME');
+    expect(redacted).not.toContain(secret);
+    expect(redacted).toContain('[REDACTED]');
+
+    expect(
+      toEventListItem(
+        {
+          ...event,
+          action: 'dingtalk.todo.delete',
+          afterDiff: { subject: 12 },
+          targetId: 'task-x',
+          targetType: 'dingtalk_todo',
+        },
+        refs,
+      ).targetLabel,
     ).toBeNull();
   });
 

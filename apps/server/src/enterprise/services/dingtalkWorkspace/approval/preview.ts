@@ -1,5 +1,7 @@
-import type { ApprovalRuleCreateInput } from '../approvalRules';
-import { DingtalkWorkspaceError } from '../errors';
+import type { ApprovalRuleAction, ApprovalRuleConditions } from '@lobechat/types';
+
+import type { ApprovalRuleCreateInput, ApprovalRuleView } from '../approvalRules';
+import { DingtalkWorkspaceError, type DingtalkWorkspaceErrorCode } from '../errors';
 import { getFormSchema, getInstanceDetail } from './api';
 import { encodeFormValues, isSuiteTemplate } from './formValues';
 import { actingAsFromIdentity, formatStaffLabel, requireStaff, requireStaffList } from './staff';
@@ -8,6 +10,7 @@ import {
   type ApprovalServiceContext,
   canViewInstance,
   type CreateInstanceInput,
+  type ProcessInstanceDetail,
 } from './types';
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -24,6 +27,137 @@ const asStringArray = (value: unknown): string[] =>
     : [];
 
 type PreviewBody = Omit<ApprovalPreview, 'actingAs'>;
+
+const failPreview: (code: DingtalkWorkspaceErrorCode) => never = (code) => {
+  throw new DingtalkWorkspaceError(code);
+};
+
+type ActivityNameBearer = {
+  activityId?: string;
+  activityName?: string;
+  taskGroupName?: string;
+};
+
+const activityNameFromBearer = (
+  item: ActivityNameBearer,
+  activityId: string,
+): string | undefined => {
+  if (item.activityId !== activityId) return undefined;
+  return asString(item.activityName) ?? asString(item.taskGroupName);
+};
+
+const resolveActivityName = (
+  detail: ProcessInstanceDetail,
+  activityId: string,
+  forecastNames?: ReadonlyMap<string, string>,
+): string => {
+  const forecastName = forecastNames?.get(activityId);
+  if (forecastName) return forecastName;
+  for (const task of detail.tasks ?? []) {
+    const name = activityNameFromBearer(task, activityId);
+    if (name) return name;
+  }
+  for (const record of detail.operationRecords ?? []) {
+    const name = activityNameFromBearer(record, activityId);
+    if (name) return name;
+  }
+  return '指定节点';
+};
+
+const instanceHeadline = (detail: ProcessInstanceDetail): string => {
+  const title = asString(detail.title);
+  if (title) return title;
+  const processName = asString(asRecord(detail).processName);
+  const originator = asString(detail.originatorName);
+  if (processName && originator) return `${processName} · ${originator}`;
+  if (processName) return processName;
+  if (originator) return originator;
+  return '审批单';
+};
+
+const loadApprovalRuleService = async (ctx: ApprovalServiceContext) => {
+  // Dynamic import avoids a cycle: approvalRules/service imports DingtalkApprovalService.
+  const { DingtalkApprovalRuleService } = await import('../approvalRules');
+  return new DingtalkApprovalRuleService(ctx.db, ctx.userId);
+};
+
+const loadVisibleTemplates = async (ctx: ApprovalServiceContext) => {
+  // Same 5-minute per-user cache as DingtalkApprovalService.listTemplates.
+  const { DingtalkApprovalService } = await import('./service');
+  return new DingtalkApprovalService(ctx.db, ctx.userId).listTemplates();
+};
+
+const resolveTemplateName = async (
+  ctx: ApprovalServiceContext,
+  processCode: string,
+): Promise<{ fieldCount?: number; name: string }> => {
+  const visible = await loadVisibleTemplates(ctx);
+  const hit = visible.find((item) => item.processCode === processCode);
+  if (hit?.name) return { name: hit.name };
+
+  try {
+    const schema = await getFormSchema(processCode);
+    const name = asString(schema.name);
+    if (!name) return failPreview('DINGTALK_NOT_FOUND');
+    return { fieldCount: schema.fields.length, name };
+  } catch (error) {
+    if (error instanceof DingtalkWorkspaceError) throw error;
+    return failPreview('DINGTALK_NOT_FOUND');
+  }
+};
+
+const isRuleAction = (value: string): value is ApprovalRuleAction =>
+  value === 'agree' || value === 'comment' || value === 'redirect' || value === 'refuse';
+
+const ruleActionText = (input: {
+  action: ApprovalRuleAction | string;
+  redirectToName?: string | null;
+}): string => {
+  switch (input.action) {
+    case 'agree': {
+      return '同意';
+    }
+    case 'refuse': {
+      return '拒绝';
+    }
+    case 'comment': {
+      return '评论';
+    }
+    case 'redirect': {
+      const target = asString(input.redirectToName);
+      return target ? `转交给 ${target}` : '转交';
+    }
+    default: {
+      return '转交';
+    }
+  }
+};
+
+/** Matches DingtalkApprovalRuleService.summarizeConditions. */
+const summarizeRuleConditions = (conditions: ApprovalRuleConditions | null | undefined): string => {
+  const staffCount = conditions?.originators?.staffIds?.length ?? 0;
+  const deptCount = conditions?.originators?.deptIds?.length ?? 0;
+  const fields = conditions?.fields ?? [];
+  const fieldLabels = fields
+    .slice(0, 4)
+    .map((field) => field.label || field.componentId)
+    .join('、');
+  const parts = [
+    ...(staffCount > 0 ? [`发起人 ${staffCount} 人`] : []),
+    ...(deptCount > 0 ? [`发起部门 ${deptCount} 个`] : []),
+    ...(fields.length > 0 ? [`表单条件 ${fields.length} 项（${fieldLabels}）`] : []),
+  ];
+  return parts.length > 0 ? parts.join('；') : '全部待办';
+};
+
+const changedLine = (
+  label: string,
+  from: string,
+  to: string,
+): ApprovalPreview['lines'][number] => ({
+  label,
+  value: `${from} → ${to}`,
+});
 
 const previewCreate = async (
   ctx: ApprovalServiceContext,
@@ -103,15 +237,16 @@ const previewExecute = async (
   );
   const remark = asString(args.remark);
   if (result === 'refuse' && !remark) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
-  const lines = [
-    { label: '审批单', value: detail.title || processInstanceId },
+  const headline = instanceHeadline(detail);
+  const lines: ApprovalPreview['lines'] = [
+    { label: '审批单', value: headline },
     { label: '结果', value: result === 'agree' ? '同意' : '拒绝' },
+    ...(remark ? [{ label: '意见', value: remark }] : []),
   ];
-  if (remark) lines.push({ label: '意见', value: remark });
   return {
     danger: result === 'refuse',
     lines,
-    title: result === 'agree' ? `同意「${detail.title}」` : `拒绝「${detail.title}」`,
+    title: result === 'agree' ? `同意「${headline}」` : `拒绝「${headline}」`,
     warnings: result === 'refuse' ? ['拒绝后该审批单将结束。'] : [],
   };
 };
@@ -133,15 +268,16 @@ const previewRedirect = async (
   );
   const target = await requireStaff(ctx.db, toStaffToken);
   const remark = asString(args.remark);
-  const lines = [
-    { label: '审批单', value: detail.title || processInstanceId },
+  const headline = instanceHeadline(detail);
+  const lines: ApprovalPreview['lines'] = [
+    { label: '审批单', value: headline },
     { label: '转交给', value: formatStaffLabel(target) },
+    ...(remark ? [{ label: '意见', value: remark }] : []),
   ];
-  if (remark) lines.push({ label: '意见', value: remark });
   return {
     danger: true,
     lines,
-    title: `转交「${detail.title}」`,
+    title: `转交「${headline}」`,
     warnings: [],
   };
 };
@@ -157,13 +293,14 @@ const previewComment = async (
   if (!canViewInstance(detail, ctx.identity.staffId)) {
     throw new DingtalkWorkspaceError('DINGTALK_FORBIDDEN');
   }
+  const headline = instanceHeadline(detail);
   return {
     danger: false,
     lines: [
-      { label: '审批单', value: detail.title || processInstanceId },
+      { label: '审批单', value: headline },
       { label: '评论', value: text },
     ],
-    title: `评论「${detail.title}」`,
+    title: `评论「${headline}」`,
     warnings: [],
   };
 };
@@ -179,12 +316,15 @@ const previewTerminate = async (
     throw new DingtalkWorkspaceError('DINGTALK_NOT_ORIGINATOR');
   }
   const remark = asString(args.remark);
-  const lines = [{ label: '审批单', value: detail.title || processInstanceId }];
-  if (remark) lines.push({ label: '原因', value: remark });
+  const headline = instanceHeadline(detail);
+  const lines: ApprovalPreview['lines'] = [
+    { label: '审批单', value: headline },
+    ...(remark ? [{ label: '原因', value: remark }] : []),
+  ];
   return {
     danger: true,
     lines,
-    title: `撤销「${detail.title}」`,
+    title: `撤销「${headline}」`,
     warnings: ['仅发起人可撤销进行中的审批单，且模板需允许提交人撤销。'],
   };
 };
@@ -206,18 +346,20 @@ const previewRevert = async (
     taskId as string | number,
   );
   const remark = asString(args.remark);
-  const lines = [
-    { label: '审批单', value: detail.title || processInstanceId },
-    {
-      label: '退回至',
-      value: revertAction === 'REVERT_FOR_RESUBMIT' ? '发起人' : targetActivityId,
-    },
+  const headline = instanceHeadline(detail);
+  const targetName =
+    revertAction === 'REVERT_FOR_RESUBMIT'
+      ? '发起人'
+      : resolveActivityName(detail, targetActivityId);
+  const lines: ApprovalPreview['lines'] = [
+    { label: '审批单', value: headline },
+    { label: '退回至', value: targetName },
+    ...(remark ? [{ label: '原因', value: remark }] : []),
   ];
-  if (remark) lines.push({ label: '原因', value: remark });
   return {
     danger: true,
     lines,
-    title: `退回「${detail.title}」`,
+    title: `退回「${headline}」`,
     warnings: ['退回需要 OA 审批高级版。'],
   };
 };
@@ -244,14 +386,15 @@ const previewAppend = async (
     taskId as string | number,
   );
   const appenders = await requireStaffList(ctx.db, tokens);
+  const headline = instanceHeadline(detail);
   return {
     danger: false,
     lines: [
-      { label: '审批单', value: detail.title || processInstanceId },
+      { label: '审批单', value: headline },
       { label: '加签类型', value: type === 'before' ? '前加签' : '后加签' },
       { label: '加签人', value: appenders.map(formatStaffLabel).join('、') },
     ],
-    title: `加签「${detail.title}」`,
+    title: `加签「${headline}」`,
     warnings: ['加签需要 OA 审批高级版。'],
   };
 };
@@ -278,19 +421,25 @@ const previewSaveTemplate = (args: Record<string, unknown>): PreviewBody => {
   };
 };
 
-const previewDeleteTemplate = (args: Record<string, unknown>): PreviewBody => {
+const previewDeleteTemplate = async (
+  ctx: ApprovalServiceContext,
+  args: Record<string, unknown>,
+): Promise<PreviewBody> => {
   const processCode = asString(args.processCode);
-  if (!processCode) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  if (!processCode) return failPreview('DINGTALK_INVALID');
+  const resolved = await resolveTemplateName(ctx, processCode);
   return {
     danger: true,
-    lines: [{ label: '模板', value: processCode }],
-    title: `删除模板「${processCode}」`,
+    lines: [
+      { label: '模板名称', value: resolved.name },
+      ...(resolved.fieldCount !== undefined
+        ? [{ label: '字段数', value: String(resolved.fieldCount) }]
+        : []),
+    ],
+    title: `删除模板「${resolved.name}」`,
     warnings: ['删除模板不会删除已发起的审批单。'],
   };
 };
-
-const isRuleAction = (value: string): value is ApprovalRuleCreateInput['action'] =>
-  value === 'agree' || value === 'comment' || value === 'redirect' || value === 'refuse';
 
 const asRuleCreateInput = (args: Record<string, unknown>): ApprovalRuleCreateInput | undefined => {
   const name = asString(args.name);
@@ -332,26 +481,121 @@ const asRuleCreateInput = (args: Record<string, unknown>): ApprovalRuleCreateInp
   return input;
 };
 
+const requireRule = async (
+  ctx: ApprovalServiceContext,
+  args: Record<string, unknown>,
+): Promise<ApprovalRuleView> => {
+  const id = asString(args.id);
+  if (!id) return failPreview('DINGTALK_INVALID');
+  const service = await loadApprovalRuleService(ctx);
+  return service.get(id);
+};
+
+const enabledLabel = (enabled: boolean): string => (enabled ? '启用' : '停用');
+
+const previewDeleteRule = async (
+  ctx: ApprovalServiceContext,
+  args: Record<string, unknown>,
+): Promise<PreviewBody> => {
+  const rule = await requireRule(ctx, args);
+  return {
+    danger: true,
+    lines: [
+      { label: '规则名称', value: rule.name },
+      { label: '审批模板', value: rule.processName },
+      { label: '条件摘要', value: summarizeRuleConditions(rule.conditions) },
+      { label: '动作', value: ruleActionText(rule) },
+    ],
+    title: `删除规则「${rule.name}」`,
+    warnings: ['删除后不会撤销已经自动处理的审批。'],
+  };
+};
+
+const resolveRedirectName = async (
+  ctx: ApprovalServiceContext,
+  token: string | undefined,
+  fallback: string | null | undefined,
+): Promise<string | undefined> => {
+  if (!token) return asString(fallback);
+  const staff = await requireStaff(ctx.db, token);
+  return staff.name;
+};
+
+const previewUpdateRuleFallback = async (
+  ctx: ApprovalServiceContext,
+  args: Record<string, unknown>,
+): Promise<PreviewBody> => {
+  const rule = await requireRule(ctx, args);
+  const nextActionRaw = asString(args.action);
+  if (nextActionRaw && !isRuleAction(nextActionRaw)) return failPreview('DINGTALK_INVALID');
+
+  const nextName = asString(args.name);
+  const nextProcessCode = asString(args.processCode);
+  const nextEnabled = typeof args.enabled === 'boolean' ? args.enabled : undefined;
+  const nextConditions =
+    args.conditions != null && typeof args.conditions === 'object'
+      ? (args.conditions as ApprovalRuleConditions)
+      : undefined;
+  const nextRedirectToken =
+    typeof args.redirectToStaffToken === 'string' ? args.redirectToStaffToken : undefined;
+  const nextRedirectName = await resolveRedirectName(
+    ctx,
+    nextRedirectToken,
+    nextActionRaw === 'redirect' || rule.action === 'redirect' ? rule.redirectToName : undefined,
+  );
+  const currentAction = ruleActionText(rule);
+  const nextAction = nextActionRaw
+    ? ruleActionText({ action: nextActionRaw, redirectToName: nextRedirectName })
+    : undefined;
+  const nextTemplateName =
+    nextProcessCode && nextProcessCode !== rule.processCode
+      ? (await resolveTemplateName(ctx, nextProcessCode)).name
+      : undefined;
+  const currentConditions = summarizeRuleConditions(rule.conditions);
+  const nextConditionSummary = nextConditions ? summarizeRuleConditions(nextConditions) : undefined;
+
+  const changed: ApprovalPreview['lines'] = [
+    ...(nextName && nextName !== rule.name ? [changedLine('规则名称', rule.name, nextName)] : []),
+    ...(nextTemplateName && nextTemplateName !== rule.processName
+      ? [changedLine('审批模板', rule.processName, nextTemplateName)]
+      : []),
+    ...(nextConditionSummary && nextConditionSummary !== currentConditions
+      ? [changedLine('条件摘要', currentConditions, nextConditionSummary)]
+      : []),
+    ...(nextAction && nextAction !== currentAction
+      ? [changedLine('动作', currentAction, nextAction)]
+      : []),
+    ...(nextEnabled !== undefined && nextEnabled !== rule.enabled
+      ? [changedLine('状态', enabledLabel(rule.enabled), enabledLabel(nextEnabled))]
+      : []),
+  ];
+
+  const displayName = nextName ?? rule.name;
+  const dangerAction = nextActionRaw ?? rule.action;
+  const unchanged: ApprovalPreview['lines'] = [
+    { label: '规则名称', value: rule.name },
+    { label: '审批模板', value: rule.processName },
+    { label: '条件摘要', value: currentConditions },
+    { label: '动作', value: currentAction },
+  ];
+  return {
+    danger: dangerAction === 'refuse' || dangerAction === 'redirect' || nextEnabled === false,
+    lines: changed.length > 0 ? changed : unchanged,
+    title: `更新规则「${displayName}」`,
+    warnings: [],
+  };
+};
+
 const previewRule = async (
   ctx: ApprovalServiceContext,
   apiName: string,
   args: Record<string, unknown>,
 ): Promise<PreviewBody> => {
-  if (apiName === 'deleteApprovalRule') {
-    const id = asString(args.id) ?? '';
-    return {
-      danger: true,
-      lines: [{ label: '规则', value: id || '当前规则' }],
-      title: '删除自动审批规则',
-      warnings: ['删除后不会撤销已经自动处理的审批。'],
-    };
-  }
+  if (apiName === 'deleteApprovalRule') return previewDeleteRule(ctx, args);
 
   const createInput = asRuleCreateInput(args);
   if (createInput) {
-    // Dynamic import avoids a cycle: approvalRules/service imports DingtalkApprovalService.
-    const { DingtalkApprovalRuleService } = await import('../approvalRules');
-    const service = new DingtalkApprovalRuleService(ctx.db, ctx.userId);
+    const service = await loadApprovalRuleService(ctx);
     const preview = await service.previewRule(createInput);
     return {
       danger: preview.danger,
@@ -361,18 +605,7 @@ const previewRule = async (
     };
   }
 
-  const action = asString(args.action);
-  const name = asString(args.name) ?? asString(args.id) ?? '自动审批规则';
-  const lines: ApprovalPreview['lines'] = [{ label: '规则', value: name }];
-  if (action) lines.push({ label: '动作', value: action });
-  if (args.enabled === false) lines.push({ label: '状态', value: '停用' });
-  if (args.enabled === true) lines.push({ label: '状态', value: '启用' });
-  return {
-    danger: action === 'refuse' || action === 'redirect' || args.enabled === false,
-    lines,
-    title: `更新规则「${name}」`,
-    warnings: [],
-  };
+  return previewUpdateRuleFallback(ctx, args);
 };
 
 const WRITE_ALIASES: Record<string, string> = {
@@ -445,7 +678,7 @@ export const buildApprovalPreview = async (
       break;
     }
     case 'deleteTemplate': {
-      preview = previewDeleteTemplate(args);
+      preview = await previewDeleteTemplate(ctx, args);
       break;
     }
     case 'createApprovalRule':

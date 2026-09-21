@@ -275,6 +275,39 @@ describe('DingtalkCalendarService', () => {
     expect(preview.lines).toEqual(expect.arrayContaining([{ label: '日程', value: '周会' }]));
   });
 
+  it('preview(updateEvent) falls back to (无主题) plus start time', async () => {
+    mockRequest.mockResolvedValueOnce({ ...myEvent, summary: '' });
+    const preview = await service.preview({
+      apiName: 'updateEvent',
+      args: { eventId: 'evt-1', location: '2楼' },
+    });
+    expect(preview.lines).toEqual(
+      expect.arrayContaining([{ label: '日程', value: '(无主题) · 2026-09-22 10:00' }]),
+    );
+    expect(JSON.stringify(preview.lines)).not.toContain('evt-1');
+  });
+
+  it('preview(respondEvent) shows organizer and time', async () => {
+    mockRequest.mockResolvedValueOnce({
+      ...myEvent,
+      organizer: { displayName: '张三', id: 'union-me', self: true },
+    });
+    const preview = await service.preview({
+      apiName: 'respondEvent',
+      args: { eventId: 'evt-1', responseStatus: 'accepted' },
+    });
+    expect(preview.title).toBe('回复日程');
+    expect(preview.lines).toEqual(
+      expect.arrayContaining([
+        { label: '日程', value: '周会' },
+        { label: '组织者', value: '张三' },
+        { label: '开始', value: '2026-09-22 10:00' },
+        { label: '回复', value: '接受' },
+      ]),
+    );
+    expect(JSON.stringify(preview.lines)).not.toContain('evt-1');
+  });
+
   it('preview(createEvent) accepts reminders as minute numbers', async () => {
     const preview = await service.preview({
       apiName: 'createEvent',

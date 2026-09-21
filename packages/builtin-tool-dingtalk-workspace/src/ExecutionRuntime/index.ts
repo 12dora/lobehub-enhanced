@@ -600,6 +600,27 @@ const okResult = (
   };
 };
 
+const quoteName = (name: string | undefined): string => (name ? `「${name}」` : '');
+
+const namedWriteLine = (verb: string, name: string | undefined, generic: string): string =>
+  name ? `${verb}${quoteName(name)}` : generic;
+
+const pickResultString = (data: unknown, keys: string[]): string | undefined => {
+  const record = asRecord(data);
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  const nested = asRecord(record.event);
+  if (!nested) return undefined;
+  for (const key of keys) {
+    const value = nested[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+};
+
 /**
  * DingTalk todo + calendar execution runtime. Accepts DingtalkTodoService /
  * DingtalkCalendarService (or a test double) via constructor injection —
@@ -663,7 +684,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async createTodo(args: CreateTodoParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.createTodo(args), '已创建待办');
+      const data = await this.service.createTodo(args);
+      const subject = pickResultString(data, ['subject']) ?? args.subject;
+      return okResult(data, namedWriteLine('已创建待办', subject, '已创建待办'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -671,7 +694,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async updateTodo(args: UpdateTodoParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.updateTodo(args), `已更新待办 ${args.taskId}`);
+      const data = await this.service.updateTodo(args);
+      const subject = pickResultString(data, ['subject']) ?? args.subject;
+      return okResult(data, namedWriteLine('已更新待办', subject, '已更新待办'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -679,7 +704,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async completeTodo(args: CompleteTodoParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.completeTodo(args), `已完成待办 ${args.taskId}`);
+      const data = await this.service.completeTodo(args);
+      const subject = pickResultString(data, ['subject']);
+      return okResult(data, namedWriteLine('已完成待办', subject, '已完成待办'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -687,7 +714,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async deleteTodo(args: DeleteTodoParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.deleteTodo(args), `已删除待办 ${args.taskId}`);
+      const data = await this.service.deleteTodo(args);
+      const subject = pickResultString(data, ['subject']);
+      return okResult(data, namedWriteLine('已删除待办', subject, '已删除待办'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -731,7 +760,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async createEvent(args: CreateEventParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.createEvent(args), '已创建日程');
+      const data = await this.service.createEvent(args);
+      const summary = pickResultString(data, ['summary']) ?? args.summary;
+      return okResult(data, namedWriteLine('已创建日程', summary, '已创建日程'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -739,7 +770,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async updateEvent(args: UpdateEventParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.updateEvent(args), `已更新日程 ${args.eventId}`);
+      const data = await this.service.updateEvent(args);
+      const summary = pickResultString(data, ['summary']) ?? args.summary;
+      return okResult(data, namedWriteLine('已更新日程', summary, '已更新日程'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -747,7 +780,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async deleteEvent(args: DeleteEventParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.deleteEvent(args), `已删除日程 ${args.eventId}`);
+      const data = await this.service.deleteEvent(args);
+      const summary = pickResultString(data, ['summary']);
+      return okResult(data, namedWriteLine('已删除日程', summary, '已删除日程'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -755,7 +790,9 @@ export class DingtalkWorkspaceExecutionRuntime {
 
   async respondEvent(args: RespondEventParams): Promise<BuiltinServerRuntimeOutput> {
     try {
-      return okResult(await this.service.respondEvent(args), `已回复日程 ${args.eventId}`);
+      const data = await this.service.respondEvent(args);
+      const summary = pickResultString(data, ['summary']);
+      return okResult(data, namedWriteLine('已回复日程', summary, '已回复日程'));
     } catch (error) {
       return dingtalkFailureResult(error);
     }

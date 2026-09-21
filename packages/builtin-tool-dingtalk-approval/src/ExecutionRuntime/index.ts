@@ -680,6 +680,20 @@ const ok = (content: string, state: unknown): BuiltinServerRuntimeOutput => ({
   success: true,
 });
 
+const quoteName = (name: string | undefined): string => (name ? `「${name}」` : '');
+
+const namedWriteLine = (verb: string, name: string | undefined, generic: string): string =>
+  name ? `${verb}${quoteName(name)}` : generic;
+
+const pickWriteName = (data: unknown, keys: string[], fallback?: string): string | undefined =>
+  pickString(data, keys) ?? optionalString(fallback);
+
+const writeOk = (
+  line: string,
+  payload: Record<string, unknown>,
+  state: unknown,
+): BuiltinServerRuntimeOutput => ok(`${line}\n${compactJson(payload)}`, state);
+
 const RAW_USER_KEYS = new Set(['ccUserIds', 'ccUsers', 'originatorUserId', 'userId']);
 
 const stripRawUserIds = (value: unknown): unknown => {
@@ -898,8 +912,13 @@ export class DingtalkApprovalExecutionRuntime {
     try {
       const data = await this.service.submitApproval(args);
       const processInstanceId = pickString(data, ['processInstanceId', 'instanceId']) ?? undefined;
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: SubmitApprovalState = { processInstanceId, success: true };
-      return ok(`已提交审批\n${compactJson({ processInstanceId, result: data })}`, state);
+      return writeOk(
+        namedWriteLine('已提交', name, '已提交审批'),
+        { processInstanceId, result: data },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -908,8 +927,13 @@ export class DingtalkApprovalExecutionRuntime {
   async approveTask(args: ApproveTaskParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.approveTask(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: ApproveTaskState = { success: true, taskId: args.taskId };
-      return ok(`已同意该审批任务\n${compactJson({ result: data, taskId: args.taskId })}`, state);
+      return writeOk(
+        namedWriteLine('已同意', name, '已同意该审批'),
+        { result: data, taskId: args.taskId },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -918,8 +942,13 @@ export class DingtalkApprovalExecutionRuntime {
   async refuseTask(args: RefuseTaskParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.refuseTask(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: RefuseTaskState = { success: true, taskId: args.taskId };
-      return ok(`已拒绝该审批任务\n${compactJson({ result: data, taskId: args.taskId })}`, state);
+      return writeOk(
+        namedWriteLine('已拒绝', name, '已拒绝该审批'),
+        { result: data, taskId: args.taskId },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -928,8 +957,13 @@ export class DingtalkApprovalExecutionRuntime {
   async transferTask(args: TransferTaskParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.transferTask(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: TransferTaskState = { success: true, taskId: args.taskId };
-      return ok(`已转交该审批任务\n${compactJson({ result: data, taskId: args.taskId })}`, state);
+      return writeOk(
+        namedWriteLine('已转交', name, '已转交该审批'),
+        { result: data, taskId: args.taskId },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -938,12 +972,14 @@ export class DingtalkApprovalExecutionRuntime {
   async commentApproval(args: CommentApprovalParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.commentApproval(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: CommentApprovalState = {
         processInstanceId: args.processInstanceId,
         success: true,
       };
-      return ok(
-        `已添加评论\n${compactJson({ processInstanceId: args.processInstanceId, result: data })}`,
+      return writeOk(
+        namedWriteLine('已评论', name, '已添加评论'),
+        { processInstanceId: args.processInstanceId, result: data },
         state,
       );
     } catch (error) {
@@ -954,12 +990,14 @@ export class DingtalkApprovalExecutionRuntime {
   async withdrawApplication(args: WithdrawApplicationParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.withdrawApplication(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: WithdrawApplicationState = {
         processInstanceId: args.processInstanceId,
         success: true,
       };
-      return ok(
-        `已撤销该审批单\n${compactJson({ processInstanceId: args.processInstanceId, result: data })}`,
+      return writeOk(
+        namedWriteLine('已撤销', name, '已撤销该审批单'),
+        { processInstanceId: args.processInstanceId, result: data },
         state,
       );
     } catch (error) {
@@ -970,8 +1008,13 @@ export class DingtalkApprovalExecutionRuntime {
   async returnTask(args: ReturnTaskParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.returnTask(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: ReturnTaskState = { success: true, taskId: args.taskId };
-      return ok(`已退回该审批任务\n${compactJson({ result: data, taskId: args.taskId })}`, state);
+      return writeOk(
+        namedWriteLine('已退回', name, '已退回该审批'),
+        { result: data, taskId: args.taskId },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -980,8 +1023,13 @@ export class DingtalkApprovalExecutionRuntime {
   async addApprover(args: AddApproverParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.addApprover(args);
+      const name = pickWriteName(data, ['title', 'name', 'processName']);
       const state: AddApproverState = { success: true, taskId: args.taskId };
-      return ok(`已加签\n${compactJson({ result: data, taskId: args.taskId })}`, state);
+      return writeOk(
+        namedWriteLine('已加签', name, '已加签'),
+        { result: data, taskId: args.taskId },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -1018,7 +1066,7 @@ export class DingtalkApprovalExecutionRuntime {
       ).join('\n');
       const extraNotes = notes && notes.length > 0 ? `说明：${notes.join('；')}` : undefined;
       const content = [
-        `已保存审批模板「${name}」${processCode ? `（processCode：${processCode}）` : ''}。本次写入结果是权威结果，请勿再调用 listTemplates 或 getTemplateSchema 核对。`,
+        `已保存审批模板「${name}」。本次写入结果是权威结果，请勿再调用 listTemplates 或 getTemplateSchema 核对。`,
         fieldLines ? `表单字段：\n${fieldLines}` : undefined,
         `审批流、可见范围、抄送无法通过接口配置，请提醒用户完成以下步骤：\n${stepLines}`,
         extraNotes,
@@ -1036,9 +1084,11 @@ export class DingtalkApprovalExecutionRuntime {
   async deleteTemplate(args: DeleteTemplateParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.deleteTemplate(args);
+      const name = pickWriteName(data, ['name', 'title']);
       const state: DeleteTemplateState = { processCode: args.processCode, success: true };
-      return ok(
-        `已删除审批模板\n${compactJson({ processCode: args.processCode, result: data })}`,
+      return writeOk(
+        namedWriteLine('已删除审批模板', name, '已删除审批模板'),
+        { processCode: args.processCode, result: data },
         state,
       );
     } catch (error) {
@@ -1052,8 +1102,13 @@ export class DingtalkApprovalExecutionRuntime {
     try {
       const data = await this.service.createApprovalRule(args);
       const ruleId = pickString(data, ['id', 'ruleId']);
+      const name = pickWriteName(data, ['name'], args.name);
       const state: CreateApprovalRuleState = { ruleId, success: true };
-      return ok(`已创建自动审批规则\n${compactJson({ result: data, ruleId })}`, state);
+      return writeOk(
+        namedWriteLine('已创建自动审批规则', name, '已创建自动审批规则'),
+        { result: data, ruleId },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -1062,8 +1117,13 @@ export class DingtalkApprovalExecutionRuntime {
   async updateApprovalRule(args: UpdateApprovalRuleParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.updateApprovalRule(args);
+      const name = pickWriteName(data, ['name'], args.name);
       const state: UpdateApprovalRuleState = { ruleId: args.id, success: true };
-      return ok(`已更新自动审批规则\n${compactJson({ result: data, ruleId: args.id })}`, state);
+      return writeOk(
+        namedWriteLine('已更新自动审批规则', name, '已更新自动审批规则'),
+        { result: data, ruleId: args.id },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -1072,8 +1132,13 @@ export class DingtalkApprovalExecutionRuntime {
   async deleteApprovalRule(args: DeleteApprovalRuleParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.deleteApprovalRule(args);
+      const name = pickWriteName(data, ['name']);
       const state: DeleteApprovalRuleState = { ruleId: args.id, success: true };
-      return ok(`已删除自动审批规则\n${compactJson({ result: data, ruleId: args.id })}`, state);
+      return writeOk(
+        namedWriteLine('已删除自动审批规则', name, '已删除自动审批规则'),
+        { result: data, ruleId: args.id },
+        state,
+      );
     } catch (error) {
       return dingtalkFailureResult(error);
     }

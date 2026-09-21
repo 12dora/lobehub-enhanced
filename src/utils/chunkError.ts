@@ -26,15 +26,29 @@ export function isChunkLoadError(error: unknown): boolean {
 const RELOAD_KEY = 'lobe-chunk-reload';
 
 /**
- * Auto-reload on chunk load error. Uses sessionStorage to prevent infinite reload loops.
+ * Two chunk failures this close together mean the reload did not help (the new
+ * chunk is genuinely broken / offline), so we stop and let the user decide.
+ *
+ * The marker is a timestamp rather than a boolean on purpose: a long-lived tab
+ * survives several deploys, and a boolean latch would spend its single
+ * auto-recovery on the first one and then drop the user on the route error
+ * screen for every later deploy — the failure mode that looked like a crash.
+ */
+const RELOAD_COOLDOWN = 10_000;
+
+/**
+ * Auto-reload on chunk load error, at most once per {@link RELOAD_COOLDOWN}
+ * window, so a chunk that keeps failing can never spin into a reload loop.
  */
 export function notifyChunkError(): void {
-  const reloaded = sessionStorage.getItem(RELOAD_KEY);
-  if (reloaded) {
+  const lastReloadAt = Number(sessionStorage.getItem(RELOAD_KEY)) || 0;
+
+  if (lastReloadAt && Date.now() - lastReloadAt < RELOAD_COOLDOWN) {
     sessionStorage.removeItem(RELOAD_KEY);
     toast.error('There is a new version for the web app. Refresh the page to update');
     return;
   }
-  sessionStorage.setItem(RELOAD_KEY, '1');
+
+  sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
   window.location.reload();
 }

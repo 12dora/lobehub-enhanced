@@ -610,6 +610,8 @@ describe('DingtalkApprovalExecutionRuntime', () => {
     expect(result.content).toContain('可见范围');
     expect(result.content).toContain('权威结果');
     expect(result.content).toContain('listTemplates');
+    expect(result.content).toContain('已保存审批模板「工具借用审批」');
+    expect(result.content).not.toContain('processCode：');
     expect(result.content).not.toContain('upstream');
   });
 
@@ -724,7 +726,40 @@ describe('DingtalkApprovalExecutionRuntime', () => {
     const result = await runtime.approveTask({ processInstanceId: 'pi-1', taskId: 't-1' });
 
     expect(result.success).toBe(true);
-    expect(result.content).toContain('已同意该审批任务');
+    expect(result.content).toContain('已同意该审批');
+    expect(result.content.split('\n')[0]).not.toContain('pi-1');
+    expect(result.content.split('\n')[0]).not.toContain('t-1');
     expect(result.state).toMatchObject({ success: true, taskId: 't-1' });
+  });
+
+  it('names write success text from the result and keeps ids in JSON only', async () => {
+    const approveTask = vi.fn().mockResolvedValue({ result: true, title: '出差申请' });
+    const deleteTemplate = vi.fn().mockResolvedValue({ name: '设备转租审批' });
+    const createApprovalRule = vi.fn().mockResolvedValue({ id: 'rule-1', name: '自动拒绝' });
+    const runtime = createDingtalkApprovalRuntime(
+      makeService({ approveTask, createApprovalRule, deleteTemplate }),
+    );
+
+    const approved = await runtime.approveTask({ processInstanceId: 'pi-1', taskId: 't-1' });
+    expect(approved.content.split('\n')[0]).toBe('已同意「出差申请」');
+    expect(approved.content).toContain('"taskId":"t-1"');
+
+    const deleted = await runtime.deleteTemplate({
+      processCode: 'PROC-84322A73-E989-4C4E-B178-C4BA2EE5ECBB',
+    });
+    expect(deleted.content.split('\n')[0]).toBe('已删除审批模板「设备转租审批」');
+    expect(deleted.content.split('\n')[0]).not.toContain('PROC-');
+    expect(deleted.content).toContain('PROC-84322A73-E989-4C4E-B178-C4BA2EE5ECBB');
+
+    const created = await runtime.createApprovalRule({
+      action: 'refuse',
+      conditions: { fields: [], match: 'all' },
+      name: '自动拒绝',
+      processCode: 'PROC-1',
+      processName: '出差',
+    });
+    expect(created.content.split('\n')[0]).toBe('已创建自动审批规则「自动拒绝」');
+    expect(created.content.split('\n')[0]).not.toContain('rule-1');
+    expect(created.content).toContain('"ruleId":"rule-1"');
   });
 });

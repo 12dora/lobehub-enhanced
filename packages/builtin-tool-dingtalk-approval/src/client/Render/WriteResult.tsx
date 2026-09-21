@@ -11,6 +11,7 @@ import type { DingtalkApprovalWriteApiNameType } from '../apiNames';
 import ErrorNotice from '../components/ErrorNotice';
 import { argHint } from '../Inspector/argHint';
 import { toWriteFacts } from './rows';
+import { useUnnamedText } from './unnamed';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -22,13 +23,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const WriteResult = memo<BuiltinRenderProps<Record<string, unknown>>>(
   ({ apiName, args, pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     const stateError = isRecord(pluginState) ? pluginState.error : undefined;
     if (pluginError || stateError) return <ErrorNotice error={pluginError ?? stateError} />;
     if (!apiName) return null;
 
     const api = apiName as DingtalkApprovalWriteApiNameType;
-    const { meta, title } = toWriteFacts(pluginState);
+    const { meta, title } = toWriteFacts(pluginState, unnamed.mask);
+    // No facts at all is the right outcome for an id-only payload: 「已删除模板」
+    // already says what happened.
     const facts = [title, meta].filter(Boolean).join(' · ') || argHint(args) || '';
 
     return (

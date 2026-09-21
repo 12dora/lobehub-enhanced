@@ -90,8 +90,37 @@ describe('toResultRowList', () => {
     expect(list.truncated).toBe(true);
   });
 
-  it('drops rows without a human title', () => {
-    expect(toResultRowList({ items: [{ processInstanceId: 'x' }] }).rows).toEqual([]);
+  it('keeps an unnamed row without inventing a title for it', () => {
+    // The card names it 「未命名条目」: dropping it would make the list disagree with
+    // the count printed beside it.
+    expect(
+      toResultRowList({ items: [{ processCode: 'PROC-84322A73-E989-4C4E-B178-C4BA2EE5ECBB' }] })
+        .rows,
+    ).toEqual([
+      {
+        key: 'PROC-84322A73-E989-4C4E-B178-C4BA2EE5ECBB',
+        meta: undefined,
+        tag: undefined,
+        title: undefined,
+      },
+    ]);
+  });
+
+  it('refuses a processCode as a title', () => {
+    const [row] = toResultRowList({
+      templates: [{ name: 'PROC-84322A73-E989-4C4E-B178-C4BA2EE5ECBB' }],
+    }).rows;
+
+    expect(row.title).toBeUndefined();
+  });
+
+  it('substitutes a noun for a staff token inside a value', () => {
+    const [row] = toResultRowList(
+      { items: [{ originatorName: 'staff:012345', title: '差旅报销' }] },
+      { person: '同事' },
+    ).rows;
+
+    expect(row.meta).toBe('同事');
   });
 });
 

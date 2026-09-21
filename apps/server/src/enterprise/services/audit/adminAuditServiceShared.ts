@@ -14,10 +14,64 @@ import type { UserPublicRef } from '../../contracts/shared/userPublicRef';
 import { getEnterpriseErrorBody } from '../../guards/enterpriseErrors';
 import { toPublicPlatformAuditItem } from '../platformAudit';
 import { userRefOf } from '../shared/userRefResolver';
+import { AUDIT_ACTION, AUDIT_TARGET_TYPE } from './auditActionCatalog';
 import { targetLabelOf } from './targetLabelResolver';
 
 export type ConversationsGetInput = { topicId: string; userId: string };
 export type EventsStatsInput = { from?: Date; to?: Date };
+
+/** DingTalk targets live upstream, not in our DB — labels come from the audit row diffs. */
+const DINGTALK_DIFF_LABEL_TARGET_TYPES: ReadonlySet<string> = new Set([
+  AUDIT_TARGET_TYPE.DINGTALK_APPROVAL,
+  AUDIT_TARGET_TYPE.DINGTALK_CALENDAR,
+  AUDIT_TARGET_TYPE.DINGTALK_TODO,
+]);
+
+const DINGTALK_DIFF_LABEL_KEYS = [
+  'title',
+  'name',
+  'summary',
+  'subject',
+  'processName',
+  'ruleName',
+] as const;
+
+const DINGTALK_AUDIT_TARGET_LABEL_MAX_CHARS = 80;
+
+const isDiffRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const firstDingtalkDiffLabel = (diff: unknown): string | null => {
+  if (!isDiffRecord(diff)) return null;
+  for (const key of DINGTALK_DIFF_LABEL_KEYS) {
+    const value = diff[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+};
+
+const isDingtalkDiffLabelRow = (row: PlatformAuditLogItem): boolean =>
+  DINGTALK_DIFF_LABEL_TARGET_TYPES.has(row.targetType) ||
+  row.action === AUDIT_ACTION.DINGTALK_APPROVAL_RULE_EXECUTED ||
+  row.action === AUDIT_ACTION.SYSTEM_DINGTALK_APPROVAL_RULE_DISABLE ||
+  row.action.startsWith('dingtalk.approval.rule.');
+
+/**
+ * When batch DB resolution misses (DingTalk / rule targets), derive a display
+ * label from stored diffs. Same credential redaction as conversation labels.
+ */
+const dingtalkAuditDiffTargetLabel = (row: PlatformAuditLogItem): string | null => {
+  if (!isDingtalkDiffLabelRow(row)) return null;
+  const raw = firstDingtalkDiffLabel(row.afterDiff) ?? firstDingtalkDiffLabel(row.beforeDiff);
+  if (!raw) return null;
+  const redacted = applyAuditConversationRedaction(raw, null).trim();
+  if (!redacted) return null;
+  return redacted.length <= DINGTALK_AUDIT_TARGET_LABEL_MAX_CHARS
+    ? redacted
+    : redacted.slice(0, DINGTALK_AUDIT_TARGET_LABEL_MAX_CHARS);
+};
 
 export const toPolicyPublic = (
   policy: PlatformAuditPolicyItem,
@@ -55,7 +109,8 @@ export const toEventListItem = (
   requestId: row.requestId,
   result: row.result,
   targetId: row.targetId,
-  targetLabel: targetLabelOf(row.targetType, row.targetId, targetLabels),
+  targetLabel:
+    targetLabelOf(row.targetType, row.targetId, targetLabels) ?? dingtalkAuditDiffTargetLabel(row),
   targetType: row.targetType,
   userAgent: row.userAgent,
 });

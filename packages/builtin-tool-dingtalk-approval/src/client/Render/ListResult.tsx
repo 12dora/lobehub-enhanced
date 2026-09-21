@@ -14,6 +14,7 @@ import { RESULT_VISIBLE_ROW_LIMIT } from '../components/constants';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultRow } from '../components/ResultCard';
 import { toResultRowList } from './rows';
+import { useUnnamedText } from './unnamed';
 
 const ICONS: Partial<Record<DingtalkApprovalApiNameType, LucideIcon>> = {
   [DingtalkApprovalApiName.listApprovalRules]: Zap,
@@ -27,12 +28,13 @@ const ICONS: Partial<Record<DingtalkApprovalApiNameType, LucideIcon>> = {
 const ListResult = memo<BuiltinRenderProps<Record<string, unknown>>>(
   ({ apiName, pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
     if (!apiName) return null;
 
     const api = apiName as DingtalkApprovalApiNameType;
-    const { rows, total, truncated } = toResultRowList(pluginState);
+    const { rows, total, truncated } = toResultRowList(pluginState, unnamed.mask);
     const visible = rows.slice(0, RESULT_VISIBLE_ROW_LIMIT);
     const overflow = Math.max(total - visible.length, 0);
 
@@ -58,7 +60,7 @@ const ListResult = memo<BuiltinRenderProps<Record<string, unknown>>>(
               <ResultRow
                 key={row.key}
                 meta={row.meta}
-                title={row.title}
+                title={row.title ?? unnamed.item}
                 tag={
                   row.tag
                     ? t(`builtins.lobe-dingtalk-approval.ui.render.tag.${row.tag}` as const)

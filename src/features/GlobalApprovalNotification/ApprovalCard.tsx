@@ -22,6 +22,7 @@ import { useChatStore } from '@/store/chat';
 import { topicSelectors } from '@/store/chat/selectors';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
 
+import CancelInterventionButton from './CancelInterventionButton';
 import { styles } from './styles';
 import { type GlobalApprovalGroup } from './useGlobalPendingApprovals';
 
@@ -167,6 +168,7 @@ const ApprovalCard = memo<ApprovalCardProps>(({ group }) => {
               onClick={handleGoToConversation}
             />
           )}
+          <CancelInterventionButton messageId={activeIntervention.toolMessageId} />
         </div>
 
         {userRequest && (

@@ -9,6 +9,8 @@ export {
   DINGTALK_APPROVAL_I18N_PREFIX,
   RESULT_VISIBLE_ROW_LIMIT,
 } from './constants';
+export type { MaskIdentifiersOptions } from './displayText';
+export { maskIdentifiers } from './displayText';
 export { default as ErrorNotice } from './ErrorNotice';
 export type { DingtalkErrorCode } from './previewError';
 export { DINGTALK_ERROR_CODES, resolveDingtalkErrorCode } from './previewError';

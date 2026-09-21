@@ -6,6 +6,7 @@ import type {
   MeetingRoomView,
   TodoView,
 } from '../../types';
+import { maskIdentifiers } from '../components/displayText';
 
 /** DingTalk times are Asia/Shanghai wall-clock (shared contract §5). */
 const TIME_ZONE = 'Asia/Shanghai';
@@ -54,73 +55,74 @@ export const formatTimeRange = (
   return fromDate === toDate && fromTime && toTime ? `${from} – ${toTime}` : `${from} – ${to}`;
 };
 
-/** Drops the `staff:` prefix so a token never leaks into the UI as-is. */
-export const readStaffLabel = (token?: string): string | undefined => {
-  if (!token) return undefined;
-  const label = token.startsWith('staff:') ? token.slice('staff:'.length) : token;
-
-  return label.trim() || undefined;
-};
+/**
+ * The display name behind a `staffToken` field, or undefined when the field only
+ * holds the token. The id inside `staff:<id>` is not a shorter name for the person
+ * — it is the same secret written without its prefix.
+ */
+export const readPersonName = (token?: string): string | undefined => maskIdentifiers(token);
 
 export interface TodoRow {
   due?: string;
   isDone: boolean;
   key: string;
   priority?: number;
-  subject: string;
+  /** Absent when the payload carried no readable subject — never a todo id. */
+  subject?: string;
 }
 
+/**
+ * Rows keep their place even unnamed: the card names them with a neutral noun,
+ * because a list that silently drops entries disagrees with the count beside it.
+ */
 export const toTodoRows = (items?: TodoView[]): TodoRow[] =>
-  (items ?? [])
-    .map((todo, index) => ({
-      due: formatDateTime(todo.dueTime),
-      isDone: todo.isDone === true,
-      key: todo.taskId ?? String(index),
-      priority: typeof todo.priority === 'number' ? todo.priority : undefined,
-      subject: todo.subject?.trim() ?? '',
-    }))
-    .filter((row) => !!row.subject);
+  (items ?? []).map((todo, index) => ({
+    due: formatDateTime(todo.dueTime),
+    isDone: todo.isDone === true,
+    key: todo.taskId ?? String(index),
+    priority: typeof todo.priority === 'number' ? todo.priority : undefined,
+    subject: maskIdentifiers(todo.subject),
+  }));
 
 export interface EventRow {
   isAllDay: boolean;
   key: string;
   location?: string;
-  summary: string;
+  /** Absent when the payload carried no readable summary — never an `eventId`. */
+  summary?: string;
   timeRange?: string;
 }
 
 export const toEventRows = (items?: CalendarEventView[]): EventRow[] =>
-  (items ?? [])
-    .map((event, index) => ({
-      isAllDay: event.isAllDay === true,
-      key: event.eventId ?? event.id ?? String(index),
-      location: event.location?.trim() || undefined,
-      summary: event.summary?.trim() ?? '',
-      timeRange: event.isAllDay
-        ? formatDateTime(event.start)?.split(' ')[0]
-        : formatTimeRange(event.start, event.end),
-    }))
-    .filter((row) => !!row.summary);
+  (items ?? []).map((event, index) => ({
+    isAllDay: event.isAllDay === true,
+    key: event.eventId ?? event.id ?? String(index),
+    location: maskIdentifiers(event.location),
+    summary: maskIdentifiers(event.summary),
+    timeRange: event.isAllDay
+      ? formatDateTime(event.start)?.split(' ')[0]
+      : formatTimeRange(event.start, event.end),
+  }));
 
 export interface RoomRow {
   capacity?: number;
   key: string;
-  name: string;
+  /** Absent when the payload carried no readable name — never a `roomId`. */
+  name?: string;
 }
 
 export const toRoomRows = (items?: MeetingRoomView[]): RoomRow[] =>
-  (items ?? [])
-    .map((room, index) => ({
-      capacity: typeof room.roomCapacity === 'number' ? room.roomCapacity : undefined,
-      key: room.roomId ?? String(index),
-      name: room.roomName?.trim() ?? '',
-    }))
-    .filter((row) => !!row.name);
+  (items ?? []).map((room, index) => ({
+    capacity: typeof room.roomCapacity === 'number' ? room.roomCapacity : undefined,
+    key: room.roomId ?? String(index),
+    name: maskIdentifiers(room.roomName),
+  }));
 
 export interface FreeBusyRow {
   blockCount: number;
   key: string;
-  name: string;
+  /** Absent when the service resolved no name — never a `unionId` or staff token. */
+  name?: string;
   ranges?: string;
 }
 
@@ -132,9 +134,9 @@ export const toFreeBusyRows = (people?: FreeBusyPerson[]): FreeBusyRow[] =>
     return {
       blockCount: blocks.length,
       key: person.unionId ?? person.staffToken ?? String(index),
-      // The service resolves「姓名 · 部门」server-side; the stripped token is only a
-      // fallback, because a roster of opaque staff ids answers nobody's question.
-      name: person.name?.trim() || readStaffLabel(person.staffToken) || '',
+      // The service resolves「姓名 · 部门」server-side. When it could not, the row is
+      // 「同事」: a roster of opaque staff ids answers nobody's question.
+      name: maskIdentifiers(person.name) ?? readPersonName(person.staffToken),
       ranges: blocks
         .slice(0, 2)
         .map((block) => formatTimeRange(block.start, block.end))
@@ -145,8 +147,10 @@ export const toFreeBusyRows = (people?: FreeBusyPerson[]): FreeBusyRow[] =>
 
 export interface DirectoryRow {
   key: string;
+  /** Which neutral noun the card falls back to when `name` is absent. */
+  kind: 'department' | 'user';
   meta?: string;
-  name: string;
+  name?: string;
 }
 
 export const toDirectoryRows = (hits?: {
@@ -155,12 +159,14 @@ export const toDirectoryRows = (hits?: {
 }): DirectoryRow[] => [
   ...(hits?.users ?? []).map((user) => ({
     key: `user-${user.staffId}`,
-    meta: user.deptPath || user.leafDeptName || undefined,
-    name: user.name,
+    kind: 'user' as const,
+    meta: maskIdentifiers(user.deptPath) ?? maskIdentifiers(user.leafDeptName),
+    name: maskIdentifiers(user.name),
   })),
   ...(hits?.departments ?? []).map((dept) => ({
     key: `dept-${dept.deptId}`,
-    meta: dept.pathNames || undefined,
-    name: dept.name,
+    kind: 'department' as const,
+    meta: maskIdentifiers(dept.pathNames),
+    name: maskIdentifiers(dept.name),
   })),
 ];

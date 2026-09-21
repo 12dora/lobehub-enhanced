@@ -12,11 +12,13 @@ import { RESULT_VISIBLE_ROW_LIMIT } from '../components/constants';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultRow } from '../components/ResultCard';
 import { toDirectoryRows } from './rows';
+import { useUnnamedText } from './unnamed';
 
 /** `searchDirectory` result: people and departments that matched. */
 const DirectoryList = memo<BuiltinRenderProps<Record<string, unknown>, SearchDirectoryState>>(
   ({ pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
 
@@ -41,7 +43,13 @@ const DirectoryList = memo<BuiltinRenderProps<Record<string, unknown>, SearchDir
         ) : (
           <Flexbox gap={6}>
             {visible.map((row) => (
-              <ResultRow key={row.key} meta={row.meta} title={row.name} />
+              <ResultRow
+                key={row.key}
+                meta={row.meta}
+                title={
+                  row.name ?? (row.kind === 'department' ? unnamed.department : unnamed.person)
+                }
+              />
             ))}
             {overflow > 0 && (
               <span style={{ color: cssVar.colorTextTertiary, fontSize: 12 }}>

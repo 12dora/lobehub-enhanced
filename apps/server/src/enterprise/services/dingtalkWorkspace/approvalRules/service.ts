@@ -15,6 +15,9 @@ import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
 import type { DingtalkApprovalRuleItem } from '@/database/schemas/dingtalkApprovalRule';
 import type { LobeChatDatabase } from '@/database/type';
 
+import type { AuditAction } from '../../audit/auditActionCatalog';
+import { AUDIT_ACTION, AUDIT_TARGET_TYPE } from '../../audit/auditActionCatalog';
+import { PlatformAuditService } from '../../platformAudit';
 import { DingtalkApprovalService, type TemplateField } from '../approval';
 import { assertDingtalkFeature, getDingtalkWorkspaceCapabilities } from '../capabilities';
 import { type DingtalkStaffCandidate, resolveStaff, type ResolveStaffResult } from '../directory';
@@ -103,6 +106,60 @@ const trimRemark = (remark: string | null | undefined): string | null => {
   const trimmed = remark.trim();
   if (trimmed.length > MAX_REMARK_CHARS) throwWorkspace('DINGTALK_INVALID');
   return trimmed || null;
+};
+
+const ruleMutationAuditAction = (kind: 'create' | 'delete' | 'disable' | 'update'): AuditAction => {
+  switch (kind) {
+    case 'create': {
+      return 'dingtalk.approval.rule.create' as AuditAction;
+    }
+    case 'delete': {
+      return 'dingtalk.approval.rule.delete' as AuditAction;
+    }
+    case 'disable': {
+      return AUDIT_ACTION.SYSTEM_DINGTALK_APPROVAL_RULE_DISABLE;
+    }
+    case 'update': {
+      return 'dingtalk.approval.rule.update' as AuditAction;
+    }
+  }
+};
+
+const appendRuleAudit = async (input: {
+  action: 'create' | 'delete' | 'disable' | 'update';
+  db: LobeChatDatabase;
+  processName?: string | null;
+  ruleName?: string | null;
+  targetId: string;
+  title?: string | null;
+  userId: string;
+}): Promise<void> => {
+  const ruleName = input.ruleName?.trim() || undefined;
+  const processName = input.processName?.trim() || undefined;
+  const title = input.title?.trim() || undefined;
+  if (!ruleName && !processName && !title) return;
+  const afterDiff: Record<string, unknown> = {};
+  if (ruleName) {
+    afterDiff.name = ruleName;
+    afterDiff.ruleName = ruleName;
+  }
+  if (processName) afterDiff.processName = processName;
+  if (title) afterDiff.title = title;
+  try {
+    await new PlatformAuditService(input.db).append({
+      action: ruleMutationAuditAction(input.action),
+      actorUserId: input.userId,
+      afterDiff,
+      result: 'success',
+      targetId: input.targetId,
+      targetType: AUDIT_TARGET_TYPE.DINGTALK_APPROVAL,
+    });
+  } catch (error) {
+    console.error('[dingtalk.approval.rule] audit append failed', {
+      action: input.action,
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
 };
 
 const validateConditionsShape = (conditions: ApprovalRuleConditions): ApprovalRuleConditions => {
@@ -309,6 +366,14 @@ export class DingtalkApprovalRuleService {
     const saved =
       input.enabled === false ? await this.model.update(created.id, { enabled: false }) : created;
     invalidateApprovalRuleWorkerMemory(identity.staffId);
+    await appendRuleAudit({
+      action: 'create',
+      db: this.db,
+      processName: saved.processName,
+      ruleName: saved.name,
+      targetId: saved.id,
+      userId: this.userId,
+    });
     return saved;
   };
 
@@ -395,6 +460,14 @@ export class DingtalkApprovalRuleService {
     try {
       const saved = await this.model.update(id, next);
       invalidateApprovalRuleWorkerMemory(identity.staffId);
+      await appendRuleAudit({
+        action: patch.enabled === false ? 'disable' : 'update',
+        db: this.db,
+        processName: saved.processName ?? existing.processName,
+        ruleName: saved.name ?? existing.name,
+        targetId: saved.id,
+        userId: this.userId,
+      });
       return saved;
     } catch (error) {
       if (error instanceof DingtalkApprovalRuleEnableBlockedError) {
@@ -406,9 +479,18 @@ export class DingtalkApprovalRuleService {
 
   remove = async (id: string): Promise<{ success: true }> => {
     const identity = await this.assertReady();
+    const existing = await this.model.findById(id);
     const deleted = await this.model.delete(id);
     if (!deleted) throwWorkspace('DINGTALK_NOT_FOUND');
     invalidateApprovalRuleWorkerMemory(identity.staffId);
+    await appendRuleAudit({
+      action: 'delete',
+      db: this.db,
+      processName: existing?.processName,
+      ruleName: existing?.name,
+      targetId: id,
+      userId: this.userId,
+    });
     return { success: true };
   };
 

@@ -12,6 +12,7 @@ import { RESULT_VISIBLE_ROW_LIMIT } from '../components/constants';
 import ErrorNotice from '../components/ErrorNotice';
 import { ResultCard, ResultRow } from '../components/ResultCard';
 import { toTodoRows } from './rows';
+import { useUnnamedText } from './unnamed';
 
 const PRIORITY_KEYS = {
   10: 'builtins.lobe-dingtalk-workspace.ui.render.priority.low',
@@ -29,6 +30,7 @@ const priorityKey = (priority?: number) =>
 const TodoList = memo<BuiltinRenderProps<Record<string, unknown>, ListTodosState>>(
   ({ pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
+    const unnamed = useUnnamedText();
 
     if (pluginError) return <ErrorNotice error={pluginError} />;
 
@@ -60,7 +62,7 @@ const TodoList = memo<BuiltinRenderProps<Record<string, unknown>, ListTodosState
                 <ResultRow
                   key={row.key}
                   meta={[row.due, priority ? t(priority) : undefined].filter(Boolean).join(' · ')}
-                  title={row.subject}
+                  title={row.subject ?? unnamed.todo}
                   tag={t(
                     row.isDone
                       ? 'builtins.lobe-dingtalk-workspace.ui.render.tag.done'

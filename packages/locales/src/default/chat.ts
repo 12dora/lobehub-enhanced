@@ -786,6 +786,8 @@ export default {
   'generatedFileUploadFailed': 'Failed to save the generated file {{name}}. Please try again.',
   'floatingChatPanel.collapse': 'Collapse chat',
   'floatingChatPanel.expand': 'Expand chat',
+  'globalApproval.cancel': 'Cancel this action',
+  'globalApproval.cancelReason': 'The user cancelled this action.',
   'globalApproval.collapse': 'Collapse',
   'globalApproval.goToConversation': 'Open conversation',
   'globalApproval.moreCount_one': '{{count}} more pending',

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatDateTime,
   formatTimeRange,
-  readStaffLabel,
+  readPersonName,
   toDirectoryRows,
   toEventRows,
   toFreeBusyRows,
@@ -45,20 +45,21 @@ describe('formatTimeRange', () => {
   });
 });
 
-describe('readStaffLabel', () => {
-  it('strips the staff token prefix', () => {
-    expect(readStaffLabel('staff:012345')).toBe('012345');
-    expect(readStaffLabel('张三')).toBe('张三');
-    expect(readStaffLabel()).toBeUndefined();
+describe('readPersonName', () => {
+  it('reads a resolved name and refuses a staff token', () => {
+    expect(readPersonName('张三')).toBe('张三');
+    // The id inside `staff:<id>` is not a shorter name for the person.
+    expect(readPersonName('staff:012345')).toBeUndefined();
+    expect(readPersonName()).toBeUndefined();
   });
 });
 
 describe('toTodoRows', () => {
-  it('maps todos and drops untitled ones', () => {
+  it('maps todos and reports an untitled one as unnamed rather than dropping it', () => {
     expect(
       toTodoRows([
         { dueTime: Date.UTC(2026, 8, 21, 1, 30), isDone: false, priority: 30, subject: '写周报' },
-        { taskId: 'blank' },
+        { taskId: '2049183091773' },
       ]),
     ).toEqual([
       {
@@ -67,6 +68,14 @@ describe('toTodoRows', () => {
         key: '0',
         priority: 30,
         subject: '写周报',
+      },
+      {
+        due: undefined,
+        isDone: false,
+        key: '2049183091773',
+        priority: undefined,
+        // The card names it 「未命名待办」; the taskId never becomes its title.
+        subject: undefined,
       },
     ]);
   });
@@ -138,9 +147,9 @@ describe('toFreeBusyRows', () => {
     ]);
   });
 
-  it('falls back to the stripped token when no name was resolved', () => {
+  it('reports no name when the service resolved none, instead of the raw token', () => {
     expect(toFreeBusyRows([{ blocks: [], staffToken: 'staff:012345' }])).toEqual([
-      { blockCount: 0, key: 'staff:012345', name: '012345', ranges: '' },
+      { blockCount: 0, key: 'staff:012345', name: undefined, ranges: '' },
     ]);
   });
 });
@@ -153,8 +162,8 @@ describe('toDirectoryRows', () => {
         users: [{ deptPath: '公司/研发部', name: '张三', staffId: 's1' }],
       }),
     ).toEqual([
-      { key: 'user-s1', meta: '公司/研发部', name: '张三' },
-      { key: 'dept-d1', meta: '公司/研发部', name: '研发部' },
+      { key: 'user-s1', kind: 'user', meta: '公司/研发部', name: '张三' },
+      { key: 'dept-d1', kind: 'department', meta: '公司/研发部', name: '研发部' },
     ]);
   });
 });

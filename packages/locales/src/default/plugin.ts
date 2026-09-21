@@ -330,7 +330,8 @@ export default {
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_APPROVAL_ADMIN':
     'Approval admin permission required',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_CONFIGURED': 'DingTalk is not configured',
-  'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_FOUND': 'Todo or event not found',
+  'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_FOUND':
+    'That to-do or event was not found. It may have been deleted, or you may not have access.',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_ORIGINATOR':
     'Only the originator can do this',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_TASK_OWNER':
@@ -364,6 +365,12 @@ export default {
   'builtins.lobe-dingtalk-workspace.ui.render.priority.urgent': 'Urgent',
   'builtins.lobe-dingtalk-workspace.ui.render.tag.done': 'Done',
   'builtins.lobe-dingtalk-workspace.ui.render.tag.pending': 'Pending',
+  'builtins.lobe-dingtalk-workspace.ui.render.unnamed.department': 'Department',
+  'builtins.lobe-dingtalk-workspace.ui.render.unnamed.event': 'Untitled event',
+  'builtins.lobe-dingtalk-workspace.ui.render.unnamed.item': 'Untitled item',
+  'builtins.lobe-dingtalk-workspace.ui.render.unnamed.person': 'Colleague',
+  'builtins.lobe-dingtalk-workspace.ui.render.unnamed.room': 'Unnamed meeting room',
+  'builtins.lobe-dingtalk-workspace.ui.render.unnamed.todo': 'Untitled to-do',
   'builtins.lobe-dingtalk-workspace.ui.written.completeTodo': 'To-do completed',
   'builtins.lobe-dingtalk-workspace.ui.written.createEvent': 'Event created',
   'builtins.lobe-dingtalk-workspace.ui.written.createTodo': 'To-do created',
@@ -603,7 +610,8 @@ export default {
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_APPROVAL_ADMIN':
     'Approval admin permission required',
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_CONFIGURED': 'DingTalk is not configured',
-  'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_FOUND': 'Approval not found',
+  'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_FOUND':
+    'Nothing found to act on. It may have been deleted, or you may not have access.',
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_ORIGINATOR':
     'Only the originator can do this',
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_TASK_OWNER':
@@ -627,6 +635,9 @@ export default {
   'builtins.lobe-dingtalk-approval.ui.render.tag.enabled': 'Enabled',
   'builtins.lobe-dingtalk-approval.ui.render.tag.pending': 'Pending',
   'builtins.lobe-dingtalk-approval.ui.render.truncated': 'Partial results',
+  'builtins.lobe-dingtalk-approval.ui.render.unnamed.department': 'Department',
+  'builtins.lobe-dingtalk-approval.ui.render.unnamed.item': 'Untitled item',
+  'builtins.lobe-dingtalk-approval.ui.render.unnamed.person': 'Colleague',
   'builtins.lobe-dingtalk-approval.ui.written.addApprover': 'Approver added',
   'builtins.lobe-dingtalk-approval.ui.written.approveTask': 'Approved',
   'builtins.lobe-dingtalk-approval.ui.written.commentApproval': 'Comment added',

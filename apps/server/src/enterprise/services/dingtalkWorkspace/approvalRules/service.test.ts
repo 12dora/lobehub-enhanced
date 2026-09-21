@@ -68,6 +68,12 @@ vi.mock('./workerMemory', () => ({
   invalidateApprovalRuleWorkerMemory: (...args: unknown[]) =>
     invalidateApprovalRuleWorkerMemory(...args),
 }));
+const mockAppendAudit = vi.hoisted(() => vi.fn());
+vi.mock('../../platformAudit', () => ({
+  PlatformAuditService: class {
+    append = (...args: unknown[]) => mockAppendAudit(...args);
+  },
+}));
 vi.mock('@/database/models/dingtalkApprovalRule', () => ({
   DingtalkApprovalRuleEnableBlockedError,
   DingtalkApprovalRuleModel: class {
@@ -105,6 +111,7 @@ describe('DingtalkApprovalRuleService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAppendAudit.mockResolvedValue(undefined);
     assertDingtalkFeature.mockResolvedValue(undefined);
     getDingtalkWorkspaceCapabilities.mockResolvedValue({
       approval: true,
@@ -236,6 +243,18 @@ describe('DingtalkApprovalRuleService', () => {
     );
     expect(created.id).toBe('rule_1');
     expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.rule.create',
+        afterDiff: {
+          name: '转交财务',
+          processName: '差旅报销',
+          ruleName: '转交财务',
+        },
+        targetId: 'rule_1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
   });
 
   it('invalidates worker memory after update, setEnabled, and remove', async () => {
@@ -251,20 +270,75 @@ describe('DingtalkApprovalRuleService', () => {
       redirectToStaffId: null,
       staffId: 'staff_me',
     });
-    update.mockResolvedValue({ id: 'rule_1', name: '新名称', staffId: 'staff_me' });
+    update.mockResolvedValue({
+      id: 'rule_1',
+      name: '新名称',
+      processName: '差旅报销',
+      staffId: 'staff_me',
+    });
     await service.update('rule_1', { name: '新名称' });
     expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.rule.update',
+        afterDiff: {
+          name: '新名称',
+          processName: '差旅报销',
+          ruleName: '新名称',
+        },
+        targetId: 'rule_1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
 
     invalidateApprovalRuleWorkerMemory.mockClear();
-    update.mockResolvedValue({ enabled: false, id: 'rule_1', staffId: 'staff_me' });
+    mockAppendAudit.mockClear();
+    update.mockResolvedValue({
+      enabled: false,
+      id: 'rule_1',
+      name: '自动同意',
+      processName: '差旅报销',
+      staffId: 'staff_me',
+    });
     await service.setEnabled('rule_1', false);
     expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'system.dingtalk.approval_rule.disable',
+        afterDiff: {
+          name: '自动同意',
+          processName: '差旅报销',
+          ruleName: '自动同意',
+        },
+        targetId: 'rule_1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
 
     invalidateApprovalRuleWorkerMemory.mockClear();
+    mockAppendAudit.mockClear();
+    findById.mockResolvedValue({
+      id: 'rule_1',
+      name: '自动同意',
+      processName: '差旅报销',
+      staffId: 'staff_me',
+    });
     remove.mockResolvedValue(true);
     await expect(service.remove('rule_1')).resolves.toEqual({ success: true });
     expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
     expect(remove).toHaveBeenCalledWith('rule_1');
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.rule.delete',
+        afterDiff: {
+          name: '自动同意',
+          processName: '差旅报销',
+          ruleName: '自动同意',
+        },
+        targetId: 'rule_1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
   });
 
   it('strict tier defaults expiry to 30 days and rejects refuse without remark in preview', async () => {
