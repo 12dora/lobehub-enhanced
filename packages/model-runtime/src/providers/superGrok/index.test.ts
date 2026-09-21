@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { testProvider } from '../../providerTestUtils';
 import { LobeSuperGrokAI, SUPERGROK_ZDR_FILE_UNSUPPORTED_MESSAGE } from './index';
+import { NETWORK_RETRY_DELAY_MS } from './networkRetry';
 
 vi.mock('@lobechat/business-model-bank/model-config', () => ({
   loadModels: vi.fn().mockResolvedValue([]),
@@ -519,5 +520,122 @@ describe('LobeSuperGrokAI - native file input', () => {
       message: SUPERGROK_ZDR_FILE_UNSUPPORTED_MESSAGE,
     });
     expect(fetchImpl.mock.calls.filter(([input]) => isResponsesRequest(input))).toHaveLength(1);
+  });
+});
+
+describe('LobeSuperGrokAI - network stream retry', () => {
+  let instance: InstanceType<typeof LobeSuperGrokAI>;
+  const payload = {
+    messages: [{ content: 'Hello', role: 'user' as const }],
+    model: 'grok-4.6',
+  };
+
+  const networkReset = () => new Error('terminated', { cause: new Error('read ECONNRESET') });
+
+  const asSdkStream = (chunks: unknown[], error?: Error) => {
+    const iterate = async function* () {
+      for (const chunk of chunks) {
+        yield chunk;
+      }
+      if (error) throw error;
+    };
+
+    return {
+      [Symbol.asyncIterator]: iterate,
+      tee() {
+        return [asSdkStream(chunks, error), asSdkStream(chunks, error)];
+      },
+    };
+  };
+
+  const outputTextDelta = (text: string) => ({
+    delta: text,
+    item_id: 'msg_1',
+    type: 'response.output_text.delta' as const,
+  });
+
+  const runRetryDelayImmediately = () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: (...handlerArgs: unknown[]) => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      if (ms === NETWORK_RETRY_DELAY_MS && typeof handler === 'function') {
+        handler(...args);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return originalSetTimeout(handler, ms, ...args);
+    }) as typeof setTimeout);
+  };
+
+  beforeEach(() => {
+    instance = new LobeSuperGrokAI({ apiKey: 'test_api_key' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('retries a reset before the first content chunk and then succeeds', async () => {
+    runRetryDelayImmediately();
+    const create = vi
+      .spyOn(instance['client'].responses, 'create')
+      .mockResolvedValueOnce(asSdkStream([], networkReset()) as never)
+      .mockResolvedValueOnce(asSdkStream([outputTextDelta('recovered')]) as never);
+
+    const response = await instance.chat(payload);
+    const text = await response.text();
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(text).toContain('event: text');
+    expect(text).toContain('recovered');
+    expect(text).not.toContain('event: error');
+  });
+
+  it('does not retry a reset after the first content chunk', async () => {
+    // Exercised on the retry helper directly: the SDK-stream mock cannot model a reset that
+    // follows a delta without tripping the Responses transformer's own end-of-stream handling.
+    const { retryChatOnTransientNetworkError } = await import('./networkRetry');
+    const encoder = new TextEncoder();
+    const run = vi.fn(async () => {
+      let pulls = 0;
+      // Pull-based so the chunk is delivered before the failure (error() drops queued chunks).
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(encoder.encode('event: text\ndata: "Hello"\n\n'));
+          else controller.error(networkReset());
+        },
+      });
+      return new Response(body);
+    });
+
+    const response = await retryChatOnTransientNetworkError(run);
+    await expect(response.text()).rejects.toThrow(/terminated/);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry when the request is aborted', async () => {
+    const abortError = new Error('The operation was aborted.');
+    abortError.name = 'AbortError';
+    const create = vi.spyOn(instance['client'].responses, 'create').mockRejectedValue(abortError);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(instance.chat(payload, { signal: controller.signal })).rejects.toMatchObject({
+      message: 'The operation was aborted.',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry HTTP 400 errors', async () => {
+    const badRequest = Object.assign(new Error('invalid request'), { status: 400 });
+    const create = vi.spyOn(instance['client'].responses, 'create').mockRejectedValue(badRequest);
+
+    await expect(instance.chat(payload)).rejects.toMatchObject({
+      message: 'invalid request',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });

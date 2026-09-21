@@ -1,12 +1,13 @@
-import { DingtalkFormInvalidError } from './formError';
+import { DingtalkFormInvalidError, type FormComponentProblem, problemHint } from './formError';
 import type { SaveTemplateFieldInput, TemplateFieldOption } from './types';
 
 export const MAX_FORM_COMPONENTS = 200;
+export const MAX_FIELD_LABEL_LENGTH = 50;
+export const MIN_SELECT_OPTIONS = 2;
 
 const DATE_DAY_FORMAT = 'yyyy-MM-dd';
 const DATE_HOUR_FORMAT = 'yyyy-MM-dd HH:mm';
 const DEFAULT_RANGE_LABELS = ['开始时间', '结束时间'] as const;
-const DEFAULT_LOCATION_LABELS = ['当前时间', '当前地点'] as const;
 
 const TYPE_ALIASES: Record<string, string> = {
   Attachment: 'DDAttachment',
@@ -16,6 +17,8 @@ const TYPE_ALIASES: Record<string, string> = {
   MultiSelectField: 'DDMultiSelectField',
   PhotoField: 'DDPhotoField',
   SelectField: 'DDSelectField',
+  SerialNumberField: 'SeqNumberField',
+  SequenceNumberField: 'SeqNumberField',
   TextNoteField: 'TextNote',
 };
 
@@ -28,18 +31,28 @@ const SUPPORTED_TYPES = new Set([
   'DDPhotoField',
   'DDSelectField',
   'DepartmentField',
+  'IdCardField',
   'InnerContactField',
   'MoneyField',
   'NumberField',
   'PhoneField',
-  'RelateField',
   'StarRatingField',
   'TableField',
   'TextareaField',
   'TextField',
   'TextNote',
-  'TimeAndLocationField',
 ]);
+
+const SERIAL_TYPES = new Set(['SeqNumberField']);
+
+const SERIAL_LABEL_RE = /^(?:流水号|编号|序号)$/u;
+
+const CLOSEST_SUPPORTED: Record<string, string> = {
+  CalculateField: 'use NumberField',
+  RecipientAccountField: 'use TextField',
+  RelateField: 'use InnerContactField',
+  TimeAndLocationField: 'use DDDateField',
+};
 
 const SELECT_TYPES = new Set(['DDSelectField', 'DDMultiSelectField']);
 const DATE_TYPES = new Set(['DDDateField', 'DDDateRangeField']);
@@ -106,7 +119,7 @@ const encodeJsonStringArray = (value: unknown, fallback: readonly string[]): str
   if (Array.isArray(value)) {
     const parts = value.map((item) => String(item).trim()).filter(Boolean);
     if (parts.length >= 2) return JSON.stringify(parts.slice(0, 2));
-    if (parts.length === 1) return JSON.stringify([parts[0], parts[0]]);
+    if (parts.length === 1) return JSON.stringify([`${parts[0]}开始`, `${parts[0]}结束`]);
     return JSON.stringify([...fallback]);
   }
   const text = trimString(value);
@@ -117,33 +130,52 @@ const encodeJsonStringArray = (value: unknown, fallback: readonly string[]): str
       if (Array.isArray(parsed) && parsed.length > 0) {
         const parts = parsed.map((item) => String(item).trim()).filter(Boolean);
         if (parts.length >= 2) return JSON.stringify(parts.slice(0, 2));
-        if (parts.length === 1) return JSON.stringify([parts[0], parts[0]]);
+        if (parts.length === 1) return JSON.stringify([`${parts[0]}开始`, `${parts[0]}结束`]);
       }
     } catch {
       // Treat as a plain label below.
     }
   }
-  return JSON.stringify([text, text]);
+  return JSON.stringify([`${text}开始`, `${text}结束`]);
 };
 
-const requireLabel = (componentType: string, label: unknown): string => {
+const labelPartsForLength = (componentType: string, label: unknown): string[] => {
+  if (componentType === 'DDDateRangeField') {
+    if (Array.isArray(label)) {
+      return label.map((item) => String(item).trim()).filter(Boolean);
+    }
+    const text = trimString(label);
+    if (!text) return [];
+    if (text.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed.map((item) => String(item).trim()).filter(Boolean);
+        }
+      } catch {
+        return [text];
+      }
+    }
+    return [text];
+  }
+  if (Array.isArray(label)) return label.map((item) => String(item).trim()).filter(Boolean);
+  const text = trimString(label);
+  return text ? [text] : [];
+};
+
+const plainLabelText = (componentType: string, label: unknown): string =>
+  labelPartsForLength(componentType, label).join(' / ');
+
+const requireLabel = (componentType: string, label: unknown): string | undefined => {
   if (componentType === 'DDDateRangeField') {
     return encodeJsonStringArray(label, DEFAULT_RANGE_LABELS);
   }
-  if (componentType === 'TimeAndLocationField') {
-    return encodeJsonStringArray(label, DEFAULT_LOCATION_LABELS);
-  }
-  if (Array.isArray(label)) {
-    throw new DingtalkFormInvalidError(`${componentType}.label`);
-  }
-  const text = trimString(label);
-  if (!text) throw new DingtalkFormInvalidError(`${componentType}.label`);
-  return text;
+  if (Array.isArray(label)) return undefined;
+  return trimString(label);
 };
 
 const displayLabel = (componentType: string, label: string): string => {
-  if (componentType !== 'DDDateRangeField' && componentType !== 'TimeAndLocationField')
-    return label;
+  if (componentType !== 'DDDateRangeField') return label;
   try {
     const parsed = JSON.parse(label) as unknown;
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -156,15 +188,14 @@ const displayLabel = (componentType: string, label: string): string => {
 };
 
 const resolveDateUnitAndFormat = (
-  componentType: string,
   unit: string | undefined,
   format: string | undefined,
-): { format: string; unit: '天' | '小时' } => {
+): { format: string; unit: '天' | '小时' } | undefined => {
   const raw = unit?.trim();
   let resolved: '天' | '小时';
   if (!raw || raw === '天' || /^(?:day|days|d)$/i.test(raw)) resolved = '天';
   else if (raw === '小时' || /^(?:hour|hours|h|hr)$/i.test(raw)) resolved = '小时';
-  else throw new DingtalkFormInvalidError(`${componentType}.unit`);
+  else return undefined;
 
   const fmt = format?.trim();
   if (resolved === '小时') {
@@ -196,25 +227,25 @@ const encodeOptionItem = (item: unknown, index: number): TemplateFieldOption | u
   return { key: trimString(record.key) ?? `option_${index}`, value };
 };
 
-const encodeSelectOptions = (componentType: string, options: unknown): TemplateFieldOption[] => {
+const encodeSelectOptions = (options: unknown): TemplateFieldOption[] | undefined => {
   let list: unknown[] | undefined;
   if (typeof options === 'string') {
     const trimmed = options.trim();
-    if (!trimmed) throw new DingtalkFormInvalidError(`${componentType}.options`);
+    if (!trimmed) return undefined;
     try {
       const parsed = JSON.parse(trimmed) as unknown;
       list = Array.isArray(parsed) ? parsed : [parsed];
     } catch {
-      throw new DingtalkFormInvalidError(`${componentType}.options`);
+      return undefined;
     }
   } else if (Array.isArray(options)) {
     list = options;
   }
-  if (!list || list.length === 0) throw new DingtalkFormInvalidError(`${componentType}.options`);
+  if (!list || list.length === 0) return undefined;
   const encoded = list
     .map((item, index) => encodeOptionItem(item, index))
     .filter((item): item is TemplateFieldOption => Boolean(item));
-  if (encoded.length === 0) throw new DingtalkFormInvalidError(`${componentType}.options`);
+  if (encoded.length === 0) return undefined;
   return encoded.map((item, index) => ({
     key: item.key || `option_${index}`,
     value: item.value,
@@ -228,8 +259,7 @@ const defaultPlaceholder = (componentType: string): string | undefined => {
     case 'DDDateRangeField':
     case 'DDMultiSelectField':
     case 'DDSelectField':
-    case 'InnerContactField':
-    case 'RelateField': {
+    case 'InnerContactField': {
       return '请选择';
     }
     case 'MoneyField': {
@@ -238,12 +268,11 @@ const defaultPlaceholder = (componentType: string): string | undefined => {
     case 'NumberField': {
       return '请输入数字';
     }
+    case 'IdCardField':
     case 'PhoneField':
+    case 'StarRatingField':
     case 'TextareaField':
     case 'TextField': {
-      return '请输入';
-    }
-    case 'StarRatingField': {
       return '请输入';
     }
     default: {
@@ -252,31 +281,112 @@ const defaultPlaceholder = (componentType: string): string | undefined => {
   }
 };
 
+const unsupportedSuggestion = (componentType: string): string => {
+  if (SERIAL_TYPES.has(componentType)) return 'remove: DingTalk generates it';
+  return CLOSEST_SUPPORTED[componentType] ?? 'use TextField';
+};
+
 type EncodeContext = {
   count: { value: number };
+  overCapacity: boolean;
+  problems: FormComponentProblem[];
+  seenLabels: Map<string, number>;
   usedIds: Set<string>;
 };
 
-const assertCapacity = (ctx: EncodeContext): void => {
-  if (ctx.count.value >= MAX_FORM_COMPONENTS) {
-    throw new DingtalkFormInvalidError('formComponents');
-  }
+const recordProblem = (
+  ctx: EncodeContext,
+  index: number,
+  componentType: string,
+  label: string,
+  issue: string,
+  suggestion: string,
+): void => {
+  ctx.problems.push({
+    componentType,
+    index,
+    issue,
+    label,
+    suggestion,
+  });
+};
+
+const throwCollected: (problems: FormComponentProblem[]) => never = (problems) => {
+  const first = problems[0];
+  throw new DingtalkFormInvalidError(first ? problemHint(first) : 'formComponents', problems);
 };
 
 const encodeOne = (
   field: SaveTemplateFieldInput,
   ctx: EncodeContext,
+  index: number,
   parentType?: string,
-): { component: EncodedFormComponent; summary: NormalizedTemplateFieldSummary } => {
-  assertCapacity(ctx);
+): { component: EncodedFormComponent; summary: NormalizedTemplateFieldSummary } | undefined => {
   ctx.count.value += 1;
+  if (ctx.count.value > MAX_FORM_COMPONENTS && !ctx.overCapacity) {
+    ctx.overCapacity = true;
+    recordProblem(
+      ctx,
+      index,
+      resolveComponentType(field.componentType),
+      plainLabelText(resolveComponentType(field.componentType), field.label),
+      'formComponents',
+      'keep at most 200 components',
+    );
+  }
 
   const componentType = resolveComponentType(field.componentType);
-  if (!SUPPORTED_TYPES.has(componentType)) {
-    throw new DingtalkFormInvalidError(componentType || 'componentType');
+  const previewLabel =
+    plainLabelText(componentType, field.label) || trimString(field.content) || '';
+  const isSerial = SERIAL_TYPES.has(componentType) || SERIAL_LABEL_RE.test(previewLabel);
+  const supported = SUPPORTED_TYPES.has(componentType);
+
+  if (isSerial) {
+    recordProblem(
+      ctx,
+      index,
+      componentType || 'SeqNumberField',
+      previewLabel,
+      'unsupported',
+      'remove: DingTalk generates it',
+    );
+  } else if (!supported) {
+    recordProblem(
+      ctx,
+      index,
+      componentType || 'componentType',
+      previewLabel,
+      'unsupported',
+      unsupportedSuggestion(componentType),
+    );
   }
+
   if (parentType === 'TableField' && componentType === 'TableField') {
-    throw new DingtalkFormInvalidError('TableField.children');
+    recordProblem(ctx, index, componentType, previewLabel, 'children', 'remove nested TableField');
+  }
+
+  if (componentType !== 'TextNote') {
+    for (const part of labelPartsForLength(componentType, field.label)) {
+      if (part.length > MAX_FIELD_LABEL_LENGTH) {
+        recordProblem(
+          ctx,
+          index,
+          componentType,
+          previewLabel.slice(0, MAX_FIELD_LABEL_LENGTH),
+          'labelLength',
+          'keep label ≤50 characters',
+        );
+        break;
+      }
+    }
+  }
+
+  if (previewLabel && componentType !== 'TextNote') {
+    if (ctx.seenLabels.has(previewLabel)) {
+      recordProblem(ctx, index, componentType, previewLabel, 'duplicate', 'use a distinct label');
+    } else {
+      ctx.seenLabels.set(previewLabel, index);
+    }
   }
 
   const required = field.required === true;
@@ -284,9 +394,94 @@ const encodeOne = (
     componentType === 'TextNote'
       ? (trimString(field.label) ?? '')
       : requireLabel(componentType, field.label);
-  if (componentType !== 'TextNote' && !label) {
-    throw new DingtalkFormInvalidError(`${componentType}.label`);
+  if (componentType !== 'TextNote' && supported && !isSerial && !label) {
+    recordProblem(ctx, index, componentType, previewLabel, 'label', 'provide a non-empty label');
   }
+
+  if (SELECT_TYPES.has(componentType)) {
+    const options = encodeSelectOptions(field.options);
+    if (!options || options.length < MIN_SELECT_OPTIONS) {
+      recordProblem(
+        ctx,
+        index,
+        componentType,
+        previewLabel,
+        'options',
+        'provide at least 2 options',
+      );
+    }
+  } else if (field.options != null && Array.isArray(field.options) && field.options.length > 0) {
+    recordProblem(ctx, index, componentType, previewLabel, 'options', 'omit options on this type');
+  }
+
+  if (DATE_TYPES.has(componentType)) {
+    const date = resolveDateUnitAndFormat(field.unit, field.format);
+    if (!date) {
+      recordProblem(ctx, index, componentType, previewLabel, 'unit', 'use 天 or 小时');
+    }
+  }
+
+  if (componentType === 'TextNote') {
+    const content = trimString(field.content) ?? trimString(field.label);
+    if (!content) {
+      recordProblem(ctx, index, componentType, previewLabel, 'content', 'provide TextNote content');
+    }
+  }
+
+  if (componentType === 'TableField') {
+    const childInputs = field.children ?? [];
+    if (childInputs.length === 0) {
+      recordProblem(
+        ctx,
+        index,
+        componentType,
+        previewLabel,
+        'unsupported',
+        'split into separate fields',
+      );
+    }
+  } else if (field.children && field.children.length > 0) {
+    recordProblem(
+      ctx,
+      index,
+      componentType,
+      previewLabel,
+      'children',
+      'omit children on this type',
+    );
+  }
+
+  const skipEncode = isSerial || !supported;
+  if (componentType === 'TableField' && field.children && field.children.length > 0) {
+    const children: EncodedFormComponent[] = [];
+    for (const child of field.children) {
+      const encodedChild = encodeOne(child, ctx, index, componentType);
+      if (encodedChild) children.push(encodedChild.component);
+    }
+    if (skipEncode) return undefined;
+    const componentId = nextComponentId(componentType, field.componentId, ctx.usedIds);
+    return {
+      component: {
+        children,
+        componentType,
+        props: compactProps({
+          bizAlias: trimString(field.bizAlias),
+          componentId,
+          label,
+          placeholder: trimString(field.placeholder) ?? defaultPlaceholder(componentType),
+          required,
+          tableViewMode: 'table',
+        }),
+      },
+      summary: {
+        componentType,
+        label: displayLabel(componentType, label || previewLabel || componentType),
+        required,
+      },
+    };
+  }
+
+  if (skipEncode) return undefined;
 
   const componentId = nextComponentId(componentType, field.componentId, ctx.usedIds);
   const props: Record<string, unknown> = {
@@ -298,7 +493,10 @@ const encodeOne = (
   };
 
   if (DATE_TYPES.has(componentType)) {
-    const date = resolveDateUnitAndFormat(componentType, field.unit, field.format);
+    const date = resolveDateUnitAndFormat(field.unit, field.format) ?? {
+      format: DATE_DAY_FORMAT,
+      unit: '天' as const,
+    };
     props.unit = date.unit;
     props.format = date.format;
   } else {
@@ -307,15 +505,15 @@ const encodeOne = (
   }
 
   if (SELECT_TYPES.has(componentType)) {
-    props.options = encodeSelectOptions(componentType, field.options);
-  } else if (field.options != null && Array.isArray(field.options) && field.options.length > 0) {
-    throw new DingtalkFormInvalidError(`${componentType}.options`);
+    const options = encodeSelectOptions(field.options);
+    if (options && options.length >= MIN_SELECT_OPTIONS) props.options = options;
   }
 
   if (componentType === 'MoneyField') {
     props.upper = '0';
   }
   if (componentType === 'InnerContactField') {
+    // DingTalk rejects numeric 0 ('Missingchoice'); string '0' = single, '1' = multiple.
     props.choice = '0';
   }
   if (componentType === 'DepartmentField') {
@@ -330,29 +528,15 @@ const encodeOne = (
   if (componentType === 'StarRatingField') {
     props.limit = 5;
   }
-  if (componentType === 'TableField') {
-    props.tableViewMode = 'table';
-  }
   if (componentType === 'TextNote') {
     const content = trimString(field.content) ?? trimString(field.label);
-    if (!content) throw new DingtalkFormInvalidError('TextNote.content');
     props.content = content;
     delete props.required;
     delete props.placeholder;
   }
 
-  let children: EncodedFormComponent[] | undefined;
-  if (componentType === 'TableField') {
-    const childInputs = field.children ?? [];
-    if (childInputs.length === 0) throw new DingtalkFormInvalidError('TableField.children');
-    children = childInputs.map((child) => encodeOne(child, ctx, componentType).component);
-  } else if (field.children && field.children.length > 0) {
-    throw new DingtalkFormInvalidError(`${componentType}.children`);
-  }
-
   return {
     component: {
-      children,
       componentType,
       props: compactProps(props),
     },
@@ -368,15 +552,31 @@ export const encodeSaveTemplateFields = (
   fields: SaveTemplateFieldInput[],
 ): { components: EncodedFormComponent[]; fields: NormalizedTemplateFieldSummary[] } => {
   if (!Array.isArray(fields) || fields.length === 0) {
-    throw new DingtalkFormInvalidError('formComponents');
+    return throwCollected([
+      {
+        componentType: '',
+        index: 0,
+        issue: 'formComponents',
+        label: '',
+        suggestion: 'provide at least one field',
+      },
+    ]);
   }
-  const ctx: EncodeContext = { count: { value: 0 }, usedIds: new Set<string>() };
+  const ctx: EncodeContext = {
+    count: { value: 0 },
+    overCapacity: false,
+    problems: [],
+    seenLabels: new Map<string, number>(),
+    usedIds: new Set<string>(),
+  };
   const components: EncodedFormComponent[] = [];
   const summaries: NormalizedTemplateFieldSummary[] = [];
-  for (const field of fields) {
-    const encoded = encodeOne(field, ctx);
+  for (const [index, field] of fields.entries()) {
+    const encoded = encodeOne(field, ctx, index);
+    if (!encoded) continue;
     components.push(encoded.component);
     summaries.push(encoded.summary);
   }
+  if (ctx.problems.length > 0) return throwCollected(ctx.problems);
   return { components, fields: summaries };
 };

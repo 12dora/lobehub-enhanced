@@ -87,6 +87,36 @@ export interface TargetSelectActionerInput {
   actionerStaffTokens: DingtalkStaffToken[];
 }
 
+export const SAVE_TEMPLATE_COMPONENT_TYPES = [
+  'AddressField',
+  'DDAttachment',
+  'DDDateField',
+  'DDDateRangeField',
+  'DDMultiSelectField',
+  'DDPhotoField',
+  'DDSelectField',
+  'DepartmentField',
+  'IdCardField',
+  'InnerContactField',
+  'MoneyField',
+  'NumberField',
+  'PhoneField',
+  'StarRatingField',
+  'TextareaField',
+  'TextField',
+  'TextNote',
+] as const;
+
+export type SaveTemplateComponentType = (typeof SAVE_TEMPLATE_COMPONENT_TYPES)[number];
+
+export interface SaveTemplateFieldProblem {
+  componentType: string;
+  index: number;
+  issue: string;
+  label: string;
+  suggestion: string;
+}
+
 export interface SaveTemplateFieldInput {
   bizAlias?: string;
   componentId?: string;

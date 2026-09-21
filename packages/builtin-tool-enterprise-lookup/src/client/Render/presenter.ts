@@ -33,8 +33,15 @@ export interface PresentedRow {
   value: string;
 }
 
-/** The 项目 / 内容 table — the shape nearly every payload ends up in. */
+/**
+ * The 项目 / 内容 pairs — the shape nearly every payload ends up in.
+ *
+ * `rows` is ordered for the two-pairs-per-row grid the card lays them out in: short pairs first in
+ * the provider's own order, then the long ones (经营范围, 地址 …) which each take a whole row. That
+ * way only the last short row can end up half-empty.
+ */
 export interface PresentedPairs {
+  /** Short pairs first, long pairs last; the provider's order is kept inside each group. */
   rows: PresentedRow[];
   type: 'pairs';
 }
@@ -189,6 +196,18 @@ const buildTable = (
 };
 
 /**
+ * Pairs as the grid wants them: the short ones first, then the long ones.
+ *
+ * The card packs two pairs per row and gives a long value the whole row, so a long pair left in the
+ * middle would strand the slot beside it. Both groups keep the provider's own order, which is the
+ * reading order, so the only thing this changes is where the long values sit.
+ */
+const orderPairs = (rows: PresentedRow[]): PresentedRow[] => [
+  ...rows.filter((row) => !row.long),
+  ...rows.filter((row) => row.long),
+];
+
+/**
  * A flat object as 项目 / 内容 rows, in the order the provider wrote them.
  *
  * Record lists interrupt the pairs rather than being appended after them: the provider's order is
@@ -201,7 +220,7 @@ const flattenObject = (source: Record<string, unknown>): PresentedSection[] => {
 
   const flush = () => {
     if (pairs.length === 0) return;
-    sections.push({ rows: pairs, type: 'pairs' });
+    sections.push({ rows: orderPairs(pairs), type: 'pairs' });
     pairs = [];
   };
 

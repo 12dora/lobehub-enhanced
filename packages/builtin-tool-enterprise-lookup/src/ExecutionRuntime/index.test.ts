@@ -4,6 +4,7 @@ import {
   createEnterpriseLookupRuntime,
   ENTERPRISE_LOOKUP_CONTENT_LIMIT,
   ENTERPRISE_LOOKUP_INTERNAL_TOOL_CONTENT,
+  ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER,
   formatLookupBody,
   type IEnterpriseLookupService,
 } from './index';
@@ -80,6 +81,8 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain('数据来源：企查查');
     expect(result.content).toContain('能力：search');
     expect(result.content).toContain('"name":"示例科技有限公司"');
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(true);
+    expect(result.content).toContain('| 项目 | 内容 | 项目 | 内容 |');
     expect(result.content).not.toMatch(/\n {2}"/);
     expect(result.state).toMatchObject({
       capability: 'search',
@@ -106,6 +109,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain('数据来源：天眼查');
     expect(result.content).toContain('# 示例科技');
     expect(result.content).not.toContain('"type":"text"');
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(true);
   });
 
   it('truncates large upstream payloads and says so', async () => {
@@ -120,6 +124,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain(
       `（结果已截断，仅保留前 ${ENTERPRISE_LOOKUP_CONTENT_LIMIT} 字符）`,
     );
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(true);
     const body = (result.state as { resultText: string }).resultText;
     expect(body.length).toBe(ENTERPRISE_LOOKUP_CONTENT_LIMIT);
   });
@@ -239,7 +244,9 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain('数据来源：企查查');
     expect(result.content).toContain('查询时间：2026-09-21 20:07');
     expect(result.content).toContain('唯一主体');
-    expect(result.content).toContain('两列表格');
+    expect(result.content).not.toContain('两列表格');
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(true);
+    expect(result.content).toContain('| 项目 | 内容 | 项目 | 内容 |');
     expect(result.state).toMatchObject({
       match: 'unique',
       matched: true,
@@ -283,6 +290,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain(
       `（结果已截断，仅保留前 ${ENTERPRISE_LOOKUP_CONTENT_LIMIT} 字符）`,
     );
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(true);
   });
 
   it('surfaces a unique companyProfile when 工商 was skipped for quota', async () => {
@@ -308,6 +316,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.success).toBe(true);
     expect(result.content).toContain('已锚定唯一主体');
     expect(result.content).toContain('今日查询次数已达上限，未拉取工商基本信息。');
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(false);
     expect(result.state).toMatchObject({ match: 'unique', matched: true });
     expect((result.state as { profile?: string }).profile).toBeUndefined();
   });
@@ -343,6 +352,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     );
     expect(result.content).toContain('不要猜测');
     expect(result.content).toContain('companyProfile');
+    expect(result.content.endsWith(ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER)).toBe(false);
     expect(result.state).toMatchObject({
       candidateCount: 2,
       match: 'ambiguous',

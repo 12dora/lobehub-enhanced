@@ -79,9 +79,20 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('Never pass limit above 50');
   });
 
-  it('retries DINGTALK_INVALID once using the hint', () => {
+  it('retries DINGTALK_INVALID once using the hint or the full problem list', () => {
     expect(systemPrompt).toContain('DINGTALK_INVALID');
-    expect(systemPrompt).toContain('read the hint');
-    expect(systemPrompt).toContain('retry the same write once');
+    expect(systemPrompt).toContain('if problems are listed, fix every problem in one retry');
+    expect(systemPrompt).toContain('retry once');
+  });
+
+  it('states form design rules including no serial-number field', () => {
+    expect(systemPrompt).toContain('Form design rules');
+    expect(systemPrompt).toContain('SeqNumberField');
+    expect(systemPrompt).toContain('流水号');
+    expect(systemPrompt).toContain('DingTalk generates the serial number');
+    expect(systemPrompt).toContain('≥2 options');
+    expect(systemPrompt).toContain('≤ 25 fields');
+    expect(systemPrompt).toContain('more than about 12 fields');
+    expect(systemPrompt).toContain('ask the user to confirm BEFORE calling saveTemplate');
   });
 });

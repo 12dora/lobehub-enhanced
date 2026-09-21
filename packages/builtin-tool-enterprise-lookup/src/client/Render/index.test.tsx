@@ -69,7 +69,7 @@ const QCC_RESULT =
   '"法定代表人名称":["张三"],"状态":"存续"}]}';
 
 describe('QueryEnterpriseRender', () => {
-  it('shows the 企查查 tag, the capability and the answer as a 项目 / 内容 table', () => {
+  it('shows the 企查查 tag, the capability and the answer as 项目 / 内容 pairs', () => {
     const state: QueryEnterpriseState = {
       capability: 'search',
       provider: 'qcc',
@@ -89,12 +89,47 @@ describe('QueryEnterpriseRender', () => {
 
     expect(screen.getByText('企查查')).toBeTruthy();
     expect(screen.getByText('search')).toBeTruthy();
-    expect(screen.getByText('项目')).toBeTruthy();
-    expect(screen.getByText('内容')).toBeTruthy();
-    expect(screen.getByText('匹配结果')).toBeTruthy();
-    expect(screen.getByText('多候选')).toBeTruthy();
+
+    // The pairs are a definition list laid out two per row, so there is no 项目 / 内容 header row
+    // to spend a line on; the label carries its own tooltip for when it has to ellipsise.
+    const label = screen.getByText('匹配结果');
+    expect(label.tagName).toBe('DT');
+    expect(label.getAttribute('title')).toBe('匹配结果');
+    expect(screen.getByText('多候选').tagName).toBe('DD');
+    expect(screen.queryByText('项目')).toBeNull();
+    expect(screen.queryByText('内容')).toBeNull();
+
     // The raw JSON is no longer the card's answer, only its footnote.
     expect(screen.getByText('原始返回').closest('details')).toBeTruthy();
+  });
+
+  it('packs the short pairs first and gives a long value a row of its own', () => {
+    const long = '经营'.repeat(PRESENTER_LONG_VALUE_CHARS);
+
+    render(
+      <QueryEnterpriseRender
+        {...renderProps<QueryEnterpriseParams, QueryEnterpriseState>(
+          { capability: 'getDetail', provider: 'qcc' },
+          {
+            capability: 'getDetail',
+            provider: 'qcc',
+            resultText: JSON.stringify({ 经营范围: long, 状态: '存续', 成立日期: '2015-01-01' }),
+            success: true,
+          },
+        )}
+      />,
+    );
+
+    const pairs = [...document.querySelectorAll('dl > div')];
+
+    expect(pairs.map((pair) => pair.querySelector('dt')?.textContent)).toEqual([
+      '状态',
+      '成立日期',
+      '经营范围',
+    ]);
+    // Only the long pair carries the full-row modifier on top of the shared pair class.
+    expect(pairs.at(-1)!.className).not.toBe(pairs[0]!.className);
+    expect(screen.getAllByText('展开')).toHaveLength(1);
   });
 
   it('lays a list of records out as a compact table instead of a blob', () => {

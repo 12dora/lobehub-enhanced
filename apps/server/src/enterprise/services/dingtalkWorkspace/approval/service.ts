@@ -404,7 +404,7 @@ export class DingtalkApprovalService {
     const identity = await this.prepare();
     await this.requireApprovalAdmin(identity.staffId);
     const name = input.name.trim();
-    if (!name || input.fields.length === 0) {
+    if (!name) {
       throw new DingtalkWorkspaceError('DINGTALK_INVALID');
     }
     const encoded = encodeSaveTemplateFields(input.fields);

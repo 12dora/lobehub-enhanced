@@ -5,6 +5,7 @@ import {
   DingtalkApprovalIdentifier,
   DingtalkApprovalReadApiName,
   DingtalkApprovalWriteApiName,
+  SAVE_TEMPLATE_COMPONENT_TYPES,
 } from './types';
 
 export { DingtalkApprovalIdentifier } from './types';
@@ -425,7 +426,7 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Create or update an official approval form template. Omit processCode to create. Caller must be an OA approval admin. The result is authoritative (processCode, fields, adminUrl, notes) — do not listTemplates or getTemplateSchema to verify. Flow nodes, visibility, and CC cannot be set via API; use the returned adminUrl and remaining steps.',
+        'Create or update an official approval form template. Omit processCode to create. Caller must be an OA approval admin. The result is authoritative (processCode, fields, adminUrl, notes) — do not listTemplates or getTemplateSchema to verify. Flow nodes, visibility, and CC cannot be set via API; use the returned adminUrl and remaining steps. Do not add a 流水号/编号 field — DingTalk generates it.',
       humanIntervention: always,
       name: DingtalkApprovalWriteApiName.saveTemplate,
       parameters: {
@@ -433,13 +434,17 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
         properties: {
           description: { type: 'string' },
           fields: {
+            description:
+              'Form controls in display order. Types: AddressField address; DDAttachment files; DDDateField date (unit 天|小时); DDDateRangeField start/end (label is a JSON string of two labels; unit 天|小时); DDMultiSelectField multi-choice (≥2 options); DDPhotoField photos; DDSelectField single choice (≥2 options); DepartmentField department; IdCardField ID number; InnerContactField people; MoneyField amount; NumberField number (unit optional); PhoneField phone; StarRatingField 1–5 stars; TextareaField long text; TextField short text; TextNote static note (needs content). 流水号/编号 needs no field. Not supported: SeqNumberField, CalculateField, RelateField, RecipientAccountField, TableField.',
             items: {
               additionalProperties: false,
               properties: {
                 bizAlias: { type: 'string' },
                 componentId: { type: 'string' },
                 componentType: {
-                  description: 'e.g. TextField, TextareaField, NumberField, DDSelectField.',
+                  description:
+                    'Verified OA control. 流水号/编号 needs no field (DingTalk generates it).',
+                  enum: [...SAVE_TEMPLATE_COMPONENT_TYPES],
                   type: 'string',
                 },
                 format: { type: 'string' },

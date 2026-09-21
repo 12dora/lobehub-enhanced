@@ -2,7 +2,7 @@
 
 import { Markdown } from '@lobehub/ui';
 import { Button } from '@lobehub/ui/base-ui';
-import { createStaticStyles } from 'antd-style';
+import { createStaticStyles, cx } from 'antd-style';
 import { memo, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -30,14 +30,53 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     align-self: flex-start;
     margin-inline-start: -4px;
   `,
-  /* Wide enough for 统一社会信用代码 without starving the value beside it. */
-  labelCell: css`
-    width: 34%;
+  /* Wide enough for 统一社会信用代码; anything longer ellipsises and keeps its title tooltip. */
+  label: css`
+    overflow: hidden;
+    flex: none;
+
+    inline-size: 104px;
+    max-inline-size: 45%;
+
     color: ${cssVar.colorTextSecondary};
+    text-overflow: ellipsis;
+    white-space: nowrap;
   `,
   markdown: css`
     padding-block: 4px;
     padding-inline: 12px;
+  `,
+  pair: css`
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+
+    min-width: 0;
+    padding-block: 5px;
+    padding-inline: 12px;
+  `,
+  /* 经营范围 and friends read as a paragraph, so they take the whole row. */
+  pairFull: css`
+    grid-column: 1 / -1;
+  `,
+  pairs: css`
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+
+    margin: 0;
+
+    font-size: 12px;
+    line-height: 1.6;
+
+    /* Two pairs fit side by side once each half still clears a label plus a readable value. */
+    @container enterprise-pairs (min-width: 520px) {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  `,
+  /* The query has to name an ancestor, so the grid cannot be the container it asks about. */
+  pairsRoot: css`
+    container: enterprise-pairs / inline-size;
+    padding-block: 2px;
   `,
   raw: css`
     border-block-start: 1px solid ${cssVar.colorBorderSecondary};
@@ -134,11 +173,16 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     font-size: 12px;
     color: ${cssVar.colorTextTertiary};
   `,
-  valueCell: css`
+  value: css`
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 2px;
+
     min-width: 0;
+    margin: 0;
+
+    color: ${cssVar.colorText};
     word-break: break-word;
   `,
 }));
@@ -146,10 +190,6 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 /** Keys are written out in full so a rename is a compile-time miss rather than a runtime blank. */
 const KEYS = {
   collapse: 'builtins.lobe-enterprise-lookup.render.collapse',
-  column: {
-    field: 'builtins.lobe-enterprise-lookup.render.column.field',
-    value: 'builtins.lobe-enterprise-lookup.render.column.value',
-  },
   empty: 'builtins.lobe-enterprise-lookup.render.empty',
   expand: 'builtins.lobe-enterprise-lookup.render.expand',
   result: 'builtins.lobe-enterprise-lookup.render.result',
@@ -157,32 +197,41 @@ const KEYS = {
 } as const;
 
 /**
- * One 内容 cell. A long value (经营范围, 历史沿革 …) is clamped to two lines so a single field cannot
- * push the rest of the record off screen, and it opens in place rather than in a tooltip — the text
- * is meant to be read and copied, not glanced at.
+ * One 项目 / 内容 pair. A long value (经营范围, 历史沿革 …) is clamped to two lines so a single field
+ * cannot push the rest of the record off screen, and it opens in place rather than in a tooltip —
+ * the text is meant to be read and copied, not glanced at.
  */
-const ValueCell = memo<{ row: PresentedRow }>(({ row }) => {
+const Pair = memo<{ row: PresentedRow }>(({ row }) => {
   const { t } = useTranslation('plugin');
   const [expanded, setExpanded] = useState(false);
 
-  if (!row.long) return <div className={styles.valueCell}>{row.value}</div>;
-
   return (
-    <div className={styles.valueCell}>
-      <span className={expanded ? undefined : styles.clamped}>{row.value}</span>
-      <Button
-        className={styles.expand}
-        size={'small'}
-        type={'text'}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        {expanded ? t(KEYS.collapse) : t(KEYS.expand)}
-      </Button>
+    <div className={row.long ? cx(styles.pair, styles.pairFull) : styles.pair}>
+      <dt className={styles.label} title={row.label}>
+        {row.label}
+      </dt>
+      <dd className={styles.value}>
+        {row.long ? (
+          <>
+            <span className={expanded ? undefined : styles.clamped}>{row.value}</span>
+            <Button
+              className={styles.expand}
+              size={'small'}
+              type={'text'}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? t(KEYS.collapse) : t(KEYS.expand)}
+            </Button>
+          </>
+        ) : (
+          row.value
+        )}
+      </dd>
     </div>
   );
 });
 
-ValueCell.displayName = 'EnterpriseLookupValueCell';
+Pair.displayName = 'EnterpriseLookupPair';
 
 const RecordTable = memo<{ section: PresentedTable }>(({ section }) => {
   const { t } = useTranslation('plugin');
@@ -223,8 +272,6 @@ const RecordTable = memo<{ section: PresentedTable }>(({ section }) => {
 RecordTable.displayName = 'EnterpriseLookupRecordTable';
 
 const ResultSection = memo<{ section: PresentedSection }>(({ section }) => {
-  const { t } = useTranslation('plugin');
-
   if (section.type === 'markdown')
     return (
       <div className={styles.markdown}>
@@ -238,26 +285,15 @@ const ResultSection = memo<{ section: PresentedSection }>(({ section }) => {
 
   if (section.type === 'table') return <RecordTable section={section} />;
 
+  // Two pairs per row where the card is wide enough for them: a field per row wasted most of the
+  // width on 状态 / 成立日期 and pushed the rest of the record out of sight.
   return (
-    <div className={styles.scroll}>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            <th scope={'col'}>{t(KEYS.column.field)}</th>
-            <th scope={'col'}>{t(KEYS.column.value)}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {section.rows.map((row) => (
-            <tr key={row.label}>
-              <td className={styles.labelCell}>{row.label}</td>
-              <td>
-                <ValueCell row={row} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className={styles.pairsRoot}>
+      <dl className={styles.pairs}>
+        {section.rows.map((row) => (
+          <Pair key={row.label} row={row} />
+        ))}
+      </dl>
     </div>
   );
 });

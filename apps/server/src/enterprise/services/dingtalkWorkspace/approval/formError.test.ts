@@ -2,7 +2,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { DingtalkWorkspaceError } from '../errors';
-import { DingtalkFormInvalidError, parseFormErrorHint, remapFormsInvalidError } from './formError';
+import {
+  DingtalkFormInvalidError,
+  parseFormErrorHint,
+  problemHint,
+  remapFormsInvalidError,
+} from './formError';
 
 describe('parseFormErrorHint', () => {
   it('extracts component type and prop from props.error messages', () => {
@@ -18,6 +23,12 @@ describe('parseFormErrorHint', () => {
     expect(parseFormErrorHint('formschema.error: Missingoptions')).toBe('options');
   });
 
+  it('extracts SeqNumberField from a rule error without returning the raw text', () => {
+    expect(parseFormErrorHint('formschema.error: SeqNumberField rule error')).toBe(
+      'SeqNumberField',
+    );
+  });
+
   it('never returns the raw upstream text', () => {
     const raw = 'formschema.error: DDDateField props.unit error; requestId=abc';
     const hint = parseFormErrorHint(raw);
@@ -25,6 +36,29 @@ describe('parseFormErrorHint', () => {
     expect(hint).not.toContain('formschema');
     expect(hint).not.toContain('requestId');
     expect(parseFormErrorHint('JSON parsing error')).toBeUndefined();
+  });
+});
+
+describe('problemHint', () => {
+  it('uses the component type for unsupported fields and type.issue otherwise', () => {
+    expect(
+      problemHint({
+        componentType: 'SeqNumberField',
+        index: 0,
+        issue: 'unsupported',
+        label: '流水号',
+        suggestion: 'remove: DingTalk generates it',
+      }),
+    ).toBe('SeqNumberField');
+    expect(
+      problemHint({
+        componentType: 'DDSelectField',
+        index: 1,
+        issue: 'options',
+        label: '类型',
+        suggestion: 'provide at least 2 options',
+      }),
+    ).toBe('DDSelectField.options');
   });
 });
 
@@ -43,6 +77,26 @@ describe('remapFormsInvalidError', () => {
       expect((error as DingtalkFormInvalidError).code).toBe('DINGTALK_INVALID');
       expect((error as DingtalkFormInvalidError).hint).toBe('DDSelectField.options');
       expect((error as Error).message).toBe('DINGTALK_INVALID');
+    }
+  });
+
+  it('preserves a pre-validation problem list', () => {
+    const problems = [
+      {
+        componentType: 'SeqNumberField',
+        index: 0,
+        issue: 'unsupported',
+        label: '流水号',
+        suggestion: 'remove: DingTalk generates it',
+      },
+    ];
+    const invalid = new DingtalkFormInvalidError('SeqNumberField', problems);
+    try {
+      remapFormsInvalidError(invalid);
+      throw new Error('expected throw');
+    } catch (error) {
+      expect(error).toBe(invalid);
+      expect((error as DingtalkFormInvalidError).problems).toEqual(problems);
     }
   });
 

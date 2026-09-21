@@ -21,6 +21,7 @@ import {
   toXaiZdrBizError,
   xaiZdrErrorBody,
 } from '../xai/zdr';
+import { retryChatOnTransientNetworkError } from './networkRetry';
 
 const log = debug('lobe-supergrok:zdr');
 
@@ -186,9 +187,24 @@ const LobeSuperGrokAIBase = createOpenAICompatibleRuntime<SuperGrokClientOptions
  * Wraps factory `chat` so a ZDR file refusal retries the same turn once with
  * extracted text. `beforeChat` lives on ModelRuntime, outside this class, so
  * the retry does not re-run attachment inlining (or any other outer hook).
+ *
+ * A separate one-shot network retry covers HTTPS stream resets (ECONNRESET /
+ * terminated) that happen before any content, reasoning, or tool-call chunk
+ * has been emitted — typical of a long-reasoning wait behind a proxy.
  */
 export class LobeSuperGrokAI extends LobeSuperGrokAIBase {
   async chat(payload: ChatStreamPayload, options?: ChatMethodOptions) {
+    return retryChatOnTransientNetworkError(
+      () => this.chatWithZdrFileRetry(payload, options),
+      options,
+    );
+  }
+
+  /**
+   * Factory `chat` plus the ZDR text fallback. Kept as a method so `super.chat`
+   * stays legal (it cannot appear inside the network-retry callback).
+   */
+  private async chatWithZdrFileRetry(payload: ChatStreamPayload, options?: ChatMethodOptions) {
     try {
       return await super.chat(payload, options);
     } catch (error) {

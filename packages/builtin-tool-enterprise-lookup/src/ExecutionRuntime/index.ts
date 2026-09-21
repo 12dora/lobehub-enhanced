@@ -30,6 +30,13 @@ export const ENTERPRISE_LOOKUP_CONTENT_LIMIT = 12_000;
 export const ENTERPRISE_LOOKUP_INTERNAL_TOOL_CONTENT =
   '企业查询失败（内部错误），请稍后重试。不要向用户展示技术细节。';
 
+/**
+ * One-line reminder of the four-column key-value layout. Appended next to the
+ * payload so the model copies it instead of a distant system-prompt rule.
+ */
+export const ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER =
+  '呈现：短字段用四列表格（| 项目 | 内容 | 项目 | 内容 |）左右配对；经营范围/地址/简介等长值（>~30字）放该节配对行之后，用两列表（| 项目 | 内容 |）或一行 **字段**:值；不要半空行（末行除外）。';
+
 const KNOWN_ERROR_CODES = new Set([
   'ENTERPRISE_LOOKUP_CAPABILITY_UNKNOWN',
   'ENTERPRISE_LOOKUP_DAILY_LIMIT',
@@ -194,6 +201,9 @@ const unwrapQueryPayload = (
 const withTruncationNote = (text: string, truncated: boolean): string =>
   truncated ? `${text}\n（结果已截断，仅保留前 ${ENTERPRISE_LOOKUP_CONTENT_LIMIT} 字符）` : text;
 
+const withKvLayoutReminder = (text: string): string =>
+  `${text}\n${ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER}`;
+
 const friendlyErrorContent = (
   code: string,
   fallbackProvider?: EnterpriseLookupProvider,
@@ -324,9 +334,7 @@ export class EnterpriseLookupExecutionRuntime {
       let body: string;
       if (match === 'unique') {
         body = [
-          storedProfile?.text
-            ? '已锚定唯一主体，工商基本信息如下。请用两列表格（| 项目 | 内容 |）按短标题分组呈现，不要写长段落。'
-            : '已锚定唯一主体。',
+          storedProfile?.text ? '已锚定唯一主体，工商基本信息如下。' : '已锚定唯一主体。',
           note,
           storedProfile?.text,
         ]
@@ -363,7 +371,9 @@ export class EnterpriseLookupExecutionRuntime {
       const { text, truncated } = truncateText(
         [header, body, compactJson(payload)].filter(Boolean).join('\n'),
       );
-      const content = withTruncationNote(text, truncated);
+      const noted = withTruncationNote(text, truncated);
+      const content =
+        match === 'unique' && storedProfile?.text ? withKvLayoutReminder(noted) : noted;
       const uniqueCompany = payload.match === 'unique' ? candidates[0] : undefined;
       const state: CompanyProfileState = {
         candidateCount: candidates.length,
@@ -397,7 +407,9 @@ export class EnterpriseLookupExecutionRuntime {
       ]
         .filter(Boolean)
         .join('\n');
-      const content = withTruncationNote([header, text].filter(Boolean).join('\n'), truncated);
+      const content = withKvLayoutReminder(
+        withTruncationNote([header, text].filter(Boolean).join('\n'), truncated),
+      );
       const state: QueryEnterpriseState = {
         capability: unwrapped.capability,
         category: unwrapped.category,

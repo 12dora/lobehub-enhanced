@@ -27,12 +27,14 @@ class DingtalkWorkspaceError extends Error {
   readonly code: string;
   readonly candidates?: unknown;
   readonly hint?: unknown;
-  constructor(code: string, extras?: { candidates?: unknown; hint?: unknown }) {
+  readonly problems?: unknown;
+  constructor(code: string, extras?: { candidates?: unknown; hint?: unknown; problems?: unknown }) {
     super(`upstream ${code}`);
     this.name = 'DingtalkWorkspaceError';
     this.code = code;
     this.candidates = extras?.candidates;
     this.hint = extras?.hint;
+    this.problems = extras?.problems;
   }
 }
 
@@ -335,6 +337,45 @@ describe('dingtalkApprovalRouter', () => {
       }),
     ).rejects.toMatchObject({
       cause: { data: { code: 'DINGTALK_INVALID', hint: 'DDDateField props.unit' } },
+    });
+  });
+
+  it('forwards DINGTALK_INVALID problems on saveTemplate', async () => {
+    const problems = [
+      {
+        componentType: 'SeqNumberField',
+        index: 0,
+        issue: 'unsupported',
+        label: '流水号',
+        suggestion: 'remove: DingTalk generates it',
+      },
+      {
+        componentType: 'DDSelectField',
+        index: 1,
+        issue: 'options',
+        label: '类型',
+        suggestion: 'provide at least 2 options',
+      },
+    ];
+    mockSaveTemplate.mockRejectedValueOnce(
+      new DingtalkWorkspaceError('DINGTALK_INVALID', { hint: 'SeqNumberField', problems }),
+    );
+    await expect(
+      createCaller().saveTemplate({
+        fields: [
+          { componentType: 'SeqNumberField', label: '流水号' },
+          { componentType: 'DDSelectField', label: '类型' },
+        ],
+        name: '设备转租审批',
+      }),
+    ).rejects.toMatchObject({
+      cause: {
+        data: {
+          code: 'DINGTALK_INVALID',
+          hint: 'SeqNumberField',
+          problems,
+        },
+      },
     });
   });
 });

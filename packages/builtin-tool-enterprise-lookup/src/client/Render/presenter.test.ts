@@ -131,10 +131,54 @@ describe('presentEnterpriseResult — shaping rules', () => {
 
   it('marks a long value so the view can clamp it', () => {
     const long = '经营'.repeat(PRESENTER_LONG_VALUE_CHARS);
-    const pairs = pairsOf(mcpText(JSON.stringify({ a: long, b: '存续' })));
+    const rows = pairsOf(mcpText(JSON.stringify({ a: long, b: '存续' }))).rows;
 
-    expect(pairs.rows[0]!.long).toBe(true);
-    expect(pairs.rows[1]!.long).toBe(false);
+    expect(rows.find((row) => row.label === 'a')!.long).toBe(true);
+    expect(rows.find((row) => row.label === 'b')!.long).toBe(false);
+  });
+
+  it('puts the long pairs last so the two-per-row grid only ever gaps at the end', () => {
+    const long = '经营'.repeat(PRESENTER_LONG_VALUE_CHARS);
+    const pairs = pairsOf(
+      mcpText(
+        JSON.stringify({
+          经营范围: long,
+          状态: '存续',
+          地址: long,
+          成立日期: '2015-01-01',
+        }),
+      ),
+    );
+
+    // Short first, long after — and the provider's own order survives inside each group.
+    expect(pairs.rows.map((row) => row.label)).toEqual(['状态', '成立日期', '经营范围', '地址']);
+  });
+
+  it('keeps the provider order untouched when no value is long', () => {
+    const pairs = pairsOf(mcpText('{"状态":"存续","成立日期":"2015-01-01","注册资本":"1000万元"}'));
+
+    expect(pairs.rows.map((row) => row.label)).toEqual(['状态', '成立日期', '注册资本']);
+  });
+
+  it('orders each pairs section on its own, leaving the record lists where they are', () => {
+    const long = '经营'.repeat(PRESENTER_LONG_VALUE_CHARS);
+    const sections = presentEnterpriseResult(
+      mcpText(
+        JSON.stringify({
+          经营范围: long,
+          状态: '存续',
+          股东: [{ 股东名称: '张三' }],
+          注册资本: '1000万元',
+        }),
+      ),
+    ).sections;
+
+    expect(sections.map((section) => section.type)).toEqual(['pairs', 'table', 'pairs']);
+    expect((sections[0] as PresentedPairs).rows.map((row) => row.label)).toEqual([
+      '状态',
+      '经营范围',
+    ]);
+    expect((sections[2] as PresentedPairs).rows.map((row) => row.label)).toEqual(['注册资本']);
   });
 
   it('omits empty values whatever shape they arrive in', () => {

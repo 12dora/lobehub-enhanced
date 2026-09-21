@@ -148,4 +148,39 @@ describe('DingtalkApprovalManifest', () => {
       expect(api.parameters.type).toBe('object');
     }
   });
+
+  it('restricts saveTemplate componentType to verified types and forbids 流水号', () => {
+    const save = DingtalkApprovalManifest.api.find(
+      (item) => item.name === DingtalkApprovalApiName.saveTemplate,
+    );
+    const componentType = save?.parameters.properties.fields.items.properties.componentType;
+
+    expect(save?.description).toContain('流水号');
+    expect(save?.parameters.properties.fields.description).toContain('流水号/编号 needs no field');
+    expect(componentType.enum).toEqual([
+      'AddressField',
+      'DDAttachment',
+      'DDDateField',
+      'DDDateRangeField',
+      'DDMultiSelectField',
+      'DDPhotoField',
+      'DDSelectField',
+      'DepartmentField',
+      'IdCardField',
+      'InnerContactField',
+      'MoneyField',
+      'NumberField',
+      'PhoneField',
+      'StarRatingField',
+      'TextareaField',
+      'TextField',
+      'TextNote',
+    ]);
+    expect(componentType.enum).not.toContain('SeqNumberField');
+    expect(componentType.enum).not.toContain('CalculateField');
+    expect(componentType.enum).not.toContain('RelateField');
+    expect(componentType.enum).not.toContain('RecipientAccountField');
+    expect(componentType.enum).not.toContain('TableField');
+    expect(componentType.description).toContain('流水号');
+  });
 });

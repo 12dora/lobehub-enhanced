@@ -1,22 +1,34 @@
 import { DingtalkWorkspaceError } from '../errors';
 
+export interface FormComponentProblem {
+  componentType: string;
+  index: number;
+  issue: string;
+  label: string;
+  suggestion: string;
+}
+
 /**
- * Forms-endpoint DINGTALK_INVALID with an optional self-correct hint.
- * `hint` is only `${ComponentType}.${prop}` or a prop name — never the raw
- * DingTalk message.
+ * Forms-endpoint DINGTALK_INVALID with an optional self-correct hint
+ * and the full pre-validation problem list. `hint` is only
+ * `${ComponentType}.${prop}`, a component type, or a prop name — never
+ * the raw DingTalk message.
  */
 export class DingtalkFormInvalidError extends DingtalkWorkspaceError {
   readonly hint?: string;
+  readonly problems?: FormComponentProblem[];
 
-  constructor(hint?: string) {
+  constructor(hint?: string, problems?: readonly FormComponentProblem[]) {
     super('DINGTALK_INVALID');
     this.name = 'DingtalkFormInvalidError';
     if (hint) this.hint = hint;
+    if (problems && problems.length > 0) this.problems = [...problems];
   }
 }
 
 const PROPS_ERROR_RE = /\b([A-Z][A-Z0-9]+)\s+props\.([A-Z][A-Z0-9]*)\s+error\b/i;
 const MISSING_PROP_RE = /\bMissing\s*([A-Z][A-Z0-9]*)\b/i;
+const RULE_ERROR_RE = /\b([A-Z][A-Z0-9]+Field)\s+rule error\b/i;
 
 const toHint = (componentType: string | undefined, prop: string): string => {
   const trimmedProp = prop.trim();
@@ -26,6 +38,13 @@ const toHint = (componentType: string | undefined, prop: string): string => {
   return type ? `${type}.${normalizedProp}` : normalizedProp;
 };
 
+export const problemHint = (problem: FormComponentProblem): string => {
+  if (problem.issue === 'unsupported') return problem.componentType || 'componentType';
+  if (problem.issue === 'formComponents') return 'formComponents';
+  if (problem.componentType && problem.issue) return `${problem.componentType}.${problem.issue}`;
+  return problem.issue || problem.componentType || 'formComponents';
+};
+
 /** Extract a safe forms hint from a DingTalk 400 message. Never returns the raw text. */
 export const parseFormErrorHint = (text: unknown): string | undefined => {
   if (typeof text !== 'string' || !text.trim()) return undefined;
@@ -33,6 +52,8 @@ export const parseFormErrorHint = (text: unknown): string | undefined => {
   if (propsMatch?.[1] && propsMatch[2]) return toHint(propsMatch[1], propsMatch[2]);
   const missingMatch = text.match(MISSING_PROP_RE);
   if (missingMatch?.[1]) return toHint(undefined, missingMatch[1]);
+  const ruleMatch = text.match(RULE_ERROR_RE);
+  if (ruleMatch?.[1]) return ruleMatch[1];
   return undefined;
 };
 
@@ -51,7 +72,7 @@ const collectErrorText = (error: unknown): string => {
   return parts.join('\n');
 };
 
-export const remapFormsInvalidError = (error: unknown): never => {
+export const remapFormsInvalidError: (error: unknown) => never = (error) => {
   if (error instanceof DingtalkFormInvalidError) throw error;
   if (error instanceof DingtalkWorkspaceError && error.code === 'DINGTALK_INVALID') {
     throw new DingtalkFormInvalidError(parseFormErrorHint(collectErrorText(error)));

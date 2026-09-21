@@ -1,6 +1,6 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 
-import type { AmbiguousCandidate } from '../types';
+import type { AmbiguousCandidate, SaveTemplateFieldProblem } from '../types';
 
 export const DINGTALK_INTERNAL_TOOL_CONTENT =
   '钉钉审批操作失败（内部错误），请稍后重试。不要向用户展示技术细节。';
@@ -34,6 +34,7 @@ export interface DingtalkToolFailure {
   code: string;
   hint?: string;
   message: string;
+  problems?: SaveTemplateFieldProblem[];
 }
 
 const compactJson = (value: unknown): string => JSON.stringify(value);
@@ -120,6 +121,98 @@ const isSafeHint = (value: string): boolean => {
   return true;
 };
 
+const PROBLEM_ISSUE_ZH: Record<string, string> = {
+  children: '不能包含子控件',
+  content: '缺少说明文字',
+  duplicate: '标签重复',
+  formComponents: '表单控件数量不合法',
+  label: '标签无效',
+  labelLength: '标签超过 50 字',
+  options: '选项无效',
+  unit: '日期单位无效',
+  unsupported: '不支持该控件',
+};
+
+const suggestionZh = (problem: SaveTemplateFieldProblem): string => {
+  if (problem.suggestion.startsWith('remove:')) return '请删除该控件，钉钉会自动生成流水号';
+  if (problem.suggestion.startsWith('use ')) return `请改用 ${problem.suggestion.slice(4)}`;
+  if (problem.suggestion.startsWith('split ')) return '请拆成独立控件';
+  if (problem.issue === 'options') return '请提供至少 2 个选项';
+  if (problem.issue === 'duplicate') return '请改用不同标签';
+  if (problem.issue === 'labelLength') return '请将标签缩短到 50 字以内';
+  if (problem.issue === 'formComponents') return '请将控件数量控制在 1–200';
+  if (problem.issue === 'unit') return 'unit 只能是「天」或「小时」';
+  if (problem.issue === 'content') return '请填写 content';
+  if (problem.issue === 'label') return '请填写标签';
+  if (problem.issue === 'children') return '请去掉 children';
+  return problem.suggestion;
+};
+
+export const formatFormProblemLine = (problem: SaveTemplateFieldProblem): string => {
+  const title = problem.label || problem.componentType || `字段${problem.index}`;
+  const type = problem.componentType ? `（${problem.componentType}）` : '';
+  const issue = PROBLEM_ISSUE_ZH[problem.issue] ?? problem.issue;
+  const suggestion = suggestionZh(problem);
+  return `[${problem.index}] ${title}${type}：${issue}；${suggestion}`;
+};
+
+const asProblem = (value: unknown): SaveTemplateFieldProblem | undefined => {
+  if (!isRecord(value) || typeof value.index !== 'number' || !Number.isFinite(value.index)) {
+    return undefined;
+  }
+  const issue = typeof value.issue === 'string' ? value.issue.trim() : '';
+  if (!issue || !isSafeHint(issue)) return undefined;
+  const suggestion = typeof value.suggestion === 'string' ? value.suggestion.trim() : '';
+  if (suggestion && !isSafeHint(suggestion)) return undefined;
+  const label = typeof value.label === 'string' ? value.label.trim() : '';
+  const componentType = typeof value.componentType === 'string' ? value.componentType.trim() : '';
+  if (label && !isSafeHint(label)) return undefined;
+  if (componentType && !isSafeHint(componentType)) return undefined;
+  return {
+    componentType,
+    index: Math.trunc(value.index),
+    issue,
+    label,
+    suggestion,
+  };
+};
+
+const asProblems = (value: unknown): SaveTemplateFieldProblem[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const problems: SaveTemplateFieldProblem[] = [];
+  for (const item of value) {
+    const problem = asProblem(item);
+    if (problem) problems.push(problem);
+    if (problems.length >= 40) break;
+  }
+  return problems.length > 0 ? problems : undefined;
+};
+
+export const extractFormProblems = (error: unknown): SaveTemplateFieldProblem[] | undefined => {
+  if (!isRecord(error)) return undefined;
+
+  const direct = asProblems(error.problems);
+  if (direct) return direct;
+
+  const data = isRecord(error.data) ? error.data : undefined;
+  if (data) {
+    const fromErrorData = isRecord(data.errorData)
+      ? asProblems(data.errorData.problems)
+      : undefined;
+    if (fromErrorData) return fromErrorData;
+    const fromData = asProblems(data.problems);
+    if (fromData) return fromData;
+  }
+
+  const cause = isRecord(error.cause) ? error.cause : undefined;
+  if (cause && isRecord(cause.data)) {
+    const fromCause = asProblems(cause.data.problems);
+    if (fromCause) return fromCause;
+  }
+
+  return undefined;
+};
+
 export const extractInvalidHint = (error: unknown): string | undefined => {
   const take = (value: unknown): string | undefined => {
     if (typeof value !== 'string') return undefined;
@@ -189,6 +282,7 @@ export const dingtalkErrorGuidance = (
   code: string,
   candidates?: AmbiguousCandidate[],
   hint?: string,
+  problems?: SaveTemplateFieldProblem[],
 ): string => {
   switch (code) {
     case 'DINGTALK_NOT_CONFIGURED': {
@@ -207,6 +301,10 @@ export const dingtalkErrorGuidance = (
       return '未找到对应的审批单、任务或模板（DINGTALK_NOT_FOUND）。请先调用 listPendingApprovals / listMyApplications / listTemplates 确认标识后再试。';
     }
     case 'DINGTALK_INVALID': {
+      if (problems && problems.length > 0) {
+        const list = problems.map(formatFormProblemLine).join('\n');
+        return `请求参数无效（DINGTALK_INVALID）。请一次性修正以下全部问题后重试一次，不要重新 listTemplates、getTemplateSchema，也不要更换模板名称或重复创建。\n${list}`;
+      }
       if (hint) {
         return `请求参数无效（DINGTALK_INVALID）。字段提示：${hint}。请只修正该字段后重试一次，不要重新 listTemplates、getTemplateSchema，也不要更换模板名称或重复创建。`;
       }
@@ -259,9 +357,10 @@ export const sanitizeDingtalkFailure = (
   const code = extractDingtalkErrorCode(error);
   const candidates = extractAmbiguousCandidates(error);
   const hint = code === 'DINGTALK_INVALID' ? extractInvalidHint(error) : undefined;
+  const problems = code === 'DINGTALK_INVALID' ? extractFormProblems(error) : undefined;
 
   if (code && KNOWN_CODES.has(code)) {
-    const content = dingtalkErrorGuidance(code, candidates, hint);
+    const content = dingtalkErrorGuidance(code, candidates, hint, problems);
     return {
       content,
       error: {
@@ -269,6 +368,7 @@ export const sanitizeDingtalkFailure = (
         message: content,
         ...(candidates ? { candidates } : {}),
         ...(hint ? { hint } : {}),
+        ...(problems ? { problems } : {}),
       },
     };
   }
@@ -286,6 +386,7 @@ export const dingtalkFailureResult = (error: unknown): BuiltinServerRuntimeOutpu
     code: sanitized.error.code,
     ...(sanitized.error.candidates ? { candidates: sanitized.error.candidates } : {}),
     ...(sanitized.error.hint ? { hint: sanitized.error.hint } : {}),
+    ...(sanitized.error.problems ? { problems: sanitized.error.problems } : {}),
   };
   return {
     content: `${sanitized.content}\n${compactJson(payload)}`,

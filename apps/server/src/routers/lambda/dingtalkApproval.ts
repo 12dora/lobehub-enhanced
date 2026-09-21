@@ -74,13 +74,14 @@ const isDingtalkWorkspaceError = (
 ): error is DingtalkWorkspaceError & {
   candidates?: unknown;
   hint?: unknown;
+  problems?: unknown;
   query?: unknown;
 } => {
   if (error instanceof DingtalkWorkspaceError) return true;
   return isRecord(error) && typeof error.code === 'string' && error.code.startsWith('DINGTALK_');
 };
 
-const mapDingtalkError = (error: unknown, procedure: string): never => {
+const mapDingtalkError: (error: unknown, procedure: string) => never = (error, procedure) => {
   if (error instanceof TRPCError) throw error;
 
   if (isDingtalkWorkspaceError(error)) {
@@ -91,6 +92,9 @@ const mapDingtalkError = (error: unknown, procedure: string): never => {
     }
     if ('hint' in error && typeof error.hint === 'string' && error.hint.trim()) {
       data.hint = error.hint.trim().slice(0, 200);
+    }
+    if ('problems' in error && Array.isArray(error.problems) && error.problems.length > 0) {
+      data.problems = error.problems;
     }
     if ('query' in error && error.query !== undefined) {
       data.query = error.query;

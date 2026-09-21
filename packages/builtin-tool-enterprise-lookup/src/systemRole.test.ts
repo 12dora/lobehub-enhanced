@@ -41,14 +41,21 @@ describe('enterprise lookup systemRole', () => {
     expect(systemPrompt).toContain('queryEnterprise');
   });
 
-  it('requires two-column markdown tables and a source line', () => {
-    expect(systemPrompt).toContain('| 项目 | 内容 |');
+  it('requires four-column markdown tables, a compact list, and a source line', () => {
+    expect(systemPrompt).toContain('| 项目 | 内容 | 项目 | 内容 |');
+    expect(systemPrompt).toContain('16 fields → 8 rows');
+    expect(systemPrompt).toContain('~30 characters');
+    expect(systemPrompt).toContain('经营范围');
+    expect(systemPrompt).toContain('half-empty');
+    expect(systemPrompt).toContain('共 N 条');
+    expect(systemPrompt).toContain('at most 4 sections');
     expect(systemPrompt).toContain('基本信息');
     expect(systemPrompt).toContain('股东与高管');
-    expect(systemPrompt).toContain('No long prose paragraphs');
-    expect(systemPrompt).toContain('60 characters');
-    expect(systemPrompt).toContain('first 8');
-    expect(systemPrompt).toContain('Omit empty fields');
+    expect(systemPrompt).toContain('No prose paragraphs restating table content');
+    expect(systemPrompt).toContain('empty fields omitted');
     expect(systemPrompt).toContain('query time');
+    expect(systemPrompt).toContain(
+      '| 企业名称 | 绍兴市越城区国泰助剂有限公司 | 企业简称 | 国泰助剂 |',
+    );
   });
 });

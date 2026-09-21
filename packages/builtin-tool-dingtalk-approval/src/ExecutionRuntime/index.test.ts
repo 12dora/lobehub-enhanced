@@ -42,15 +42,33 @@ class FakeDingtalkError extends Error {
   readonly code: string;
   readonly candidates?: { deptPath?: string; name: string; staffId: string }[];
   readonly hint?: string;
+  readonly problems?: Array<{
+    componentType: string;
+    index: number;
+    issue: string;
+    label: string;
+    suggestion: string;
+  }>;
   constructor(
     code: string,
-    extras?: { candidates?: { deptPath?: string; name: string; staffId: string }[]; hint?: string },
+    extras?: {
+      candidates?: { deptPath?: string; name: string; staffId: string }[];
+      hint?: string;
+      problems?: Array<{
+        componentType: string;
+        index: number;
+        issue: string;
+        label: string;
+        suggestion: string;
+      }>;
+    },
   ) {
     super(`upstream boom ${code}`);
     this.name = 'DingtalkWorkspaceError';
     this.code = code;
     this.candidates = extras?.candidates;
     this.hint = extras?.hint;
+    this.problems = extras?.problems;
   }
 }
 
@@ -616,6 +634,86 @@ describe('DingtalkApprovalExecutionRuntime', () => {
     expect(result.error).toMatchObject({
       code: 'DINGTALK_INVALID',
       hint: 'DDDateField props.unit',
+    });
+  });
+
+  it('lists every saveTemplate form problem in one Chinese DINGTALK_INVALID', async () => {
+    const problems = [
+      {
+        componentType: 'SeqNumberField',
+        index: 0,
+        issue: 'unsupported',
+        label: '流水号',
+        suggestion: 'remove: DingTalk generates it',
+      },
+      {
+        componentType: 'DDSelectField',
+        index: 1,
+        issue: 'options',
+        label: '转租类型',
+        suggestion: 'provide at least 2 options',
+      },
+    ];
+    const saveTemplate = vi
+      .fn()
+      .mockRejectedValue(
+        new FakeDingtalkError('DINGTALK_INVALID', { hint: 'SeqNumberField', problems }),
+      );
+    const runtime = createDingtalkApprovalRuntime(makeService({ saveTemplate }));
+
+    const result = await runtime.saveTemplate({
+      fields: [
+        { componentType: 'SeqNumberField', label: '流水号' },
+        { componentType: 'DDSelectField', label: '转租类型' },
+      ],
+      name: '设备转租审批',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('DINGTALK_INVALID');
+    expect(result.content).toContain('一次性修正以下全部问题');
+    expect(result.content).toContain('[0] 流水号（SeqNumberField）');
+    expect(result.content).toContain('请删除该控件，钉钉会自动生成流水号');
+    expect(result.content).toContain('[1] 转租类型（DDSelectField）');
+    expect(result.content).toContain('请提供至少 2 个选项');
+    expect(result.content).not.toContain('只修正该字段');
+    expect(result.content).not.toContain('upstream boom');
+    expect(result.error).toMatchObject({
+      code: 'DINGTALK_INVALID',
+      hint: 'SeqNumberField',
+      problems,
+    });
+  });
+
+  it('reads saveTemplate problems from TRPC cause.data', async () => {
+    const saveTemplate = vi.fn().mockRejectedValue({
+      cause: {
+        data: {
+          code: 'DINGTALK_INVALID',
+          hint: 'SeqNumberField',
+          problems: [
+            {
+              componentType: 'SeqNumberField',
+              index: 0,
+              issue: 'unsupported',
+              label: '流水号',
+              suggestion: 'remove: DingTalk generates it',
+            },
+          ],
+        },
+      },
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ saveTemplate }));
+    const result = await runtime.saveTemplate({
+      fields: [{ componentType: 'SeqNumberField', label: '流水号' }],
+      name: '设备转租审批',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('请删除该控件，钉钉会自动生成流水号');
+    expect(result.error).toMatchObject({
+      code: 'DINGTALK_INVALID',
+      problems: [expect.objectContaining({ componentType: 'SeqNumberField', index: 0 })],
     });
   });
 

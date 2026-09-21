@@ -299,6 +299,43 @@ describe('DingtalkApprovalService', () => {
     expect(mockSaveForm).not.toHaveBeenCalled();
   });
 
+  it('lists every saveTemplate problem before calling DingTalk', async () => {
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(
+      service.saveTemplate({
+        fields: [
+          { componentType: 'SeqNumberField', label: '流水号' },
+          { componentType: 'DDSelectField', label: '转租类型' },
+          { componentType: 'TextField', label: '事由' },
+          { componentType: 'TextField', label: '事由' },
+        ],
+        name: '设备转租审批',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DINGTALK_INVALID',
+      hint: 'SeqNumberField',
+      problems: [
+        expect.objectContaining({
+          componentType: 'SeqNumberField',
+          index: 0,
+          issue: 'unsupported',
+          suggestion: 'remove: DingTalk generates it',
+        }),
+        expect.objectContaining({
+          componentType: 'DDSelectField',
+          index: 1,
+          issue: 'options',
+        }),
+        expect.objectContaining({
+          index: 3,
+          issue: 'duplicate',
+          label: '事由',
+        }),
+      ],
+    });
+    expect(mockSaveForm).not.toHaveBeenCalled();
+  });
+
   it('encodes select options and date-range labels before save', async () => {
     mockSaveForm.mockResolvedValueOnce({ processCode: 'PROC-NEW' });
     const service = new DingtalkApprovalService({} as never, 'user-1');
