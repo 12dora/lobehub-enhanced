@@ -82,6 +82,18 @@ export const lambdaRouter = router({
   pushToken: lazyRouter(() => import('./pushToken').then((m) => m.pushTokenRouter)),
   ragEval: moduleRouter('knowledgeBase', () => import('./ragEval').then((m) => m.ragEvalRouter)),
   recent: lazyRouter(() => import('./recent').then((m) => m.recentRouter)),
+  enterpriseLookup: lazyRouter(() =>
+    import('./enterpriseLookup').then((m) => m.enterpriseLookupRouter),
+  ),
+  dingtalkApproval: lazyRouter(() =>
+    import('./dingtalkApproval').then((m) => m.dingtalkApprovalRouter),
+  ),
+  dingtalkApprovalRule: lazyRouter(() =>
+    import('./dingtalkApprovalRule').then((m) => m.dingtalkApprovalRuleRouter),
+  ),
+  dingtalkWorkspace: lazyRouter(() =>
+    import('./dingtalkWorkspace').then((m) => m.dingtalkWorkspaceRouter),
+  ),
   reminder: lazyRouter(() => import('./reminder').then((m) => m.reminderRouter)),
   search: lazyRouter(() => import('./search').then((m) => m.searchRouter)),
   session: lazyRouter(() => import('./session').then((m) => m.sessionRouter)),

@@ -1,3 +1,9 @@
+import { DINGTALK_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-approval/executionRuntime';
+import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-workspace/executionRuntime';
+import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
+import { ENTERPRISE_LOOKUP_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-enterprise-lookup/executionRuntime';
+import { EnterpriseLookupIdentifier } from '@lobechat/builtin-tool-enterprise-lookup/manifest';
 import { REMINDER_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-reminder/executionRuntime';
 import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder/manifest';
 import { builtinTools } from '@lobechat/builtin-tools';
@@ -44,6 +50,21 @@ const collectRuntimeApiNames = (runtime: Record<string, any>): string[] => {
     }
   }
   return [...names];
+};
+
+const SANITIZED_TOOL_FAILURES: Record<string, { code: string; content: string }> = {
+  [DingtalkApprovalIdentifier]: {
+    code: 'DINGTALK_INTERNAL',
+    content: DINGTALK_INTERNAL_TOOL_CONTENT,
+  },
+  [DingtalkWorkspaceIdentifier]: {
+    code: 'DINGTALK_INTERNAL',
+    content: DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT,
+  },
+  [EnterpriseLookupIdentifier]: {
+    code: 'ENTERPRISE_LOOKUP_INTERNAL',
+    content: ENTERPRISE_LOOKUP_INTERNAL_TOOL_CONTENT,
+  },
 };
 
 export class BuiltinToolsExecutor implements IToolExecutor {
@@ -210,6 +231,16 @@ export class BuiltinToolsExecutor implements IToolExecutor {
         return {
           content: REMINDER_INTERNAL_TOOL_CONTENT,
           error: { code: 'REMINDER_INTERNAL', message: REMINDER_INTERNAL_TOOL_CONTENT },
+          success: false,
+        };
+      }
+
+      // Same backstop for tools that call third-party APIs with admin-held credentials.
+      const sanitized = SANITIZED_TOOL_FAILURES[identifier];
+      if (sanitized) {
+        return {
+          content: sanitized.content,
+          error: { code: sanitized.code, message: sanitized.content },
           success: false,
         };
       }

@@ -27,6 +27,7 @@ import { adminBrowserProfileRouter } from './admin/browserProfile';
 import { adminConnectorsRouter } from './admin/connectors';
 import { adminContentModerationRouter } from './admin/contentModeration';
 import { adminCredsRouter } from './admin/creds';
+import { adminDingtalkApprovalRulesRouter } from './admin/dingtalkApprovalRules';
 import { adminIdentityProvidersRouter } from './admin/identityProviders';
 import { adminImConnectorsRouter } from './admin/imConnectors';
 import { adminManagedResourcesRouter } from './admin/managedResources';
@@ -183,6 +184,7 @@ export const adminRouter = router({
   contentModeration: adminContentModerationRouter,
   creds: adminCredsRouter,
   identityProviders: adminIdentityProvidersRouter,
+  dingtalkApprovalRules: adminDingtalkApprovalRulesRouter,
   imConnectors: adminImConnectorsRouter,
   managedResources: adminManagedResourcesRouter,
   modules: adminModulesRouter,

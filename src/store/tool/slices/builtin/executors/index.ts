@@ -11,6 +11,9 @@ import { agentManagementExecutor } from '@lobechat/builtin-tool-agent-management
 import { calculatorExecutor } from '@lobechat/builtin-tool-calculator/executor';
 import { cloudSandboxExecutor } from '@lobechat/builtin-tool-cloud-sandbox/executor';
 import { credsExecutor } from '@lobechat/builtin-tool-creds/executor';
+import { dingtalkApprovalExecutor } from '@lobechat/builtin-tool-dingtalk-approval/client/executor';
+import { dingtalkWorkspaceExecutor } from '@lobechat/builtin-tool-dingtalk-workspace/client/executor';
+import { enterpriseLookupExecutor } from '@lobechat/builtin-tool-enterprise-lookup/client/executor';
 import { groupAgentBuilderExecutor } from '@lobechat/builtin-tool-group-agent-builder/executor';
 import { groupManagementExecutor } from '@lobechat/builtin-tool-group-management/executor';
 import { knowledgeBaseExecutor } from '@lobechat/builtin-tool-knowledge-base/client/executor';
@@ -160,6 +163,9 @@ export const registerBuiltinToolExecutors = (): void => {
     skillStoreExecutor,
     skillsExecutor,
     reminderExecutor,
+    dingtalkWorkspaceExecutor,
+    dingtalkApprovalExecutor,
+    enterpriseLookupExecutor,
     taskExecutor,
     activatorExecutor,
     topicReferenceExecutor,

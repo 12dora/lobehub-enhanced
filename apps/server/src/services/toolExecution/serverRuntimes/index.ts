@@ -24,7 +24,10 @@ import { BriefIdentifier } from '@lobechat/builtin-tool-brief/manifest';
 import { CalculatorIdentifier } from '@lobechat/builtin-tool-calculator/manifest';
 import { CloudSandboxIdentifier } from '@lobechat/builtin-tool-cloud-sandbox/manifest';
 import { CredsIdentifier } from '@lobechat/builtin-tool-creds/manifest';
+import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
 import { DocumentPagesIdentifier } from '@lobechat/builtin-tool-document-pages/manifest';
+import { EnterpriseLookupIdentifier } from '@lobechat/builtin-tool-enterprise-lookup/manifest';
 import { GroupManagementIdentifier } from '@lobechat/builtin-tool-group-management/manifest';
 import { KnowledgeBaseIdentifier } from '@lobechat/builtin-tool-knowledge-base/manifest';
 import { LobeAgentIdentifier } from '@lobechat/builtin-tool-lobe-agent/manifest';
@@ -129,6 +132,18 @@ const SERVER_RUNTIME_REGISTRATIONS: ServerRuntimeRegistration[] = [
   lazyRuntime(BriefIdentifier, async () => (await import('./brief')).briefRuntime),
   lazyRuntime(TaskIdentifier, async () => (await import('./task')).taskRuntime),
   lazyRuntime(ReminderIdentifier, async () => (await import('./reminder')).reminderRuntime),
+  lazyRuntime(
+    DingtalkWorkspaceIdentifier,
+    async () => (await import('./dingtalkWorkspace')).dingtalkWorkspaceRuntime,
+  ),
+  lazyRuntime(
+    DingtalkApprovalIdentifier,
+    async () => (await import('./dingtalkApproval')).dingtalkApprovalRuntime,
+  ),
+  lazyRuntime(
+    EnterpriseLookupIdentifier,
+    async () => (await import('./enterpriseLookup')).enterpriseLookupRuntime,
+  ),
   lazyRuntime(
     TopicReferenceIdentifier,
     async () => (await import('./topicReference')).topicReferenceRuntime,

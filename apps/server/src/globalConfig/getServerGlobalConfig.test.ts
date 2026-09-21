@@ -150,6 +150,10 @@ const mockGlobalConfigDependencies = (
       mocks.genServerAiProvidersConfig(specificConfig),
     resetAiProvidersCacheForTest: () => undefined,
   }));
+
+  vi.doMock('@/server/enterprise/services/enterpriseLookup', () => ({
+    isEnterpriseLookupConfigured: async () => false,
+  }));
 };
 
 const loadCapturedProviderConfig = async (enableBusinessFeatures: boolean) => {
@@ -256,6 +260,23 @@ describe('getServerGlobalConfig', () => {
         process.env.SANDBOX_PROVIDER = previous;
       }
     }
+  });
+
+  it('defaults enterprise.capabilities.enterpriseLookup to false', async () => {
+    const config = await loadServerConfig(false);
+    expect(config.enterprise?.capabilities?.enterpriseLookup).toBe(false);
+  });
+
+  it('exposes enterprise.capabilities.enterpriseLookup from runtime config', async () => {
+    vi.resetModules();
+    mocks.genServerAiProvidersConfig.mockClear();
+    mockGlobalConfigDependencies(false);
+    vi.doMock('@/server/enterprise/services/enterpriseLookup', () => ({
+      isEnterpriseLookupConfigured: async () => true,
+    }));
+    const { getServerGlobalConfig } = await import('./index');
+    const config = await getServerGlobalConfig();
+    expect(config.enterprise?.capabilities?.enterpriseLookup).toBe(true);
   });
 
   it('exposes enterprise.modules from LOBE_MODULES_DISABLED', async () => {

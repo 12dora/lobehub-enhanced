@@ -29,6 +29,14 @@ describe('dingTalkConnectorSettingsSchema', () => {
     expect(settings.pushEnabled).toBe(true);
   });
 
+  it('defaults workspace switches off and automation tier to moderate', () => {
+    const settings = dingTalkConnectorSettingsSchema.parse({ robotCode: 'ding-robot' });
+    expect(settings.workspaceApprovalEnabled).toBe(false);
+    expect(settings.workspaceTodoEnabled).toBe(false);
+    expect(settings.workspaceCalendarEnabled).toBe(false);
+    expect(settings.approvalAutomationTier).toBe('moderate');
+  });
+
   it('persists explicit false on both notify-app channels', () => {
     const settings = dingTalkConnectorSettingsSchema.parse({
       notifyRobotEnabled: false,
@@ -90,6 +98,7 @@ describe('adminImConnectorViewSchema', () => {
     expect(parsed.success).toBe(false);
 
     const withFlags = adminImConnectorViewSchema.parse({
+      approvalAutomationTier: 'moderate',
       aiCardTemplateId: null,
       chatEnabled: true,
       clientId: null,
@@ -117,8 +126,13 @@ describe('adminImConnectorViewSchema', () => {
         state: 'unknown',
       },
       updatedAt: null,
+      workspaceApprovalEnabled: false,
+      workspaceCalendarEnabled: false,
+      workspaceTodoEnabled: false,
     });
     expect(withFlags.notifyWorkNoticeEnabled).toBe(true);
     expect(withFlags.notifyRobotEnabled).toBe(true);
+    expect(withFlags.workspaceApprovalEnabled).toBe(false);
+    expect(withFlags.approvalAutomationTier).toBe('moderate');
   });
 });

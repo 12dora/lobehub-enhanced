@@ -2,10 +2,10 @@
  * Tools Engineering - Unified tools processing using ToolsEngine
  */
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
+import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { MemoryManifest } from '@lobechat/builtin-tool-memory';
-import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
 import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
 import { alwaysOnToolIds, chatModeAllowedToolIds, defaultToolIds } from '@lobechat/builtin-tools';
 import { createEnableChecker, type PluginEnableChecker } from '@lobechat/context-engine';
@@ -23,6 +23,7 @@ import { isToolAvailableInCurrentEnv } from '@/helpers/toolAvailability';
 import { patchManifestWithPermissions } from '@/libs/mcp/patchManifestPermissions';
 import { getAgentStoreState } from '@/store/agent';
 import { agentChatConfigSelectors, agentSelectors } from '@/store/agent/selectors';
+import { getServerConfigStoreState } from '@/store/serverConfig';
 import { getToolStoreState } from '@/store/tool';
 import {
   composioStoreSelectors,
@@ -36,6 +37,23 @@ import { settingsSelectors } from '@/store/user/selectors';
 import { getSearchConfig } from '../getSearchConfig';
 import { isCanUseFC } from '../isCanUseFC';
 import { buildClientConnectorManifests } from './buildClientConnectorManifests';
+
+const DINGTALK_APPROVAL_TOOL_IDENTIFIER = 'lobe-dingtalk-approval';
+const DINGTALK_WORKSPACE_TOOL_IDENTIFIER = 'lobe-dingtalk-workspace';
+const ENTERPRISE_LOOKUP_TOOL_IDENTIFIER = 'lobe-enterprise-lookup';
+
+const dingtalkDisabledToolIds = (): string[] => {
+  const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
+  const ids: string[] = [];
+  if (!caps?.dingtalkApproval) ids.push(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
+  if (!caps?.dingtalkTodo && !caps?.dingtalkCalendar) ids.push(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+  return ids;
+};
+
+const enterpriseLookupDisabledToolIds = (): string[] => {
+  const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
+  return caps?.enterpriseLookup ? [] : [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER];
+};
 
 /**
  * Tools engine configuration options
@@ -229,9 +247,13 @@ export const createAgentToolsEngine = (
   // Native search and the platform browsing tool must not stack. Drop the
   // web-browsing manifest from the pool so `allowExplicitActivation` cannot
   // re-enable it after lobe-activator.
-  const disabledIds = webBrowsingEnabled
-    ? disabledPluginIds
-    : [...disabledPluginIds, WebBrowsingManifest.identifier];
+  const disabledIds = [
+    ...(webBrowsingEnabled
+      ? disabledPluginIds
+      : [...disabledPluginIds, WebBrowsingManifest.identifier]),
+    ...dingtalkDisabledToolIds(),
+    ...enterpriseLookupDisabledToolIds(),
+  ];
 
   const chatModeRules = {
     [DocumentPagesManifest.identifier]: true,
@@ -254,6 +276,8 @@ export const createAgentToolsEngine = (
     [LocalSystemManifest.identifier]: agentChatConfigSelectors.isLocalSystemEnabled(agentState),
     [MemoryManifest.identifier]: memoryEnabled,
     [WebBrowsingManifest.identifier]: webBrowsingEnabled,
+    [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER]:
+      !!getServerConfigStoreState()?.serverConfig.enterprise?.capabilities?.enterpriseLookup,
   };
 
   return createToolsEngine({

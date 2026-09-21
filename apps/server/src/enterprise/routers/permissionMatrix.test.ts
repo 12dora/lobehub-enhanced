@@ -53,6 +53,7 @@ const o04SystemProcedurePaths = [
   'admin.system.cancelJob',
   'admin.system.getDocumentRenderSettings',
   'admin.system.getDocumentRenderStatus',
+  'admin.system.getEnterpriseLookupSettings',
   'admin.system.getInfraSettings',
   'admin.system.getInstanceRevisions',
   'admin.system.getJobs',
@@ -63,7 +64,9 @@ const o04SystemProcedurePaths = [
   'admin.system.retryJob',
   'admin.system.runDocumentRenderGc',
   'admin.system.testDependency',
+  'admin.system.testEnterpriseLookupProvider',
   'admin.system.updateDocumentRenderSettings',
+  'admin.system.updateEnterpriseLookupSettings',
   'admin.system.updateInfraSettings',
   'admin.system.updateSandboxSettings',
 ] as const;
@@ -71,6 +74,7 @@ const o04SystemProcedurePathSet = new Set<string>(o04SystemProcedurePaths);
 const o04SystemReadProcedurePaths = [
   'admin.system.getDocumentRenderSettings',
   'admin.system.getDocumentRenderStatus',
+  'admin.system.getEnterpriseLookupSettings',
   'admin.system.getInfraSettings',
   'admin.system.getInstanceRevisions',
   'admin.system.getJobs',

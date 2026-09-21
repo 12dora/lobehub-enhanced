@@ -37,6 +37,23 @@ import {
   CloudSandboxStreamings,
 } from '@lobechat/builtin-tool-cloud-sandbox/client';
 import {
+  DingtalkApprovalInspectors,
+  DingtalkApprovalInterventions,
+  DingtalkApprovalManifest,
+  DingtalkApprovalRenders,
+} from '@lobechat/builtin-tool-dingtalk-approval/client';
+import {
+  DingtalkWorkspaceInspectors,
+  DingtalkWorkspaceInterventions,
+  DingtalkWorkspaceManifest,
+  DingtalkWorkspaceRenders,
+} from '@lobechat/builtin-tool-dingtalk-workspace/client';
+import {
+  EnterpriseLookupInspectors,
+  EnterpriseLookupManifest,
+  EnterpriseLookupRenders,
+} from '@lobechat/builtin-tool-enterprise-lookup/client';
+import {
   GroupAgentBuilderInspectors,
   GroupAgentBuilderManifest,
   GroupAgentBuilderRenders,
@@ -193,6 +210,12 @@ export const registerBuiltinToolSurfaces = (): void => {
     [NotebookIdentifier]: NotebookRenders,
     [PageAgentManifest.identifier]: PageAgentRenders as Record<string, BuiltinRender>,
     [ReminderManifest.identifier]: ReminderRenders as Record<string, BuiltinRender>,
+    [DingtalkWorkspaceManifest.identifier]: DingtalkWorkspaceRenders as Record<
+      string,
+      BuiltinRender
+    >,
+    [DingtalkApprovalManifest.identifier]: DingtalkApprovalRenders as Record<string, BuiltinRender>,
+    [EnterpriseLookupManifest.identifier]: EnterpriseLookupRenders as Record<string, BuiltinRender>,
     [RemoteDeviceManifest.identifier]: RemoteDeviceRenders as Record<string, BuiltinRender>,
     [SkillStoreManifest.identifier]: SkillStoreRenders as Record<string, BuiltinRender>,
     [SkillsManifest.identifier]: SkillsRenders as Record<string, BuiltinRender>,
@@ -246,6 +269,18 @@ export const registerBuiltinToolSurfaces = (): void => {
     [SkillStoreManifest.identifier]: SkillStoreInspectors as Record<string, BuiltinInspector>,
     [SkillsManifest.identifier]: SkillsInspectors as Record<string, BuiltinInspector>,
     [ReminderManifest.identifier]: ReminderInspectors as Record<string, BuiltinInspector>,
+    [DingtalkWorkspaceManifest.identifier]: DingtalkWorkspaceInspectors as Record<
+      string,
+      BuiltinInspector
+    >,
+    [DingtalkApprovalManifest.identifier]: DingtalkApprovalInspectors as Record<
+      string,
+      BuiltinInspector
+    >,
+    [EnterpriseLookupManifest.identifier]: EnterpriseLookupInspectors as Record<
+      string,
+      BuiltinInspector
+    >,
     [TaskManifest.identifier]: TaskInspectors as Record<string, BuiltinInspector>,
     [WebBrowsingManifest.identifier]: WebBrowsingInspectors as Record<string, BuiltinInspector>,
     [WebOnboardingManifest.identifier]: WebOnboardingInspectors as Record<string, BuiltinInspector>,
@@ -283,6 +318,14 @@ export const registerBuiltinToolSurfaces = (): void => {
   });
 
   registerBuiltinInterventions({
+    [DingtalkWorkspaceManifest.identifier]: DingtalkWorkspaceInterventions as Record<
+      string,
+      BuiltinIntervention
+    >,
+    [DingtalkApprovalManifest.identifier]: DingtalkApprovalInterventions as Record<
+      string,
+      BuiltinIntervention
+    >,
     [AgentBuilderManifest.identifier]: AgentBuilderInterventions as Record<
       string,
       BuiltinIntervention

@@ -39,6 +39,8 @@ import {
   resolveExecutionTarget,
   resolveToolMode,
 } from '@/helpers/executionTarget';
+import { peekDingtalkWorkspaceCapabilities } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
+import { peekEnterpriseLookupConfigured } from '@/server/enterprise/services/enterpriseLookup/health';
 import { getAttachmentCapabilities } from '@/server/modules/ModelRuntime/attachmentCapabilities';
 import {
   buildAllowedBuiltinTools,
@@ -51,6 +53,10 @@ import {
   type ServerAgentToolsEngineConfig,
   type ServerCreateAgentToolsEngineParams,
 } from './types';
+
+const ENTERPRISE_LOOKUP_TOOL_IDENTIFIER = 'lobe-enterprise-lookup';
+const DINGTALK_APPROVAL_TOOL_IDENTIFIER = 'lobe-dingtalk-approval';
+const DINGTALK_WORKSPACE_TOOL_IDENTIFIER = 'lobe-dingtalk-workspace';
 
 export type {
   InstalledPlugin,
@@ -178,9 +184,18 @@ export const createServerAgentToolsEngine = (
     runtimeProvider,
     transformBuiltinManifest,
     useApplicationBuiltinSearchTool,
+    enterpriseLookupConfigured,
+    dingtalkApprovalEnabled,
+    dingtalkWorkspaceEnabled,
   } = params;
 
   const dropDocumentPages = !getAttachmentCapabilities(runtimeProvider ?? provider).tools;
+  const isEnterpriseLookupEnabled =
+    enterpriseLookupConfigured ?? peekEnterpriseLookupConfigured() ?? false;
+  const dingtalkCaps = peekDingtalkWorkspaceCapabilities();
+  const isDingtalkApprovalEnabled = dingtalkApprovalEnabled ?? dingtalkCaps?.approval ?? false;
+  const isDingtalkWorkspaceEnabled =
+    dingtalkWorkspaceEnabled ?? Boolean(dingtalkCaps?.todo || dingtalkCaps?.calendar);
 
   if (exactBuiltinToolIds) {
     const exactIds = new Set([
@@ -189,6 +204,14 @@ export const createServerAgentToolsEngine = (
       ...(additionalManifests ?? []).map(({ identifier }) => identifier),
     ]);
     if (dropDocumentPages) exactIds.delete(DocumentPagesIdentifier);
+    if (!isEnterpriseLookupEnabled) exactIds.delete(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
+    if (!isDingtalkApprovalEnabled) exactIds.delete(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
+    if (!isDingtalkWorkspaceEnabled) exactIds.delete(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+    const exactExclude = new Set<string>();
+    if (dropDocumentPages) exactExclude.add(DocumentPagesIdentifier);
+    if (!isEnterpriseLookupEnabled) exactExclude.add(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
+    if (!isDingtalkApprovalEnabled) exactExclude.add(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
+    if (!isDingtalkWorkspaceEnabled) exactExclude.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
     return createServerToolsEngine(
       { ...context, installedPlugins: [] },
       {
@@ -199,7 +222,7 @@ export const createServerAgentToolsEngine = (
           allowExplicitActivation: false,
           rules: Object.fromEntries([...exactIds].map((id) => [id, true])),
         }),
-        excludeIdentifiers: dropDocumentPages ? new Set([DocumentPagesIdentifier]) : undefined,
+        excludeIdentifiers: exactExclude.size > 0 ? exactExclude : undefined,
         manifestContext,
         transformBuiltinManifest,
       },
@@ -323,6 +346,9 @@ export const createServerAgentToolsEngine = (
     // physical walls drop it for `canUseDevice=false` turns.
     [RemoteDeviceManifest.identifier]: deviceCapable && hasDeviceProxy && !deviceLocked,
     [WebBrowsingManifest.identifier]: isSearchEnabled,
+    [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER]: isEnterpriseLookupEnabled,
+    [DINGTALK_APPROVAL_TOOL_IDENTIFIER]: isDingtalkApprovalEnabled,
+    [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: isDingtalkWorkspaceEnabled,
   };
 
   const excludeIdentifiers = new Set<string>(
@@ -330,6 +356,9 @@ export const createServerAgentToolsEngine = (
   );
   if (!isSearchEnabled) excludeIdentifiers.add(WebBrowsingManifest.identifier);
   if (dropDocumentPages) excludeIdentifiers.add(DocumentPagesIdentifier);
+  if (!isEnterpriseLookupEnabled) excludeIdentifiers.add(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
+  if (!isDingtalkApprovalEnabled) excludeIdentifiers.add(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
+  if (!isDingtalkWorkspaceEnabled) excludeIdentifiers.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
 
   return createServerToolsEngine(context, {
     // Pass additional manifests (e.g., LobeHub Skills)
@@ -350,7 +379,13 @@ export const createServerAgentToolsEngine = (
       ? (agentConfig.plugins ?? [])
       : isChatMode
         ? chatModeAllowedToolIds
-        : [...defaultToolIds, ...(isGroupSupervisor ? groupSupervisorToolIds : [])],
+        : [
+            ...defaultToolIds,
+            ...(isGroupSupervisor ? groupSupervisorToolIds : []),
+            ...(isEnterpriseLookupEnabled ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
+            ...(isDingtalkApprovalEnabled ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
+            ...(isDingtalkWorkspaceEnabled ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
+          ],
     // Post-merge wall: a plugin or Skill/Composio manifest claiming a
     // device identifier survives `buildAllowedBuiltinTools` (which only
     // filters the builtin source). Excluding the identifiers here drops

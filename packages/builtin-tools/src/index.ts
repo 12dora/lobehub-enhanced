@@ -12,7 +12,10 @@ import { BriefManifest } from '@lobechat/builtin-tool-brief';
 import { CalculatorManifest } from '@lobechat/builtin-tool-calculator';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { CredsManifest } from '@lobechat/builtin-tool-creds';
+import { DingtalkApprovalManifest } from '@lobechat/builtin-tool-dingtalk-approval';
+import { DingtalkWorkspaceManifest } from '@lobechat/builtin-tool-dingtalk-workspace';
 import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
+import { EnterpriseLookupManifest } from '@lobechat/builtin-tool-enterprise-lookup';
 import { GroupAgentBuilderManifest } from '@lobechat/builtin-tool-group-agent-builder';
 import { GroupManagementManifest } from '@lobechat/builtin-tool-group-management';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
@@ -55,6 +58,7 @@ export const defaultToolIds = [
   DocumentPagesManifest.identifier,
   TaskManifest.identifier,
   ReminderManifest.identifier,
+  EnterpriseLookupManifest.identifier,
   LobeAgentManifest.identifier,
 ];
 
@@ -357,6 +361,21 @@ const builtinToolRegistry: LobeBuiltinTool[] = [
   {
     identifier: ReminderManifest.identifier,
     manifest: ReminderManifest,
+    type: 'builtin',
+  },
+  {
+    identifier: DingtalkWorkspaceManifest.identifier,
+    manifest: DingtalkWorkspaceManifest,
+    type: 'builtin',
+  },
+  {
+    identifier: DingtalkApprovalManifest.identifier,
+    manifest: DingtalkApprovalManifest,
+    type: 'builtin',
+  },
+  {
+    identifier: EnterpriseLookupManifest.identifier,
+    manifest: EnterpriseLookupManifest,
     type: 'builtin',
   },
   {

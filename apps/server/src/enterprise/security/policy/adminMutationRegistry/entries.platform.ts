@@ -65,6 +65,17 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
     'Replace the platform content-moderation configuration with CAS and a sanitized audit row.',
     { reason: noReason },
   ),
+  'admin.dingtalkApprovalRules.disable': regularMutation(
+    'admin.dingtalkApprovalRules.disable',
+    'medium',
+    'Force-disable a user DingTalk auto-approval rule.',
+    {
+      audit: enforced(
+        'Service persists a sanitized platform audit outcome with action system.dingtalk.approval_rule.disable.',
+      ),
+      reason: optionalReasonInput,
+    },
+  ),
   'admin.imConnectors.bindings.remove': regularMutation(
     'admin.imConnectors.bindings.remove',
     'medium',
@@ -91,6 +102,35 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
       reason: optionalReasonInput,
     },
   ),
+  'admin.imConnectors.probeWorkspacePermissions': regularMutation(
+    'admin.imConnectors.probeWorkspacePermissions',
+    'low',
+    'Probe DingTalk workspace approval, todo, and calendar scopes with the notify-app token.',
+    {
+      audit: notApplicable(
+        'The bounded live probe does not persist configuration or write an audit row.',
+      ),
+      lastKnownGood: remoteProbeNoLkg,
+      outbound: enforced(
+        'Read-only DingTalk OpenAPI calls go through SafeOutbound with the notify-app token.',
+      ),
+      reason: noReason,
+    },
+  ),
+  'admin.imConnectors.syncDirectory': regularMutation(
+    'admin.imConnectors.syncDirectory',
+    'medium',
+    'Run a guarded DingTalk contacts directory sync from the notify app.',
+    {
+      audit: notApplicable(
+        'Directory sync writes the mirrored contacts tables and Redis status, not a platform audit row.',
+      ),
+      outbound: enforced(
+        'Directory sync uses the notify-app token to list DingTalk departments and users.',
+      ),
+      reason: noReason,
+    },
+  ),
   'admin.imConnectors.test': regularMutation(
     'admin.imConnectors.test',
     'low',
@@ -102,6 +142,21 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
       lastKnownGood: remoteProbeNoLkg,
       outbound: enforced(
         'Hardcoded POST to api.dingtalk.com/v1.0/oauth2/accessToken; does not use the enterprise outbound policy client.',
+      ),
+      reason: noReason,
+    },
+  ),
+  'admin.imConnectors.testNotifyApp': regularMutation(
+    'admin.imConnectors.testNotifyApp',
+    'low',
+    'Probe the DingTalk notify-app (服务号) token endpoints without sending a message.',
+    {
+      audit: notApplicable(
+        'The bounded live probe does not persist configuration or write an audit row.',
+      ),
+      lastKnownGood: remoteProbeNoLkg,
+      outbound: enforced(
+        'Probes oapi gettoken and oauth2/accessToken for the notify app; does not send a work notice.',
       ),
       reason: noReason,
     },
@@ -349,11 +404,30 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
       reason: noReason,
     },
   ),
+  'admin.system.testEnterpriseLookupProvider': regularMutation(
+    'admin.system.testEnterpriseLookupProvider',
+    'low',
+    'Probe an enterprise-lookup MCP provider without persisting any change.',
+    {
+      audit: notApplicable(
+        'The bounded live probe does not persist configuration or write an audit row.',
+      ),
+      lastKnownGood: remoteProbeNoLkg,
+      outbound: safeOutbound,
+      reason: noReason,
+    },
+  ),
   'admin.system.updateDocumentRenderSettings': regularMutation(
     'admin.system.updateDocumentRenderSettings',
     'medium',
     'Replace platform document-render sidecar limits and trigger. Takes effect on the next upload or on-demand job.',
     { reason: optionalReasonInput },
+  ),
+  'admin.system.updateEnterpriseLookupSettings': dangerousMutation(
+    'admin.system.updateEnterpriseLookupSettings',
+    'high',
+    'Replace platform enterprise-lookup provider configuration.',
+    { reason: optionalReasonInput, reauth: recentReauth },
   ),
   'admin.system.updateInfraSettings': dangerousMutation(
     'admin.system.updateInfraSettings',

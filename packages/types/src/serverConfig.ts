@@ -58,6 +58,16 @@ export type ServerLanguageModel = Partial<Record<GlobalLLMProviderKey, ServerMod
  */
 export interface EnterprisePublicServerConfig {
   /**
+   * Secret-free runtime capability flags. Always present so clients can gate
+   * without optional-field races; false when the capability is off / unconfigured.
+   */
+  capabilities?: {
+    dingtalkApproval?: boolean;
+    dingtalkCalendar?: boolean;
+    dingtalkTodo?: boolean;
+    enterpriseLookup?: boolean;
+  };
+  /**
    * True when any enterprise feature flag is on.
    * Gates EnterprisePlatformProvider network calls after config.getGlobalConfig.
    */

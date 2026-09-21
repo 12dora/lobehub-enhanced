@@ -11,7 +11,10 @@ import {
 import { CalculatorManifest } from '@lobechat/builtin-tool-calculator';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { CredsManifest } from '@lobechat/builtin-tool-creds';
+import { DingtalkApprovalManifest } from '@lobechat/builtin-tool-dingtalk-approval';
+import { DingtalkWorkspaceManifest } from '@lobechat/builtin-tool-dingtalk-workspace';
 import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
+import { EnterpriseLookupManifest } from '@lobechat/builtin-tool-enterprise-lookup';
 import { GroupAgentBuilderManifest } from '@lobechat/builtin-tool-group-agent-builder';
 import { GroupManagementManifest } from '@lobechat/builtin-tool-group-management';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
@@ -47,6 +50,9 @@ export const builtinToolIdentifiers: string[] = [
   NotebookManifest.identifier,
   PageAgentManifest.identifier,
   ReminderManifest.identifier,
+  DingtalkWorkspaceManifest.identifier,
+  DingtalkApprovalManifest.identifier,
+  EnterpriseLookupManifest.identifier,
   selfFeedbackIntentManifest.identifier,
   agentSignalReviewManifest.identifier,
   agentSignalReflectionManifest.identifier,

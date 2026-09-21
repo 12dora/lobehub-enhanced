@@ -258,6 +258,16 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
+    // Core: no moduleId. In-process DingTalk auto-approval rule sweep.
+    // Internal predicate skips Vercel / Lambda / missing DATABASE_URL.
+    name: 'dingtalkApprovalRuleWorker',
+    start: async () => {
+      const { ensureDingtalkApprovalRuleWorkerStarted } =
+        await import('../services/dingtalkWorkspace/approvalRules');
+      ensureDingtalkApprovalRuleWorkerStarted();
+    },
+  },
+  {
     // Core: no moduleId. Only meaningful when the key provider is Vault —
     // otherwise the 2s poller is a pure idle-CPU leak.
     name: 'secretRewrap',
@@ -348,6 +358,15 @@ export const stopEnterpriseWorkers = async (): Promise<void> => {
     stopReminderWorker();
   } catch (error) {
     console.error('[modules] failed to stop reminderWorker', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
+  try {
+    const { stopDingtalkApprovalRuleWorker } =
+      await import('../services/dingtalkWorkspace/approvalRules');
+    stopDingtalkApprovalRuleWorker();
+  } catch (error) {
+    console.error('[modules] failed to stop dingtalkApprovalRuleWorker', {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     });
   }

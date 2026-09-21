@@ -18,6 +18,7 @@ const serviceMocks = vi.hoisted(() => ({
   get: vi.fn(),
   list: vi.fn(),
   listBindings: vi.fn(),
+  probeWorkspacePermissions: vi.fn(),
   removeBinding: vi.fn(),
   syncDirectory: vi.fn(),
   test: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('../../services/imConnectors/service', () => ({
     get = serviceMocks.get;
     list = serviceMocks.list;
     listBindings = serviceMocks.listBindings;
+    probeWorkspacePermissions = serviceMocks.probeWorkspacePermissions;
     removeBinding = serviceMocks.removeBinding;
     syncDirectory = serviceMocks.syncDirectory;
     test = serviceMocks.test;
@@ -44,6 +46,7 @@ vi.mock('../../services/imConnectors/service', () => ({
 }));
 
 const sampleView = {
+  approvalAutomationTier: 'moderate' as const,
   aiCardTemplateId: null,
   chatEnabled: true,
   clientId: null,
@@ -71,6 +74,9 @@ const sampleView = {
     state: 'unknown' as const,
   },
   updatedAt: null,
+  workspaceApprovalEnabled: false,
+  workspaceCalendarEnabled: false,
+  workspaceTodoEnabled: false,
 };
 
 const sampleBinding = {
@@ -131,6 +137,11 @@ beforeEach(() => {
     latencyMs: 9,
     ok: true,
     robotName: null,
+  });
+  serviceMocks.probeWorkspacePermissions.mockReset().mockResolvedValue({
+    approval: { ok: true },
+    calendar: { ok: true },
+    todo: { ok: true },
   });
 });
 
@@ -205,6 +216,10 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(denied.probeWorkspacePermissions()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
     expect(serviceMocks.list).not.toHaveBeenCalled();
     expect(serviceMocks.upsert).not.toHaveBeenCalled();
     expect(serviceMocks.test).not.toHaveBeenCalled();
@@ -270,6 +285,10 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(reader.probeWorkspacePermissions()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
     expect(serviceMocks.upsert).not.toHaveBeenCalled();
     expect(serviceMocks.test).not.toHaveBeenCalled();
     expect(serviceMocks.upsertBinding).not.toHaveBeenCalled();
@@ -301,6 +320,9 @@ describe('admin.imConnectors permission gating', () => {
     await expect(
       operator.testNotifyApp({ notifyAppKey: 'k', notifyAppSecret: 's' }),
     ).resolves.toMatchObject({ ok: true });
+    await expect(operator.probeWorkspacePermissions()).resolves.toMatchObject({
+      approval: { ok: true },
+    });
     expect(serviceMocks.upsert).toHaveBeenCalled();
     expect(serviceMocks.test).toHaveBeenCalled();
     expect(serviceMocks.syncDirectory).toHaveBeenCalled();

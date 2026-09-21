@@ -12,10 +12,19 @@ import { SkillsApiName, SkillsManifest } from '@lobechat/builtin-tool-skills';
 import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
 import { builtinTools } from '@lobechat/builtin-tools';
 import { type LobeToolManifest, ToolsEngine } from '@lobechat/context-engine';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  noteEnterpriseLookupConfigured,
+  resetEnterpriseLookupHealthForTest,
+} from '@/server/enterprise/services/enterpriseLookup/health';
 
 import { createServerAgentToolsEngine, createServerToolsEngine } from '../index';
 import { type InstalledPlugin, type ServerAgentToolsContext } from '../types';
+
+vi.mock('@/server/enterprise/services/dingtalkWorkspace/capabilities', () => ({
+  peekDingtalkWorkspaceCapabilities: () => null,
+}));
 
 // Mock installed plugins
 const mockInstalledPlugins: InstalledPlugin[] = [
@@ -1273,5 +1282,146 @@ describe('createServerAgentToolsEngine', () => {
 
       expect(result.enabledToolIds).toContain(RemoteDeviceManifest.identifier);
     });
+  });
+
+  it('physically drops lobe-enterprise-lookup when it is not configured', () => {
+    const identifier = 'lobe-enterprise-lookup';
+    const lookupManifest = {
+      api: [{ description: 'query', name: 'queryEnterprise', parameters: { type: 'object' } }],
+      identifier,
+      meta: { title: 'Enterprise Lookup' },
+      type: 'builtin',
+    } as LobeToolManifest;
+    const context = createMockContext();
+    const engine = createServerAgentToolsEngine(context, {
+      additionalManifests: [lookupManifest],
+      agentConfig: { plugins: [identifier] },
+      enterpriseLookupConfigured: false,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(identifier);
+  });
+
+  it('fails closed when enterprise lookup configuration is unknown', () => {
+    const identifier = 'lobe-enterprise-lookup';
+    resetEnterpriseLookupHealthForTest();
+    const lookupManifest = {
+      api: [{ description: 'query', name: 'queryEnterprise', parameters: { type: 'object' } }],
+      identifier,
+      meta: { title: 'Enterprise Lookup' },
+      type: 'builtin',
+    } as LobeToolManifest;
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [lookupManifest],
+      agentConfig: { plugins: [identifier] },
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(identifier);
+  });
+
+  it('uses the configured peek when enterpriseLookupConfigured is omitted', () => {
+    const identifier = 'lobe-enterprise-lookup';
+    noteEnterpriseLookupConfigured(true);
+    try {
+      const lookupManifest = {
+        api: [{ description: 'query', name: 'queryEnterprise', parameters: { type: 'object' } }],
+        identifier,
+        meta: { title: 'Enterprise Lookup' },
+        type: 'builtin',
+      } as LobeToolManifest;
+      const engine = createServerAgentToolsEngine(createMockContext(), {
+        additionalManifests: [lookupManifest],
+        agentConfig: { plugins: [identifier] },
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      const result = engine.generateToolsDetailed({
+        context: { isExplicitActivation: true },
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds: [identifier],
+      });
+
+      expect(result.enabledToolIds).toContain(identifier);
+    } finally {
+      resetEnterpriseLookupHealthForTest();
+    }
+  });
+
+  it('physically drops lobe-dingtalk-approval when approval is off', () => {
+    const identifier = 'lobe-dingtalk-approval';
+    const manifest = {
+      api: [{ description: 'list', name: 'listPendingApprovals', parameters: { type: 'object' } }],
+      identifier,
+      meta: { title: 'DingTalk Approval' },
+      type: 'builtin',
+    } as LobeToolManifest;
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [manifest],
+      agentConfig: { plugins: [identifier] },
+      dingtalkApprovalEnabled: false,
+      dingtalkWorkspaceEnabled: true,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(identifier);
+  });
+
+  it('physically drops lobe-dingtalk-workspace when todo and calendar are off', () => {
+    const identifier = 'lobe-dingtalk-workspace';
+    const manifest = {
+      api: [{ description: 'list', name: 'listTodos', parameters: { type: 'object' } }],
+      identifier,
+      meta: { title: 'DingTalk Workspace' },
+      type: 'builtin',
+    } as LobeToolManifest;
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [manifest],
+      agentConfig: { plugins: [identifier] },
+      dingtalkApprovalEnabled: true,
+      dingtalkWorkspaceEnabled: false,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(identifier);
   });
 });

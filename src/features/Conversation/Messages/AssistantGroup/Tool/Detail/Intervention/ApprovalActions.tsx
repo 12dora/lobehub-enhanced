@@ -158,7 +158,14 @@ const ApprovalActions = memo<ApprovalActionsProps>(
         if (choice === 'reject') {
           await rejectAndContinueToolCall(messageId, reason.trim() || undefined);
         } else {
-          if (onBeforeApprove) await onBeforeApprove();
+          if (onBeforeApprove) {
+            // A rejecting callback blocks the approval; the intervention surfaces its own message.
+            try {
+              await onBeforeApprove();
+            } catch {
+              return;
+            }
+          }
           await approveToolCall(messageId, assistantGroupId ?? '');
           if (isAllowListMode && choice === 'approve-remember') {
             await addToolToAllowList(`${identifier}/${apiName}`);

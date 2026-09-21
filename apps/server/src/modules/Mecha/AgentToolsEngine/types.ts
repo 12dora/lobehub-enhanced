@@ -113,8 +113,20 @@ export interface ServerCreateAgentToolsEngineParams {
     deviceOnline?: boolean;
     gatewayConfigured: boolean;
   };
+  /**
+   * DingTalk workspace tool switches. When omitted, uses the in-process
+   * capabilities peek (fail-closed: drop when the cache is cold).
+   */
+  dingtalkApprovalEnabled?: boolean;
+  dingtalkWorkspaceEnabled?: boolean;
   /** Whether to suppress the local-system builtin while preserving other tools. */
   disableLocalSystem?: boolean;
+  /**
+   * Whether the enterprise-lookup builtin is configured (admin API key present).
+   * When false the identifier is physically dropped, matching the search gate.
+   * Omit to use the in-process configured peek (default: keep the tool).
+   */
+  enterpriseLookupConfigured?: boolean;
   /** Server-authored immutable builtin allowlist for exact managed operations. */
   exactBuiltinToolIds?: readonly string[];
   /**

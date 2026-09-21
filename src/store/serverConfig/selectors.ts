@@ -8,6 +8,7 @@ export const serverConfigSelectors = {
   enableEmailVerification: (s: ServerConfigStore) =>
     s.serverConfig.enableEmailVerification || false,
   enableComposio: (s: ServerConfigStore) => s.serverConfig.enableComposio || false,
+  enterpriseCapabilities: (s: ServerConfigStore) => s.serverConfig.enterprise?.capabilities,
   enterpriseModules: (s: ServerConfigStore) => s.serverConfig.enterprise?.modules,
   enableGatewayMode: (s: ServerConfigStore) => s.serverConfig.enableGatewayMode || false,
   enableLobehubSkill: (s: ServerConfigStore) => s.serverConfig.enableLobehubSkill || false,

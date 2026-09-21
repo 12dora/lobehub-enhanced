@@ -119,6 +119,27 @@ export const getServerGlobalConfig = async () => {
   const platformAdminEnabled = isPlatformAdminFeatureEnabled();
   const { getModuleSettingsSnapshot } = await import('@/server/enterprise/services/moduleSettings');
   const modules = (await getModuleSettingsSnapshot()).effective;
+  let enterpriseLookupConfigured = false;
+  try {
+    const { isEnterpriseLookupConfigured } =
+      await import('@/server/enterprise/services/enterpriseLookup');
+    enterpriseLookupConfigured = await isEnterpriseLookupConfigured();
+  } catch {
+    // Fail closed: the capability flag stays false.
+  }
+  let dingtalkApproval = false;
+  let dingtalkCalendar = false;
+  let dingtalkTodo = false;
+  try {
+    const { getDingtalkWorkspaceCapabilities } =
+      await import('@/server/enterprise/services/dingtalkWorkspace/capabilities');
+    const caps = await getDingtalkWorkspaceCapabilities();
+    dingtalkApproval = caps.approval;
+    dingtalkCalendar = caps.calendar;
+    dingtalkTodo = caps.todo;
+  } catch {
+    // Fail closed: workspace capability flags stay false.
+  }
 
   const config: GlobalServerConfig = {
     aiProvider: await getCachedServerAiProvidersConfig(aiProviderSpecificConfig),
@@ -132,6 +153,12 @@ export const getServerGlobalConfig = async () => {
     // Always present so clients can gate without optional-field races; false when flags off.
     // `platformAdmin` is feature existence only — never authorization.
     enterprise: {
+      capabilities: {
+        dingtalkApproval,
+        dingtalkCalendar,
+        dingtalkTodo,
+        enterpriseLookup: enterpriseLookupConfigured,
+      },
       enabled: enterpriseEnabled,
       modules,
       platformAdmin: platformAdminEnabled,

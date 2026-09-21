@@ -118,6 +118,54 @@ vi.mock('@/store/tool', () => ({
         } as unknown as ToolManifest,
         type: 'builtin' as const,
       },
+      {
+        identifier: 'lobe-dingtalk-approval',
+        manifest: {
+          api: [
+            {
+              description: 'List pending approvals',
+              name: 'listPendingApprovals',
+              parameters: { properties: {}, type: 'object' },
+            },
+          ],
+          identifier: 'lobe-dingtalk-approval',
+          meta: { title: 'DingTalk Approval', avatar: '✅' },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
+      {
+        identifier: 'lobe-dingtalk-workspace',
+        manifest: {
+          api: [
+            {
+              description: 'List todos',
+              name: 'listTodos',
+              parameters: { properties: {}, type: 'object' },
+            },
+          ],
+          identifier: 'lobe-dingtalk-workspace',
+          meta: { title: 'DingTalk Workspace', avatar: '📅' },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
+      {
+        identifier: 'lobe-enterprise-lookup',
+        manifest: {
+          api: [
+            {
+              description: 'Query enterprise records',
+              name: 'queryEnterprise',
+              parameters: { properties: {}, type: 'object' },
+            },
+          ],
+          identifier: 'lobe-enterprise-lookup',
+          meta: { title: 'Enterprise Lookup', avatar: '🏢' },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
     ],
   }),
 }));
@@ -170,6 +218,19 @@ vi.mock('@/store/user', () => ({
   useUserStore: { getState: () => ({}) },
 }));
 
+let mockDingtalkCaps: {
+  dingtalkApproval?: boolean;
+  dingtalkCalendar?: boolean;
+  dingtalkTodo?: boolean;
+  enterpriseLookup?: boolean;
+} = {};
+
+vi.mock('@/store/serverConfig', () => ({
+  getServerConfigStoreState: () => ({
+    serverConfig: { enterprise: { capabilities: mockDingtalkCaps }, telemetry: {} },
+  }),
+}));
+
 vi.mock('@/store/user/selectors', () => ({
   settingsSelectors: {
     memoryEnabled: () => false,
@@ -195,6 +256,7 @@ describe('toolEngineering', () => {
     mockCurrentAgentDisabledPlugins = [];
     mockEnableAgentMode = undefined;
     mockIsCanUseFC = true;
+    mockDingtalkCaps = {};
   });
 
   describe('createToolsEngine', () => {
@@ -558,6 +620,68 @@ describe('toolEngineering', () => {
       });
 
       expect(result.enabledToolIds).toContain('http-mcp-plugin');
+    });
+  });
+
+  describe('DingTalk workspace capability gates', () => {
+    it('drops approval and workspace tools when capability flags are off', () => {
+      mockDingtalkCaps = { dingtalkApproval: false, dingtalkCalendar: false, dingtalkTodo: false };
+      mockCurrentAgentPlugins = ['lobe-dingtalk-approval', 'lobe-dingtalk-workspace'];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: ['lobe-dingtalk-approval', 'lobe-dingtalk-workspace'],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-approval');
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-workspace');
+    });
+
+    it('keeps the workspace tool when either todo or calendar is on', () => {
+      mockDingtalkCaps = { dingtalkApproval: true, dingtalkCalendar: false, dingtalkTodo: true };
+      mockCurrentAgentPlugins = ['lobe-dingtalk-approval', 'lobe-dingtalk-workspace'];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: ['lobe-dingtalk-approval', 'lobe-dingtalk-workspace'],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-dingtalk-approval');
+      expect(result.enabledToolIds).toContain('lobe-dingtalk-workspace');
+    });
+  });
+
+  describe('enterprise lookup capability gate', () => {
+    it('drops lobe-enterprise-lookup when the capability flag is off', () => {
+      mockDingtalkCaps = { enterpriseLookup: false };
+      mockCurrentAgentPlugins = ['lobe-enterprise-lookup'];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: ['lobe-enterprise-lookup'],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).not.toContain('lobe-enterprise-lookup');
+    });
+
+    it('keeps lobe-enterprise-lookup when the capability flag is on', () => {
+      mockDingtalkCaps = { enterpriseLookup: true };
+      mockCurrentAgentPlugins = ['lobe-enterprise-lookup'];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: ['lobe-enterprise-lookup'],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-enterprise-lookup');
     });
   });
 

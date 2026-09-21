@@ -126,6 +126,7 @@ import {
   buildPinnedManagedConnectorManifests,
 } from '@/server/enterprise/services/connectorCatalog/runtimeIntegration';
 import { resolveConnectorGovernance } from '@/server/enterprise/services/connectorGovernance/resolve';
+import { isEnterpriseLookupConfigured } from '@/server/enterprise/services/enterpriseLookup';
 import { getManagedSkillRuntimeModeSnapshot } from '@/server/enterprise/services/managedResourceCapabilities';
 import { getLatestPersonaDocumentMemo } from '@/server/enterprise/services/memory/personaReadMemo';
 import type { UserSettingsReadMemo } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
@@ -1392,7 +1393,8 @@ export class AiAgentService {
       let assistantName: string | undefined;
       if (agentSlug === BUILTIN_AGENT_SLUGS.inbox) {
         try {
-          assistantName = (await loadResolvedInboxIdentity(this.db, this.userId)).title ?? undefined;
+          assistantName =
+            (await loadResolvedInboxIdentity(this.db, this.userId)).title ?? undefined;
         } catch (error) {
           log('execAgent: failed to load inbox identity for runtime systemRole: %O', error);
         }
@@ -3203,6 +3205,7 @@ export class AiAgentService {
         isBotConversation,
         isGroupSupervisor,
         useApplicationBuiltinSearchTool: searchDecision.useApplicationBuiltinSearchTool,
+        enterpriseLookupConfigured: await isEnterpriseLookupConfigured(),
         // Context-aware builtin manifests: inside a sub-agent (or group) run,
         // lobe-agent drops `callSubAgent` so the model can't recurse into nested
         // sub-agents (which the runtime rejects, looping until the inactivity
