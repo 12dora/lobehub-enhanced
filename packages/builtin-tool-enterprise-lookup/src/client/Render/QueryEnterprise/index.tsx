@@ -17,7 +17,7 @@ export const QueryEnterpriseRender = memo<
     <EnterpriseLookupRenderView
       capability={capability}
       provider={isEnterpriseLookupProvider(provider) ? provider : undefined}
-      resultText={pluginState?.resultText}
+      result={pluginState?.resultText}
       truncated={pluginState?.truncated}
     />
   );

@@ -126,6 +126,7 @@ import {
   buildPinnedManagedConnectorManifests,
 } from '@/server/enterprise/services/connectorCatalog/runtimeIntegration';
 import { resolveConnectorGovernance } from '@/server/enterprise/services/connectorGovernance/resolve';
+import { getDingtalkWorkspaceCapabilities } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { isEnterpriseLookupConfigured } from '@/server/enterprise/services/enterpriseLookup';
 import { getManagedSkillRuntimeModeSnapshot } from '@/server/enterprise/services/managedResourceCapabilities';
 import { getLatestPersonaDocumentMemo } from '@/server/enterprise/services/memory/personaReadMemo';
@@ -3178,6 +3179,8 @@ export class AiAgentService {
       const activeComposioManifests = dropDisabledManifests(composioManifests);
       const activeConnectorManifests = dropDisabledManifests(connectorManifests);
 
+      // Live capability read (30 s cache) so a cold peek never hides enabled DingTalk tools.
+      const dingtalkCapabilities = await getDingtalkWorkspaceCapabilities();
       const toolsEngine = createServerAgentToolsEngine(toolsContext, {
         additionalManifests: [
           ...activeLobehubSkillManifests,
@@ -3206,6 +3209,8 @@ export class AiAgentService {
         isGroupSupervisor,
         useApplicationBuiltinSearchTool: searchDecision.useApplicationBuiltinSearchTool,
         enterpriseLookupConfigured: await isEnterpriseLookupConfigured(),
+        dingtalkApprovalEnabled: dingtalkCapabilities.approval,
+        dingtalkWorkspaceEnabled: dingtalkCapabilities.todo || dingtalkCapabilities.calendar,
         // Context-aware builtin manifests: inside a sub-agent (or group) run,
         // lobe-agent drops `callSubAgent` so the model can't recurse into nested
         // sub-agents (which the runtime rejects, looping until the inactivity

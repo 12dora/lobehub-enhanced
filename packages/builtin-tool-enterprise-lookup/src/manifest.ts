@@ -2,6 +2,7 @@ import type { BuiltinToolManifest } from '@lobechat/types';
 
 import { systemPrompt } from './systemRole';
 import {
+  COMPANY_PROFILE_ASPECTS,
   ENTERPRISE_LOOKUP_PROVIDERS,
   EnterpriseLookupApiName,
   EnterpriseLookupIdentifier,
@@ -28,7 +29,32 @@ export const EnterpriseLookupManifest: BuiltinToolManifest = {
   api: [
     {
       description:
-        'List enabled enterprise-lookup capabilities and their inputSchema for a data provider. Call this before a new kind of query, and after a PROVIDER_UNAVAILABLE fallback switch. Do not guess capability names.',
+        'Search a company by name and, when the match is unique (or the registered name equals the input), fetch 工商基本信息 in the same call. Use this first. If several companies match, the result lists candidates (name · 统一社会信用代码 · 法定代表人 · 状态) and fetches nothing else — ask the user, then retry with the exact name. Do not follow with listCapabilities or queryEnterprise to verify. Each upstream call consumes paid quota.',
+      humanIntervention: 'never',
+      name: EnterpriseLookupApiName.companyProfile,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          aspects: {
+            description:
+              'Dimensions of interest: basic (工商), people (股东/高管), risk, ipr. companyProfile always fetches 工商 when unique; extra dimensions still need listCapabilities + queryEnterprise.',
+            items: { enum: [...COMPANY_PROFILE_ASPECTS], type: 'string' },
+            type: 'array',
+          },
+          name: {
+            description: 'Company name as the user gave it. Do not invent a registered name.',
+            minLength: 1,
+            type: 'string',
+          },
+          provider: providerSchema,
+        },
+        required: ['name'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        'List enabled enterprise-lookup capabilities and their inputSchema for a data provider. Call this only when companyProfile does not cover the dimension the user asked for, and after a PROVIDER_UNAVAILABLE fallback switch for a long-tail queryEnterprise. Never call twice in one conversation. Do not guess capability names.',
       humanIntervention: 'never',
       name: EnterpriseLookupApiName.listCapabilities,
       parameters: {
@@ -43,7 +69,7 @@ export const EnterpriseLookupManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Query one enterprise-lookup capability (工商 / 风险 / 知识产权, etc.). capability and argument keys must be copied from listCapabilities. Anchor the company with the provider search first; if several companies match, ask the user — never guess. Each call consumes paid quota.',
+        'Query one long-tail enterprise-lookup capability (风险 / 知识产权 / 招投标, etc.). Prefer companyProfile for 工商/基本信息. capability and argument keys must be copied from listCapabilities. If several companies match, ask the user — never guess. Each call consumes paid quota.',
       humanIntervention: 'never',
       name: EnterpriseLookupApiName.queryEnterprise,
       parameters: {

@@ -7,6 +7,8 @@ import { preAccessAuthedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 
 import {
+  adminImConnectorApiCallStatsInputSchema,
+  adminImConnectorApiCallStatsOutputSchema,
   adminImConnectorBindingItemSchema,
   adminImConnectorBindingsListInputSchema,
   adminImConnectorBindingsListOutputSchema,
@@ -25,6 +27,7 @@ import { withActiveUser } from '../../guards/activeUser';
 import { withAdminMutationRateLimit } from '../../guards/adminMutationRateLimit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
 import { withPlatformPermission } from '../../guards/platformPermission';
+import { getDingtalkApiCallStats } from '../../services/dingtalkWorkspace/apiCallStats';
 import {
   ImConnectorBindingUserNotFoundError,
   ImConnectorPlatformUserAlreadyBoundError,
@@ -89,6 +92,14 @@ const executeImConnectors = async <T>(operation: () => Promise<T>): Promise<T> =
 };
 
 export const adminImConnectorsRouter = router({
+  apiCallStats: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
+    .input(adminImConnectorApiCallStatsInputSchema)
+    .output(adminImConnectorApiCallStatsOutputSchema)
+    .query(({ input }) =>
+      executeImConnectors(() => getDingtalkApiCallStats({ days: input?.days })),
+    ),
+
   bindings: router({
     list: platformSystemBase
       .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))

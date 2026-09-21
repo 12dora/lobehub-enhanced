@@ -32,6 +32,7 @@ const KNOWN_CODES = new Set<string>(DINGTALK_ERROR_CODES);
 export interface DingtalkToolFailure {
   candidates?: AmbiguousCandidate[];
   code: string;
+  hint?: string;
   message: string;
 }
 
@@ -109,6 +110,45 @@ export const extractDingtalkErrorCode = (error: unknown): string | undefined => 
   return undefined;
 };
 
+const HINT_MAX_LEN = 200;
+
+const isSafeHint = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > HINT_MAX_LEN) return false;
+  if (/password|token=|secret|authorization|bearer\s|postgres:\/\//i.test(trimmed)) return false;
+  if (/\bat\s+\S+\s+\(/.test(trimmed) || trimmed.includes('\n')) return false;
+  return true;
+};
+
+export const extractInvalidHint = (error: unknown): string | undefined => {
+  const take = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return isSafeHint(trimmed) ? trimmed : undefined;
+  };
+
+  if (!isRecord(error)) return undefined;
+
+  const direct = take(error.hint);
+  if (direct) return direct;
+
+  const data = isRecord(error.data) ? error.data : undefined;
+  if (data) {
+    const fromErrorData = isRecord(data.errorData) ? take(data.errorData.hint) : undefined;
+    if (fromErrorData) return fromErrorData;
+    const fromData = take(data.hint);
+    if (fromData) return fromData;
+  }
+
+  const cause = isRecord(error.cause) ? error.cause : undefined;
+  if (cause && isRecord(cause.data)) {
+    const fromCause = take(cause.data.hint);
+    if (fromCause) return fromCause;
+  }
+
+  return undefined;
+};
+
 export const extractAmbiguousCandidates = (error: unknown): AmbiguousCandidate[] | undefined => {
   if (!isRecord(error)) return undefined;
 
@@ -145,7 +185,11 @@ export const formatCandidateLabel = (candidate: AmbiguousCandidate): string => {
 
 const identityGuidance = '请让用户使用钉钉登录，或通过钉钉机器人完成绑定。管理员不能代为绑定。';
 
-export const dingtalkErrorGuidance = (code: string, candidates?: AmbiguousCandidate[]): string => {
+export const dingtalkErrorGuidance = (
+  code: string,
+  candidates?: AmbiguousCandidate[],
+  hint?: string,
+): string => {
   switch (code) {
     case 'DINGTALK_NOT_CONFIGURED': {
       return '钉钉服务号未配置，无法使用审批（DINGTALK_NOT_CONFIGURED）。请联系管理员完成钉钉连接配置。';
@@ -163,7 +207,10 @@ export const dingtalkErrorGuidance = (code: string, candidates?: AmbiguousCandid
       return '未找到对应的审批单、任务或模板（DINGTALK_NOT_FOUND）。请先调用 listPendingApprovals / listMyApplications / listTemplates 确认标识后再试。';
     }
     case 'DINGTALK_INVALID': {
-      return '请求参数无效（DINGTALK_INVALID）。请核对必填表单字段、人员 token 与模板限制；套件类模板无法通过接口发起。不要编造必填值。';
+      if (hint) {
+        return `请求参数无效（DINGTALK_INVALID）。字段提示：${hint}。请只修正该字段后重试一次，不要重新 listTemplates、getTemplateSchema，也不要更换模板名称或重复创建。`;
+      }
+      return '请求参数无效（DINGTALK_INVALID）。请核对必填表单字段、人员 token 与模板限制；套件类模板无法通过接口发起。不要编造必填值。修正后只重试一次。';
     }
     case 'DINGTALK_RATE_LIMITED': {
       return '钉钉接口限流（DINGTALK_RATE_LIMITED）。请稍后重试，不要并行放大请求。';
@@ -211,15 +258,17 @@ export const sanitizeDingtalkFailure = (
 ): { content: string; error: DingtalkToolFailure } => {
   const code = extractDingtalkErrorCode(error);
   const candidates = extractAmbiguousCandidates(error);
+  const hint = code === 'DINGTALK_INVALID' ? extractInvalidHint(error) : undefined;
 
   if (code && KNOWN_CODES.has(code)) {
-    const content = dingtalkErrorGuidance(code, candidates);
+    const content = dingtalkErrorGuidance(code, candidates, hint);
     return {
       content,
       error: {
         code,
         message: content,
         ...(candidates ? { candidates } : {}),
+        ...(hint ? { hint } : {}),
       },
     };
   }
@@ -236,6 +285,7 @@ export const dingtalkFailureResult = (error: unknown): BuiltinServerRuntimeOutpu
   const payload = {
     code: sanitized.error.code,
     ...(sanitized.error.candidates ? { candidates: sanitized.error.candidates } : {}),
+    ...(sanitized.error.hint ? { hint: sanitized.error.hint } : {}),
   };
   return {
     content: `${sanitized.content}\n${compactJson(payload)}`,

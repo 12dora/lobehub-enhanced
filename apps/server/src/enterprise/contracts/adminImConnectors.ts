@@ -19,6 +19,9 @@ export const IM_CONNECTOR_IDLE_HOURS_MIN = 1;
 export const IM_CONNECTOR_IDLE_HOURS_MAX = 720;
 export const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
 
+/** DingTalk robot display name shown to employees (`{{botName}}`). */
+export const DINGTALK_ROBOT_DISPLAY_NAME_MAX = 32;
+
 export const approvalAutomationTierSchema = z.enum(['moderate', 'off', 'relaxed', 'strict']);
 export type ConnectorApprovalAutomationTier = z.infer<typeof approvalAutomationTierSchema>;
 
@@ -72,6 +75,11 @@ export const dingTalkConnectorSettingsSchema = z
     pushEnabled: z.boolean().default(true),
     /** RobotCode from the DingTalk robot page (often equals the Client ID). */
     robotCode: z.string().trim().min(1).max(200),
+    /**
+     * Name of the DingTalk chat robot as employees see it. Used for
+     * `messenger.dingtalk.status.instructions` `{{botName}}`. Empty = 「AI 助手」.
+     */
+    robotDisplayName: z.string().trim().max(DINGTALK_ROBOT_DISPLAY_NAME_MAX).default(''),
     /** Optional interactive "select" card template id (助手/会话选择卡片). Empty = ActionCard fallback. */
     selectCardTemplateId: z.string().trim().max(200).nullable().default(null),
     /** Workspace approval tool (`lobe-dingtalk-approval`). */
@@ -155,6 +163,11 @@ export const adminImConnectorViewSchema = z
     platform: imConnectorPlatformSchema,
     pushEnabled: z.boolean(),
     robotCode: z.string().nullable(),
+    /**
+     * Connector setting `robotDisplayName`. Empty / omitted = the client should
+     * fall back to 「AI 助手」. Optional so older view fixtures still parse.
+     */
+    robotDisplayName: z.string().max(DINGTALK_ROBOT_DISPLAY_NAME_MAX).optional(),
     selectCardTemplateId: z.string().nullable(),
     stats: imConnectorStatsSchema,
     status: imConnectorStatusSchema,
@@ -219,6 +232,11 @@ export const adminImConnectorUpsertInputSchema = z
     pushEnabled: z.boolean(),
     reason: secretSafeAuditReasonSchema.optional(),
     robotCode: z.string().trim().min(1).max(200),
+    /**
+     * Omit to leave the stored name unchanged. `null` or `''` clears it
+     * (the chat-platform page then falls back to 「AI 助手」).
+     */
+    robotDisplayName: z.string().trim().max(DINGTALK_ROBOT_DISPLAY_NAME_MAX).nullable().optional(),
     selectCardTemplateId: z.string().trim().max(200).nullable(),
     workspaceApprovalEnabled: z.boolean().optional().default(false),
     workspaceCalendarEnabled: z.boolean().optional().default(false),
@@ -367,3 +385,36 @@ export const adminImConnectorProbeWorkspacePermissionsOutputSchema = z
 export type AdminImConnectorProbeWorkspacePermissionsOutput = z.infer<
   typeof adminImConnectorProbeWorkspacePermissionsOutputSchema
 >;
+
+export const adminImConnectorApiCallStatsInputSchema = z
+  .object({
+    days: z.number().int().min(1).max(40).optional(),
+  })
+  .strict()
+  .optional();
+export type AdminImConnectorApiCallStatsInput = z.infer<
+  typeof adminImConnectorApiCallStatsInputSchema
+>;
+
+export const adminImConnectorApiCallStatsByApiSchema = z
+  .object({
+    api: z.string().min(1).max(300),
+    count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const adminImConnectorApiCallStatsDaySchema = z
+  .object({
+    byApi: z.array(adminImConnectorApiCallStatsByApiSchema),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    total: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const adminImConnectorApiCallStatsOutputSchema = z
+  .object({
+    days: z.array(adminImConnectorApiCallStatsDaySchema),
+    total: z.number().int().nonnegative(),
+  })
+  .strict();
+export type AdminImConnectorApiCallStats = z.infer<typeof adminImConnectorApiCallStatsOutputSchema>;

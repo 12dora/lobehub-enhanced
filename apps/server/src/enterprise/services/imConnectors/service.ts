@@ -37,6 +37,7 @@ import type {
 } from '../../contracts/adminImConnectors';
 import {
   APPROVAL_AUTOMATION_TIER_DEFAULT,
+  DINGTALK_ROBOT_DISPLAY_NAME_MAX,
   dingTalkConnectorSettingsSchema,
   IM_CONNECTOR_IDLE_HOURS_DEFAULT,
   imConnectorPlatformSchema,
@@ -74,6 +75,7 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   notifyWorkNoticeEnabled: true,
   pushEnabled: true,
   robotCode: '',
+  robotDisplayName: '',
   selectCardTemplateId: null,
   workspaceApprovalEnabled: false,
   workspaceCalendarEnabled: false,
@@ -157,6 +159,10 @@ const parseDingTalkSettings = (
     pushEnabled:
       typeof raw?.pushEnabled === 'boolean' ? raw.pushEnabled : DEFAULT_SETTINGS.pushEnabled,
     robotCode: typeof raw?.robotCode === 'string' ? raw.robotCode : '',
+    robotDisplayName:
+      typeof raw?.robotDisplayName === 'string'
+        ? raw.robotDisplayName.trim().slice(0, DINGTALK_ROBOT_DISPLAY_NAME_MAX)
+        : DEFAULT_SETTINGS.robotDisplayName,
     selectCardTemplateId: emptyToNull(
       typeof raw?.selectCardTemplateId === 'string' ? raw.selectCardTemplateId : null,
     ),
@@ -175,7 +181,10 @@ const parseDingTalkSettings = (
   };
 };
 
-const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnectorSettings =>
+const settingsFromUpsert = (
+  input: AdminImConnectorUpsertInput,
+  previous?: DingTalkConnectorSettings,
+): DingTalkConnectorSettings =>
   dingTalkConnectorSettingsSchema.parse({
     approvalAutomationTier: input.approvalAutomationTier ?? APPROVAL_AUTOMATION_TIER_DEFAULT,
     agentId: emptyToNull(input.agentId ?? null),
@@ -190,6 +199,12 @@ const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnect
     notifyWorkNoticeEnabled: input.notifyWorkNoticeEnabled ?? true,
     pushEnabled: input.pushEnabled,
     robotCode: input.robotCode,
+    // Omit keeps the stored name. `null` / `''` is an explicit clear (the
+    // admin card sends `null` for an empty 机器人名称 field).
+    robotDisplayName:
+      input.robotDisplayName === undefined
+        ? (previous?.robotDisplayName ?? '')
+        : (input.robotDisplayName ?? '').trim(),
     selectCardTemplateId: emptyToNull(input.selectCardTemplateId),
     workspaceApprovalEnabled: input.workspaceApprovalEnabled ?? false,
     workspaceCalendarEnabled: input.workspaceCalendarEnabled ?? false,
@@ -227,6 +242,7 @@ const unconfiguredView = async (
     platform,
     pushEnabled: DEFAULT_SETTINGS.pushEnabled,
     robotCode: null,
+    robotDisplayName: DEFAULT_SETTINGS.robotDisplayName,
     selectCardTemplateId: DEFAULT_SETTINGS.selectCardTemplateId,
     stats,
     status,
@@ -273,6 +289,7 @@ const toView = async (
     platform,
     pushEnabled: settings.pushEnabled,
     robotCode: emptyToNull(settings.robotCode),
+    robotDisplayName: settings.robotDisplayName,
     selectCardTemplateId: emptyToNull(settings.selectCardTemplateId),
     stats,
     status,
@@ -312,7 +329,6 @@ export class ImConnectorsAdminService {
     const replacing = input.clientSecret.action === 'replace';
     const replacementSecret =
       input.clientSecret.action === 'replace' ? input.clientSecret.value : undefined;
-    const settings = settingsFromUpsert(input);
     const notifySecretAction = input.notifyAppSecret?.action ?? 'keep';
     const notifySecretMutates = notifySecretAction === 'replace' || notifySecretAction === 'clear';
     let prevTier = APPROVAL_AUTOMATION_TIER_DEFAULT;
@@ -320,7 +336,9 @@ export class ImConnectorsAdminService {
 
     await this.db.transaction(async (tx) => {
       const existing = await SystemBotProviderModel.findByPlatform(tx, input.platform, gateKeeper);
-      prevTier = parseDingTalkSettings(existing?.settings).approvalAutomationTier;
+      const previousSettings = parseDingTalkSettings(existing?.settings);
+      prevTier = previousSettings.approvalAutomationTier;
+      const settings = settingsFromUpsert(input, previousSettings);
       const storedSecret = pickClientSecret(existing?.credentials);
       const nextSecret = replacing ? replacementSecret : storedSecret;
 
@@ -393,6 +411,7 @@ export class ImConnectorsAdminService {
           platform: input.platform,
           pushEnabled: settings.pushEnabled,
           robotCode: settings.robotCode,
+          robotDisplayName: settings.robotDisplayName,
           rotation: replacing ? 'replaced' : 'kept',
           selectCardTemplateId: settings.selectCardTemplateId,
           workspaceApprovalEnabled: settings.workspaceApprovalEnabled,

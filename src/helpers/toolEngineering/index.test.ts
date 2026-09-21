@@ -653,6 +653,68 @@ describe('toolEngineering', () => {
       expect(result.enabledToolIds).toContain('lobe-dingtalk-approval');
       expect(result.enabledToolIds).toContain('lobe-dingtalk-workspace');
     });
+
+    it('exposes DingTalk tools in agent mode without plugin selection when flags are on', () => {
+      mockDingtalkCaps = { dingtalkApproval: true, dingtalkCalendar: true, dingtalkTodo: false };
+      mockCurrentAgentPlugins = [];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: [],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-dingtalk-approval');
+      expect(result.enabledToolIds).toContain('lobe-dingtalk-workspace');
+    });
+
+    it('fails closed when DingTalk capability flags are unknown', () => {
+      mockDingtalkCaps = {};
+      mockCurrentAgentPlugins = [];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        context: { isExplicitActivation: true },
+        toolIds: [],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-approval');
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-workspace');
+    });
+
+    it('does not expose DingTalk tools in chat mode even when flags are on', () => {
+      mockEnableAgentMode = false;
+      mockDingtalkCaps = { dingtalkApproval: true, dingtalkCalendar: true, dingtalkTodo: true };
+      mockCurrentAgentPlugins = [];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: [],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-approval');
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-workspace');
+    });
+
+    it('gates approval and workspace independently', () => {
+      mockDingtalkCaps = { dingtalkApproval: true, dingtalkCalendar: false, dingtalkTodo: false };
+      mockCurrentAgentPlugins = [];
+
+      const toolsEngine = createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' });
+      const result = toolsEngine.generateToolsDetailed({
+        toolIds: [],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-dingtalk-approval');
+      expect(result.enabledToolIds).not.toContain('lobe-dingtalk-workspace');
+    });
   });
 
   describe('enterprise lookup capability gate', () => {

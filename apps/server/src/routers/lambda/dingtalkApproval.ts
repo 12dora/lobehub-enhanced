@@ -73,6 +73,7 @@ const isDingtalkWorkspaceError = (
   error: unknown,
 ): error is DingtalkWorkspaceError & {
   candidates?: unknown;
+  hint?: unknown;
   query?: unknown;
 } => {
   if (error instanceof DingtalkWorkspaceError) return true;
@@ -87,6 +88,9 @@ const mapDingtalkError = (error: unknown, procedure: string): never => {
     const data: Record<string, unknown> = { code };
     if ('candidates' in error && error.candidates !== undefined) {
       data.candidates = error.candidates;
+    }
+    if ('hint' in error && typeof error.hint === 'string' && error.hint.trim()) {
+      data.hint = error.hint.trim().slice(0, 200);
     }
     if ('query' in error && error.query !== undefined) {
       data.query = error.query;
@@ -227,7 +231,7 @@ export const dingtalkApprovalRouter = router({
     .input(
       z
         .object({
-          limit: z.number().int().min(1).max(300).optional(),
+          limit: z.number().int().min(1).max(50).optional(),
           status: z.enum(['COMPLETED', 'RUNNING', 'TERMINATED']).optional(),
         })
         .strict()
@@ -240,7 +244,7 @@ export const dingtalkApprovalRouter = router({
   listPendingApprovals: approvalProcedure
     .input(
       z
-        .object({ limit: z.number().int().min(1).max(300).optional() })
+        .object({ limit: z.number().int().min(1).max(50).optional() })
         .strict()
         .optional(),
     )

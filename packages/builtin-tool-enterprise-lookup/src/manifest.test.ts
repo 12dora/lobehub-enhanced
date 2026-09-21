@@ -43,5 +43,24 @@ describe('EnterpriseLookupManifest', () => {
     expect(list?.parameters.required).toEqual([]);
     expect(list?.parameters.properties.provider.enum).toEqual(['qcc', 'tianyancha']);
     expect(list?.description).toContain('inputSchema');
+    expect(list?.description).toContain('companyProfile');
+  });
+
+  it('requires name on companyProfile and keeps extra properties closed', () => {
+    const api = EnterpriseLookupManifest.api.find(
+      (item) => item.name === EnterpriseLookupApiName.companyProfile,
+    );
+
+    expect(api?.humanIntervention).toBe('never');
+    expect(api?.parameters.required).toEqual(['name']);
+    expect(api?.parameters.additionalProperties).toBe(false);
+    expect(api?.parameters.properties.aspects.items.enum).toEqual([
+      'basic',
+      'ipr',
+      'people',
+      'risk',
+    ]);
+    expect(api?.description).toContain('unique');
+    expect(api?.description).toContain('paid quota');
   });
 });

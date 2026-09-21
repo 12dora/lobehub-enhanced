@@ -27,6 +27,7 @@ describe('dingtalk workspace systemRole', () => {
     expect(systemPrompt).toContain('only todos created through this AIHub tool');
     expect(systemPrompt).toContain('confirm card');
     expect(systemPrompt).toContain('never parallelize');
+    expect(systemPrompt).toContain('successful write result is authoritative');
   });
 
   it('covers identity errors and disabled features', () => {

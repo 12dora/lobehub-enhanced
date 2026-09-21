@@ -22,7 +22,7 @@ export const ListCapabilitiesRender = memo<
     <EnterpriseLookupRenderView
       capability={capability}
       provider={isEnterpriseLookupProvider(provider) ? provider : undefined}
-      resultText={pluginState?.resultText}
+      result={pluginState?.resultText}
       truncated={pluginState?.truncated}
     />
   );

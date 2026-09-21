@@ -19,6 +19,8 @@ describe('dingtalk approval systemRole', () => {
   it('tells the model not to restate writes and to call once', () => {
     expect(systemPrompt).toContain('confirm card');
     expect(systemPrompt).toContain('Call the write API once');
+    expect(systemPrompt).toContain('successful write result is authoritative');
+    expect(systemPrompt).toContain('never call listTemplates, getTemplateSchema');
   });
 
   it('forbids parallel batch approvals', () => {
@@ -34,6 +36,8 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('structured conditions');
     expect(systemPrompt).toContain('getTemplateSchema');
     expect(systemPrompt).toContain('Ask when a condition cannot be expressed structurally');
+    expect(systemPrompt).toContain('literal "me"');
+    expect(systemPrompt).toContain('Do not call searchDirectory to find the current user');
   });
 
   it('explains premium-only and unsupported OpenAPI actions', () => {
@@ -63,7 +67,21 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('Without DingTalk OA Premium');
     expect(systemPrompt).toContain('listPendingApprovals and listMyApplications');
     expect(systemPrompt).toContain('15-25 seconds');
-    expect(systemPrompt).toContain('do not repeat them in the same turn');
+    expect(systemPrompt).toContain('do not repeat it in the same turn');
     expect(systemPrompt).toContain('marked incomplete');
+  });
+
+  it('routes 待我审批 to listPendingApprovals only and caps limit at 50', () => {
+    expect(systemPrompt).toContain('listPendingApprovals ONLY');
+    expect(systemPrompt).toContain(
+      'listMyApplications only when the user asks about requests they submitted',
+    );
+    expect(systemPrompt).toContain('Never pass limit above 50');
+  });
+
+  it('retries DINGTALK_INVALID once using the hint', () => {
+    expect(systemPrompt).toContain('DINGTALK_INVALID');
+    expect(systemPrompt).toContain('read the hint');
+    expect(systemPrompt).toContain('retry the same write once');
   });
 });

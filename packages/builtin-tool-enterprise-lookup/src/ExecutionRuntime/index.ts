@@ -1,6 +1,10 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 
 import type {
+  CompanyProfileCandidate,
+  CompanyProfileParams,
+  CompanyProfileResult,
+  CompanyProfileState,
   EnterpriseLookupProvider,
   ListCapabilitiesParams,
   ListCapabilitiesResult,
@@ -41,6 +45,7 @@ const PROVIDER_LABEL: Record<EnterpriseLookupProvider, string> = {
 };
 
 export interface IEnterpriseLookupService {
+  companyProfile: (params: CompanyProfileParams) => Promise<CompanyProfileResult>;
   listCapabilities: (params: ListCapabilitiesParams) => Promise<ListCapabilitiesResult>;
   query: (params: QueryEnterpriseParams) => Promise<unknown>;
 }
@@ -203,7 +208,7 @@ const friendlyErrorContent = (
     case 'ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE': {
       if (fallbackProvider) {
         const label = providerLabel(fallbackProvider) ?? fallbackProvider;
-        return `当前数据源不可用（ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE）。请对 fallbackProvider「${label}」（${fallbackProvider}）调用一次 listCapabilities，然后用该数据源重试 queryEnterprise，仅重试一次。不要向用户展示技术细节。`;
+        return `当前数据源不可用（ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE）。请对 fallbackProvider「${label}」（${fallbackProvider}）调用一次 companyProfile，仅重试一次。长尾能力则对该数据源调用一次 listCapabilities 后再重试 queryEnterprise。不要向用户展示技术细节。`;
       }
       return '当前数据源不可用（ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE）。请稍后重试。不要向用户展示技术细节。';
     }
@@ -278,7 +283,7 @@ export class EnterpriseLookupExecutionRuntime {
       const { text, truncated } = truncateText(compactJson(payload));
       const source = providerLabel(provider);
       const instruction =
-        '请按返回的 capability 名称与 inputSchema 调用 queryEnterprise。公司匹配不唯一时列出「企业名称 · 统一社会信用代码/法定代表人」请用户选择，不要猜测。';
+        '仅在 companyProfile 未覆盖的维度按返回的 capability 名称与 inputSchema 调用 queryEnterprise。同一对话中不要再次调用 listCapabilities。公司匹配不唯一时列出「企业名称 · 统一社会信用代码/法定代表人」请用户选择，不要猜测。';
       const header = source ? `数据来源：${source}` : undefined;
       const content = withTruncationNote(
         [header, instruction, text].filter(Boolean).join('\n'),
@@ -291,6 +296,87 @@ export class EnterpriseLookupExecutionRuntime {
         success: true,
         toolCount,
         truncated,
+      };
+      return { content, state, success: true };
+    } catch (error) {
+      return failureResult(error);
+    }
+  }
+
+  async companyProfile(args: CompanyProfileParams): Promise<BuiltinServerRuntimeOutput> {
+    try {
+      const result = await this.service.companyProfile(args);
+      const provider = isEnterpriseLookupProvider(result.provider)
+        ? result.provider
+        : args.provider;
+      const source = providerLabel(provider);
+      const queriedAt = typeof result.queriedAt === 'string' ? result.queriedAt : undefined;
+      const match = result.match;
+      const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+      const formatCandidate = (item: CompanyProfileCandidate) =>
+        [item.name, item.creditCode, item.legalPerson, item.status].filter(Boolean).join(' · ');
+      const note =
+        typeof result.note === 'string' && result.note.trim() ? result.note.trim() : undefined;
+      const rawProfile =
+        match === 'unique' && result.profile != null ? formatLookupBody(result.profile) : '';
+      const storedProfile = rawProfile ? truncateText(rawProfile) : undefined;
+
+      let body: string;
+      if (match === 'unique') {
+        body = [
+          storedProfile?.text
+            ? '已锚定唯一主体，工商基本信息如下。请用两列表格（| 项目 | 内容 |）按短标题分组呈现，不要写长段落。'
+            : '已锚定唯一主体。',
+          note,
+          storedProfile?.text,
+        ]
+          .filter(Boolean)
+          .join('\n');
+      } else if (match === 'ambiguous') {
+        const listed = candidates.map(formatCandidate).filter(Boolean);
+        body = [
+          '匹配到多家企业，请列出「企业名称 · 统一社会信用代码 · 法定代表人 · 状态」请用户选择后再调用 companyProfile（使用完整注册名称），不要猜测，也不要继续 queryEnterprise。',
+          listed.length > 0 ? listed.map((line, index) => `${index + 1}. ${line}`).join('\n') : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      } else {
+        body = '未找到匹配企业。请向用户确认名称后再试，不要猜测主体。';
+      }
+
+      const header = [
+        source ? `数据来源：${source}` : undefined,
+        queriedAt ? `查询时间：${queriedAt}` : undefined,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      const payload: CompanyProfileResult = {
+        aspects: Array.isArray(result.aspects) ? result.aspects : [],
+        candidates,
+        match: match === 'unique' || match === 'ambiguous' || match === 'none' ? match : 'none',
+        provider: provider ?? 'qcc',
+        queriedAt: queriedAt ?? '',
+        query: typeof result.query === 'string' ? result.query : args.name,
+        ...(note ? { note } : {}),
+        ...(storedProfile ? { profile: storedProfile.text } : {}),
+      };
+      const { text, truncated } = truncateText(
+        [header, body, compactJson(payload)].filter(Boolean).join('\n'),
+      );
+      const content = withTruncationNote(text, truncated);
+      const uniqueCompany = payload.match === 'unique' ? candidates[0] : undefined;
+      const state: CompanyProfileState = {
+        candidateCount: candidates.length,
+        candidates,
+        match: payload.match,
+        matched: payload.match === 'unique',
+        provider,
+        queriedAt,
+        resultText: text,
+        success: true,
+        truncated: truncated || Boolean(storedProfile?.truncated),
+        ...(uniqueCompany ? { company: uniqueCompany } : {}),
+        ...(storedProfile ? { profile: storedProfile.text } : {}),
       };
       return { content, state, success: true };
     } catch (error) {

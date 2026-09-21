@@ -10,8 +10,8 @@ import {
   EnterpriseLookupServiceError,
   formatEnterpriseLookupClientError,
   isEnterpriseLookupErrorCode,
-  QCC_CATEGORIES,
 } from '@/server/enterprise/services/enterpriseLookup';
+import { QCC_CATEGORIES } from '@/types/platform/enterpriseLookup';
 
 const enterpriseLookupProcedure = authedProcedure.use(serverDatabase).use(async (opts) => {
   const { ctx } = opts;
@@ -24,6 +24,7 @@ const enterpriseLookupProcedure = authedProcedure.use(serverDatabase).use(async 
 
 const providerSchema = z.enum(['qcc', 'tianyancha']);
 const categorySchema = z.union([z.enum(QCC_CATEGORIES), z.literal('default')]);
+const aspectSchema = z.enum(['basic', 'ipr', 'people', 'risk']);
 
 const mapError = (error: unknown, procedure: string): never => {
   if (error instanceof TRPCError) throw error;
@@ -68,6 +69,24 @@ const mapError = (error: unknown, procedure: string): never => {
 };
 
 export const enterpriseLookupRouter = router({
+  companyProfile: enterpriseLookupProcedure
+    .input(
+      z
+        .object({
+          aspects: z.array(aspectSchema).optional(),
+          name: z.string().min(1),
+          provider: providerSchema.optional(),
+        })
+        .strict(),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.enterpriseLookupService.companyProfile(input);
+      } catch (error) {
+        return mapError(error, 'companyProfile');
+      }
+    }),
+
   listCapabilities: enterpriseLookupProcedure
     .input(
       z

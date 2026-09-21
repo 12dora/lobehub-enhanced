@@ -366,7 +366,17 @@ export interface SaveTemplateParams {
   processCode?: string;
 }
 
+export interface SaveTemplateSavedField {
+  componentType?: string;
+  label: string;
+  required?: boolean;
+}
+
 export interface SaveTemplateState {
+  adminUrl?: string;
+  created?: boolean;
+  fields?: SaveTemplateSavedField[];
+  name?: string;
   notes?: string[];
   processCode?: string;
   success: boolean;

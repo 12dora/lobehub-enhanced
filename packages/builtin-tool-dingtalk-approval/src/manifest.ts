@@ -47,7 +47,7 @@ const formValuesSchema = {
 const approvalRuleConditionsSchema = {
   additionalProperties: false,
   description:
-    'Structured match conditions. match is always all. originators.staffIds are DingTalk userIds (or staff:<id> tokens). fields[].componentId must exist on the template schema; numeric ops only on NumberField/MoneyField.',
+    'Structured match conditions. match is always all. originators.staffIds are staff:<id> tokens or the literal "me" for the caller (server-resolved; do not searchDirectory for the current user). fields[].componentId must exist on the template schema; numeric ops only on NumberField/MoneyField.',
   properties: {
     fields: {
       items: {
@@ -88,7 +88,8 @@ const approvalRuleConditionsSchema = {
           type: 'array',
         },
         staffIds: {
-          description: 'Originator DingTalk userIds or staff:<id> tokens.',
+          description:
+            'Originator staff:<id> tokens, or the literal "me" for the caller. Do not call searchDirectory to resolve the current user.',
           items: { type: 'string' },
           type: 'array',
         },
@@ -141,15 +142,15 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'List tasks currently waiting on the user. May be truncated on the standard edition (truncated=true). Each row has processInstanceId and taskId for write APIs.',
+        'List tasks currently waiting on the user (待我审批). Use this — and only this — for 「没审批的 / 待我审批」. Do not also call listMyApplications. May be truncated on the standard edition (truncated=true). Each row has processInstanceId and taskId for write APIs.',
       humanIntervention: never,
       name: DingtalkApprovalReadApiName.listPendingApprovals,
       parameters: {
         additionalProperties: false,
         properties: {
           limit: {
-            description: 'Max rows to return (1–300).',
-            maximum: 300,
+            description: 'Max rows to return (1–50). Never pass more than 50.',
+            maximum: 50,
             minimum: 1,
             type: 'integer',
           },
@@ -160,15 +161,15 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'List approval instances the current user started. Optional status filter: RUNNING, COMPLETED, TERMINATED.',
+        'List approval instances the current user started (我发起的). Use only when they ask about requests they submitted. Never combine with listPendingApprovals for 「待我审批」. Optional status filter: RUNNING, COMPLETED, TERMINATED.',
       humanIntervention: never,
       name: DingtalkApprovalReadApiName.listMyApplications,
       parameters: {
         additionalProperties: false,
         properties: {
           limit: {
-            description: 'Max rows to return (1–300).',
-            maximum: 300,
+            description: 'Max rows to return (1–50). Never pass more than 50.',
+            maximum: 50,
             minimum: 1,
             type: 'integer',
           },
@@ -424,7 +425,7 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Create or update an official approval form template. Omit processCode to create. Caller must be an OA approval admin. Flow nodes, visibility, and CC cannot be set via API — notes in the result list what still must be configured in the DingTalk console.',
+        'Create or update an official approval form template. Omit processCode to create. Caller must be an OA approval admin. The result is authoritative (processCode, fields, adminUrl, notes) — do not listTemplates or getTemplateSchema to verify. Flow nodes, visibility, and CC cannot be set via API; use the returned adminUrl and remaining steps.',
       humanIntervention: always,
       name: DingtalkApprovalWriteApiName.saveTemplate,
       parameters: {
@@ -479,7 +480,7 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        "Create an automatic approval rule. Compile the user's request into structured conditions after reading getTemplateSchema. redirect needs redirectToStaffToken; refuse needs remark. Strict tier may require expiresAt.",
+        'Create an automatic approval rule. Compile the user\'s request into structured conditions after reading getTemplateSchema. originators.staffIds may be staff:<id> or "me" for the caller — do not searchDirectory for the current user. redirect needs redirectToStaffToken; refuse needs remark. Strict tier may require expiresAt.',
       humanIntervention: always,
       name: DingtalkApprovalWriteApiName.createApprovalRule,
       parameters: {

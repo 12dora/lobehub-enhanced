@@ -397,6 +397,80 @@ describe('ImConnectorsAdminService', () => {
     });
   });
 
+  it('clears robotDisplayName when upsert sends null', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, robotDisplayName: 'AI 助手' },
+    } as never);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, robotDisplayName: null },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ robotDisplayName: '' }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('keeps the stored robotDisplayName when upsert omits it', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, robotDisplayName: 'AI 助手' },
+    } as never);
+
+    await service.upsert({ actorUserId: 'operator-1', input: upsertInput });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ robotDisplayName: 'AI 助手' }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('persists robotDisplayName on upsert and returns it on the view', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, robotDisplayName: 'AI 助手' },
+    } as never);
+
+    const view = await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, robotDisplayName: '  AI 助手  ' },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ robotDisplayName: 'AI 助手', robotCode: 'ding-robot' }),
+      }),
+      expect.anything(),
+    );
+    expect(view.robotDisplayName).toBe('AI 助手');
+  });
+
+  it('defaults robotDisplayName to empty on an unconfigured connector', async () => {
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue(null);
+    const service = new ImConnectorsAdminService(createDb());
+    const view = await service.get('dingtalk');
+    expect(view.robotDisplayName).toBe('');
+  });
+
   it('passes corpId through upsert settings and the view', async () => {
     const db = createDb();
     const service = new ImConnectorsAdminService(db);

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  adminImConnectorApiCallStatsOutputSchema,
   adminImConnectorUpsertInputSchema,
   adminImConnectorViewSchema,
   dingTalkConnectorSettingsSchema,
@@ -35,6 +36,22 @@ describe('dingTalkConnectorSettingsSchema', () => {
     expect(settings.workspaceTodoEnabled).toBe(false);
     expect(settings.workspaceCalendarEnabled).toBe(false);
     expect(settings.approvalAutomationTier).toBe('moderate');
+    expect(settings.robotDisplayName).toBe('');
+  });
+
+  it('trims robotDisplayName and rejects names longer than 32', () => {
+    expect(
+      dingTalkConnectorSettingsSchema.parse({
+        robotCode: 'ding-robot',
+        robotDisplayName: '  AI 助手  ',
+      }).robotDisplayName,
+    ).toBe('AI 助手');
+    expect(
+      dingTalkConnectorSettingsSchema.safeParse({
+        robotCode: 'ding-robot',
+        robotDisplayName: 'a'.repeat(33),
+      }).success,
+    ).toBe(false);
   });
 
   it('persists explicit false on both notify-app channels', () => {
@@ -55,6 +72,14 @@ describe('adminImConnectorUpsertInputSchema', () => {
     expect(input.notifyRobotEnabled).toBe(true);
   });
 
+  it('accepts null robotDisplayName as an explicit clear', () => {
+    const input = adminImConnectorUpsertInputSchema.parse({
+      ...UPSERT_BASE,
+      robotDisplayName: null,
+    });
+    expect(input.robotDisplayName).toBeNull();
+  });
+
   it('accepts false for both notify-app channel switches', () => {
     const input = adminImConnectorUpsertInputSchema.parse({
       ...UPSERT_BASE,
@@ -63,6 +88,23 @@ describe('adminImConnectorUpsertInputSchema', () => {
     });
     expect(input.notifyWorkNoticeEnabled).toBe(false);
     expect(input.notifyRobotEnabled).toBe(false);
+  });
+});
+
+describe('adminImConnectorApiCallStatsOutputSchema', () => {
+  it('accepts the billed-call counter shape', () => {
+    expect(
+      adminImConnectorApiCallStatsOutputSchema.parse({
+        days: [
+          {
+            byApi: [{ api: 'POST /topapi/v2/department/listsub', count: 39 }],
+            date: '2026-09-21',
+            total: 39,
+          },
+        ],
+        total: 39,
+      }),
+    ).toMatchObject({ total: 39 });
   });
 });
 

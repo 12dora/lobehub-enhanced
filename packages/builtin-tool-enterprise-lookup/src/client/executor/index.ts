@@ -7,7 +7,11 @@ import { enterpriseLookupService } from '@/services/enterpriseLookup';
 import type { IEnterpriseLookupService } from '../../ExecutionRuntime';
 import { EnterpriseLookupExecutionRuntime } from '../../ExecutionRuntime';
 import { EnterpriseLookupIdentifier } from '../../manifest';
-import type { ListCapabilitiesParams, QueryEnterpriseParams } from '../../types';
+import type {
+  CompanyProfileParams,
+  ListCapabilitiesParams,
+  QueryEnterpriseParams,
+} from '../../types';
 import { EnterpriseLookupApiName } from '../../types';
 
 const log = debug('lobe-enterprise-lookup:executor');
@@ -16,6 +20,7 @@ const loadEnterpriseLookupService = async (): Promise<IEnterpriseLookupService> 
   // Static app import like the reminder tool: the desktop (vite/rolldown) bundle
   // cannot resolve a dynamic `@/` import from inside a workspace package.
   return {
+    companyProfile: (params) => enterpriseLookupService.companyProfile(params),
     listCapabilities: async (params) => {
       const result = await enterpriseLookupService.listCapabilities(params);
       if (!result) {
@@ -38,6 +43,16 @@ class EnterpriseLookupExecutor extends BaseExecutor<typeof EnterpriseLookupApiNa
     );
     return this.runtimePromise;
   }
+
+  companyProfile = async (params: CompanyProfileParams): Promise<BuiltinToolResult> => {
+    try {
+      log('companyProfile name=%s provider=%s', params.name, params.provider);
+      const runtime = await this.getRuntime();
+      return this.toResult(await runtime.companyProfile(params));
+    } catch (error) {
+      return this.errorResult(error, 'CompanyProfileFailed');
+    }
+  };
 
   listCapabilities = async (params: ListCapabilitiesParams = {}): Promise<BuiltinToolResult> => {
     try {

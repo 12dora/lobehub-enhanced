@@ -3,43 +3,13 @@
 import { Block } from '@lobehub/ui';
 import { Tag, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { EnterpriseLookupProvider } from '../../types';
+import { EnterpriseResultView } from './ResultView';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
-  body: css`
-    margin: 0;
-    padding: 10px 12px;
-
-    font-family: ${cssVar.fontFamilyCode};
-    font-size: 12px;
-    line-height: 1.6;
-    color: ${cssVar.colorText};
-    word-break: break-word;
-    white-space: pre-wrap;
-  `,
-  details: css`
-    border-block-start: 1px solid ${cssVar.colorBorderSecondary};
-
-    & > summary {
-      cursor: pointer;
-      user-select: none;
-
-      padding-block: 8px;
-      padding-inline: 12px;
-
-      font-size: 12px;
-      color: ${cssVar.colorTextSecondary};
-
-      list-style: none;
-
-      &::-webkit-details-marker {
-        display: none;
-      }
-    }
-  `,
   header: css`
     display: flex;
     flex-wrap: wrap;
@@ -67,16 +37,23 @@ const PROVIDER_KEY: Record<EnterpriseLookupProvider, string> = {
 
 export interface EnterpriseLookupRenderViewProps {
   capability?: string;
+  /** Rendered between the header and the result — the matched company, the candidate list. */
+  children?: ReactNode;
   provider?: EnterpriseLookupProvider;
-  resultText?: string;
+  /** The upstream payload as it arrived: MCP content, a JSON string, or markdown text. */
+  result?: unknown;
   truncated?: boolean;
 }
 
+/**
+ * The shared frame of every enterprise-lookup card: which provider answered, which capability was
+ * asked, and the answer itself as a readable table rather than a blob of JSON.
+ */
 export const EnterpriseLookupRenderView = memo<EnterpriseLookupRenderViewProps>(
-  ({ capability, provider, resultText, truncated }) => {
+  ({ capability, children, provider, result, truncated }) => {
     const { t } = useTranslation('plugin');
 
-    if (!provider && !capability && !resultText) return null;
+    if (!provider && !capability && !children && result === undefined) return null;
 
     return (
       <Block variant={'outlined'} width={'100%'}>
@@ -91,12 +68,8 @@ export const EnterpriseLookupRenderView = memo<EnterpriseLookupRenderViewProps>(
             </span>
           )}
         </div>
-        {resultText && (
-          <details className={styles.details}>
-            <summary>{t('builtins.lobe-enterprise-lookup.render.result')}</summary>
-            <pre className={styles.body}>{resultText}</pre>
-          </details>
-        )}
+        {children}
+        {result !== undefined && <EnterpriseResultView result={result} />}
       </Block>
     );
   },

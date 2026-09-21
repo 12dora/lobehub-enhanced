@@ -13,7 +13,7 @@ describe('enterprise lookup systemRole', () => {
   });
 
   it('asks the user when the company match is ambiguous and never guesses', () => {
-    expect(systemPrompt).toContain('企业名称 · 统一社会信用代码/法定代表人');
+    expect(systemPrompt).toContain('企业名称 · 统一社会信用代码 · 法定代表人 · 状态');
     expect(systemPrompt).toContain('never guess');
     expect(systemPrompt).toContain('ask the user to choose');
   });
@@ -29,13 +29,26 @@ describe('enterprise lookup systemRole', () => {
   it('retries once on PROVIDER_UNAVAILABLE fallback', () => {
     expect(systemPrompt).toContain('ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE');
     expect(systemPrompt).toContain('fallbackProvider');
-    expect(systemPrompt).toContain('listCapabilities');
-    expect(systemPrompt).toContain('retry queryEnterprise once');
+    expect(systemPrompt).toContain('retry companyProfile once');
     expect(systemPrompt).toContain('Do not retry further');
   });
 
-  it('documents both APIs', () => {
+  it('documents companyProfile first and the long-tail APIs', () => {
+    expect(systemPrompt).toContain('companyProfile');
+    expect(systemPrompt).toContain('Call companyProfile first');
     expect(systemPrompt).toContain('listCapabilities');
+    expect(systemPrompt).toContain('Never call listCapabilities twice');
     expect(systemPrompt).toContain('queryEnterprise');
+  });
+
+  it('requires two-column markdown tables and a source line', () => {
+    expect(systemPrompt).toContain('| 项目 | 内容 |');
+    expect(systemPrompt).toContain('基本信息');
+    expect(systemPrompt).toContain('股东与高管');
+    expect(systemPrompt).toContain('No long prose paragraphs');
+    expect(systemPrompt).toContain('60 characters');
+    expect(systemPrompt).toContain('first 8');
+    expect(systemPrompt).toContain('Omit empty fields');
+    expect(systemPrompt).toContain('query time');
   });
 });

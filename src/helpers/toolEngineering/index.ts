@@ -42,17 +42,18 @@ const DINGTALK_APPROVAL_TOOL_IDENTIFIER = 'lobe-dingtalk-approval';
 const DINGTALK_WORKSPACE_TOOL_IDENTIFIER = 'lobe-dingtalk-workspace';
 const ENTERPRISE_LOOKUP_TOOL_IDENTIFIER = 'lobe-enterprise-lookup';
 
-const dingtalkDisabledToolIds = (): string[] => {
+/**
+ * Capability flags from server config. Missing / unknown is fail-closed (off).
+ * Approval and workspace are NOT always-on: they join `defaultToolIds` + the
+ * enable rule only when the matching flag is on, same as enterprise-lookup.
+ */
+const readEnterpriseToolFlags = () => {
   const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
-  const ids: string[] = [];
-  if (!caps?.dingtalkApproval) ids.push(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
-  if (!caps?.dingtalkTodo && !caps?.dingtalkCalendar) ids.push(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
-  return ids;
-};
-
-const enterpriseLookupDisabledToolIds = (): string[] => {
-  const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
-  return caps?.enterpriseLookup ? [] : [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER];
+  return {
+    dingtalkApproval: !!caps?.dingtalkApproval,
+    dingtalkWorkspace: !!(caps?.dingtalkTodo || caps?.dingtalkCalendar),
+    enterpriseLookup: !!caps?.enterpriseLookup,
+  };
 };
 
 /**
@@ -244,15 +245,18 @@ export const createAgentToolsEngine = (
     agentChatConfigSelectors.currentChatConfig(agentState).memory?.enabled ??
     settingsSelectors.memoryEnabled(useUserStore.getState());
   const webBrowsingEnabled = searchConfig.useApplicationBuiltinSearchTool;
+  const { dingtalkApproval, dingtalkWorkspace, enterpriseLookup } = readEnterpriseToolFlags();
   // Native search and the platform browsing tool must not stack. Drop the
   // web-browsing manifest from the pool so `allowExplicitActivation` cannot
-  // re-enable it after lobe-activator.
+  // re-enable it after lobe-activator. DingTalk / enterprise-lookup are
+  // dropped the same way when their capability flag is off or unknown.
   const disabledIds = [
     ...(webBrowsingEnabled
       ? disabledPluginIds
       : [...disabledPluginIds, WebBrowsingManifest.identifier]),
-    ...dingtalkDisabledToolIds(),
-    ...enterpriseLookupDisabledToolIds(),
+    ...(!dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
+    ...(!dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
+    ...(!enterpriseLookup ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
   ];
 
   const chatModeRules = {
@@ -276,12 +280,27 @@ export const createAgentToolsEngine = (
     [LocalSystemManifest.identifier]: agentChatConfigSelectors.isLocalSystemEnabled(agentState),
     [MemoryManifest.identifier]: memoryEnabled,
     [WebBrowsingManifest.identifier]: webBrowsingEnabled,
-    [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER]:
-      !!getServerConfigStoreState()?.serverConfig.enterprise?.capabilities?.enterpriseLookup,
+    [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER]: enterpriseLookup,
+    // Same mechanism as enterprise-lookup: enable rule + defaultToolIds, not
+    // always-on. The approval manifest is large; keep it off the prompt when
+    // the connector flag is off.
+    [DINGTALK_APPROVAL_TOOL_IDENTIFIER]: dingtalkApproval,
+    [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: dingtalkWorkspace,
   };
 
   return createToolsEngine({
-    defaultToolIds: isChatMode ? chatModeAllowedToolIds : defaultToolIds,
+    // Enabling a tool that isn't a candidate is a no-op — the checker only
+    // filters `union(toolIds, defaultToolIds)`. DingTalk ids are not in the
+    // shared always-on / default lists (token cost); inject them here when
+    // the matching capability is on so the model can call them without an
+    // activator round-trip.
+    defaultToolIds: isChatMode
+      ? chatModeAllowedToolIds
+      : [
+          ...defaultToolIds,
+          ...(dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
+          ...(dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
+        ],
     disabledPluginIds: disabledIds,
     manifestContext,
     enableChecker: createEnableChecker({

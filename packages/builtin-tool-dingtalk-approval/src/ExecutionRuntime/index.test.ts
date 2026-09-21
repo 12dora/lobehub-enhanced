@@ -41,14 +41,16 @@ const makeService = (
 class FakeDingtalkError extends Error {
   readonly code: string;
   readonly candidates?: { deptPath?: string; name: string; staffId: string }[];
+  readonly hint?: string;
   constructor(
     code: string,
-    extras?: { candidates?: { deptPath?: string; name: string; staffId: string }[] },
+    extras?: { candidates?: { deptPath?: string; name: string; staffId: string }[]; hint?: string },
   ) {
     super(`upstream boom ${code}`);
     this.name = 'DingtalkWorkspaceError';
     this.code = code;
     this.candidates = extras?.candidates;
+    this.hint = extras?.hint;
   }
 }
 
@@ -554,6 +556,67 @@ describe('DingtalkApprovalExecutionRuntime', () => {
     expect(payload.processInstanceId).toBe('pi-last');
     expect(result.content).not.toContain('"userId"');
     expect(result.content.length).toBeLessThanOrEqual(DINGTALK_APPROVAL_CONTENT_LIMIT);
+  });
+
+  it('passes saveTemplate processCode, fields, adminUrl and remaining steps through content and state', async () => {
+    const saveTemplate = vi.fn().mockResolvedValue({
+      adminUrl: 'https://aflow.dingtalk.com/dingtalk/web/query/oaDesigner?processCode=PROC-1',
+      created: true,
+      fields: [
+        { componentType: 'TextField', label: '借用工具', required: true },
+        { componentType: 'TextareaField', label: '借用事由', required: false },
+      ],
+      name: '工具借用审批',
+      notes: ['请在后台配置由发起人自选审批人'],
+      processCode: 'PROC-1',
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ saveTemplate }));
+
+    const result = await runtime.saveTemplate({
+      fields: [{ componentType: 'TextField', label: '借用工具', required: true }],
+      name: '工具借用审批',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.state).toMatchObject({
+      adminUrl: 'https://aflow.dingtalk.com/dingtalk/web/query/oaDesigner?processCode=PROC-1',
+      created: true,
+      name: '工具借用审批',
+      processCode: 'PROC-1',
+      success: true,
+    });
+    expect(result.content).toContain(
+      '[前往钉钉后台配置审批流程](https://aflow.dingtalk.com/dingtalk/web/query/oaDesigner?processCode=PROC-1)',
+    );
+    expect(result.content).toContain('流程设计');
+    expect(result.content).toContain('可见范围');
+    expect(result.content).toContain('权威结果');
+    expect(result.content).toContain('listTemplates');
+    expect(result.content).not.toContain('upstream');
+  });
+
+  it('includes DINGTALK_INVALID hint so the model can retry once', async () => {
+    const saveTemplate = vi
+      .fn()
+      .mockRejectedValue(
+        new FakeDingtalkError('DINGTALK_INVALID', { hint: 'DDDateField props.unit' }),
+      );
+    const runtime = createDingtalkApprovalRuntime(makeService({ saveTemplate }));
+
+    const result = await runtime.saveTemplate({
+      fields: [{ componentType: 'DDDateField', label: '借用日期', required: true }],
+      name: '工具借用审批',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('DINGTALK_INVALID');
+    expect(result.content).toContain('DDDateField props.unit');
+    expect(result.content).toContain('重试一次');
+    expect(result.content).not.toContain('upstream boom');
+    expect(result.error).toMatchObject({
+      code: 'DINGTALK_INVALID',
+      hint: 'DDDateField props.unit',
+    });
   });
 
   it('returns compact success JSON for writes', async () => {

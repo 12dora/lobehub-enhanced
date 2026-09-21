@@ -37,6 +37,7 @@ import type {
   ReturnTaskParams,
   ReturnTaskState,
   SaveTemplateParams,
+  SaveTemplateSavedField,
   SaveTemplateState,
   SearchDirectoryParams,
   SearchDirectoryState,
@@ -143,6 +144,49 @@ const incompleteListNote = (incomplete: ApprovalScanIncomplete): string =>
 
 const PENDING_TRUNCATED_NOTE =
   '列表可能不完整（truncated=true）。标准版无待办列表接口，结果来自有界扫描。\n';
+
+const DEFAULT_TEMPLATE_ADMIN_URL = 'https://oa.dingtalk.com/';
+
+const DEFAULT_TEMPLATE_NEXT_STEPS = [
+  '打开该模板的【流程设计】，配置审批节点（例如由发起人自选审批人）',
+  '设置可见范围',
+  '如需抄送或高级设置，在后台补全后发布',
+];
+
+const asNonEmptyStringList = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter(
+    (item): item is string => typeof item === 'string' && item.trim().length > 0,
+  );
+  return items.length > 0 ? items.map((item) => item.trim()) : undefined;
+};
+
+const safeTemplateAdminUrl = (value: unknown): string => {
+  if (typeof value !== 'string') return DEFAULT_TEMPLATE_ADMIN_URL;
+  const trimmed = value.trim();
+  if (/^https:\/\/(?:[\w-]+\.)*dingtalk\.com(?:[/?#]|$)/i.test(trimmed)) return trimmed;
+  return DEFAULT_TEMPLATE_ADMIN_URL;
+};
+
+const mapSavedTemplateFields = (value: unknown): SaveTemplateSavedField[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const fields: SaveTemplateSavedField[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const label = optionalString(item.label);
+    if (!label) continue;
+    fields.push({
+      componentType: optionalString(item.componentType),
+      label,
+      ...(item.required === true
+        ? { required: true }
+        : item.required === false
+          ? { required: false }
+          : {}),
+    });
+  }
+  return fields.length > 0 ? fields : undefined;
+};
 
 const pickString = (value: unknown, keys: string[]): string | undefined => {
   if (!isRecord(value)) return undefined;
@@ -946,15 +990,44 @@ export class DingtalkApprovalExecutionRuntime {
   async saveTemplate(args: SaveTemplateParams): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.saveTemplate(args);
+      const record = isRecord(data) ? data : {};
       const processCode = pickString(data, ['processCode']) ?? args.processCode;
-      const notes =
-        isRecord(data) && Array.isArray(data.notes) ? (data.notes as string[]) : undefined;
-      const state: SaveTemplateState = { notes, processCode, success: true };
-      const noteLine =
-        notes && notes.length > 0
-          ? `审批流、可见范围等仍需在钉钉管理后台配置：${notes.join('；')}\n`
-          : '审批流、可见范围、抄送等无法通过接口配置，请提醒用户在钉钉管理后台补全。\n';
-      return ok(`${noteLine}${compactJson({ notes, processCode, result: data })}`, state);
+      const name = pickString(data, ['name']) ?? args.name;
+      const created = typeof record.created === 'boolean' ? record.created : !args.processCode;
+      const adminUrl = safeTemplateAdminUrl(record.adminUrl);
+      const notes = asNonEmptyStringList(record.notes);
+      const fields = mapSavedTemplateFields(record.fields) ?? mapSavedTemplateFields(args.fields);
+      const state: SaveTemplateState = {
+        adminUrl,
+        created,
+        fields,
+        name,
+        notes,
+        processCode,
+        success: true,
+      };
+      const fieldLines = (fields ?? [])
+        .map((field) => {
+          const type = field.componentType ? `（${field.componentType}）` : '';
+          const required = field.required === true ? '，必填' : '';
+          return `- ${field.label}${type}${required}`;
+        })
+        .join('\n');
+      const stepLines = DEFAULT_TEMPLATE_NEXT_STEPS.map(
+        (step, index) => `${index + 1}. ${step}`,
+      ).join('\n');
+      const extraNotes = notes && notes.length > 0 ? `说明：${notes.join('；')}` : undefined;
+      const content = [
+        `已保存审批模板「${name}」${processCode ? `（processCode：${processCode}）` : ''}。本次写入结果是权威结果，请勿再调用 listTemplates 或 getTemplateSchema 核对。`,
+        fieldLines ? `表单字段：\n${fieldLines}` : undefined,
+        `审批流、可见范围、抄送无法通过接口配置，请提醒用户完成以下步骤：\n${stepLines}`,
+        extraNotes,
+        `[前往钉钉后台配置审批流程](${adminUrl})`,
+        compactJson({ adminUrl, created, fields, name, notes, processCode }),
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return ok(content, state);
     } catch (error) {
       return dingtalkFailureResult(error);
     }

@@ -133,9 +133,258 @@ export interface EnterpriseLookupListCapabilitiesInput {
   provider?: EnterpriseLookupProvider;
 }
 
+export const COMPANY_PROFILE_ASPECTS = ['basic', 'ipr', 'people', 'risk'] as const;
+
+export type CompanyProfileAspect = (typeof COMPANY_PROFILE_ASPECTS)[number];
+
+export const isCompanyProfileAspect = (value: unknown): value is CompanyProfileAspect =>
+  value === 'basic' || value === 'ipr' || value === 'people' || value === 'risk';
+
+export interface EnterpriseLookupCompanyProfileInput {
+  aspects?: CompanyProfileAspect[];
+  name: string;
+  provider?: EnterpriseLookupProvider;
+}
+
+export interface EnterpriseLookupCompanyCandidate {
+  creditCode?: string;
+  legalPerson?: string;
+  name: string;
+  status?: string;
+}
+
+export interface EnterpriseLookupCompanyProfileResult {
+  aspects: CompanyProfileAspect[];
+  candidates: EnterpriseLookupCompanyCandidate[];
+  match: 'ambiguous' | 'none' | 'unique';
+  /** Set when a unique hit was found but 工商 was not fetched (daily quota on the second call). */
+  note?: string;
+  profile?: string;
+  provider: EnterpriseLookupProvider;
+  queriedAt: string;
+  query: string;
+}
+
+const QCC_SEARCH_CAPABILITY = 'get_company_by_query';
+const QCC_BASIC_CAPABILITY = 'get_company_registration_info';
+const QCC_COMPANY_CATEGORY = 'company';
+const TYC_SEARCH_CAPABILITY = 'search_companies';
+const TYC_BASIC_CAPABILITY = 'get_company_basic_profile';
+
+const COMPANY_NAME_KEYS = [
+  'name',
+  'companyname',
+  'company_name',
+  'entname',
+  'orgname',
+  'corpname',
+  'enterprisename',
+  '企业名称',
+];
+const CREDIT_CODE_KEYS = [
+  'creditcode',
+  'credit_code',
+  'creditno',
+  'unifiedsocialcreditcode',
+  'unifiedcode',
+  'regnumber',
+  'taxno',
+  '统一社会信用代码',
+];
+const LEGAL_PERSON_KEYS = [
+  'opername',
+  'legalperson',
+  'legalpersonname',
+  'legal_person',
+  'legalrepresentative',
+  'frname',
+  'boss',
+  '法定代表人',
+  '法定代表人名称',
+];
+const STATUS_KEYS = [
+  'status',
+  'regstatus',
+  'registstatus',
+  'newstatus',
+  'companystatus',
+  '登记状态',
+  '经营状态',
+];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const asNonEmptyString = (value: unknown): string | undefined => {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join('、');
+  }
+  return undefined;
+};
+
+const firstNonEmptyString = (
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined => {
+  const lower = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(record)) {
+    lower.set(key.toLowerCase(), value);
+  }
+  for (const key of keys) {
+    const found = asNonEmptyString(lower.get(key.toLowerCase()));
+    if (found) return found;
+  }
+  return undefined;
+};
+
+const normalizeCompanyName = (value: string): string => value.trim().replaceAll(/\s+/g, '');
+
+const companyCandidateDedupeKey = (
+  candidate: Pick<EnterpriseLookupCompanyCandidate, 'creditCode' | 'legalPerson' | 'name'>,
+): string =>
+  `${normalizeCompanyName(candidate.name)}|${candidate.creditCode ?? ''}|${candidate.legalPerson ?? ''}`;
+
+const COMPANY_PROFILE_BASIC_QUOTA_NOTE = '今日查询次数已达上限，未拉取工商基本信息。';
+
+export const parseJsonPayload = (text: string): unknown => {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.search(/[[{]/);
+    if (start < 0) return null;
+    const objectEnd = trimmed.lastIndexOf('}');
+    const arrayEnd = trimmed.lastIndexOf(']');
+    const end = Math.max(objectEnd, arrayEnd);
+    if (end <= start) return null;
+    try {
+      return JSON.parse(trimmed.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+};
+
+const looksLikeCompany = (
+  record: Record<string, unknown>,
+): EnterpriseLookupCompanyCandidate | undefined => {
+  const name = firstNonEmptyString(record, COMPANY_NAME_KEYS);
+  if (!name) return undefined;
+  const creditCode = firstNonEmptyString(record, CREDIT_CODE_KEYS);
+  const legalPerson = firstNonEmptyString(record, LEGAL_PERSON_KEYS);
+  const status = firstNonEmptyString(record, STATUS_KEYS);
+  if (!creditCode && !legalPerson && !status && !/[公司厂集团企业合作社]/.test(name)) {
+    return undefined;
+  }
+  return {
+    name,
+    ...(creditCode ? { creditCode } : {}),
+    ...(legalPerson ? { legalPerson } : {}),
+    ...(status ? { status } : {}),
+  };
+};
+
+const CREDIT_CODE_PATTERN = /[0-9A-HJ-NPQRTUWXY]{2}\d{6}[0-9A-HJ-NPQRTUWXY]{10}/;
+const COMPANY_NAME_PATTERN =
+  /[\u4E00-\u9FFFA-Z0-9()（）.-]{2,40}(?:股份有限公司|有限责任公司|有限公司|集团有限公司|集团公司|公司|厂|合作社)/gi;
+
+const parseTextCompanyCandidates = (text: string): EnterpriseLookupCompanyCandidate[] => {
+  const found: EnterpriseLookupCompanyCandidate[] = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/\n+/)) {
+    COMPANY_NAME_PATTERN.lastIndex = 0;
+    const name = line.match(COMPANY_NAME_PATTERN)?.[0]?.trim();
+    if (!name) continue;
+    const creditCode = line.match(CREDIT_CODE_PATTERN)?.[0];
+    const candidate: EnterpriseLookupCompanyCandidate = {
+      name,
+      ...(creditCode ? { creditCode } : {}),
+    };
+    const key = companyCandidateDedupeKey(candidate);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(candidate);
+    if (found.length >= 20) break;
+  }
+  return found;
+};
+
+export const parseEnterpriseLookupCompanyCandidates = (
+  content: string,
+): EnterpriseLookupCompanyCandidate[] => {
+  const parsed = parseJsonPayload(content);
+  const found: EnterpriseLookupCompanyCandidate[] = [];
+  const seen = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!isRecord(value)) return;
+    const candidate = looksLikeCompany(value);
+    if (candidate) {
+      const key = companyCandidateDedupeKey(candidate);
+      if (!seen.has(key)) {
+        seen.add(key);
+        found.push(candidate);
+      }
+      return;
+    }
+    for (const nested of Object.values(value)) visit(nested);
+  };
+  if (parsed != null) visit(parsed);
+  if (found.length > 0) return found.slice(0, 20);
+  return parseTextCompanyCandidates(content);
+};
+
+export const pickUniqueCompanyCandidate = (
+  candidates: EnterpriseLookupCompanyCandidate[],
+  query: string,
+): EnterpriseLookupCompanyCandidate | undefined => {
+  const needle = normalizeCompanyName(query);
+  const exact = candidates.filter((item) => normalizeCompanyName(item.name) === needle);
+  return exact.length === 1 ? exact[0] : undefined;
+};
+
+const normalizeCompanyProfileAspects = (value?: unknown): CompanyProfileAspect[] => {
+  if (value == null) return ['basic'];
+  if (!Array.isArray(value)) {
+    throw new EnterpriseLookupServiceError(ENTERPRISE_LOOKUP_INVALID_ARGUMENTS);
+  }
+  if (value.length === 0) return ['basic'];
+  const seen = new Set<CompanyProfileAspect>();
+  for (const item of value) {
+    if (!isCompanyProfileAspect(item)) {
+      throw new EnterpriseLookupServiceError(ENTERPRISE_LOOKUP_INVALID_ARGUMENTS);
+    }
+    seen.add(item);
+  }
+  return [...seen];
+};
+
 const OTHER_PROVIDER: Record<EnterpriseLookupProvider, EnterpriseLookupProvider> = {
   qcc: 'tianyancha',
   tianyancha: 'qcc',
+};
+
+export const shanghaiDateTime = (now: Date = new Date()): string => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+    minute: '2-digit',
+    month: '2-digit',
+    timeZone: ENTERPRISE_LOOKUP_USAGE_TZ,
+    year: 'numeric',
+  }).formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
 };
 
 export const shanghaiUsageDate = (now: Date = new Date()): string => {
@@ -453,6 +702,95 @@ export class EnterpriseLookupService {
         await this.releaseReservation(provider, usageDate);
       }
     }
+  };
+
+  companyProfile = async (
+    input: EnterpriseLookupCompanyProfileInput,
+  ): Promise<EnterpriseLookupCompanyProfileResult> => {
+    const name = input.name?.trim();
+    if (!name) {
+      throw new EnterpriseLookupServiceError(ENTERPRISE_LOOKUP_INVALID_ARGUMENTS);
+    }
+    const aspects = normalizeCompanyProfileAspects(input.aspects);
+    const queriedAt = shanghaiDateTime();
+
+    const config = await requireConfig();
+    const { provider } = resolveProvider(config, input.provider);
+
+    const search = await this.query(
+      provider === 'qcc'
+        ? {
+            arguments: { searchKey: name },
+            capability: QCC_SEARCH_CAPABILITY,
+            category: QCC_COMPANY_CATEGORY,
+            provider,
+          }
+        : {
+            arguments: { page: 1, page_size: 5, query: name },
+            capability: TYC_SEARCH_CAPABILITY,
+            category: TIANYANCHA_CATEGORY,
+            provider,
+          },
+    );
+
+    const candidates = parseEnterpriseLookupCompanyCandidates(search.content);
+    const unique = pickUniqueCompanyCandidate(candidates, name);
+    if (!unique) {
+      return {
+        aspects,
+        candidates,
+        match: candidates.length === 0 ? 'none' : 'ambiguous',
+        provider: search.provider,
+        queriedAt,
+        query: name,
+      };
+    }
+
+    const searchKey = unique.creditCode || unique.name;
+    let basic: EnterpriseLookupQueryResult;
+    try {
+      basic = await this.query(
+        search.provider === 'qcc'
+          ? {
+              arguments: { searchKey },
+              capability: QCC_BASIC_CAPABILITY,
+              category: QCC_COMPANY_CATEGORY,
+              provider: search.provider,
+            }
+          : {
+              arguments: { company_name: unique.name },
+              capability: TYC_BASIC_CAPABILITY,
+              category: TIANYANCHA_CATEGORY,
+              provider: search.provider,
+            },
+      );
+    } catch (error) {
+      if (
+        error instanceof EnterpriseLookupServiceError &&
+        error.code === ENTERPRISE_LOOKUP_DAILY_LIMIT
+      ) {
+        return {
+          aspects,
+          candidates: [unique],
+          match: 'unique',
+          note: COMPANY_PROFILE_BASIC_QUOTA_NOTE,
+          provider: search.provider,
+          queriedAt,
+          query: name,
+        };
+      }
+      throw error;
+    }
+
+    return {
+      aspects,
+      candidates: [unique],
+      match: 'unique',
+      profile: basic.content,
+      provider: basic.provider,
+      queriedAt,
+      query: name,
+    };
   };
 
   private findCategoryForCapability = async (

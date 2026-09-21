@@ -52,6 +52,7 @@ export {
   type ReturnTaskState,
   type SaveTemplateFieldInput,
   type SaveTemplateParams,
+  type SaveTemplateSavedField,
   type SaveTemplateState,
   type SearchDirectoryParams,
   type SearchDirectoryState,

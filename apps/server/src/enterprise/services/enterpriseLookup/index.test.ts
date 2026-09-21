@@ -44,11 +44,14 @@ const {
   ENTERPRISE_LOOKUP_CAPABILITY_UNKNOWN,
   ENTERPRISE_LOOKUP_DAILY_LIMIT,
   ENTERPRISE_LOOKUP_INTERNAL,
+  ENTERPRISE_LOOKUP_INVALID_ARGUMENTS,
   ENTERPRISE_LOOKUP_NOT_CONFIGURED,
   ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE,
   EnterpriseLookupService,
   EnterpriseLookupServiceError,
   isConfigured,
+  parseEnterpriseLookupCompanyCandidates,
+  pickUniqueCompanyCandidate,
   resetEnterpriseLookupHealthForTest,
   shanghaiUsageDate,
 } = await import('./index');
@@ -275,5 +278,390 @@ describe('EnterpriseLookupService', () => {
       fallbackProvider: 'tianyancha',
     });
     expect(mockRelease).toHaveBeenCalled();
+  });
+});
+
+describe('parseEnterpriseLookupCompanyCandidates', () => {
+  it('reads QCC Result.Data rows', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(
+      JSON.stringify({
+        Result: {
+          Data: [
+            {
+              CreditCode: '914403001922038216',
+              Name: '华为技术有限公司',
+              OperName: '赵明路',
+              Status: '存续',
+            },
+          ],
+        },
+      }),
+    );
+    expect(candidates).toEqual([
+      {
+        creditCode: '914403001922038216',
+        legalPerson: '赵明路',
+        name: '华为技术有限公司',
+        status: '存续',
+      },
+    ]);
+  });
+
+  it('falls back to markdown/text company lines', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(
+      '已用 **天眼查** 检索「捷发科技」。\n1. **浙江捷发科技股份有限公司** · 91330600597214350R / 邵国标\n2. 杭州捷发科技有限公司 · 91330000700000000X',
+    );
+    expect(candidates.map((item) => item.name)).toEqual([
+      '浙江捷发科技股份有限公司',
+      '杭州捷发科技有限公司',
+    ]);
+    expect(candidates[0]?.creditCode).toBe('91330600597214350R');
+  });
+
+  it('picks the unique exact-name candidate among several', () => {
+    const unique = pickUniqueCompanyCandidate(
+      [
+        { creditCode: '1', legalPerson: '甲', name: '杭州捷发科技有限公司', status: '存续' },
+        { creditCode: '2', legalPerson: '乙', name: '浙江捷发科技股份有限公司', status: '存续' },
+      ],
+      '浙江捷发科技股份有限公司',
+    );
+    expect(unique?.creditCode).toBe('2');
+    expect(
+      pickUniqueCompanyCandidate(
+        [{ name: '杭州捷发科技有限公司' }, { name: '浙江捷发科技股份有限公司' }],
+        '捷发科技',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('keeps same-name JSON rows that differ by legal person when credit codes are missing', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(
+      JSON.stringify({
+        items: [
+          { Name: '某某有限公司', OperName: '甲', Status: '存续' },
+          { Name: '某某有限公司', OperName: '乙', Status: '存续' },
+        ],
+      }),
+    );
+    expect(candidates).toEqual([
+      { legalPerson: '甲', name: '某某有限公司', status: '存续' },
+      { legalPerson: '乙', name: '某某有限公司', status: '存续' },
+    ]);
+  });
+
+  it('keeps same-name markdown rows that differ by credit code', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(
+      '1. 某某有限公司 · 91330000111111111X\n2. 某某有限公司 · 91330000222222222Y',
+    );
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((item) => item.creditCode)).toEqual([
+      '91330000111111111X',
+      '91330000222222222Y',
+    ]);
+  });
+
+  it('does not treat a single inexact candidate as unique', () => {
+    expect(
+      pickUniqueCompanyCandidate([{ creditCode: '1', name: '华为技术有限公司' }], '华为'),
+    ).toBeUndefined();
+  });
+
+  it('does not auto-pick when several rows share the exact name', () => {
+    expect(
+      pickUniqueCompanyCandidate(
+        [
+          { creditCode: '1', legalPerson: '甲', name: '某某有限公司' },
+          { creditCode: '2', legalPerson: '乙', name: '某某有限公司' },
+        ],
+        '某某有限公司',
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe('EnterpriseLookupService.companyProfile', () => {
+  const service = () => new EnterpriseLookupService({} as never, 'user-1');
+
+  beforeEach(() => {
+    mockListProviderTools.mockImplementation(async (provider: string) => {
+      if (provider === 'tianyancha') {
+        return [
+          { description: 'search', inputSchema: { type: 'object' }, name: 'search_companies' },
+          {
+            description: 'basic',
+            inputSchema: { type: 'object' },
+            name: 'get_company_basic_profile',
+          },
+        ];
+      }
+      return [
+        { description: 'search', inputSchema: { type: 'object' }, name: 'get_company_by_query' },
+        {
+          description: 'basic',
+          inputSchema: { type: 'object' },
+          name: 'get_company_registration_info',
+        },
+      ];
+    });
+  });
+
+  it('rejects an empty name without calling upstream', async () => {
+    await expect(service().companyProfile({ name: '  ' })).rejects.toMatchObject({
+      code: ENTERPRISE_LOOKUP_INVALID_ARGUMENTS,
+    });
+    expect(mockCallProviderTool).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown aspects without calling upstream', async () => {
+    await expect(
+      service().companyProfile({ aspects: ['tender' as 'basic'], name: '华为技术有限公司' }),
+    ).rejects.toMatchObject({ code: ENTERPRISE_LOOKUP_INVALID_ARGUMENTS });
+    expect(mockCallProviderTool).not.toHaveBeenCalled();
+  });
+
+  it('searches QCC then fetches registration info for a unique match', async () => {
+    mockCallProviderTool.mockImplementation(async (_provider, _category, _key, capability) => {
+      if (capability === 'get_company_by_query') {
+        return {
+          content: [
+            {
+              text: JSON.stringify({
+                Result: {
+                  Data: [
+                    {
+                      CreditCode: '914403001922038216',
+                      Name: '华为技术有限公司',
+                      OperName: '赵明路',
+                      Status: '存续',
+                    },
+                  ],
+                },
+              }),
+              type: 'text',
+            },
+          ],
+          isError: false,
+        };
+      }
+      return {
+        content: [
+          { text: '{"Name":"华为技术有限公司","RegistCapi":"4032711万人民币"}', type: 'text' },
+        ],
+        isError: false,
+      };
+    });
+
+    const result = await service().companyProfile({ name: '华为技术有限公司' });
+    expect(result).toMatchObject({
+      match: 'unique',
+      provider: 'qcc',
+      query: '华为技术有限公司',
+    });
+    expect(result.candidates).toEqual([
+      {
+        creditCode: '914403001922038216',
+        legalPerson: '赵明路',
+        name: '华为技术有限公司',
+        status: '存续',
+      },
+    ]);
+    expect(result.profile).toContain('4032711');
+    expect(mockCallProviderTool).toHaveBeenCalledTimes(2);
+    expect(mockCallProviderTool).toHaveBeenNthCalledWith(
+      1,
+      'qcc',
+      'company',
+      'qk-secret',
+      'get_company_by_query',
+      { searchKey: '华为技术有限公司' },
+    );
+    expect(mockCallProviderTool).toHaveBeenNthCalledWith(
+      2,
+      'qcc',
+      'company',
+      'qk-secret',
+      'get_company_registration_info',
+      { searchKey: '914403001922038216' },
+    );
+    expect(mockReserve).toHaveBeenCalledTimes(2);
+    expect(mockAuditAppend).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns candidates and does not fetch a profile when several names match', async () => {
+    mockCallProviderTool.mockResolvedValueOnce({
+      content: [
+        {
+          text: JSON.stringify({
+            items: [
+              {
+                creditCode: '91330600597214350R',
+                legalPersonName: '邵国标',
+                name: '浙江捷发科技股份有限公司',
+                regStatus: '存续',
+              },
+              {
+                creditCode: '91330000XXXX',
+                legalPersonName: '张三',
+                name: '杭州捷发科技有限公司',
+                regStatus: '存续',
+              },
+            ],
+          }),
+          type: 'text',
+        },
+      ],
+      isError: false,
+    });
+
+    const result = await service().companyProfile({
+      name: '捷发科技',
+      provider: 'tianyancha',
+    });
+    expect(result.match).toBe('ambiguous');
+    expect(result.candidates).toHaveLength(2);
+    expect(result.profile).toBeUndefined();
+    expect(mockCallProviderTool).toHaveBeenCalledTimes(1);
+    expect(mockCallProviderTool).toHaveBeenCalledWith(
+      'tianyancha',
+      'default',
+      'tk-secret',
+      'search_companies',
+      { page: 1, page_size: 5, query: '捷发科技' },
+    );
+  });
+
+  it('fetches Tianyancha basic profile when one candidate name equals the input', async () => {
+    mockCallProviderTool.mockImplementation(async (_provider, _category, _key, capability) => {
+      if (capability === 'search_companies') {
+        return {
+          content: [
+            {
+              text: JSON.stringify({
+                items: [
+                  {
+                    creditCode: 'A',
+                    legalPersonName: '甲',
+                    name: '杭州捷发科技有限公司',
+                    regStatus: '存续',
+                  },
+                  {
+                    creditCode: '91330600597214350R',
+                    legalPersonName: '邵国标',
+                    name: '浙江捷发科技股份有限公司',
+                    regStatus: '存续',
+                  },
+                ],
+              }),
+              type: 'text',
+            },
+          ],
+          isError: false,
+        };
+      }
+      return {
+        content: [
+          { text: '{"name":"浙江捷发科技股份有限公司","regCapital":"5000万"}', type: 'text' },
+        ],
+        isError: false,
+      };
+    });
+
+    const result = await service().companyProfile({
+      name: '浙江捷发科技股份有限公司',
+      provider: 'tianyancha',
+    });
+    expect(result.match).toBe('unique');
+    expect(mockCallProviderTool).toHaveBeenNthCalledWith(
+      2,
+      'tianyancha',
+      'default',
+      'tk-secret',
+      'get_company_basic_profile',
+      { company_name: '浙江捷发科技股份有限公司' },
+    );
+  });
+
+  it('returns ambiguous when two legal entities share the registered name', async () => {
+    mockCallProviderTool.mockResolvedValueOnce({
+      content: [
+        {
+          text: JSON.stringify({
+            Result: {
+              Data: [
+                { Name: '某某有限公司', OperName: '甲', Status: '存续' },
+                { Name: '某某有限公司', OperName: '乙', Status: '存续' },
+              ],
+            },
+          }),
+          type: 'text',
+        },
+      ],
+      isError: false,
+    });
+
+    const result = await service().companyProfile({ name: '某某有限公司' });
+    expect(result.match).toBe('ambiguous');
+    expect(result.candidates).toHaveLength(2);
+    expect(result.profile).toBeUndefined();
+    expect(mockCallProviderTool).toHaveBeenCalledTimes(1);
+    expect(mockReserve).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a unique search hit when the basic profile hits the daily limit', async () => {
+    mockReserve.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    mockCallProviderTool.mockImplementation(async (_provider, _category, _key, capability) => {
+      if (capability === 'get_company_by_query') {
+        return {
+          content: [
+            {
+              text: JSON.stringify({
+                Result: {
+                  Data: [
+                    {
+                      CreditCode: '914403001922038216',
+                      Name: '华为技术有限公司',
+                      OperName: '赵明路',
+                      Status: '存续',
+                    },
+                  ],
+                },
+              }),
+              type: 'text',
+            },
+          ],
+          isError: false,
+        };
+      }
+      throw new Error('basic profile must not be called after quota exhaustion');
+    });
+
+    const result = await service().companyProfile({ name: '华为技术有限公司' });
+    expect(result).toMatchObject({
+      match: 'unique',
+      note: '今日查询次数已达上限，未拉取工商基本信息。',
+      provider: 'qcc',
+      query: '华为技术有限公司',
+    });
+    expect(result.profile).toBeUndefined();
+    expect(result.candidates).toEqual([
+      {
+        creditCode: '914403001922038216',
+        legalPerson: '赵明路',
+        name: '华为技术有限公司',
+        status: '存续',
+      },
+    ]);
+    expect(mockCallProviderTool).toHaveBeenCalledTimes(1);
+    expect(mockReserve).toHaveBeenCalledTimes(2);
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+  });
+
+  it('still throws when the search itself hits the daily limit', async () => {
+    mockReserve.mockResolvedValueOnce(false);
+    await expect(service().companyProfile({ name: '华为技术有限公司' })).rejects.toMatchObject({
+      code: ENTERPRISE_LOOKUP_DAILY_LIMIT,
+    });
+    expect(mockCallProviderTool).not.toHaveBeenCalled();
   });
 });

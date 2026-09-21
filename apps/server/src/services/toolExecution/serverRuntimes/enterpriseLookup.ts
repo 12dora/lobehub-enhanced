@@ -24,6 +24,7 @@ export const enterpriseLookupRuntime: ServerRuntimeRegistration = {
     const lookup = new EnterpriseLookupService(serverDB, userId);
 
     return createEnterpriseLookupRuntime({
+      companyProfile: (params) => lookup.companyProfile(params),
       listCapabilities: (params) => lookup.listCapabilities(params),
       query: (params) => lookup.query(params),
     });

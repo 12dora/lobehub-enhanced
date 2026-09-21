@@ -121,10 +121,11 @@ describe('admin procedure authorization registry', () => {
     // +1 query / +1 mutation since: admin.dingtalkApprovalRules.{list,disable}.
     // +1 query / +2 mutations since: admin.system.{getEnterpriseLookupSettings,
     // testEnterpriseLookupProvider, updateEnterpriseLookupSettings}.
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(262);
+    // +1 query since: admin.imConnectors.apiCallStats (DingTalk billed-call counters).
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(263);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
-    ).toHaveLength(115);
+    ).toHaveLength(116);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
     ).toHaveLength(147);

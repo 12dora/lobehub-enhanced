@@ -40,6 +40,7 @@ import {
   peekLinkToken,
   resolveMessengerPlatformBindings,
 } from '@/server/services/messenger';
+import { resolveDingTalkRobotDisplayName } from '@/server/services/messenger/platforms/dingtalk/branding';
 import { mirrorWebTurnToDingTalk } from '@/server/services/messenger/platforms/dingtalk/mirrorWebTurn';
 
 const platformEnum = z.enum([
@@ -239,14 +240,15 @@ export const messengerRouter = router({
             : def.id === 'dingtalk'
               ? dingtalkConfig?.clientId
               : undefined,
-      // Telegram-only: deep-link target (`https://t.me/<botUsername>`) — no
-      // direct equivalent on Slack/Discord, both of which use App/Application
-      // IDs to deep-link to the bot. DingTalk has no public bot username.
+      // Telegram-only: deep-link target (`https://t.me/<botUsername>`).
+      // DingTalk has no public @username; `botUsername` here is the robot
+      // display name (`robotDisplayName` setting, fallback 「AI 助手」) used
+      // by `messenger.dingtalk.status.instructions` `{{botName}}`.
       botUsername:
         def.id === 'telegram'
           ? telegramConfig?.botUsername
           : def.id === 'dingtalk'
-            ? null
+            ? resolveDingTalkRobotDisplayName(dingtalkConfig?.robotDisplayName)
             : undefined,
       binding: bindings[def.id] ?? { linked: false, platformUsername: null },
       capabilities:

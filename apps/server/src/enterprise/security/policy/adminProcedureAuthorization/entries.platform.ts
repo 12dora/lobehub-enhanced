@@ -105,6 +105,11 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_PLATFORM = [
   },
   {
     kind: 'query',
+    path: 'admin.imConnectors.apiCallStats',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
+  },
+  {
+    kind: 'query',
     path: 'admin.imConnectors.bindings.list',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
   },

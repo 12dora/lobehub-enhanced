@@ -98,19 +98,39 @@ describe('DingtalkApprovalManifest', () => {
     expect(api?.parameters.properties.remark.minLength).toBe(1);
   });
 
-  it('constrains listPendingApprovals and listMyApplications limit to integers 1–300', () => {
+  it('constrains listPendingApprovals and listMyApplications limit to integers 1–50', () => {
     for (const name of [
       DingtalkApprovalApiName.listPendingApprovals,
       DingtalkApprovalApiName.listMyApplications,
     ]) {
       const api = DingtalkApprovalManifest.api.find((item) => item.name === name);
       expect(api?.parameters.properties.limit).toEqual({
-        description: 'Max rows to return (1–300).',
-        maximum: 300,
+        description: 'Max rows to return (1–50). Never pass more than 50.',
+        maximum: 50,
         minimum: 1,
         type: 'integer',
       });
     }
+  });
+
+  it('accepts originator "me" and forbids verifying a successful saveTemplate', () => {
+    const create = DingtalkApprovalManifest.api.find(
+      (item) => item.name === DingtalkApprovalApiName.createApprovalRule,
+    );
+    const save = DingtalkApprovalManifest.api.find(
+      (item) => item.name === DingtalkApprovalApiName.saveTemplate,
+    );
+    const pending = DingtalkApprovalManifest.api.find(
+      (item) => item.name === DingtalkApprovalApiName.listPendingApprovals,
+    );
+
+    expect(create?.parameters.properties.conditions.description).toContain('"me"');
+    expect(
+      create?.parameters.properties.conditions.properties.originators.properties.staffIds
+        .description,
+    ).toContain('literal "me"');
+    expect(save?.description).toContain('authoritative');
+    expect(pending?.description).toContain('only this');
   });
 
   it('caps submitApproval approver nodes at 20 and CC at 50', () => {

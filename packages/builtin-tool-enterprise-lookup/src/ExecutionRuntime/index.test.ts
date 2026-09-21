@@ -11,6 +11,22 @@ import {
 const makeService = (
   overrides: Partial<IEnterpriseLookupService> = {},
 ): IEnterpriseLookupService => ({
+  companyProfile: vi.fn().mockResolvedValue({
+    aspects: ['basic'],
+    candidates: [
+      {
+        creditCode: '914403001922038216',
+        legalPerson: '赵明路',
+        name: '华为技术有限公司',
+        status: '存续',
+      },
+    ],
+    match: 'unique',
+    profile: '{"name":"华为技术有限公司","regCapital":"4032711万人民币"}',
+    provider: 'qcc',
+    queriedAt: '2026-09-21 20:07',
+    query: '华为技术有限公司',
+  }),
   listCapabilities: vi.fn().mockResolvedValue({
     categories: [
       {
@@ -140,7 +156,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain('ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE');
     expect(result.content).toContain('天眼查');
     expect(result.content).toContain('tianyancha');
-    expect(result.content).toContain('listCapabilities');
+    expect(result.content).toContain('companyProfile');
     expect(result.content).toContain('仅重试一次');
     expect(result.content).not.toContain('10.0.0.8');
     expect(result.error).toMatchObject({
@@ -172,7 +188,7 @@ describe('EnterpriseLookupExecutionRuntime', () => {
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('天眼查');
-    expect(result.content).toContain('listCapabilities');
+    expect(result.content).toContain('companyProfile');
     expect(result.error).toMatchObject({
       code: 'ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE',
       fallbackProvider: 'tianyancha',
@@ -213,6 +229,126 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatchObject({ code: 'ENTERPRISE_LOOKUP_DAILY_LIMIT' });
     expect(result.content).toContain('今日查询次数已达上限');
+  });
+
+  it('formats a unique companyProfile without a follow-up search', async () => {
+    const runtime = createEnterpriseLookupRuntime(makeService());
+    const result = await runtime.companyProfile({ name: '华为技术有限公司' });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('数据来源：企查查');
+    expect(result.content).toContain('查询时间：2026-09-21 20:07');
+    expect(result.content).toContain('唯一主体');
+    expect(result.content).toContain('两列表格');
+    expect(result.state).toMatchObject({
+      match: 'unique',
+      matched: true,
+      provider: 'qcc',
+      success: true,
+    });
+    expect((result.state as { company?: { name?: string } }).company?.name).toBe(
+      '华为技术有限公司',
+    );
+    expect((result.state as { profile?: string }).profile).toBe(
+      '{"name":"华为技术有限公司","regCapital":"4032711万人民币"}',
+    );
+  });
+
+  it('caps stored companyProfile state.profile to the content limit', async () => {
+    const huge = '工'.repeat(ENTERPRISE_LOOKUP_CONTENT_LIMIT + 800);
+    const companyProfile = vi.fn().mockResolvedValue({
+      aspects: ['basic'],
+      candidates: [
+        {
+          creditCode: '914403001922038216',
+          legalPerson: '赵明路',
+          name: '华为技术有限公司',
+          status: '存续',
+        },
+      ],
+      match: 'unique',
+      profile: huge,
+      provider: 'qcc',
+      queriedAt: '2026-09-21 20:07',
+      query: '华为技术有限公司',
+    });
+    const runtime = createEnterpriseLookupRuntime(makeService({ companyProfile }));
+    const result = await runtime.companyProfile({ name: '华为技术有限公司' });
+    const state = result.state as { profile?: string; resultText?: string; truncated?: boolean };
+
+    expect(result.success).toBe(true);
+    expect(state.truncated).toBe(true);
+    expect(state.profile?.length).toBe(ENTERPRISE_LOOKUP_CONTENT_LIMIT);
+    expect(state.resultText?.length).toBe(ENTERPRISE_LOOKUP_CONTENT_LIMIT);
+    expect(result.content).toContain(
+      `（结果已截断，仅保留前 ${ENTERPRISE_LOOKUP_CONTENT_LIMIT} 字符）`,
+    );
+  });
+
+  it('surfaces a unique companyProfile when 工商 was skipped for quota', async () => {
+    const companyProfile = vi.fn().mockResolvedValue({
+      aspects: ['basic'],
+      candidates: [
+        {
+          creditCode: '914403001922038216',
+          legalPerson: '赵明路',
+          name: '华为技术有限公司',
+          status: '存续',
+        },
+      ],
+      match: 'unique',
+      note: '今日查询次数已达上限，未拉取工商基本信息。',
+      provider: 'qcc',
+      queriedAt: '2026-09-21 20:07',
+      query: '华为技术有限公司',
+    });
+    const runtime = createEnterpriseLookupRuntime(makeService({ companyProfile }));
+    const result = await runtime.companyProfile({ name: '华为技术有限公司' });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('已锚定唯一主体');
+    expect(result.content).toContain('今日查询次数已达上限，未拉取工商基本信息。');
+    expect(result.state).toMatchObject({ match: 'unique', matched: true });
+    expect((result.state as { profile?: string }).profile).toBeUndefined();
+  });
+
+  it('lists ambiguous companyProfile candidates and tells the model not to guess', async () => {
+    const companyProfile = vi.fn().mockResolvedValue({
+      aspects: ['basic'],
+      candidates: [
+        {
+          creditCode: '91330600597214350R',
+          legalPerson: '邵国标',
+          name: '浙江捷发科技股份有限公司',
+          status: '存续',
+        },
+        {
+          creditCode: '91330000XXXX',
+          legalPerson: '张三',
+          name: '杭州捷发科技有限公司',
+          status: '存续',
+        },
+      ],
+      match: 'ambiguous',
+      provider: 'tianyancha',
+      queriedAt: '2026-09-21 20:10',
+      query: '捷发科技',
+    });
+    const runtime = createEnterpriseLookupRuntime(makeService({ companyProfile }));
+    const result = await runtime.companyProfile({ name: '捷发科技', provider: 'tianyancha' });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain(
+      '浙江捷发科技股份有限公司 · 91330600597214350R · 邵国标 · 存续',
+    );
+    expect(result.content).toContain('不要猜测');
+    expect(result.content).toContain('companyProfile');
+    expect(result.state).toMatchObject({
+      candidateCount: 2,
+      match: 'ambiguous',
+      matched: false,
+    });
+    expect((result.state as { candidates: unknown[] }).candidates).toHaveLength(2);
   });
 });
 

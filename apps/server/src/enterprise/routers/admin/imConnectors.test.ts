@@ -14,6 +14,7 @@ const createCaller = createCallerFactory(adminRouter);
 const fixture = createAdminAuthorizationFixture({ namespace: 'im-connectors' });
 
 const serviceMocks = vi.hoisted(() => ({
+  apiCallStats: vi.fn(),
   directoryStatus: vi.fn(),
   get: vi.fn(),
   list: vi.fn(),
@@ -25,6 +26,10 @@ const serviceMocks = vi.hoisted(() => ({
   testNotifyApp: vi.fn(),
   upsert: vi.fn(),
   upsertBinding: vi.fn(),
+}));
+
+vi.mock('../../services/dingtalkWorkspace/apiCallStats', () => ({
+  getDingtalkApiCallStats: (...args: unknown[]) => serviceMocks.apiCallStats(...args),
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({ getServerDB: vi.fn(async () => db) }));
@@ -143,6 +148,10 @@ beforeEach(() => {
     calendar: { ok: true },
     todo: { ok: true },
   });
+  serviceMocks.apiCallStats.mockReset().mockResolvedValue({
+    days: [{ byApi: [{ api: 'GET /gettoken', count: 2 }], date: '2026-09-21', total: 2 }],
+    total: 2,
+  });
 });
 
 const callerFor = async (principal: 'auditor' | 'normal' | 'superAdmin') => {
@@ -201,6 +210,10 @@ describe('admin.imConnectors permission gating', () => {
     await expect(
       denied.bindings.remove({ platform: 'dingtalk', userId: 'user_admin' }),
     ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(denied.apiCallStats()).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
@@ -276,6 +289,9 @@ describe('admin.imConnectors permission gating', () => {
       code: 'FORBIDDEN',
       message: 'PLATFORM_PERMISSION_DENIED',
     });
+    await expect(reader.apiCallStats()).resolves.toMatchObject({ total: 2 });
+    await expect(reader.apiCallStats({ days: 7 })).resolves.toMatchObject({ total: 2 });
+    expect(serviceMocks.apiCallStats).toHaveBeenCalledWith({ days: 7 });
     await expect(reader.directoryStatus()).resolves.toMatchObject({ state: 'ok', users: 12 });
     await expect(reader.syncDirectory()).rejects.toMatchObject({
       code: 'FORBIDDEN',

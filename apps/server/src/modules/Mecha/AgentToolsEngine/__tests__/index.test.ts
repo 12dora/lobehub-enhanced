@@ -1424,4 +1424,108 @@ describe('createServerAgentToolsEngine', () => {
     expect(result.enabledToolIds).not.toContain(identifier);
     expect(engine.getAvailablePlugins()).not.toContain(identifier);
   });
+
+  it('fails closed when DingTalk flags are omitted and the capabilities peek is cold', () => {
+    const approval = 'lobe-dingtalk-approval';
+    const workspace = 'lobe-dingtalk-workspace';
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [
+        {
+          api: [
+            { description: 'list', name: 'listPendingApprovals', parameters: { type: 'object' } },
+          ],
+          identifier: approval,
+          meta: { title: 'DingTalk Approval' },
+          type: 'builtin',
+        } as LobeToolManifest,
+        {
+          api: [{ description: 'list', name: 'listTodos', parameters: { type: 'object' } }],
+          identifier: workspace,
+          meta: { title: 'DingTalk Workspace' },
+          type: 'builtin',
+        } as LobeToolManifest,
+      ],
+      agentConfig: { plugins: [approval, workspace] },
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [approval, workspace],
+    });
+
+    expect(result.enabledToolIds).not.toContain(approval);
+    expect(result.enabledToolIds).not.toContain(workspace);
+    expect(engine.getAvailablePlugins()).not.toContain(approval);
+    expect(engine.getAvailablePlugins()).not.toContain(workspace);
+  });
+
+  it('exposes DingTalk tools in agent mode without plugin selection when flags are on', () => {
+    const approval = 'lobe-dingtalk-approval';
+    const workspace = 'lobe-dingtalk-workspace';
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [
+        {
+          api: [
+            { description: 'list', name: 'listPendingApprovals', parameters: { type: 'object' } },
+          ],
+          identifier: approval,
+          meta: { title: 'DingTalk Approval' },
+          type: 'builtin',
+        } as LobeToolManifest,
+        {
+          api: [{ description: 'list', name: 'listTodos', parameters: { type: 'object' } }],
+          identifier: workspace,
+          meta: { title: 'DingTalk Workspace' },
+          type: 'builtin',
+        } as LobeToolManifest,
+      ],
+      agentConfig: { plugins: [] },
+      dingtalkApprovalEnabled: true,
+      dingtalkWorkspaceEnabled: true,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [],
+    });
+
+    expect(result.enabledToolIds).toContain(approval);
+    expect(result.enabledToolIds).toContain(workspace);
+  });
+
+  it('does not expose DingTalk tools in chat mode even when flags are on', () => {
+    const approval = 'lobe-dingtalk-approval';
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [
+        {
+          api: [
+            { description: 'list', name: 'listPendingApprovals', parameters: { type: 'object' } },
+          ],
+          identifier: approval,
+          meta: { title: 'DingTalk Approval' },
+          type: 'builtin',
+        } as LobeToolManifest,
+      ],
+      agentConfig: { chatConfig: { enableAgentMode: false }, plugins: [] },
+      dingtalkApprovalEnabled: true,
+      dingtalkWorkspaceEnabled: true,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [],
+    });
+
+    expect(result.enabledToolIds).not.toContain(approval);
+  });
 });

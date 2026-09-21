@@ -1,12 +1,19 @@
 export { EnterpriseLookupIdentifier, EnterpriseLookupManifest } from './manifest';
 export { systemPrompt } from './systemRole';
 export {
+  COMPANY_PROFILE_ASPECTS,
+  type CompanyProfileAspect,
+  type CompanyProfileCandidate,
+  type CompanyProfileParams,
+  type CompanyProfileResult,
+  type CompanyProfileState,
   ENTERPRISE_LOOKUP_PROVIDERS,
   EnterpriseLookupApiName,
   type EnterpriseLookupApiNameType,
   type EnterpriseLookupCategoryInfo,
   type EnterpriseLookupProvider,
   type EnterpriseLookupToolInfo,
+  isCompanyProfileAspect,
   isEnterpriseLookupProvider,
   type ListCapabilitiesParams,
   type ListCapabilitiesResult,
