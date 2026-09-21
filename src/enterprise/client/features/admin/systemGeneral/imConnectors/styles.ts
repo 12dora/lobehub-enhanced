@@ -100,6 +100,29 @@ export const imConnectorStyles = createStaticStyles(({ css }) => ({
     line-height: 1.6;
     color: ${cssVar.colorTextSecondary};
   `,
+  /** 查看近 30 天 — the per-day breakdown is only read when one day looks wrong. */
+  statsDetails: css`
+    & > summary {
+      cursor: pointer;
+      user-select: none;
+
+      width: fit-content;
+
+      font-size: ${cssVar.fontSizeSM};
+      line-height: 20px;
+      color: ${cssVar.colorTextSecondary};
+      list-style: none;
+
+      &::-webkit-details-marker {
+        display: none;
+      }
+
+      &:hover,
+      &:focus-visible {
+        color: ${cssVar.colorText};
+      }
+    }
+  `,
   switchRow: css`
     display: flex;
     gap: 8px;

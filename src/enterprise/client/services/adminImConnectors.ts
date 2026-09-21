@@ -2,6 +2,8 @@ import type { z } from 'zod';
 
 import { lambdaClient } from '@/libs/trpc/client';
 import type {
+  AdminImConnectorApiCallStats,
+  AdminImConnectorApiCallStatsInput,
   AdminImConnectorBindingItem,
   AdminImConnectorBindingsListInput,
   AdminImConnectorBindingsListOutput,
@@ -31,6 +33,16 @@ export type AdminImConnectorList = z.infer<typeof adminImConnectorListOutputSche
 export interface AdminImConnectorsReadService {
   get: (input: AdminImConnectorGetInput) => Promise<AdminImConnectorView>;
   list: () => Promise<AdminImConnectorList>;
+}
+
+/**
+ * Billed DingTalk OpenAPI call counters. SYSTEM_READ. `days` defaults to 30,
+ * max 40, Asia/Shanghai calendar days.
+ */
+export interface AdminImConnectorsApiCallStatsService {
+  apiCallStats: (
+    input?: AdminImConnectorApiCallStatsInput,
+  ) => Promise<AdminImConnectorApiCallStats>;
 }
 
 /**
@@ -94,12 +106,16 @@ export interface AdminImConnectorsNotifyAppService {
   ) => Promise<AdminImConnectorTestOutput>;
 }
 
-export type AdminImConnectorsService = AdminImConnectorsBindingsService &
+export type AdminImConnectorsService = AdminImConnectorsApiCallStatsService &
+  AdminImConnectorsBindingsService &
   AdminImConnectorsNotifyAppService &
   AdminImConnectorsMutationService &
   AdminImConnectorsReadService;
 
 class AdminImConnectorsServiceImpl implements AdminImConnectorsService {
+  apiCallStats = (input?: AdminImConnectorApiCallStatsInput) =>
+    lambdaClient.admin.imConnectors.apiCallStats.query(input);
+
   directoryStatus = () => lambdaClient.admin.imConnectors.directoryStatus.query();
 
   get = (input: AdminImConnectorGetInput) => lambdaClient.admin.imConnectors.get.query(input);
@@ -133,6 +149,8 @@ export const adminImConnectorsService: AdminImConnectorsService =
   new AdminImConnectorsServiceImpl();
 
 export type {
+  AdminImConnectorApiCallStats,
+  AdminImConnectorApiCallStatsInput,
   AdminImConnectorBindingItem,
   AdminImConnectorBindingsListInput,
   AdminImConnectorBindingsListOutput,

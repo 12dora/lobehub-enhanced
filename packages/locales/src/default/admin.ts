@@ -2353,6 +2353,7 @@ export default {
   'systemGeneral.imConnectors.fields.corpId': 'CorpId',
   'systemGeneral.imConnectors.fields.agentId': 'AgentId',
   'systemGeneral.imConnectors.fields.robotCode': 'RobotCode',
+  'systemGeneral.imConnectors.fields.robotDisplayName': 'Robot name',
   'systemGeneral.imConnectors.fields.notifyAppKey': 'AppKey',
   'systemGeneral.imConnectors.fields.notifyAppSecret': 'AppSecret',
   'systemGeneral.imConnectors.fields.notifyAgentId': 'AgentId',
@@ -2368,6 +2369,8 @@ export default {
     'Create an enterprise internal app in the DingTalk developer console, add a robot, and set message receiving to Stream mode.',
   'systemGeneral.imConnectors.hints.robotCode':
     'From the robot page of the app; it is usually the same as the Client ID.',
+  'systemGeneral.imConnectors.hints.robotDisplayName':
+    'Shown in the binding instructions on chat platforms; keep it identical to the robot name in DingTalk.',
   'systemGeneral.imConnectors.hints.corpId':
     'DingTalk developer console home page → Enterprise information → CorpId. Leave it empty to pick it up from the first message.',
   'systemGeneral.imConnectors.hints.agentId':
@@ -2464,6 +2467,20 @@ export default {
     'Existing rules will be shortened to expire within 90 days, and their owners will be notified.',
   'systemGeneral.imConnectors.workspace.tierConfirm.off':
     'Existing rules will stop running. They are not deleted.',
+  // 接口调用量 — what the workbench capabilities above actually spend of the vendor's per-app quota.
+  'systemGeneral.imConnectors.apiStats.title': 'API call volume',
+  'systemGeneral.imConnectors.apiStats.description':
+    'Calls the workbench capabilities made through the notification app. DingTalk meters them per app.',
+  'systemGeneral.imConnectors.apiStats.total': 'Last {{days}} days {{value}}',
+  'systemGeneral.imConnectors.apiStats.today': 'Today {{value}}',
+  'systemGeneral.imConnectors.apiStats.column.api': 'API',
+  'systemGeneral.imConnectors.apiStats.column.count': 'Calls',
+  'systemGeneral.imConnectors.apiStats.column.date': 'Date',
+  'systemGeneral.imConnectors.apiStats.expand': 'View the last {{days}} days',
+  'systemGeneral.imConnectors.apiStats.loading': 'Loading',
+  'systemGeneral.imConnectors.apiStats.empty': 'No data',
+  'systemGeneral.imConnectors.apiStats.emptyToday': 'No calls today',
+  'systemGeneral.imConnectors.apiStats.loadFailed': 'Could not load the call volume. Try again.',
   // 绑定用户 — which AIHub account a DingTalk user pushes to. Signing in through DingTalk binds
   // the account automatically; every other account (local / break-glass) is bound here by hand.
   'systemGeneral.imConnectors.bindings.bind': 'Bind user',

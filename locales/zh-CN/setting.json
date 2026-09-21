@@ -241,6 +241,7 @@
   "approvalRule.empty.title": "暂无规则",
   "approvalRule.enableBlocked": "{{reason}}，无法在此重新启用。",
   "approvalRule.expiry.never": "长期有效",
+  "approvalRule.identityRequired": "需使用钉钉登录后才能使用自动审批规则。",
   "approvalRule.runs.close": "关闭",
   "approvalRule.runs.column.action": "动作",
   "approvalRule.runs.column.instance": "审批单",

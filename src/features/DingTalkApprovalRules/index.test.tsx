@@ -360,6 +360,39 @@ describe('DingTalkApprovalRules table', () => {
     expect(mocks.refreshList).toHaveBeenCalled();
   });
 
+  it('asks the member to sign in with DingTalk instead of offering a retry', () => {
+    // Production saw this from members who signed in with email: the server refuses the read, but
+    // nothing is broken and nothing is worth retrying.
+    mocks.rules = undefined;
+    mocks.listError = new Error('FORBIDDEN: DINGTALK_IDENTITY_UNBOUND');
+
+    render(<DingTalkApprovalRules />);
+
+    expect(screen.getByText('需使用钉钉登录后才能使用自动审批规则。')).toBeInTheDocument();
+    expect(screen.queryByText('error.retry')).toBeNull();
+    expect(screen.queryByText('暂无规则')).toBeNull();
+  });
+
+  it('says the same for an identity that is bound but not verified yet', () => {
+    mocks.rules = undefined;
+    mocks.listError = new Error('DINGTALK_IDENTITY_UNVERIFIED');
+
+    render(<DingTalkApprovalRules />);
+
+    expect(screen.getByText('需使用钉钉登录后才能使用自动审批规则。')).toBeInTheDocument();
+  });
+
+  it('keeps the ordinary error state for every other failure', () => {
+    mocks.rules = undefined;
+    // An identity that was bound and then deactivated is something to act on, so the Retry stays.
+    mocks.listError = new Error('DINGTALK_IDENTITY_INACTIVE');
+
+    render(<DingTalkApprovalRules />);
+
+    expect(screen.getByText('error.retry')).toBeInTheDocument();
+    expect(screen.queryByText('需使用钉钉登录后才能使用自动审批规则。')).toBeNull();
+  });
+
   it('disables a rule and refreshes the list', async () => {
     render(<DingTalkApprovalRules />);
 

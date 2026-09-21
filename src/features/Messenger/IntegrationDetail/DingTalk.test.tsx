@@ -193,11 +193,11 @@ describe('Messenger DingTalkDetail', () => {
     expect(screen.queryByTestId('agent-select')).not.toBeInTheDocument();
   });
 
-  it('falls back to the app name when the robot name is unknown', () => {
+  it('falls back to 「AI 助手」 when the robot name is unknown', () => {
     renderDetail();
 
     expect(
-      screen.getByText('在钉钉中找到机器人「AIHub」并发送任意消息，即可自动完成绑定。'),
+      screen.getByText('在钉钉中找到机器人「AI 助手」并发送任意消息，即可自动完成绑定。'),
     ).toBeInTheDocument();
   });
 

@@ -66,6 +66,7 @@ export default {
   'approvalRule.empty.title': 'No rules yet',
   'approvalRule.enableBlocked': '{{reason}}. This rule cannot be re-enabled here.',
   'approvalRule.expiry.never': 'No expiry',
+  'approvalRule.identityRequired': 'Sign in with DingTalk to use automatic approval rules.',
   'approvalRule.runs.close': 'Close',
   'approvalRule.runs.column.action': 'Action',
   'approvalRule.runs.column.instance': 'Request',

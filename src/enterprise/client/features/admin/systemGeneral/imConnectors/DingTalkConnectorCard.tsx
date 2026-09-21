@@ -12,6 +12,7 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 import { InfraField, InfraSwitchRow } from '../infra/InfraField';
 import { infraFormStyles as formStyles } from '../infra/styles';
 import { infraSettingsStyles as cardStyles } from '../styles';
+import { ApiCallStatsSection, type ImConnectorApiStatsService } from './ApiCallStatsSection';
 import { BindingsSection } from './BindingsSection';
 import { ConnectorSecretField } from './ConnectorSecretField';
 import {
@@ -46,6 +47,8 @@ const STATUS_PRESENTATION: Record<
 };
 
 export interface DingTalkConnectorCardProps {
+  /** Injectable for tests — the 接口调用量 reading. */
+  apiStatsService?: ImConnectorApiStatsService;
   /** Injectable for tests. */
   bindingsService?: ImConnectorBindingsService;
   /** SYSTEM_OPERATE. Without it the card renders the same readings, but nothing can be written. */
@@ -68,7 +71,16 @@ export interface DingTalkConnectorCardProps {
  * for the first time fills them in together.
  */
 export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
-  ({ bindingsService, canOperate, notifyAppService, onSaved, service, view, workspaceService }) => {
+  ({
+    apiStatsService,
+    bindingsService,
+    canOperate,
+    notifyAppService,
+    onSaved,
+    service,
+    view,
+    workspaceService,
+  }) => {
     const { t } = useTranslation('admin');
     const editor = useImConnectorEditor({ canOperate, onSaved, service, view });
     const { draft, errors } = editor;
@@ -178,6 +190,22 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
                 )}
               </InfraField>
               <InfraField
+                error={errors.robotDisplayName}
+                hint={t('systemGeneral.imConnectors.hints.robotDisplayName')}
+                label={t('systemGeneral.imConnectors.fields.robotDisplayName')}
+              >
+                {(field) => (
+                  <Input
+                    {...field.control}
+                    autoComplete="off"
+                    disabled={locked}
+                    maxLength={32}
+                    value={draft.robotDisplayName}
+                    onChange={(event) => editor.patch({ robotDisplayName: event.target.value })}
+                  />
+                )}
+              </InfraField>
+              <InfraField
                 error={errors.corpId}
                 hint={t('systemGeneral.imConnectors.hints.corpId')}
                 label={t('systemGeneral.imConnectors.fields.corpId')}
@@ -229,6 +257,10 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
             service={workspaceService}
             onPatch={editor.patch}
           />
+
+          {/* Directly under the capabilities it measures: the numbers are what an admin decides
+              from when weighing a capability against the vendor's per-app quota. */}
+          <ApiCallStatsSection service={apiStatsService} />
 
           <div className={styles.section}>
             <span className={styles.sectionTitle}>

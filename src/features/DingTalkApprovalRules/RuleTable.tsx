@@ -15,6 +15,7 @@ import { dingtalkApprovalRuleService } from '@/services/dingtalkApprovalRule';
 
 import { buildRuleConditionSummary } from './conditionSummary';
 import { enableBlockedReason, formatRuleDate, isRuleExpired, todayRunCount } from './formatters';
+import { isDingTalkIdentityMissing } from './identityError';
 import RuleActionTag from './RuleActionTag';
 import RuleStatusTag, { REASON_LABEL_KEY } from './RuleStatusTag';
 import RunHistoryDrawer from './RunHistoryDrawer';
@@ -49,6 +50,13 @@ const RuleTable = memo(() => {
   );
 
   const rules = useMemo(() => normalizeApprovalRuleList(data), [data]);
+
+  /**
+   * A member who has never signed in through DingTalk has no identity for a rule to act as, so the
+   * server refuses the read. Nothing is broken and nothing is worth retrying — the page says what
+   * would make the feature available and stops there.
+   */
+  const identityMissing = data === undefined && isDingTalkIdentityMissing(error);
 
   const handleToggle = useCallback(
     async (row: ApprovalRuleRow) => {
@@ -263,6 +271,13 @@ const RuleTable = memo(() => {
     ],
     [confirmDelete, handleToggle, isMobile, pendingId, t],
   );
+
+  if (identityMissing)
+    return (
+      <Text fontSize={13} type={'secondary'}>
+        {t('approvalRule.identityRequired')}
+      </Text>
+    );
 
   return (
     <>

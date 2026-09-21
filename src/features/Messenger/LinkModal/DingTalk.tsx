@@ -5,8 +5,6 @@ import { Text } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { useBranding } from '@/enterprise/client/providers/RuntimeBrandingProvider';
-
 import { PlatformAvatar } from '../constants';
 
 interface DingTalkLinkBodyProps {
@@ -24,8 +22,7 @@ interface DingTalkLinkBodyProps {
  */
 const DingTalkLinkBody = memo<DingTalkLinkBodyProps>(({ botUsername, chatDisabled, name }) => {
   const { t } = useTranslation('messenger');
-  const { name: appName } = useBranding();
-  const robotName = botUsername?.trim() || appName;
+  const robotName = botUsername?.trim() || 'AI 助手';
 
   return (
     <>

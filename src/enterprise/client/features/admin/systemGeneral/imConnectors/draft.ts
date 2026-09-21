@@ -15,6 +15,8 @@ const TEXT_MAX = 200;
 const SECRET_MAX = 500;
 /** The AgentId is a short numeric id; the contract caps it at 64. */
 const AGENT_ID_MAX = 64;
+/** 机器人名称 is a label, not an identifier — the contract caps it at 32. */
+const ROBOT_DISPLAY_NAME_MAX = 32;
 
 /**
  * 自动审批档位 in the order the select offers them, from the tier that allows nothing to the one
@@ -91,6 +93,8 @@ export interface DingTalkConnectorDraft {
   notifyWorkNoticeEnabled: boolean;
   pushEnabled: boolean;
   robotCode: string;
+  /** Optional label shown in the binding instructions; empty when the deployment never set one. */
+  robotDisplayName: string;
   selectCardTemplateId: string;
   /** 工作台能力: the assistant acts as the member's own DingTalk identity — all three default off. */
   workspaceApprovalEnabled: boolean;
@@ -105,6 +109,7 @@ export type DingTalkConnectorFieldErrors = Partial<
     | 'clientSecret'
     | 'corpId'
     | 'robotCode'
+    | 'robotDisplayName'
     | 'notifyAgentId'
     | 'notifyAppKey'
     | 'notifyAppSecret'
@@ -158,6 +163,8 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
     notifyWorkNoticeEnabled: view.notifyWorkNoticeEnabled ?? true,
     pushEnabled: view.pushEnabled,
     robotCode: view.robotCode ?? '',
+    // Optional on the view so a row written before the field existed still parses.
+    robotDisplayName: view.robotDisplayName ?? '',
     selectCardTemplateId: view.selectCardTemplateId ?? '',
     workspaceApprovalEnabled: workspace.workspaceApprovalEnabled,
     workspaceCalendarEnabled: workspace.workspaceCalendarEnabled,
@@ -193,6 +200,7 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.notifyWorkNoticeEnabled,
     draft.pushEnabled,
     draft.robotCode.trim(),
+    draft.robotDisplayName.trim(),
     draft.selectCardTemplateId.trim(),
     draft.workspaceApprovalEnabled,
     draft.workspaceCalendarEnabled,
@@ -242,6 +250,9 @@ export const validateDingTalkDraft = (
 
   if (draft.corpId.trim().length > TEXT_MAX) errors.corpId = 'tooLong';
   if (draft.agentId.trim().length > AGENT_ID_MAX) errors.agentId = 'tooLong';
+  // Optional: a deployment that never set a robot name simply has none to show.
+  if (draft.robotDisplayName.trim().length > ROBOT_DISPLAY_NAME_MAX)
+    errors.robotDisplayName = 'tooLong';
 
   // The notification app is optional as a whole: a half-filled block is simply not configured
   // (the server reads it as absent), so only the lengths the contract caps are checked here.
@@ -308,6 +319,7 @@ export const toDingTalkUpsertInput = (
   platform: 'dingtalk',
   pushEnabled: draft.pushEnabled,
   robotCode: draft.robotCode.trim(),
+  robotDisplayName: optionalText(draft.robotDisplayName),
   selectCardTemplateId: optionalText(draft.selectCardTemplateId),
   workspaceApprovalEnabled: draft.workspaceApprovalEnabled,
   workspaceCalendarEnabled: draft.workspaceCalendarEnabled,

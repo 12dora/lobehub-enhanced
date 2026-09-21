@@ -173,6 +173,11 @@ vi.mock('../../primitives/runAdminMutation', () => ({
   runAdminMutation: (options: { run: () => Promise<void> }) => mocks.runAdminMutation(options),
 }));
 
+// 接口调用量 has its own suite (ApiCallStatsSection.test.tsx); the card only has to mount it.
+vi.mock('./ApiCallStatsSection', () => ({
+  ApiCallStatsSection: () => <div data-testid="api-stats" />,
+}));
+
 // The 绑定用户 list has its own suite (BindingsSection.test.tsx); here it only has to be mounted
 // with what the card is responsible for handing it.
 vi.mock('./BindingsSection', () => ({
@@ -609,6 +614,49 @@ describe('DingTalkConnectorCard', () => {
 
     await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
     expect(stub.upsert.mock.calls[0]![0].agentId).toBeNull();
+  });
+
+  it('sends the 机器人名称 an admin typed beside the robot credentials', async () => {
+    const stub = service();
+    render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+    fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.robotDisplayName'), {
+      target: { value: '  AIHub 助理  ' },
+    });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert.mock.calls[0]![0]).toMatchObject({ robotDisplayName: 'AIHub 助理' });
+  });
+
+  it('sends a null 机器人名称 when the label is blanked', async () => {
+    const stub = service();
+    render(
+      <DingTalkConnectorCard
+        canOperate
+        service={stub}
+        view={view({ robotDisplayName: 'AIHub 助理' })}
+      />,
+    );
+
+    const field = screen.getByLabelText('systemGeneral.imConnectors.fields.robotDisplayName');
+    expect((field as HTMLInputElement).value).toBe('AIHub 助理');
+
+    fireEvent.change(field, { target: { value: '   ' } });
+    fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+    await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+    expect(stub.upsert.mock.calls[0]![0].robotDisplayName).toBeNull();
+  });
+
+  it('reports the API call volume under the capabilities it measures', () => {
+    render(<DingTalkConnectorCard canOperate view={view()} />);
+
+    const stats = screen.getByTestId('api-stats');
+    const bindings = screen.getByTestId('bindings');
+    expect(stats).toBeTruthy();
+    // Above the 绑定用户 list: the reading belongs with the capabilities, not with the roster.
+    expect(stats.compareDocumentPosition(bindings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   // A frame (heartbeat/ack) is the worker's own liveness, so it is reported next to the last

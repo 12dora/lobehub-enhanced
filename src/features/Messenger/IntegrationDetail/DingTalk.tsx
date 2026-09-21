@@ -9,7 +9,6 @@ import { Fragment, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import AsyncError from '@/components/AsyncError';
-import { useBranding } from '@/enterprise/client/providers/RuntimeBrandingProvider';
 import { usePermission } from '@/hooks/usePermission';
 
 import AgentScopeSelect from '../AgentScopeSelect';
@@ -77,7 +76,6 @@ interface DingTalkDetailProps {
  */
 const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, name, onBack }) => {
   const { t } = useTranslation('messenger');
-  const { name: appName } = useBranding();
   const { allowed: canEdit } = usePermission('edit_own_content');
 
   const data = useMessengerData('dingtalk');
@@ -94,7 +92,7 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
 
   const link = data.links[0];
   const linkedAt = formatLinkedAt(link?.createdAt);
-  const robotName = botUsername?.trim() || appName;
+  const robotName = botUsername?.trim() || 'AI 助手';
   // An admin can switch the chat half off independently of push. When it is
   // off, telling the user to message the robot would be advice that cannot
   // work, so the unlinked card carries the notice instead of the instruction.

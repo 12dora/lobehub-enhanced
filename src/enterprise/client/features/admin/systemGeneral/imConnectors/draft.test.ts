@@ -66,6 +66,31 @@ describe('DingTalk connector draft', () => {
     expect(toDingTalkDraft(view({ agentId: '0_123456' })).agentId).toBe('0_123456');
   });
 
+  it('carries the optional 机器人名称 from the row into the upsert', () => {
+    const named = view({ robotDisplayName: 'AIHub 助理' });
+
+    // The view leaves it out for a row written before the field existed; that reads as「未填写」.
+    expect(toDingTalkDraft(view()).robotDisplayName).toBe('');
+    expect(toDingTalkDraft(named).robotDisplayName).toBe('AIHub 助理');
+    expect(toDingTalkUpsertInput(toDingTalkDraft(named)).robotDisplayName).toBe('AIHub 助理');
+    // Empty is sent as null, like every other optional label on the row.
+    expect(toDingTalkUpsertInput(toDingTalkDraft(view())).robotDisplayName).toBeNull();
+  });
+
+  it('caps 机器人名称 at 32 characters and counts it in the draft identity', () => {
+    const seed = toDingTalkDraft(view());
+
+    expect(validateDingTalkDraft({ ...seed, robotDisplayName: 'x'.repeat(33) })).toEqual({
+      robotDisplayName: 'tooLong',
+    });
+    expect(
+      validateDingTalkDraft({ ...seed, robotDisplayName: 'x'.repeat(32) }).robotDisplayName,
+    ).toBeUndefined();
+    expect(fingerprintDingTalkDraft({ ...seed, robotDisplayName: 'AIHub 助理' })).not.toBe(
+      fingerprintDingTalkDraft(seed),
+    );
+  });
+
   it('seeds the notification app block, empty when the second app was never provisioned', () => {
     const seed = toDingTalkDraft(view());
 
