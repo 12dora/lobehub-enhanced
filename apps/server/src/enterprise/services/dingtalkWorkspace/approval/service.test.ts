@@ -1,0 +1,276 @@
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+class DingtalkWorkspaceError extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(code);
+    this.name = 'DingtalkWorkspaceError';
+    this.code = code;
+  }
+}
+
+const mockAssertFeature = vi.fn();
+const mockRequireIdentity = vi.fn();
+const mockIsAdmin = vi.fn();
+const mockResolveStaff = vi.fn();
+const mockGetSchema = vi.fn();
+const mockGetDetail = vi.fn();
+const mockExecute = vi.fn();
+const mockRedirect = vi.fn();
+const mockComment = vi.fn();
+const mockStart = vi.fn();
+const mockForecast = vi.fn();
+const mockTerminate = vi.fn();
+const mockSaveForm = vi.fn();
+const mockDeleteForm = vi.fn();
+const mockAppendAudit = vi.fn();
+const mockListPending = vi.fn();
+const mockLoadTemplates = vi.fn();
+const mockInvalidate = vi.fn();
+const mockGetUsers = vi.fn();
+
+vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
+vi.mock('../capabilities', () => ({
+  assertDingtalkFeature: (...args: unknown[]) => mockAssertFeature(...args),
+}));
+vi.mock('../identity', () => ({
+  isDingtalkApprovalAdmin: (...args: unknown[]) => mockIsAdmin(...args),
+  requireVerifiedDingtalkIdentity: (...args: unknown[]) => mockRequireIdentity(...args),
+}));
+vi.mock('../directory', () => ({
+  resolveStaff: (...args: unknown[]) => mockResolveStaff(...args),
+}));
+vi.mock('@/database/models/dingtalkDirectory', () => ({
+  DingTalkDirectoryModel: class {
+    getUsers = (...args: unknown[]) => mockGetUsers(...args);
+  },
+}));
+vi.mock('../../platformAudit', () => ({
+  PlatformAuditService: class {
+    append = (...args: unknown[]) => mockAppendAudit(...args);
+  },
+}));
+vi.mock('./api', () => ({
+  addCommentAs: (...args: unknown[]) => mockComment(...args),
+  appendTaskAs: vi.fn(),
+  deleteFormTemplate: (...args: unknown[]) => mockDeleteForm(...args),
+  executeTaskAs: (...args: unknown[]) => mockExecute(...args),
+  forecastProcess: (...args: unknown[]) => mockForecast(...args),
+  getFormSchema: (...args: unknown[]) => mockGetSchema(...args),
+  getInstanceDetail: (...args: unknown[]) => mockGetDetail(...args),
+  redirectTaskAs: (...args: unknown[]) => mockRedirect(...args),
+  revertTaskAs: vi.fn(),
+  saveFormTemplate: (...args: unknown[]) => mockSaveForm(...args),
+  startProcessInstance: (...args: unknown[]) => mockStart(...args),
+  terminateProcessInstance: (...args: unknown[]) => mockTerminate(...args),
+}));
+vi.mock('./pending', () => ({
+  invalidateApprovalListCache: (...args: unknown[]) => mockInvalidate(...args),
+  listInitiatedApprovals: vi.fn(),
+  listPendingApprovals: (...args: unknown[]) => mockListPending(...args),
+  loadVisibleTemplatesCached: (...args: unknown[]) => mockLoadTemplates(...args),
+}));
+vi.mock('../approvalRules', () => ({
+  DingtalkApprovalRuleService: class {
+    previewRule = vi.fn();
+  },
+}));
+
+const { DingtalkApprovalService } = await import('./service');
+
+const identity = { name: '张三', staffId: 'me', unionId: 'u-me' };
+const runningDetail = {
+  ccUserIds: [],
+  formComponentValues: [{ name: '事由', value: '出差' }],
+  originatorUserId: 'other',
+  processInstanceId: 'inst-1',
+  status: 'RUNNING',
+  tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+  title: '出差申请',
+};
+
+describe('DingtalkApprovalService', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAssertFeature.mockResolvedValue(undefined);
+    mockRequireIdentity.mockResolvedValue(identity);
+    mockIsAdmin.mockResolvedValue(true);
+    mockLoadTemplates.mockResolvedValue([{ name: '出差', processCode: 'PROC-1' }]);
+    mockAppendAudit.mockResolvedValue(undefined);
+    mockExecute.mockResolvedValue({ result: true });
+    mockRedirect.mockResolvedValue({ result: true });
+    mockComment.mockResolvedValue({ result: true });
+    mockStart.mockResolvedValue({ instanceId: 'inst-new' });
+    mockForecast.mockResolvedValue({ workflowActivityRules: [] });
+    mockGetUsers.mockResolvedValue([]);
+    mockGetSchema.mockResolvedValue({
+      fields: [
+        { componentId: 'TextField-1', componentType: 'TextField', label: '事由', required: true },
+      ],
+      name: '出差',
+      processCode: 'PROC-1',
+    });
+  });
+
+  it('asserts the approval feature and verified identity on every call', async () => {
+    mockListPending.mockResolvedValue({ rows: [], truncated: false });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.listPending();
+    expect(mockAssertFeature).toHaveBeenCalledWith('approval');
+    expect(mockRequireIdentity).toHaveBeenCalled();
+  });
+
+  it('refuses executeTask when the caller is not the running handler', async () => {
+    mockGetDetail.mockResolvedValueOnce({
+      ...runningDetail,
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'someone-else' }],
+    });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(
+      service.executeTask({ processInstanceId: 'inst-1', result: 'agree', taskId: 't-1' }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_NOT_TASK_OWNER' });
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('executes agree after re-fetching ownership and writes audit without form payload', async () => {
+    mockGetDetail.mockResolvedValueOnce(runningDetail);
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.executeTask({ processInstanceId: 'inst-1', result: 'agree', taskId: 't-1' });
+    expect(mockExecute).toHaveBeenCalledWith('me', {
+      processInstanceId: 'inst-1',
+      remark: undefined,
+      result: 'agree',
+      taskId: 't-1',
+    });
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.agree',
+        actorUserId: 'user-1',
+        afterDiff: { title: '出差申请' },
+        targetId: 'inst-1',
+        targetType: 'dingtalk_approval',
+      }),
+    );
+  });
+
+  it('attaches directory display names on getInstance', async () => {
+    mockGetUsers.mockResolvedValueOnce([
+      { name: '张三', staffId: 'me' },
+      { name: '李四', staffId: 'other' },
+      { name: '王五', staffId: 'cc-1' },
+    ]);
+    mockGetDetail.mockResolvedValueOnce({
+      ...runningDetail,
+      ccUserIds: ['cc-1'],
+      operationRecords: [{ type: 'EXECUTE_TASK_NORMAL', userId: 'me' }],
+      originatorUserId: 'other',
+    });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    const detail = await service.getInstance('inst-1');
+    expect(mockGetUsers).toHaveBeenCalledTimes(1);
+    expect(detail.originatorName).toBe('李四');
+    expect(detail.tasks[0]?.name).toBe('张三');
+    expect(detail.operationRecords[0]?.name).toBe('张三');
+    expect(detail.ccUsers).toEqual([{ name: '王五', userId: 'cc-1' }]);
+    expect(detail.summary).toEqual([{ label: '事由', value: '出差' }]);
+  });
+
+  it('forbids getInstance for outsiders', async () => {
+    mockGetDetail.mockResolvedValueOnce({
+      ...runningDetail,
+      ccUserIds: [],
+      originatorUserId: 'other',
+      tasks: [{ status: 'COMPLETED', taskId: 't-9', userId: 'other' }],
+    });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(service.getInstance('inst-1')).rejects.toMatchObject({
+      code: 'DINGTALK_FORBIDDEN',
+    });
+  });
+
+  it('creates an instance as the verified caller and audits the instance id', async () => {
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.createInstance({
+      formValues: [{ label: '事由', value: '北京出差' }],
+      processCode: 'PROC-1',
+    });
+    expect(mockStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originatorUserId: 'me',
+        processCode: 'PROC-1',
+      }),
+    );
+    expect(mockAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'dingtalk.approval.create',
+        targetId: 'inst-new',
+        targetType: 'dingtalk_approval',
+      }),
+    );
+  });
+
+  it('requires approval admin to save a template', async () => {
+    mockIsAdmin.mockResolvedValueOnce(false);
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(
+      service.saveTemplate({
+        fields: [{ componentType: 'TextField', label: '事由' }],
+        name: '新模板',
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_NOT_APPROVAL_ADMIN' });
+  });
+
+  it('threads format, unit and bizAlias into DingTalk form component props', async () => {
+    mockSaveForm.mockResolvedValueOnce({ processCode: 'PROC-NEW' });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.saveTemplate({
+      fields: [
+        {
+          bizAlias: 'start_date',
+          componentType: 'DDDateField',
+          format: 'yyyy-MM-dd',
+          label: '开始日期',
+          required: true,
+        },
+        {
+          componentType: 'MoneyField',
+          label: '金额',
+          unit: '元',
+        },
+      ],
+      name: '新模板',
+    });
+    expect(mockSaveForm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        formComponents: [
+          {
+            componentType: 'DDDateField',
+            props: expect.objectContaining({
+              bizAlias: 'start_date',
+              format: 'yyyy-MM-dd',
+              label: '开始日期',
+              required: true,
+            }),
+          },
+          {
+            componentType: 'MoneyField',
+            props: expect.objectContaining({
+              label: '金额',
+              unit: '元',
+            }),
+          },
+        ],
+        name: '新模板',
+      }),
+    );
+  });
+
+  it('terminates only as originator', async () => {
+    mockGetDetail.mockResolvedValueOnce({ ...runningDetail, originatorUserId: 'other' });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(service.terminateInstance({ processInstanceId: 'inst-1' })).rejects.toMatchObject({
+      code: 'DINGTALK_NOT_ORIGINATOR',
+    });
+  });
+});

@@ -4,6 +4,14 @@ import { invalidateMessengerConfigCache } from '@/config/messenger';
 import type { DecryptedSystemBotProvider } from '@/database/models/systemBotProvider';
 import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
+import {
+  applyAutomationTierChange,
+  notifyAutomationTierTruncation,
+} from '@/server/enterprise/services/dingtalkWorkspace/approvalRules';
+import {
+  invalidateDingtalkWorkspaceCapabilities,
+  probeWorkspacePermissions as probeDingtalkWorkspacePermissions,
+} from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import {
@@ -19,6 +27,7 @@ import type {
   AdminImConnectorBindingsRemoveInput,
   AdminImConnectorBindingsRemoveOutput,
   AdminImConnectorBindingsUpsertInput,
+  AdminImConnectorProbeWorkspacePermissionsOutput,
   AdminImConnectorTestInput,
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
@@ -27,6 +36,7 @@ import type {
   ImConnectorPlatform,
 } from '../../contracts/adminImConnectors';
 import {
+  APPROVAL_AUTOMATION_TIER_DEFAULT,
   dingTalkConnectorSettingsSchema,
   IM_CONNECTOR_IDLE_HOURS_DEFAULT,
   imConnectorPlatformSchema,
@@ -51,6 +61,7 @@ export const IM_CONNECTOR_CONNECTION_MODE = 'websocket';
 export const IM_CONNECTOR_AUDIT_TARGET_TYPE = 'im_connector' as const;
 
 const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
+  approvalAutomationTier: APPROVAL_AUTOMATION_TIER_DEFAULT,
   agentId: null,
   aiCardTemplateId: null,
   chatEnabled: true,
@@ -64,6 +75,9 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   pushEnabled: true,
   robotCode: '',
   selectCardTemplateId: null,
+  workspaceApprovalEnabled: false,
+  workspaceCalendarEnabled: false,
+  workspaceTodoEnabled: false,
 };
 
 const emptyToNull = (value: string | null | undefined): string | null => {
@@ -108,6 +122,13 @@ const parseDingTalkSettings = (
   if (parsed.success) return parsed.data;
   return {
     ...DEFAULT_SETTINGS,
+    approvalAutomationTier:
+      raw?.approvalAutomationTier === 'off' ||
+      raw?.approvalAutomationTier === 'strict' ||
+      raw?.approvalAutomationTier === 'moderate' ||
+      raw?.approvalAutomationTier === 'relaxed'
+        ? raw.approvalAutomationTier
+        : DEFAULT_SETTINGS.approvalAutomationTier,
     agentId: emptyToNull(typeof raw?.agentId === 'string' ? raw.agentId : null),
     aiCardTemplateId: emptyToNull(
       typeof raw?.aiCardTemplateId === 'string' ? raw.aiCardTemplateId : null,
@@ -139,11 +160,24 @@ const parseDingTalkSettings = (
     selectCardTemplateId: emptyToNull(
       typeof raw?.selectCardTemplateId === 'string' ? raw.selectCardTemplateId : null,
     ),
+    workspaceApprovalEnabled:
+      typeof raw?.workspaceApprovalEnabled === 'boolean'
+        ? raw.workspaceApprovalEnabled
+        : DEFAULT_SETTINGS.workspaceApprovalEnabled,
+    workspaceCalendarEnabled:
+      typeof raw?.workspaceCalendarEnabled === 'boolean'
+        ? raw.workspaceCalendarEnabled
+        : DEFAULT_SETTINGS.workspaceCalendarEnabled,
+    workspaceTodoEnabled:
+      typeof raw?.workspaceTodoEnabled === 'boolean'
+        ? raw.workspaceTodoEnabled
+        : DEFAULT_SETTINGS.workspaceTodoEnabled,
   };
 };
 
 const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnectorSettings =>
   dingTalkConnectorSettingsSchema.parse({
+    approvalAutomationTier: input.approvalAutomationTier ?? APPROVAL_AUTOMATION_TIER_DEFAULT,
     agentId: emptyToNull(input.agentId ?? null),
     aiCardTemplateId: emptyToNull(input.aiCardTemplateId),
     chatEnabled: input.chatEnabled,
@@ -157,6 +191,9 @@ const settingsFromUpsert = (input: AdminImConnectorUpsertInput): DingTalkConnect
     pushEnabled: input.pushEnabled,
     robotCode: input.robotCode,
     selectCardTemplateId: emptyToNull(input.selectCardTemplateId),
+    workspaceApprovalEnabled: input.workspaceApprovalEnabled ?? false,
+    workspaceCalendarEnabled: input.workspaceCalendarEnabled ?? false,
+    workspaceTodoEnabled: input.workspaceTodoEnabled ?? false,
   });
 
 const redisClient = () => getAgentRuntimeRedisClient();
@@ -170,6 +207,7 @@ const unconfiguredView = async (
     readImConnectorStatus({ platform, redis: redisClient(), rowDisabled: false }),
   ]);
   return {
+    approvalAutomationTier: DEFAULT_SETTINGS.approvalAutomationTier,
     agentId: DEFAULT_SETTINGS.agentId,
     aiCardTemplateId: DEFAULT_SETTINGS.aiCardTemplateId,
     chatEnabled: DEFAULT_SETTINGS.chatEnabled,
@@ -193,6 +231,9 @@ const unconfiguredView = async (
     stats,
     status,
     updatedAt: null,
+    workspaceApprovalEnabled: DEFAULT_SETTINGS.workspaceApprovalEnabled,
+    workspaceCalendarEnabled: DEFAULT_SETTINGS.workspaceCalendarEnabled,
+    workspaceTodoEnabled: DEFAULT_SETTINGS.workspaceTodoEnabled,
   };
 };
 
@@ -212,6 +253,7 @@ const toView = async (
   ]);
 
   return {
+    approvalAutomationTier: settings.approvalAutomationTier,
     agentId: emptyToNull(settings.agentId),
     aiCardTemplateId: emptyToNull(settings.aiCardTemplateId),
     chatEnabled: settings.chatEnabled,
@@ -235,6 +277,9 @@ const toView = async (
     stats,
     status,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+    workspaceApprovalEnabled: settings.workspaceApprovalEnabled,
+    workspaceCalendarEnabled: settings.workspaceCalendarEnabled,
+    workspaceTodoEnabled: settings.workspaceTodoEnabled,
   };
 };
 
@@ -270,9 +315,12 @@ export class ImConnectorsAdminService {
     const settings = settingsFromUpsert(input);
     const notifySecretAction = input.notifyAppSecret?.action ?? 'keep';
     const notifySecretMutates = notifySecretAction === 'replace' || notifySecretAction === 'clear';
+    let prevTier = APPROVAL_AUTOMATION_TIER_DEFAULT;
+    let truncationNotify: Awaited<ReturnType<typeof applyAutomationTierChange>>['rows'] = [];
 
     await this.db.transaction(async (tx) => {
       const existing = await SystemBotProviderModel.findByPlatform(tx, input.platform, gateKeeper);
+      prevTier = parseDingTalkSettings(existing?.settings).approvalAutomationTier;
       const storedSecret = pickClientSecret(existing?.credentials);
       const nextSecret = replacing ? replacementSecret : storedSecret;
 
@@ -328,6 +376,7 @@ export class ImConnectorsAdminService {
         action: AUDIT_ACTION.SYSTEM_IM_CONNECTOR_UPDATE,
         actorUserId: params.actorUserId,
         afterDiff: {
+          approvalAutomationTier: settings.approvalAutomationTier,
           agentId: settings.agentId,
           aiCardTemplateId: settings.aiCardTemplateId,
           chatEnabled: settings.chatEnabled,
@@ -346,20 +395,42 @@ export class ImConnectorsAdminService {
           robotCode: settings.robotCode,
           rotation: replacing ? 'replaced' : 'kept',
           selectCardTemplateId: settings.selectCardTemplateId,
+          workspaceApprovalEnabled: settings.workspaceApprovalEnabled,
+          workspaceCalendarEnabled: settings.workspaceCalendarEnabled,
+          workspaceTodoEnabled: settings.workspaceTodoEnabled,
         },
         reason: input.reason ?? null,
         result: 'success',
         targetId: input.platform,
         targetType: IM_CONNECTOR_AUDIT_TARGET_TYPE,
       });
+
+      // Truncate in the same transaction as the connector upsert so a failed
+      // apply rolls the tier back. Work notices are sent after commit so a
+      // down notify app cannot hold the row locks.
+      if (settings.approvalAutomationTier === 'strict') {
+        const applied = await applyAutomationTierChange(
+          tx,
+          prevTier,
+          settings.approvalAutomationTier,
+        );
+        truncationNotify = applied.rows;
+      }
     });
 
     invalidateMessengerConfigCache('dingtalk');
+    invalidateDingtalkWorkspaceCapabilities();
     await invalidateNotifyAppToken();
+    if (truncationNotify.length > 0) {
+      await notifyAutomationTierTruncation(truncationNotify);
+    }
 
     const row = await SystemBotProviderModel.findByPlatform(this.db, input.platform, gateKeeper);
     return toView(this.db, input.platform, row);
   };
+
+  probeWorkspacePermissions = (): Promise<AdminImConnectorProbeWorkspacePermissionsOutput> =>
+    probeDingtalkWorkspacePermissions();
 
   test = async (input: AdminImConnectorTestInput): Promise<AdminImConnectorTestOutput> => {
     const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey();

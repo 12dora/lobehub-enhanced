@@ -15,6 +15,7 @@ import {
   adminImConnectorBindingsUpsertInputSchema,
   adminImConnectorGetInputSchema,
   adminImConnectorListOutputSchema,
+  adminImConnectorProbeWorkspacePermissionsOutputSchema,
   adminImConnectorTestInputSchema,
   adminImConnectorTestOutputSchema,
   adminImConnectorUpsertInputSchema,
@@ -144,6 +145,15 @@ export const adminImConnectorsRouter = router({
     .output(adminImConnectorListOutputSchema)
     .query(({ ctx }) =>
       executePlatformSystem(() => new ImConnectorsAdminService(ctx.serverDB).list()),
+    ),
+
+  probeWorkspacePermissions: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+    .output(adminImConnectorProbeWorkspacePermissionsOutputSchema)
+    .mutation(({ ctx }) =>
+      executeImConnectors(() =>
+        new ImConnectorsAdminService(ctx.serverDB).probeWorkspacePermissions(),
+      ),
     ),
 
   syncDirectory: platformSystemBase

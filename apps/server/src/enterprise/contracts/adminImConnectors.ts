@@ -1,3 +1,4 @@
+import type { ApprovalAutomationTier } from '@lobechat/types';
 import { z } from 'zod';
 
 import { secretSafeAuditReasonSchema } from './shared';
@@ -18,9 +19,19 @@ export const IM_CONNECTOR_IDLE_HOURS_MIN = 1;
 export const IM_CONNECTOR_IDLE_HOURS_MAX = 720;
 export const IM_CONNECTOR_IDLE_HOURS_DEFAULT = 24;
 
+export const approvalAutomationTierSchema = z.enum(['moderate', 'off', 'relaxed', 'strict']);
+export type ConnectorApprovalAutomationTier = z.infer<typeof approvalAutomationTierSchema>;
+
+/** Default matches `APPROVAL_AUTOMATION_TIERS` moderate. */
+export const APPROVAL_AUTOMATION_TIER_DEFAULT: ApprovalAutomationTier = 'moderate';
+
 /** Plaintext `system_bot_providers.settings` shape for platform `dingtalk`. */
 export const dingTalkConnectorSettingsSchema = z
   .object({
+    /**
+     * Automatic-approval worker tier. `off` stores rules but does not execute them.
+     */
+    approvalAutomationTier: approvalAutomationTierSchema.default(APPROVAL_AUTOMATION_TIER_DEFAULT),
     /**
      * Optional DingTalk micro-app AgentId for `dingtalk://…/openapp` deep links
      * (`app_id=0_<agentId>`). Empty = push/card buttons use the plain https SSO URL.
@@ -63,6 +74,12 @@ export const dingTalkConnectorSettingsSchema = z
     robotCode: z.string().trim().min(1).max(200),
     /** Optional interactive "select" card template id (助手/会话选择卡片). Empty = ActionCard fallback. */
     selectCardTemplateId: z.string().trim().max(200).nullable().default(null),
+    /** Workspace approval tool (`lobe-dingtalk-approval`). */
+    workspaceApprovalEnabled: z.boolean().default(false),
+    /** Workspace calendar APIs of `lobe-dingtalk-workspace`. */
+    workspaceCalendarEnabled: z.boolean().default(false),
+    /** Workspace todo APIs of `lobe-dingtalk-workspace`. */
+    workspaceTodoEnabled: z.boolean().default(false),
   })
   .strict();
 export type DingTalkConnectorSettings = z.infer<typeof dingTalkConnectorSettingsSchema>;
@@ -108,6 +125,7 @@ export type ImConnectorStats = z.infer<typeof imConnectorStatsSchema>;
 
 export const adminImConnectorViewSchema = z
   .object({
+    approvalAutomationTier: approvalAutomationTierSchema,
     /** Optional micro-app AgentId used by DingTalk `openapp` deep links. Null when unset. */
     agentId: z.string().nullable().optional(),
     aiCardTemplateId: z.string().nullable(),
@@ -141,6 +159,9 @@ export const adminImConnectorViewSchema = z
     stats: imConnectorStatsSchema,
     status: imConnectorStatusSchema,
     updatedAt: z.string().nullable(),
+    workspaceApprovalEnabled: z.boolean(),
+    workspaceCalendarEnabled: z.boolean(),
+    workspaceTodoEnabled: z.boolean(),
   })
   .strict();
 export type AdminImConnectorView = z.infer<typeof adminImConnectorViewSchema>;
@@ -173,6 +194,9 @@ export const adminImConnectorNotifyAppSecretInputSchema = z.discriminatedUnion('
 
 export const adminImConnectorUpsertInputSchema = z
   .object({
+    approvalAutomationTier: approvalAutomationTierSchema
+      .optional()
+      .default(APPROVAL_AUTOMATION_TIER_DEFAULT),
     agentId: z.string().trim().max(64).nullable().optional(),
     aiCardTemplateId: z.string().trim().max(200).nullable(),
     chatEnabled: z.boolean(),
@@ -196,6 +220,9 @@ export const adminImConnectorUpsertInputSchema = z
     reason: secretSafeAuditReasonSchema.optional(),
     robotCode: z.string().trim().min(1).max(200),
     selectCardTemplateId: z.string().trim().max(200).nullable(),
+    workspaceApprovalEnabled: z.boolean().optional().default(false),
+    workspaceCalendarEnabled: z.boolean().optional().default(false),
+    workspaceTodoEnabled: z.boolean().optional().default(false),
   })
   .strict();
 export type AdminImConnectorUpsertInput = z.input<typeof adminImConnectorUpsertInputSchema>;
@@ -313,4 +340,30 @@ export const adminImConnectorBindingsRemoveOutputSchema = z
   .strict();
 export type AdminImConnectorBindingsRemoveOutput = z.infer<
   typeof adminImConnectorBindingsRemoveOutputSchema
+>;
+
+export const dingtalkPermissionProbeReasonSchema = z.enum([
+  'forbidden',
+  'not_configured',
+  'unreachable',
+]);
+
+export const dingtalkPermissionProbeSchema = z
+  .object({
+    missingScopes: z.array(z.string().min(1).max(100)).max(16).optional(),
+    ok: z.boolean(),
+    reason: dingtalkPermissionProbeReasonSchema.optional(),
+  })
+  .strict();
+export type DingtalkPermissionProbe = z.infer<typeof dingtalkPermissionProbeSchema>;
+
+export const adminImConnectorProbeWorkspacePermissionsOutputSchema = z
+  .object({
+    approval: dingtalkPermissionProbeSchema,
+    calendar: dingtalkPermissionProbeSchema,
+    todo: dingtalkPermissionProbeSchema,
+  })
+  .strict();
+export type AdminImConnectorProbeWorkspacePermissionsOutput = z.infer<
+  typeof adminImConnectorProbeWorkspacePermissionsOutputSchema
 >;

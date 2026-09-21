@@ -22,6 +22,10 @@ const runGuardedDirectorySync = vi.hoisted(() => vi.fn());
 const probeNotifyAppToken = vi.hoisted(() => vi.fn());
 const readNotifyAppFromProviderRow = vi.hoisted(() => vi.fn());
 const invalidateNotifyAppToken = vi.hoisted(() => vi.fn());
+const invalidateDingtalkWorkspaceCapabilities = vi.hoisted(() => vi.fn());
+const probeWorkspacePermissions = vi.hoisted(() => vi.fn());
+const applyAutomationTierChange = vi.hoisted(() => vi.fn());
+const notifyAutomationTierTruncation = vi.hoisted(() => vi.fn());
 const getImConnectorStats = vi.hoisted(() =>
   vi.fn(async () => ({ linkedUsers: 2, messages7d: 7, pushes7d: 1 })),
 );
@@ -91,6 +95,16 @@ vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
   invalidateNotifyAppToken,
   probeNotifyAppToken,
   readNotifyAppFromProviderRow,
+}));
+
+vi.mock('@/server/enterprise/services/dingtalkWorkspace/capabilities', () => ({
+  invalidateDingtalkWorkspaceCapabilities,
+  probeWorkspacePermissions,
+}));
+
+vi.mock('@/server/enterprise/services/dingtalkWorkspace/approvalRules', () => ({
+  applyAutomationTierChange,
+  notifyAutomationTierTruncation,
 }));
 
 const SECRET = 'dingtalk-client-secret';
@@ -184,6 +198,14 @@ describe('ImConnectorsAdminService', () => {
     syncDingTalkDirectory.mockResolvedValue({ departments: 2, durationMs: 12, users: 9 });
     runGuardedDirectorySync.mockResolvedValue({ departments: 2, durationMs: 12, users: 9 });
     invalidateNotifyAppToken.mockResolvedValue(undefined);
+    invalidateDingtalkWorkspaceCapabilities.mockReset();
+    applyAutomationTierChange.mockResolvedValue({ rows: [], truncated: 0 });
+    notifyAutomationTierTruncation.mockResolvedValue(undefined);
+    probeWorkspacePermissions.mockResolvedValue({
+      approval: { ok: true },
+      calendar: { ok: false, reason: 'forbidden', missingScopes: ['Calendar.Event.Read'] },
+      todo: { ok: true },
+    });
     probeNotifyAppToken.mockResolvedValue({
       errorCode: null,
       errorMessage: null,
@@ -235,6 +257,7 @@ describe('ImConnectorsAdminService', () => {
     expect(SystemBotProviderModel.upsertByPlatform).not.toHaveBeenCalled();
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
     expect(invalidateNotifyAppToken).toHaveBeenCalled();
+    expect(invalidateDingtalkWorkspaceCapabilities).toHaveBeenCalled();
   });
 
   it('replaces the secret through upsertByPlatform', async () => {
@@ -748,5 +771,104 @@ describe('ImConnectorsAdminService', () => {
       robotName: null,
     });
     expect(probeNotifyAppToken).not.toHaveBeenCalled();
+  });
+
+  it('persists workspace switches and the automation tier', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: {
+        ...upsertInput,
+        approvalAutomationTier: 'strict',
+        workspaceApprovalEnabled: true,
+        workspaceCalendarEnabled: true,
+        workspaceTodoEnabled: true,
+      },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          approvalAutomationTier: 'strict',
+          workspaceApprovalEnabled: true,
+          workspaceCalendarEnabled: true,
+          workspaceTodoEnabled: true,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(applyAutomationTierChange).toHaveBeenCalledWith(db, 'moderate', 'strict');
+    expect(notifyAutomationTierTruncation).not.toHaveBeenCalled();
+  });
+
+  it('does not call applyAutomationTierChange when the saved tier is not strict', async () => {
+    const service = new ImConnectorsAdminService(createDb());
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, approvalAutomationTier: 'moderate' },
+    });
+    expect(applyAutomationTierChange).not.toHaveBeenCalled();
+    expect(notifyAutomationTierTruncation).not.toHaveBeenCalled();
+  });
+
+  it('still truncates when the saved tier is already strict', async () => {
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, approvalAutomationTier: 'strict' },
+    } as never);
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, approvalAutomationTier: 'strict' },
+    });
+    expect(applyAutomationTierChange).toHaveBeenCalledWith(db, 'strict', 'strict');
+  });
+
+  it('notifies truncated owners after the upsert transaction commits', async () => {
+    const rows = [
+      { id: 'r1', name: '差旅', staffId: 'staff_a' },
+      { id: 'r2', name: '请假', staffId: 'staff_b' },
+    ];
+    applyAutomationTierChange.mockResolvedValue({ rows, truncated: 2 });
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, approvalAutomationTier: 'strict' },
+    });
+    expect(applyAutomationTierChange).toHaveBeenCalledWith(db, 'moderate', 'strict');
+    expect(notifyAutomationTierTruncation).toHaveBeenCalledWith(rows);
+    expect(db.transaction.mock.invocationCallOrder[0]!).toBeLessThan(
+      notifyAutomationTierTruncation.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('notifies at-cap owners after commit when truncate matches nothing', async () => {
+    const rows = [{ id: 'r1', name: '差旅', staffId: 'staff_a' }];
+    applyAutomationTierChange.mockResolvedValue({ rows, truncated: 0 });
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, approvalAutomationTier: 'strict' },
+    });
+    expect(notifyAutomationTierTruncation).toHaveBeenCalledWith(rows);
+    expect(db.transaction.mock.invocationCallOrder[0]!).toBeLessThan(
+      notifyAutomationTierTruncation.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('forwards probeWorkspacePermissions', async () => {
+    const service = new ImConnectorsAdminService(createDb());
+    await expect(service.probeWorkspacePermissions()).resolves.toMatchObject({
+      approval: { ok: true },
+      calendar: { reason: 'forbidden' },
+    });
+    expect(probeWorkspacePermissions).toHaveBeenCalled();
   });
 });

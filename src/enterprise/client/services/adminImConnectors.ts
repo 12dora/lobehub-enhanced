@@ -11,10 +11,12 @@ import type {
   AdminImConnectorBindingsUpsertOutput,
   AdminImConnectorGetInput,
   adminImConnectorListOutputSchema,
+  AdminImConnectorProbeWorkspacePermissionsOutput,
   AdminImConnectorTestInput,
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
+  DingtalkPermissionProbe,
   ImConnectorBindingBoundVia,
   ImConnectorBindingSource,
   ImConnectorPlatform,
@@ -36,6 +38,7 @@ export interface AdminImConnectorsReadService {
  * verified before it is stored, and falls back to the saved row for any field left out.
  */
 export interface AdminImConnectorsMutationService {
+  probeWorkspacePermissions: () => Promise<AdminImConnectorProbeWorkspacePermissionsOutput>;
   test: (input: AdminImConnectorTestInput) => Promise<AdminImConnectorTestOutput>;
   upsert: (input: AdminImConnectorUpsertInput) => Promise<AdminImConnectorView>;
 }
@@ -106,6 +109,9 @@ class AdminImConnectorsServiceImpl implements AdminImConnectorsService {
   listBindings = (input: AdminImConnectorBindingsListInput) =>
     lambdaClient.admin.imConnectors.bindings.list.query(input);
 
+  probeWorkspacePermissions = () =>
+    lambdaClient.admin.imConnectors.probeWorkspacePermissions.mutate();
+
   removeBinding = (input: AdminImConnectorBindingsRemoveInput) =>
     lambdaClient.admin.imConnectors.bindings.remove.mutate(input);
 
@@ -135,10 +141,12 @@ export type {
   AdminImConnectorBindingsUpsertInput,
   AdminImConnectorBindingsUpsertOutput,
   AdminImConnectorGetInput,
+  AdminImConnectorProbeWorkspacePermissionsOutput,
   AdminImConnectorTestInput,
   AdminImConnectorTestOutput,
   AdminImConnectorUpsertInput,
   AdminImConnectorView,
+  DingtalkPermissionProbe,
   ImConnectorBindingBoundVia,
   ImConnectorBindingSource,
   ImConnectorPlatform,
