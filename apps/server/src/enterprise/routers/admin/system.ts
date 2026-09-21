@@ -11,6 +11,7 @@ import {
   adminSystemCancelJobOutputSchema,
   adminSystemGetDocumentRenderSettingsOutputSchema,
   adminSystemGetDocumentRenderStatusOutputSchema,
+  adminSystemGetEnterpriseLookupSettingsOutputSchema,
   adminSystemGetInfraSettingsOutputSchema,
   adminSystemGetInstanceRevisionsInputSchema,
   adminSystemGetInstanceRevisionsOutputSchema,
@@ -32,8 +33,12 @@ import {
   adminSystemRunDocumentRenderGcOutputSchema,
   adminSystemTestDependencyInputSchema,
   adminSystemTestDependencyOutputSchema,
+  adminSystemTestEnterpriseLookupProviderInputSchema,
+  adminSystemTestEnterpriseLookupProviderOutputSchema,
   adminSystemUpdateDocumentRenderSettingsInputSchema,
   adminSystemUpdateDocumentRenderSettingsOutputSchema,
+  adminSystemUpdateEnterpriseLookupSettingsInputSchema,
+  adminSystemUpdateEnterpriseLookupSettingsOutputSchema,
   adminSystemUpdateInfraSettingsInputSchema,
   adminSystemUpdateInfraSettingsOutputSchema,
   adminSystemUpdateSandboxSettingsInputSchema,
@@ -60,6 +65,11 @@ import {
   toSandboxSettingsOutput,
 } from '../../services/sandboxSettings';
 import { isIdentityProviderFeatureEnabled } from './identityProvidersSupport';
+import {
+  getEnterpriseLookupSettings,
+  testEnterpriseLookupProviderHandler,
+  updateEnterpriseLookupSettings,
+} from './system.enterpriseLookup';
 import { createSystemService, execute, executePlatformSystem } from './system.errors';
 import { updateInfraSettings } from './system.infra';
 import { assertJobMutationReauth, assertRestartReauth } from './system.reauth';
@@ -121,6 +131,11 @@ export const adminSystemRouter = router({
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
     .output(adminSystemGetDocumentRenderStatusOutputSchema)
     .query(({ ctx }) => executePlatformSystem(() => getDocumentRenderStatus(ctx.serverDB))),
+
+  getEnterpriseLookupSettings: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
+    .output(adminSystemGetEnterpriseLookupSettingsOutputSchema)
+    .query(getEnterpriseLookupSettings),
 
   getInfraSettings: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
@@ -230,11 +245,23 @@ export const adminSystemRouter = router({
       }),
     ),
 
+  testEnterpriseLookupProvider: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+    .input(adminSystemTestEnterpriseLookupProviderInputSchema)
+    .output(adminSystemTestEnterpriseLookupProviderOutputSchema)
+    .mutation(testEnterpriseLookupProviderHandler),
+
   updateDocumentRenderSettings: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
     .input(adminSystemUpdateDocumentRenderSettingsInputSchema)
     .output(adminSystemUpdateDocumentRenderSettingsOutputSchema)
     .mutation(updateDocumentRenderSettingsHandler),
+
+  updateEnterpriseLookupSettings: platformSystemBase
+    .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+    .input(adminSystemUpdateEnterpriseLookupSettingsInputSchema)
+    .output(adminSystemUpdateEnterpriseLookupSettingsOutputSchema)
+    .mutation(updateEnterpriseLookupSettings),
 
   updateInfraSettings: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
