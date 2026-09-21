@@ -2,6 +2,7 @@ import type { ChatModelCard } from '@lobechat/types';
 import type { Pricing } from 'model-bank';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FAMILY_INHERITED_KEYS } from './familyInherit';
 import {
   detectModelProvider,
   MODEL_LIST_CONFIGS,
@@ -12,104 +13,165 @@ import {
 } from './modelParse';
 
 // Mock the imported LOBE_DEFAULT_MODEL_LIST
-const { loadModelsMock, mockDefaultModelList } = vi.hoisted(() => ({
-  loadModelsMock: vi.fn(),
-  mockDefaultModelList: [
-    {
-      contextWindowTokens: 8192,
-      displayName: 'GPT-4',
-      enabled: true,
-      functionCall: true,
-      id: 'gpt-4',
-      maxOutput: 4096,
-      reasoning: false,
-      vision: true,
-    },
-    {
-      displayName: 'Claude 3 Opus',
-      enabled: true,
-      functionCall: true,
-      id: 'claude-3-opus',
-      reasoning: true,
-      vision: true,
-    },
-    {
-      displayName: 'Qwen Turbo',
-      enabled: true,
-      functionCall: true,
-      id: 'qwen-turbo',
-      reasoning: false,
-      vision: false,
-    },
-    // Added for more detailed tests:
-    {
-      displayName: 'Custom Known FC True',
-      enabled: true,
-      functionCall: true,
-      id: 'custom-model-known-fc-true', // For testing: knownModel.abilities.fc=true, no keyword match for openai fc
-      reasoning: false,
-      vision: false,
-    },
-    {
-      displayName: 'GPT-4o Known FC False',
-      enabled: true,
-      functionCall: false,
-      id: 'gpt-4o-known-fc-false', // For testing: '4o' keyword match, knownModel.abilities.fc=false
-      reasoning: true,
-      vision: true,
-    },
-    {
-      displayName: 'GPT-4o Known Vision False',
-      enabled: true,
-      functionCall: true,
-      id: 'gpt-4o-known-vision-false', // For testing: '4o' keyword match, knownModel.abilities.vision=false
-      reasoning: true,
-      vision: false,
-    },
-    {
-      displayName: 'GPT-4o Audio Known Abilities True',
-      enabled: true,
-      functionCall: true,
-      id: 'gpt-4o-audio-known-abilities-true', // For testing: '4o' keyword, 'audio' excluded, but knownModel.abilities.fc/vision=true
-      reasoning: true,
-      vision: true,
-    },
-    {
-      displayName: 'GPT-4o Audio Known Abilities False',
-      enabled: true,
-      functionCall: false,
-      id: 'gpt-4o-audio-known-abilities-false', // For testing: '4o' keyword, 'audio' excluded, and knownModel.abilities.fc/vision=false
-      reasoning: false,
-      vision: false,
-    },
-    {
-      displayName: 'Known Model DisplayName',
-      enabled: true,
-      id: 'model-known-displayname',
-    },
-    {
-      contextWindowTokens: 1000,
-      enabled: true,
-      id: 'model-known-context',
-      maxOutput: 100,
-    },
-    {
-      displayName: 'Known Disabled Model',
-      enabled: false,
-      id: 'model-known-disabled',
-    },
-    {
-      displayName: 'Known Model With Settings',
-      enabled: true,
-      id: 'model-known-settings',
-      settings: {
-        extendParams: ['enableReasoning'],
-        searchImpl: 'params',
-        searchProvider: 'builtin',
+const { grokProviderModels, loadModelsMock, mockDefaultModelList, xaiProviderModels } = vi.hoisted(
+  () => ({
+    grokProviderModels: [
+      {
+        abilities: {
+          files: true,
+          functionCall: true,
+          reasoning: true,
+          search: true,
+          structuredOutput: true,
+          vision: true,
+        },
+        contextWindowTokens: 111,
+        description: 'provider donor',
+        displayName: 'Provider Grok 4.6',
+        id: 'grok-4.6',
+        releasedAt: '2026-08-01',
+        settings: {
+          extendParams: ['grok4_20ReasoningEffort'],
+          searchImpl: 'params',
+          searchProvider: 'builtin',
+        },
       },
-    },
-  ] as (Partial<ChatModelCard> & { id: string })[],
-}));
+      {
+        abilities: { functionCall: true, reasoning: true, search: true, vision: true },
+        id: 'grok-4.5',
+        releasedAt: '2026-07-08',
+        settings: { extendParams: ['grok4_5ReasoningEffort'], searchImpl: 'params' },
+      },
+      {
+        abilities: { reasoning: false, search: true, vision: true },
+        id: 'grok-4.6-non-reasoning',
+        releasedAt: '2026-08-01',
+        settings: { extendParams: ['grok4_20ReasoningEffort'], searchImpl: 'params' },
+      },
+    ],
+    loadModelsMock: vi.fn(),
+    mockDefaultModelList: [
+      {
+        contextWindowTokens: 8192,
+        displayName: 'GPT-4',
+        enabled: true,
+        functionCall: true,
+        id: 'gpt-4',
+        maxOutput: 4096,
+        reasoning: false,
+        vision: true,
+      },
+      {
+        displayName: 'Claude 3 Opus',
+        enabled: true,
+        functionCall: true,
+        id: 'claude-3-opus',
+        reasoning: true,
+        vision: true,
+      },
+      {
+        displayName: 'Qwen Turbo',
+        enabled: true,
+        functionCall: true,
+        id: 'qwen-turbo',
+        reasoning: false,
+        vision: false,
+      },
+      // Added for more detailed tests:
+      {
+        displayName: 'Custom Known FC True',
+        enabled: true,
+        functionCall: true,
+        id: 'custom-model-known-fc-true', // For testing: knownModel.abilities.fc=true, no keyword match for openai fc
+        reasoning: false,
+        vision: false,
+      },
+      {
+        displayName: 'GPT-4o Known FC False',
+        enabled: true,
+        functionCall: false,
+        id: 'gpt-4o-known-fc-false', // For testing: '4o' keyword match, knownModel.abilities.fc=false
+        reasoning: true,
+        vision: true,
+      },
+      {
+        displayName: 'GPT-4o Known Vision False',
+        enabled: true,
+        functionCall: true,
+        id: 'gpt-4o-known-vision-false', // For testing: '4o' keyword match, knownModel.abilities.vision=false
+        reasoning: true,
+        vision: false,
+      },
+      {
+        displayName: 'GPT-4o Audio Known Abilities True',
+        enabled: true,
+        functionCall: true,
+        id: 'gpt-4o-audio-known-abilities-true', // For testing: '4o' keyword, 'audio' excluded, but knownModel.abilities.fc/vision=true
+        reasoning: true,
+        vision: true,
+      },
+      {
+        displayName: 'GPT-4o Audio Known Abilities False',
+        enabled: true,
+        functionCall: false,
+        id: 'gpt-4o-audio-known-abilities-false', // For testing: '4o' keyword, 'audio' excluded, and knownModel.abilities.fc/vision=false
+        reasoning: false,
+        vision: false,
+      },
+      {
+        displayName: 'Known Model DisplayName',
+        enabled: true,
+        id: 'model-known-displayname',
+      },
+      {
+        contextWindowTokens: 1000,
+        enabled: true,
+        id: 'model-known-context',
+        maxOutput: 100,
+      },
+      {
+        displayName: 'Known Disabled Model',
+        enabled: false,
+        id: 'model-known-disabled',
+      },
+      {
+        displayName: 'Known Model With Settings',
+        enabled: true,
+        id: 'model-known-settings',
+        settings: {
+          extendParams: ['enableReasoning'],
+          searchImpl: 'params',
+          searchProvider: 'builtin',
+        },
+      },
+      {
+        abilities: { reasoning: true },
+        contextWindowTokens: 999_999,
+        description: 'global donor',
+        displayName: 'Global Grok 4.6',
+        id: 'grok-4.6',
+        releasedAt: '2026-09-01',
+        settings: { extendParams: ['enableReasoning'], searchImpl: 'internal' },
+      },
+      {
+        abilities: { reasoning: true, vision: true },
+        id: 'claude-opus-4-thinking-high',
+        releasedAt: '2026-01-01',
+        settings: { extendParams: ['enableReasoning'], searchImpl: 'params' },
+      },
+    ] as (Partial<ChatModelCard> & { id: string })[],
+    xaiProviderModels: [
+      {
+        abilities: { reasoning: true, vision: true },
+        contextWindowTokens: 222,
+        displayName: 'XAI Grok 4.5',
+        id: 'grok-4.5',
+        releasedAt: '2026-07-08',
+        settings: { extendParams: ['grok4_5ReasoningEffort'], searchImpl: 'params' },
+      },
+    ],
+  }),
+);
 
 // Mock the import
 vi.mock('model-bank', () => ({
@@ -127,6 +189,8 @@ vi.mock('model-bank', () => ({
       abilities: { search: true, functionCall: true, reasoning: true, vision: true },
     },
   ],
+  grok: grokProviderModels,
+  xai: xaiProviderModels,
 }));
 
 vi.mock('@lobechat/business-model-bank/model-config', () => ({
@@ -530,6 +594,99 @@ describe('modelParse', () => {
         expect(settings?.searchProvider).toBe('builtin');
       });
     });
+
+    it('inherits abilities and effort settings for an unknown id without copying the donor card', async () => {
+      const result = await processModelList(
+        [
+          {
+            contextWindowTokens: 128_000,
+            displayName: 'Grok 4.7',
+            id: 'grok-4.7',
+            pricing: { input: 3, output: 9 },
+          },
+          { id: 'grok-4.6' },
+          { id: 'grok-4.7-non-reasoning' },
+          { id: 'claude-opus-5' },
+          { id: 'brand-new-model' },
+        ],
+        MODEL_LIST_CONFIGS.xai,
+        'grok',
+      );
+
+      const inherited = result.find((model) => model.id === 'grok-4.7');
+      const exact = result.find((model) => model.id === 'grok-4.6');
+      const nonReasoning = result.find((model) => model.id === 'grok-4.7-non-reasoning');
+      const globalDonor = result.find((model) => model.id === 'claude-opus-5');
+      const unknown = result.find((model) => model.id === 'brand-new-model');
+
+      expect(inherited).toEqual(
+        expect.objectContaining({
+          contextWindowTokens: 128_000,
+          description: '',
+          displayName: 'Grok 4.7',
+          files: true,
+          functionCall: true,
+          id: 'grok-4.7',
+          reasoning: true,
+          search: true,
+          settings: { extendParams: ['grok4_20ReasoningEffort'], searchImpl: 'params' },
+          vision: true,
+        }),
+      );
+      expect(inherited?.pricing?.units).toEqual([
+        { name: 'textInput', rate: 3, strategy: 'fixed', unit: 'millionTokens' },
+        { name: 'textOutput', rate: 9, strategy: 'fixed', unit: 'millionTokens' },
+      ]);
+      expect(Reflect.get(inherited ?? {}, 'structuredOutput')).toBe(true);
+      expect(Reflect.get(inherited ?? {}, FAMILY_INHERITED_KEYS)).toMatchObject({
+        settings: expect.arrayContaining(['extendParams', 'searchImpl']),
+      });
+      expect(Object.keys(inherited ?? {})).not.toContain('familyInheritedKeys');
+      expect(inherited?.settings).not.toHaveProperty('searchProvider');
+
+      expect(exact).toEqual(
+        expect.objectContaining({
+          contextWindowTokens: 111,
+          description: 'provider donor',
+          displayName: 'Provider Grok 4.6',
+          settings: {
+            extendParams: ['grok4_20ReasoningEffort'],
+            searchImpl: 'params',
+            searchProvider: 'builtin',
+          },
+        }),
+      );
+      expect(exact).not.toHaveProperty('files');
+      expect(Reflect.get(exact ?? {}, FAMILY_INHERITED_KEYS)).toBeUndefined();
+
+      expect(nonReasoning).toEqual(
+        expect.objectContaining({
+          displayName: 'grok-4.7-non-reasoning',
+          reasoning: false,
+          search: true,
+          settings: { searchImpl: 'params' },
+          vision: true,
+        }),
+      );
+      expect(nonReasoning?.settings).not.toHaveProperty('extendParams');
+
+      expect(globalDonor).toEqual(
+        expect.objectContaining({
+          displayName: 'claude-opus-5',
+          reasoning: true,
+          settings: { extendParams: ['enableReasoning'], searchImpl: 'params' },
+          vision: true,
+        }),
+      );
+      expect(unknown).toEqual(
+        expect.objectContaining({
+          displayName: 'brand-new-model',
+          reasoning: false,
+          vision: false,
+        }),
+      );
+      expect(unknown?.settings).toBeUndefined();
+    });
   });
 
   describe('processMultiProviderModelList', () => {
@@ -594,6 +751,39 @@ describe('modelParse', () => {
       const result = await processMultiProviderModelList(modelList);
       expect(result).toHaveLength(0);
       expect(Array.isArray(result)).toBe(true);
+    });
+
+    it('inherits from the detected provider bank and keeps extendParams only for aggregator policy', async () => {
+      const plain = await processMultiProviderModelList([
+        { displayName: 'Grok 4.7', id: 'grok-4.7' },
+        { id: 'grok-4.5' },
+      ]);
+      const inherited = plain.find((model) => model.id === 'grok-4.7');
+      const exact = plain.find((model) => model.id === 'grok-4.5');
+
+      expect(inherited).toEqual(
+        expect.objectContaining({
+          displayName: 'Grok 4.7',
+          reasoning: true,
+          vision: true,
+        }),
+      );
+      expect(inherited?.settings).toBeUndefined();
+      expect(exact).toEqual(
+        expect.objectContaining({
+          contextWindowTokens: 222,
+          displayName: 'XAI Grok 4.5',
+        }),
+      );
+
+      const aggregated = await processMultiProviderModelList([{ id: 'grok-4.7' }], 'aihubmix');
+      expect(aggregated[0]?.settings).toEqual({
+        extendParams: ['grok4_5ReasoningEffort'],
+        searchImpl: 'params',
+      });
+      expect(Reflect.get(aggregated[0] ?? {}, FAMILY_INHERITED_KEYS)).toMatchObject({
+        settings: expect.arrayContaining(['extendParams', 'searchImpl']),
+      });
     });
 
     it('should fall back to default values when no information is available', async () => {

@@ -28,6 +28,7 @@ import {
   AiCatalogValidationError,
 } from './adminService';
 import { applyChatGPTWebCatalogSyncPolicy, mapCardsToBatchUpdate } from './adminService.sync';
+import { FAMILY_INHERITED_KEYS } from './adminService.sync.mapping';
 import { AiCatalogExecutionResolver } from './runtimeAdapter';
 import type * as SharedOAuthRefreshModule from './sharedOAuthRefresh';
 
@@ -241,6 +242,251 @@ describe('mapCardsToBatchUpdate', () => {
         settings: { extendParams: ['gpt5_6ReasoningEffort'] },
       }),
     ]);
+  });
+
+  const inheritedGrok47 = () => {
+    const card = {
+      displayName: 'Grok 4.7',
+      files: true,
+      functionCall: true,
+      id: 'grok-4.7',
+      reasoning: true,
+      search: true,
+      settings: {
+        extendParams: ['grok4_20ReasoningEffort' as const],
+        searchImpl: 'params' as const,
+      },
+      structuredOutput: true,
+      type: 'chat' as const,
+      vision: true,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: {
+        abilities: ['files', 'functionCall', 'reasoning', 'search', 'structuredOutput', 'vision'],
+        settings: ['extendParams', 'searchImpl'],
+      },
+    });
+    return card;
+  };
+
+  it('persists inferred abilities and settings on a new row', () => {
+    const result = mapCardsToBatchUpdate([inheritedGrok47()], []);
+
+    expect(result.created).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      abilities: {
+        files: true,
+        functionCall: true,
+        reasoning: true,
+        search: true,
+        structuredOutput: true,
+        vision: true,
+      },
+      enabled: false,
+      id: 'grok-4.7',
+      settings: { extendParams: ['grok4_20ReasoningEffort'], searchImpl: 'params' },
+    });
+  });
+
+  it('back-fills an existing row whose abilities and settings are both empty', () => {
+    const existing = draftModel({
+      abilities: {},
+      displayName: 'Grok 4.7',
+      id: 'model-1',
+      modelKey: 'grok-4.7',
+      settings: {},
+    });
+
+    const result = mapCardsToBatchUpdate([inheritedGrok47()], [existing]);
+
+    expect(result.updated).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      abilities: { files: true, reasoning: true, search: true, structuredOutput: true },
+      id: 'model-1',
+      settings: { extendParams: ['grok4_20ReasoningEffort'], searchImpl: 'params' },
+    });
+    expect(result.items[0]).not.toHaveProperty('enabled');
+  });
+
+  it('does not overwrite abilities or family-inherited settings once an admin has set either', () => {
+    const abilitiesOnly = draftModel({
+      abilities: { vision: true },
+      displayName: 'Grok 4.7',
+      id: 'abilities-set',
+      modelKey: 'grok-4.7',
+      settings: {},
+    });
+    const settingsOnly = draftModel({
+      abilities: {},
+      displayName: 'Grok 4.7',
+      id: 'settings-set',
+      modelKey: 'grok-4.7',
+      settings: { searchImpl: 'tool' },
+    });
+
+    expect(mapCardsToBatchUpdate([inheritedGrok47()], [abilitiesOnly]).items).toEqual([]);
+    expect(mapCardsToBatchUpdate([inheritedGrok47()], [settingsOnly]).items).toEqual([]);
+  });
+
+  it('strips donor extendParams and searchImpl when the card already has settings and the row was edited', () => {
+    const card = {
+      displayName: 'Grok 4.8',
+      id: 'grok-4.8',
+      reasoning: true,
+      search: true,
+      settings: {
+        extendParams: ['grok4_20ReasoningEffort' as const],
+        searchImpl: 'params' as const,
+      },
+      type: 'chat' as const,
+      vision: true,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: {
+        abilities: ['reasoning', 'search', 'vision'],
+        settings: ['extendParams', 'searchImpl'],
+      },
+    });
+    const existing = draftModel({
+      abilities: { vision: true },
+      displayName: 'Grok 4.8',
+      id: 'model-1',
+      modelKey: 'grok-4.8',
+      settings: { searchImpl: 'internal' },
+    });
+
+    const result = mapCardsToBatchUpdate([card], [existing]);
+
+    expect(result.items).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('familyInheritedKeys');
+    expect(JSON.stringify(result)).not.toContain('grok4_20ReasoningEffort');
+    expect(JSON.stringify(result)).not.toContain('searchImpl');
+  });
+
+  it('keeps an admin searchImpl when a touched row also receives a live effort list', () => {
+    const card = {
+      displayName: 'Grok 4.8',
+      id: 'grok-4.8',
+      settings: {
+        extendParams: ['grok4_5ReasoningEffort' as const],
+        searchImpl: 'params' as const,
+      },
+      type: 'chat' as const,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: { abilities: ['reasoning'], settings: ['searchImpl'] },
+    });
+    const existing = draftModel({
+      abilities: {},
+      displayName: 'Grok 4.8',
+      id: 'model-1',
+      modelKey: 'grok-4.8',
+      settings: { searchImpl: 'internal' },
+    });
+
+    const result = mapCardsToBatchUpdate([card], [existing]);
+
+    expect(result.updated).toBe(1);
+    expect(result.items[0]?.settings).toEqual({
+      extendParams: ['grok4_5ReasoningEffort'],
+      searchImpl: 'internal',
+    });
+  });
+
+  it('does not overwrite settings with donor values when the marker lists no settings keys', () => {
+    const card = {
+      displayName: 'Grok 4.7',
+      id: 'grok-4.7',
+      reasoning: true,
+      settings: {
+        extendParams: ['grok4_20ReasoningEffort' as const],
+        searchImpl: 'params' as const,
+      },
+      type: 'chat' as const,
+      vision: true,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: { abilities: ['reasoning', 'vision'], settings: [] },
+    });
+    const existing = draftModel({
+      abilities: { functionCall: true },
+      displayName: 'Grok 4.7',
+      id: 'model-1',
+      modelKey: 'grok-4.7',
+      settings: { searchImpl: 'internal' },
+    });
+
+    const result = mapCardsToBatchUpdate([card], [existing]);
+
+    expect(result.items).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('grok4_20ReasoningEffort');
+    expect(JSON.stringify(result)).not.toContain('searchImpl');
+  });
+
+  it('keeps an admin ability the live payload did not report', async () => {
+    const cards = await listThroughChatGPT([
+      {
+        displayName: 'Custom Grok',
+        id: 'codex-sync-ability-fixture',
+        reasoning: true,
+      },
+    ]);
+    const existing = draftModel({
+      abilities: { reasoning: false, vision: true },
+      displayName: cards[0]?.displayName ?? 'codex-sync-ability-fixture',
+      id: 'model-1',
+      modelKey: 'codex-sync-ability-fixture',
+    });
+
+    const result = mapCardsToBatchUpdate(cards, [existing]);
+
+    expect(result.items[0]?.abilities).toEqual({ reasoning: true, vision: true });
+  });
+
+  it('persists reasoning false for a non-reasoning id on a new or empty row', () => {
+    const card = {
+      displayName: 'Grok 4.7 Non Reasoning',
+      id: 'grok-4.7-non-reasoning',
+      reasoning: false as const,
+      search: true,
+      settings: { searchImpl: 'params' as const },
+      type: 'chat' as const,
+      vision: true,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: {
+        abilities: ['reasoning', 'search', 'vision'],
+        settings: ['searchImpl'],
+      },
+    });
+
+    const created = mapCardsToBatchUpdate([card], []);
+    expect(created.items[0]?.abilities).toMatchObject({
+      reasoning: false,
+      search: true,
+      vision: true,
+    });
+    expect(JSON.stringify(created.items[0])).not.toContain('familyInheritedKeys');
+
+    const empty = draftModel({
+      abilities: {},
+      displayName: 'Grok 4.7 Non Reasoning',
+      id: 'model-1',
+      modelKey: 'grok-4.7-non-reasoning',
+      settings: {},
+    });
+    const backfill = mapCardsToBatchUpdate([card], [empty]);
+    expect(backfill.items[0]?.abilities).toMatchObject({ reasoning: false, search: true });
   });
 });
 

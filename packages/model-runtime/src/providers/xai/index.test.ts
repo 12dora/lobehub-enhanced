@@ -4,6 +4,7 @@ import type { Mock } from 'vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { testProvider } from '../../providerTestUtils';
+import { FAMILY_INHERITED_KEYS } from '../../utils/familyInherit';
 import { LobeSuperGrokAI } from '../superGrok';
 import type { XAIModelCard } from './index';
 import { LobeXAI } from './index';
@@ -306,6 +307,32 @@ describe('LobeXAI - custom features', () => {
   });
 
   describe('models', () => {
+    it('inherits grok-4.7 from the xAI 4.5 card and keeps upstream context', async () => {
+      vi.spyOn(instance['client'].models, 'list').mockResolvedValue({
+        data: [{ context_length: 131_072, id: 'grok-4.7' }],
+      } as never);
+
+      const models = await instance.models();
+      const card = models.find((model) => model.id === 'grok-4.7');
+
+      expect(card).toEqual(
+        expect.objectContaining({
+          contextWindowTokens: 131_072,
+          displayName: 'grok-4.7',
+          functionCall: true,
+          reasoning: true,
+          search: true,
+          settings: { extendParams: ['grok4_5ReasoningEffort'], searchImpl: 'params' },
+          vision: true,
+        }),
+      );
+      expect(card?.settings?.extendParams).not.toContain('grok4_20ReasoningEffort');
+      expect(Reflect.get(card ?? {}, FAMILY_INHERITED_KEYS)).toMatchObject({
+        settings: expect.arrayContaining(['extendParams', 'searchImpl']),
+      });
+      expect(Object.keys(card ?? {})).not.toContain('familyInheritedKeys');
+    });
+
     it('should fetch and process model list correctly', async () => {
       const mockModelList: XAIModelCard[] = [
         { id: 'grok-2' },

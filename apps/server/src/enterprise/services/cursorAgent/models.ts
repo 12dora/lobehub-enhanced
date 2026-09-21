@@ -21,6 +21,13 @@ export interface CursorAgentModel {
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const SUFFIX_RE = / \((?:current|default)\)$/i;
 
+/** CLI names include zero-width characters and doubled spaces (`Grok 4.7  High Fast`). */
+const sanitizeCursorText = (value: string): string =>
+  value
+    .replaceAll(/[\u200B-\u200D\uFEFF]/g, '')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+
 const cache = new Map<string, { expiresAt: number; models: CursorAgentModel[] }>();
 
 export const tokenCacheKey = (token: string): string =>
@@ -33,12 +40,12 @@ export const tokenCacheKey = (token: string): string =>
 export const parseCursorModelList = (text: string): CursorAgentModel[] => {
   const models: CursorAgentModel[] = [];
   for (const raw of text.split('\n')) {
-    const line = raw.trim();
+    const line = sanitizeCursorText(raw);
     const separator = line.indexOf(' - ');
     if (separator <= 0) continue;
-    const id = line.slice(0, separator);
+    const id = sanitizeCursorText(line.slice(0, separator));
     if (!id || id.includes(' ') || id.includes('\t')) continue;
-    const name = line.slice(separator + 3).replace(SUFFIX_RE, '');
+    const name = sanitizeCursorText(line.slice(separator + 3).replace(SUFFIX_RE, ''));
     if (!name) continue;
     models.push({ id, name });
   }

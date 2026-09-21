@@ -1,6 +1,6 @@
 import type { ChatModelCard } from '@lobechat/types';
 import createDebug from 'debug';
-import { cursor as cursorChatModels } from 'model-bank';
+import { cursor as cursorChatModels, loadModels } from 'model-bank';
 
 import { deriveCursorConversationId, isUuidV4 } from '../../browserProfile';
 import type { LobeRuntimeAI } from '../../core/BaseAI';
@@ -9,6 +9,7 @@ import type { ChatMethodOptions, ChatStreamPayload } from '../../types';
 import { AgentRuntimeErrorType } from '../../types/error';
 import { AgentRuntimeError } from '../../utils/createError';
 import { debugStream } from '../../utils/debugStream';
+import { inheritFamilyCard, stampFamilyInheritedKeys } from '../../utils/familyInherit';
 import { StreamingResponse } from '../../utils/response';
 import { isCursorToolsActive } from './toolProtocol';
 import { buildCursorTurn } from './turn';
@@ -40,7 +41,19 @@ const CURSOR_CATALOG = new Map(cursorChatModels.map((model) => [model.id, model]
 
 type CursorCatalogEntry = (typeof cursorChatModels)[number];
 
-/** Map a model-bank entry onto a chat card. Settings are shallow-cloned. */
+/** Copy bank settings so a caller `push` cannot mutate the shared catalog array. */
+const cloneCursorSettings = (
+  settings: CursorCatalogEntry['settings'] | undefined,
+): ChatModelCard['settings'] => {
+  if (!settings) return undefined;
+  const extendParams = settings.extendParams;
+  return {
+    ...settings,
+    ...(Array.isArray(extendParams) ? { extendParams: [...extendParams] } : {}),
+  };
+};
+
+/** Map a model-bank entry onto a chat card. Settings arrays are copied. */
 export const toCursorKnownModelCard = (
   id: string,
   remoteName: string | undefined,
@@ -56,7 +69,7 @@ export const toCursorKnownModelCard = (
     id,
     reasoning,
     search: known.abilities?.search,
-    settings: known.settings ? { ...known.settings } : undefined,
+    settings: cloneCursorSettings(known.settings),
     type: 'chat',
     vision: known.abilities?.vision,
   };
@@ -191,25 +204,72 @@ export class LobeCursorAI implements LobeRuntimeAI {
     }
 
     const models = Array.isArray(json.models) ? json.models : [];
-    return models
-      .filter(
-        (model): model is { id: string; name?: string } =>
-          typeof model?.id === 'string' && model.id.length > 0,
-      )
-      .map((model) => {
-        const id = model.id;
-        const known = CURSOR_CATALOG.get(id);
-        if (known) return toCursorKnownModelCard(id, model.name, known);
-        const displayName = model.name || id;
-        return {
-          contextWindowTokens: /1m/i.test(displayName) ? 1_000_000 : undefined,
-          displayName,
-          enabled: false,
-          id,
-          reasoning: undefined,
-          type: 'chat' as const,
-        } as ChatModelCard;
-      });
+    const listed = models.filter(
+      (model): model is { id: string; name?: string } =>
+        typeof model?.id === 'string' && model.id.length > 0,
+    );
+    const needsInheritance = listed.some((model) => !CURSOR_CATALOG.has(model.id));
+    const globalCards = needsInheritance ? await loadModels() : [];
+    const providerCards = needsInheritance ? [...CURSOR_CATALOG.values()] : [];
+
+    return listed.map((model) => {
+      const id = model.id;
+      const known = CURSOR_CATALOG.get(id);
+      if (known) return toCursorKnownModelCard(id, model.name, known);
+      const displayName = model.name || id;
+      const contextWindowTokens = /1m/i.test(displayName) ? 1_000_000 : undefined;
+      const base: ChatModelCard = {
+        displayName,
+        enabled: false,
+        id,
+        reasoning: undefined,
+        type: 'chat',
+        ...(contextWindowTokens ? { contextWindowTokens } : {}),
+      };
+      // Effort is already in the id (`-high`, `-xhigh`, …). Never invent extendParams.
+      const inherited = inheritFamilyCard(
+        id,
+        { globalCards, providerCards },
+        { extendParams: false, type: 'chat' },
+      );
+      if (!inherited) return base;
+
+      const abilities = inherited.abilities;
+      const abilityKeys: string[] = [];
+      if (typeof abilities?.files === 'boolean') {
+        base.files = abilities.files;
+        abilityKeys.push('files');
+      }
+      if (typeof abilities?.functionCall === 'boolean') {
+        base.functionCall = abilities.functionCall;
+        abilityKeys.push('functionCall');
+      }
+      if (typeof abilities?.reasoning === 'boolean') {
+        base.reasoning = abilities.reasoning;
+        abilityKeys.push('reasoning');
+      }
+      if (typeof abilities?.search === 'boolean') {
+        base.search = abilities.search;
+        abilityKeys.push('search');
+      }
+      if (typeof abilities?.vision === 'boolean') {
+        base.vision = abilities.vision;
+        abilityKeys.push('vision');
+      }
+      if (typeof abilities?.imageOutput === 'boolean') {
+        base.imageOutput = abilities.imageOutput;
+        abilityKeys.push('imageOutput');
+      }
+      if (typeof abilities?.video === 'boolean') {
+        base.video = abilities.video;
+        abilityKeys.push('video');
+      }
+      const settings = cloneCursorSettings(inherited.settings);
+      const settingKeys = settings ? Object.keys(settings) : [];
+      if (settings) base.settings = settings;
+      stampFamilyInheritedKeys(base, { abilities: abilityKeys, settings: settingKeys });
+      return base;
+    });
   }
 
   private async request(url: string, init: RequestInit): Promise<Response> {

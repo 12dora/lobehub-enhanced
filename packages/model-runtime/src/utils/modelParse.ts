@@ -1,6 +1,5 @@
 import type { ChatModelCard } from '@lobechat/types';
 import type {
-  AIBaseModelCard,
   AiFullModelCard,
   AiModelSettings,
   AiModelType,
@@ -12,6 +11,14 @@ import type {
 import { AiModelTypeSchema, ModelProvider } from 'model-bank';
 
 import type { ModelProviderKey } from '../types';
+import {
+  FAMILY_INHERITED_KEYS,
+  type FamilyKnownCard,
+  type InheritedFamilyCard,
+  inheritFamilyCard,
+  readFamilyInheritedKeys,
+  stampFamilyInheritedKeys,
+} from './familyInherit';
 import { EMBEDDING_MODEL_KEYWORDS } from './modelTypeKeywords';
 
 export { EMBEDDING_MODEL_KEYWORDS } from './modelTypeKeywords';
@@ -285,41 +292,36 @@ const isKeywordListMatch = (modelId: string, keywords: readonly string[]): boole
   return includeKeywords.some((keyword) => matchKeyword(keyword));
 };
 
+const findCardById = <T extends { id: string }>(cards: readonly T[], id: string): T | undefined => {
+  const lower = id.toLowerCase();
+  return cards.find((card) => card.id.toLowerCase() === lower);
+};
+
 /**
- * Find the corresponding local model configuration based on provider type
- * @param modelId Model ID
- * @param provider Provider type
- * @returns Matching local model configuration
+ * Same type `processModelCard` will assign when the upstream payload omits one.
+ * Passed into family matching so a chat donor cannot fill an image or embedding id.
  */
-// Accepts either a provider id or a model-family key — at runtime it simply
-// looks up a same-named export in model-bank and skips when absent.
-const findKnownModelByProvider = async (
-  modelId: string,
-  provider: ModelProviderKey | keyof typeof MODEL_LIST_CONFIGS,
-): Promise<any> => {
-  const lowerModelId = modelId.toLowerCase();
-
-  try {
-    // Attempt to dynamically import the corresponding configuration file
-    const modules = await import('model-bank');
-
-    // If provider configuration file doesn't exist, skip
-    if (!(provider in modules)) {
-      return null;
-    }
-
-    const providerModels = modules[provider as keyof typeof modules] as AIBaseModelCard[];
-
-    // If import succeeds and has data, perform search
-    if (Array.isArray(providerModels)) {
-      return providerModels.find((m) => m.id.toLowerCase() === lowerModelId);
-    }
-
-    return null;
-  } catch {
-    // If import fails (file doesn't exist or other error), return null
-    return null;
+const resolveInheritType = (model: ProcessableModelCard): string => {
+  const normalized = normalizeModelType(model.type);
+  if (normalized) return normalized;
+  const id = model.id.toLowerCase();
+  if (
+    isKeywordListMatch(
+      id,
+      IMAGE_MODEL_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+    )
+  ) {
+    return 'image';
   }
+  if (
+    isKeywordListMatch(
+      id,
+      EMBEDDING_MODEL_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+    )
+  ) {
+    return 'embedding';
+  }
+  return 'chat';
 };
 
 /**
@@ -473,6 +475,21 @@ const mergeSettings = (
   } else {
     delete merged.searchImpl;
     delete merged.searchProvider;
+  }
+
+  const carried = knownSettings ? readFamilyInheritedKeys(knownSettings) : undefined;
+  if (carried) {
+    const upstreamExtend = modelSettings?.extendParams;
+    const settings = carried.settings.filter((key) => {
+      if (!Object.hasOwn(merged, key)) return false;
+      if (key === 'extendParams') {
+        return !(Array.isArray(upstreamExtend) && upstreamExtend.length > 0);
+      }
+      if (key === 'searchImpl') return !modelSettings?.searchImpl;
+      if (key === 'searchProvider') return !modelSettings?.searchProvider;
+      return true;
+    });
+    stampFamilyInheritedKeys(merged, { abilities: [], settings });
   }
 
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -718,13 +735,102 @@ export interface ProcessableModelCard {
   vision?: boolean;
 }
 
+const readModuleExport = (module: object, key: string): unknown => {
+  try {
+    if (!(key in module)) return undefined;
+    return Reflect.get(module, key);
+  } catch {
+    // A partial vi.mock throws when the provider export was not stubbed.
+    return undefined;
+  }
+};
+
+const isFamilyKnownCard = (value: unknown): value is FamilyKnownCard =>
+  !!value && typeof value === 'object' && 'id' in value && typeof value.id === 'string';
+
+const toFamilyCards = (value: unknown): FamilyKnownCard[] =>
+  Array.isArray(value) ? value.filter(isFamilyKnownCard) : [];
+
+/**
+ * Exact id wins. On a miss, a same-family donor supplies abilities and settings
+ * only — display name, context, and pricing stay on the upstream card.
+ */
+const DONOR_ABILITY_KEYS = [
+  'files',
+  'functionCall',
+  'imageOutput',
+  'reasoning',
+  'search',
+  'structuredOutput',
+  'video',
+  'vision',
+] as const;
+
+const lookupKnownModel = (
+  model: ProcessableModelCard,
+  exact: unknown,
+  providerCards: readonly FamilyKnownCard[],
+  globalCards: readonly FamilyKnownCard[],
+): { inherited?: InheritedFamilyCard; knownModel: unknown } => {
+  if (exact) return { knownModel: exact };
+  const inherited = inheritFamilyCard(
+    model.id,
+    { globalCards, providerCards },
+    { type: resolveInheritType(model) },
+  );
+  if (!inherited) return { knownModel: null };
+  const settings = inherited.settings ? { ...inherited.settings } : undefined;
+  if (settings?.extendParams) settings.extendParams = [...settings.extendParams];
+  const settingKeys: string[] = [];
+  if (settings?.extendParams?.length) settingKeys.push('extendParams');
+  if (settings?.searchImpl) settingKeys.push('searchImpl');
+  if (settings && settingKeys.length > 0) {
+    stampFamilyInheritedKeys(settings, { abilities: [], settings: settingKeys });
+  }
+  return {
+    inherited,
+    knownModel: {
+      abilities: inherited.abilities,
+      ...(settings ? { settings } : {}),
+    },
+  };
+};
+
+const stampFamilyInheritance = (
+  model: ProcessableModelCard,
+  processed: ChatModelCard | undefined,
+  inherited: InheritedFamilyCard | undefined,
+): ChatModelCard | undefined => {
+  if (!processed || !inherited) return processed;
+  const files = inherited.abilities?.files;
+  if (typeof files === 'boolean') processed.files = files;
+  if (typeof inherited.abilities?.structuredOutput === 'boolean') {
+    Object.assign(processed, { structuredOutput: inherited.abilities.structuredOutput });
+  }
+  const settingMark = processed.settings ? readFamilyInheritedKeys(processed.settings) : undefined;
+  if (processed.settings) Reflect.deleteProperty(processed.settings, FAMILY_INHERITED_KEYS);
+  const abilityKeys: string[] = [];
+  for (const key of DONOR_ABILITY_KEYS) {
+    const inheritedValue = inherited.abilities?.[key];
+    if (typeof inheritedValue !== 'boolean') continue;
+    if (typeof Reflect.get(model, key) === 'boolean') continue;
+    abilityKeys.push(key);
+  }
+  stampFamilyInheritedKeys(processed, {
+    abilities: abilityKeys,
+    settings: settingMark?.settings ?? [],
+  });
+  return processed;
+};
+
 export const processModelList = async (
   modelList: ProcessableModelCard[],
   config: ModelProcessorConfig,
   provider?: ModelProviderKey,
 ): Promise<ChatModelCard[]> => {
-  const { loadModels } = await import('model-bank');
-  const builtinModels = await loadModels();
+  const modelBank = await import('model-bank');
+  const builtinModels = await modelBank.loadModels();
+  const providerCards = provider ? toFamilyCards(readModuleExport(modelBank, provider)) : [];
 
   // If provider is provided, try to get the local configuration for that provider
   const providerLocalConfig = await getProviderLocalConfig(provider);
@@ -735,19 +841,20 @@ export const processModelList = async (
         return undefined;
       }
 
-      let knownModel: any = null;
+      let exact: unknown = provider ? (findCardById(providerCards, model.id) ?? null) : null;
+      if (!exact) exact = findCardById(builtinModels, model.id) ?? null;
 
-      // If provider is provided, prioritize using provider-specific configuration
-      if (provider) {
-        knownModel = await findKnownModelByProvider(model.id, provider);
-      }
-
-      // If not found, fall back to global configuration
-      if (!knownModel) {
-        knownModel = builtinModels.find((m) => model.id.toLowerCase() === m.id.toLowerCase());
-      }
-
-      const processedModel = processModelCard(model, config, knownModel);
+      const { inherited, knownModel } = lookupKnownModel(
+        model,
+        exact,
+        providerCards,
+        builtinModels,
+      );
+      const processedModel = stampFamilyInheritance(
+        model,
+        processModelCard(model, config, knownModel),
+        exact ? undefined : inherited,
+      );
 
       // If provider is provided and has local configuration, try to get the model's enabled status from it
       const providerLocalModelConfig = getModelLocalEnableConfig(
@@ -781,7 +888,16 @@ export const processMultiProviderModelList = async (
 ): Promise<ChatModelCard[]> => {
   const { loadModels } =
     (await import('@lobechat/business-model-bank/model-config')) as BusinessModelConfigModule;
+  const modelBank = await import('model-bank');
   const builtinModels = await loadModels();
+  const providerCardCache = new Map<string, FamilyKnownCard[]>();
+  const cardsFor = (key: string): FamilyKnownCard[] => {
+    const cached = providerCardCache.get(key);
+    if (cached) return cached;
+    const cards = toFamilyCards(readModuleExport(modelBank, key));
+    providerCardCache.set(key, cards);
+    return cards;
+  };
 
   // If providerid is provided, try to get the local configuration for that provider
   const providerLocalConfig = await getProviderLocalConfig(providerid);
@@ -791,13 +907,15 @@ export const processMultiProviderModelList = async (
       const detectedProvider = detectModelProvider(model.id);
       const config = MODEL_LIST_CONFIGS[detectedProvider];
 
-      // Prioritize using provider-specific configuration
-      let knownModel = await findKnownModelByProvider(model.id, detectedProvider);
+      let exact: unknown = findCardById(cardsFor(detectedProvider), model.id) ?? null;
+      if (!exact) exact = findCardById(builtinModels, model.id) ?? null;
 
-      // If not found, fall back to global configuration
-      if (!knownModel) {
-        knownModel = builtinModels.find((m) => model.id.toLowerCase() === m.id.toLowerCase());
-      }
+      const { inherited, knownModel } = lookupKnownModel(
+        model,
+        exact,
+        cardsFor(detectedProvider),
+        builtinModels,
+      );
 
       const includeKnownExtendParams =
         providerid === 'aihubmix' ||
@@ -812,10 +930,14 @@ export const processMultiProviderModelList = async (
         model,
       );
 
-      const processedModel = processModelCard(model, config, knownModel, {
-        includeKnownExtendParams,
-        includeSearchSettings,
-      });
+      const processedModel = stampFamilyInheritance(
+        model,
+        processModelCard(model, config, knownModel, {
+          includeKnownExtendParams,
+          includeSearchSettings,
+        }),
+        exact ? undefined : inherited,
+      );
 
       if (processedModel && includeSearchSettings && providerLocalModelConfig?.settings) {
         const localSettings = providerLocalModelConfig.settings as AiModelSettings | undefined;

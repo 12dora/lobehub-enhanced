@@ -188,6 +188,30 @@ describe('LobeSuperGrokAI - models', () => {
     );
   });
 
+  it('inherits a new grok-4.7 from the superGrok 4.6 card', async () => {
+    vi.spyOn(instance['client'].models, 'list').mockResolvedValue({
+      data: [{ context_length: 128_000, id: 'grok-4.7' }],
+    } as never);
+
+    const models = await instance.models();
+    const card = models.find((model) => model.id === 'grok-4.7');
+
+    expect(card).toEqual(
+      expect.objectContaining({
+        contextWindowTokens: 128_000,
+        displayName: 'grok-4.7',
+        files: true,
+        functionCall: true,
+        id: 'grok-4.7',
+        reasoning: true,
+        search: true,
+        settings: { extendParams: ['grok4_20ReasoningEffort'], searchImpl: 'params' },
+        vision: true,
+      }),
+    );
+    expect(models.filter((model) => model.id === 'grok-4.7')).toHaveLength(1);
+  });
+
   it('leaves abilities to keyword fallback when the list card has only an id', async () => {
     vi.spyOn(instance['client'].models, 'list').mockResolvedValue({
       data: [{ id: 'grok-keyword-only-test-model' }],

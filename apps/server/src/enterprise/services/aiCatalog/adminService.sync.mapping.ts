@@ -26,9 +26,18 @@ const ABILITY_KEYS = [
   'imageOutput',
   'reasoning',
   'search',
+  'structuredOutput',
   'video',
   'vision',
 ] as const;
+
+/**
+ * Which ability and settings keys were copied from a family donor.
+ * Same symbol as `FAMILY_INHERITED_KEYS` in `familyInherit.ts`
+ * (`Symbol.for('lobe.familyInheritedKeys')`). Object spread keeps it;
+ * `JSON.stringify` omits it, so it never enters the batch patch.
+ */
+export const FAMILY_INHERITED_KEYS = Symbol.for('lobe.familyInheritedKeys');
 
 const CHATGPTWEB_PROVIDER = 'chatgptweb';
 
@@ -121,18 +130,89 @@ const optionalPositiveInt = (value: unknown): number | undefined =>
 const optionalModelType = (value: unknown): ModelType | undefined =>
   typeof value === 'string' && MODEL_TYPE_SET.has(value) ? (value as ModelType) : undefined;
 
-const optionalSettingsRecord = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+const isEmptyRecord = (value: unknown): boolean => {
+  if (value == null) return true;
+  if (typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.keys(value).length === 0;
+};
 
-const cardToBatchUpdateItem = (card: ChatModelCard, id: string): BatchUpdateItem => {
-  const abilities = collectAbilities(card);
+/** Both objects empty means the row was stored by a sync that had nothing to infer. */
+const isUntouchedModel = (model: DraftModel): boolean =>
+  isEmptyRecord(model.abilities) && isEmptyRecord(model.settings);
+
+interface FamilyInheritedKeys {
+  abilities: readonly string[];
+  settings: readonly string[];
+}
+
+const readFamilyInheritedKeys = (card: ChatModelCard): FamilyInheritedKeys => {
+  const value = Reflect.get(card, FAMILY_INHERITED_KEYS);
+  if (!value || typeof value !== 'object') return { abilities: [], settings: [] };
+  const abilities = Reflect.get(value, 'abilities');
+  const settings = Reflect.get(value, 'settings');
+  return {
+    abilities: Array.isArray(abilities)
+      ? abilities.filter((key): key is string => typeof key === 'string')
+      : [],
+    settings: Array.isArray(settings)
+      ? settings.filter((key): key is string => typeof key === 'string')
+      : [],
+  };
+};
+
+/**
+ * Keyword and family inference land as flat booleans. Only `true` is persisted,
+ * plus explicit `reasoning: false` for ids that say they do not reason.
+ */
+const readFlatAbilities = (card: ChatModelCard): Record<string, boolean> | undefined => {
+  const abilities: Record<string, boolean> = {};
+  for (const key of ABILITY_KEYS) {
+    if (Reflect.get(card, key) === true) abilities[key] = true;
+  }
+  if (card.id.toLowerCase().includes('non-reasoning')) abilities.reasoning = false;
+  return Object.keys(abilities).length > 0 ? abilities : undefined;
+};
+
+const enumerableRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) record[key] = Reflect.get(value, key);
+  return record;
+};
+
+const readBooleanRecord = (value: unknown): Record<string, boolean> => {
+  const record = enumerableRecord(value);
+  if (!record) return {};
+  const next: Record<string, boolean> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (typeof item === 'boolean') next[key] = item;
+  }
+  return next;
+};
+
+const sameJson = (left: unknown, right: unknown): boolean => stableJson(left) === stableJson(right);
+
+const omitKeys = (
+  record: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): Record<string, unknown> | undefined => {
+  if (!record) return undefined;
+  if (keys.length === 0) return record;
+  const next = { ...record };
+  for (const key of keys) delete next[key];
+  return Object.keys(next).length > 0 ? next : undefined;
+};
+
+const cardToBatchUpdateItem = (
+  card: ChatModelCard,
+  id: string,
+  abilities: Record<string, boolean> | undefined,
+  settings: Record<string, unknown> | undefined,
+): BatchUpdateItem => {
   const displayName = clip(card.displayName, DISPLAY_NAME_MAX);
   const description = clip(card.description, DESCRIPTION_MAX);
   const contextWindowTokens = optionalPositiveInt(card.contextWindowTokens);
   const type = optionalModelType(card.type);
-  const settings = optionalSettingsRecord(card.settings);
   return {
     id,
     ...(abilities !== undefined ? { abilities } : {}),
@@ -162,7 +242,50 @@ export const mapCardsToBatchUpdate = (
     total += 1;
 
     const current = existingByKey.get(modelKey);
-    const item = cardToBatchUpdateItem(card, current?.id ?? modelKey);
+    const provenance = readUpstreamReportedAbilities(card);
+    const provenanceAbilities = collectAbilities(card);
+    const untouched = !current || isUntouchedModel(current);
+    const donor = readFamilyInheritedKeys(card);
+    const donorAbilities = new Set(donor.abilities);
+    // Provenance still wins on a new or empty row. Otherwise inferred booleans,
+    // including reasoning:false for non-reasoning ids, fill only that row.
+    // A touched row keeps stored keys and overlays live upstream keys. Donor
+    // keys are never written, so a column replace cannot drop an admin key.
+    let abilities: Record<string, boolean> | undefined;
+    if (untouched) {
+      abilities =
+        provenanceAbilities !== undefined ? { ...provenanceAbilities } : readFlatAbilities(card);
+    } else if (
+      current &&
+      provenance &&
+      Object.values(provenance).some((value) => typeof value === 'boolean')
+    ) {
+      const storedAbilities = readBooleanRecord(current.abilities);
+      const merged = { ...storedAbilities };
+      for (const key of ABILITY_KEYS) {
+        if (donorAbilities.has(key)) continue;
+        const value = provenance[key];
+        if (value === true) merged[key] = true;
+        else if (value === false) delete merged[key];
+      }
+      abilities = sameJson(merged, storedAbilities) ? undefined : merged;
+    }
+    const rawSettings = enumerableRecord(card.settings);
+    const storedSettings = current ? (enumerableRecord(current.settings) ?? {}) : {};
+    const inheritanceMarked = donor.abilities.length > 0 || donor.settings.length > 0;
+    let settings: Record<string, unknown> | undefined;
+    if (untouched) {
+      settings = rawSettings;
+    } else if (inheritanceMarked && donor.settings.length === 0) {
+      // Abilities were inherited and no settings key was listed. The settings
+      // object on the card is the donor blob and must not replace the column.
+      settings = undefined;
+    } else {
+      const liveSettings = omitKeys(rawSettings, donor.settings) ?? {};
+      const merged = { ...storedSettings, ...liveSettings };
+      settings = sameJson(merged, storedSettings) ? undefined : merged;
+    }
+    const item = cardToBatchUpdateItem(card, current?.id ?? modelKey, abilities, settings);
 
     if (!current) {
       // applyImmediate publishes site-wide — new remotes stay off until an admin enables them.

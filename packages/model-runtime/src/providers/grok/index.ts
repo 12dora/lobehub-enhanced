@@ -11,6 +11,7 @@ import { degradeFileUrlPartsToText } from '../../core/contextBuilders';
 import { createOpenAICompatibleRuntime } from '../../core/openaiCompatibleFactory';
 import type { ChatMethodOptions, ChatStreamPayload } from '../../types';
 import { AgentRuntimeErrorType } from '../../types/error';
+import { copyFamilyInheritedKeys } from '../../utils/familyInherit';
 import { MODEL_LIST_CONFIGS, processModelList } from '../../utils/modelParse';
 import type { XAIModelCard } from '../xai';
 import { handleXAIChatCompletionPayload, handleXAIResponsesPayload } from '../xai';
@@ -200,13 +201,17 @@ const applyLiveGrokReasoningEffort = (
     effortParam,
   ];
 
-  return {
+  // Live effort replaces extendParams. Donor keys that are still on the card
+  // (searchImpl, abilities) keep their mark so sync will not write them over an edit.
+  const next: ChatModelCard = {
     ...card,
     settings: {
       ...card.settings,
       extendParams,
     },
   };
+  copyFamilyInheritedKeys(card, next, ['extendParams']);
+  return next;
 };
 
 /**

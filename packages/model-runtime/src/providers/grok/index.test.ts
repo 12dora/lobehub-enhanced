@@ -7,6 +7,7 @@ import { deriveConversationSessionId, deriveGrokAgentId } from '../../browserPro
 import { OpenAIResponsesStream } from '../../core/streams';
 import { createReadableStream, readStreamChunk } from '../../core/streams/utils';
 import { testProvider } from '../../providerTestUtils';
+import { FAMILY_INHERITED_KEYS } from '../../utils/familyInherit';
 import {
   GROK_AUTHENTICATE_RESPONSE,
   GROK_CLIENT_IDENTIFIER,
@@ -922,6 +923,65 @@ describe('LobeGrokAI', () => {
       expect(models.find((model) => model.id === 'grok-4.6')?.settings?.extendParams).toEqual([
         'grok4_5ReasoningEffort',
       ]);
+    });
+
+    it('fills a silent new generation from the grok-4.6 donor and lets a live effort list override it', async () => {
+      vi.spyOn(instance['client'].models, 'list').mockResolvedValue({
+        data: [
+          {
+            context_window: 128_000,
+            id: 'grok-4.7',
+            name: 'Grok 4.7',
+          },
+          {
+            id: 'grok-4.8',
+            name: 'Grok 4.8 live',
+            reasoning_efforts: ['high', 'medium', 'low'],
+          },
+          {
+            id: 'grok-4-fast-non-reasoning',
+            name: 'Grok 4 Fast Non Reasoning',
+          },
+        ],
+      } as never);
+
+      const models = await instance.models();
+      const silent = models.find((model) => model.id === 'grok-4.7');
+      const live = models.find((model) => model.id === 'grok-4.8');
+      const nonReasoning = models.find((model) => model.id === 'grok-4-fast-non-reasoning');
+
+      expect(silent).toEqual(
+        expect.objectContaining({
+          contextWindowTokens: 128_000,
+          displayName: 'Grok 4.7',
+          files: true,
+          functionCall: true,
+          id: 'grok-4.7',
+          reasoning: true,
+          search: true,
+          settings: { extendParams: ['grok4_20ReasoningEffort'], searchImpl: 'params' },
+          vision: true,
+        }),
+      );
+      expect(silent?.description ?? '').not.toContain('frontier');
+      expect(Reflect.get(silent ?? {}, FAMILY_INHERITED_KEYS)).toMatchObject({
+        settings: expect.arrayContaining(['extendParams', 'searchImpl']),
+      });
+      expect(Object.keys(silent ?? {})).not.toContain('familyInheritedKeys');
+      expect(JSON.stringify(silent)).not.toContain('familyInheritedKeys');
+      expect(live?.settings?.extendParams).toEqual(['grok4_5ReasoningEffort']);
+      expect(Reflect.get(live ?? {}, FAMILY_INHERITED_KEYS)).toMatchObject({
+        settings: ['searchImpl'],
+      });
+      expect(Object.keys(live ?? {})).not.toContain('familyInheritedKeys');
+      expect(nonReasoning).toEqual(
+        expect.objectContaining({
+          id: 'grok-4-fast-non-reasoning',
+          reasoning: false,
+        }),
+      );
+      expect(nonReasoning?.settings?.extendParams).toBeUndefined();
+      expect(nonReasoning?.settings?.searchImpl).toBeUndefined();
     });
 
     it('falls back to xai keyword inference when the proxy is silent', async () => {

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { deriveCursorConversationId } from '../../browserProfile';
+import { FAMILY_INHERITED_KEYS } from '../../utils/familyInherit';
 import { AgentRuntimeErrorType } from '../../types/error';
 import {
   CURSOR_ACCOUNT_HEADER,
@@ -420,7 +421,7 @@ describe('LobeCursorAI', () => {
   });
 
   describe('models', () => {
-    it('GETs /v1/models and merges curated catalog abilities; unknown ids stay uninferred', async () => {
+    it('GETs /v1/models, merges catalog hits, and inherits unknown family ids', async () => {
       const fetchImpl = vi.fn(
         async () =>
           new Response(
@@ -430,6 +431,8 @@ describe('LobeCursorAI', () => {
                 { id: 'composer-2.5', name: 'Composer 2.5' },
                 { id: 'claude-opus-5-thinking-high', name: 'Claude Opus 5 1M Thinking' },
                 { id: 'gpt-5.6-sol-high', name: 'GPT-5.6 Sol 1M High' },
+                { id: 'grok-4.7-low', name: 'Grok 4.7 Low' },
+                { id: 'grok-4.7-high-fast', name: 'Grok 4.7  High Fast' },
                 { id: 'brand-new-cursor-model', name: 'Brand New 1M' },
               ],
             }),
@@ -450,7 +453,7 @@ describe('LobeCursorAI', () => {
         }),
       );
 
-      expect(cards).toEqual([
+      expect(cards.slice(0, 4)).toEqual([
         {
           contextWindowTokens: 200_000,
           // Follows the curated card in model-bank (renamed by the frontend round).
@@ -500,15 +503,49 @@ describe('LobeCursorAI', () => {
           type: 'chat',
           vision: true,
         },
-        {
-          contextWindowTokens: 1_000_000,
-          displayName: 'Brand New 1M',
-          enabled: false,
-          id: 'brand-new-cursor-model',
-          reasoning: undefined,
-          type: 'chat',
-        },
       ]);
+      expect(cards).toHaveLength(7);
+      const low = cards.find((card) => card.id === 'grok-4.7-low');
+      const fast = cards.find((card) => card.id === 'grok-4.7-high-fast');
+      expect(low).toEqual(
+        expect.objectContaining({
+          displayName: 'Grok 4.7 Low',
+          enabled: false,
+          functionCall: true,
+          id: 'grok-4.7-low',
+          reasoning: true,
+          search: true,
+          settings: { searchImpl: 'params' },
+          type: 'chat',
+        }),
+      );
+      expect(low?.vision).toBeUndefined();
+      expect(low?.settings).not.toHaveProperty('extendParams');
+      expect(low).not.toHaveProperty('contextWindowTokens');
+      expect(Reflect.get(low ?? {}, FAMILY_INHERITED_KEYS)).toEqual({
+        abilities: ['functionCall', 'reasoning', 'search'],
+        settings: ['searchImpl'],
+      });
+      expect(Object.keys(low ?? {})).not.toContain('familyInheritedKeys');
+      expect(fast).toEqual(
+        expect.objectContaining({
+          displayName: 'Grok 4.7  High Fast',
+          enabled: false,
+          functionCall: true,
+          reasoning: true,
+          search: true,
+          settings: { searchImpl: 'params' },
+        }),
+      );
+      expect(fast?.vision).toBeUndefined();
+      expect(cards[6]).toEqual({
+        contextWindowTokens: 1_000_000,
+        displayName: 'Brand New 1M',
+        enabled: false,
+        id: 'brand-new-cursor-model',
+        reasoning: undefined,
+        type: 'chat',
+      });
     });
 
     it('shallow-clones known settings so callers cannot mutate later cards', () => {
@@ -529,9 +566,9 @@ describe('LobeCursorAI', () => {
       expect(first.settings).toEqual({ extendParams: ['enableReasoning'] });
       expect(first.settings).not.toBe(known.settings);
       expect(first.settings).not.toBe(second.settings);
-      if (first.settings) first.settings.extendParams = ['effort'];
+      first.settings?.extendParams?.push('reasoningBudgetToken');
       expect(second.settings).toEqual({ extendParams: ['enableReasoning'] });
-      expect(known.settings).toEqual({ extendParams: ['enableReasoning'] });
+      expect(known.settings.extendParams).toEqual(['enableReasoning']);
     });
 
     it('maps a 401 on /v1/models to OAuthAuthorizationExpired', async () => {
