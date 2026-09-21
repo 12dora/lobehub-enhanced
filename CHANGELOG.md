@@ -5,6 +5,17 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.8.5 (2026-09-21)
+
+全场景真实接口复测后的修正。
+
+#### 🐛 Fixes
+
+- 会议室无法预订时说明具体原因(例如「预订时长不得少于 30 分钟」),不再笼统提示参数无效;确认卡片显示会议室名称。
+- 自己刚发起或刚处理的审批,立即反映在「待我审批」中。
+- 天眼查候选列表不再混入说明文字。
+- 「接口调用量」按真实接口分列。
+
 ## 1.8.4 (2026-09-21)
 
 根据首轮真实使用反馈的修正:自动审批生效、钉钉接口调用量治理、对话提速。
