@@ -46,7 +46,12 @@ const styles = createStaticStyles(({ css }) => ({
     font-size: ${cssVar.fontSizeSM};
     font-variant-numeric: tabular-nums;
   `,
-  /** One provider per block, divided by a hairline so the two credentials never blur together. */
+  /**
+   * One provider per block, divided by a hairline so the two credentials never blur together.
+   *
+   * A hairline above the FIRST block would divide it from the modal header rather than from a
+   * sibling — it is a rule with nothing on the other side of it, so the first block does without.
+   */
   section: css`
     display: flex;
     flex-direction: column;
@@ -55,6 +60,11 @@ const styles = createStaticStyles(({ css }) => ({
     min-width: 0;
     padding-block-start: 12px;
     border-block-start: 1px solid ${cssVar.colorBorderSecondary};
+
+    &:first-child {
+      padding-block-start: 0;
+      border-block-start: none;
+    }
   `,
   /** The provider name, and the probe that answers for it, on one line. */
   sectionHeader: css`
@@ -194,8 +204,6 @@ const EnterpriseLookupForm = memo<{
 
   return (
     <div className={formStyles.stack}>
-      <span className={formStyles.hint}>{t('systemGeneral.enterpriseLookup.editHint')}</span>
-
       <ProviderSection canOperate={canOperate} disabled={disabled} editor={editor} provider="qcc">
         <InfraField
           wide

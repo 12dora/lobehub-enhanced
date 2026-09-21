@@ -2812,8 +2812,6 @@ export default {
   'systemGeneral.enterpriseLookup.title': 'Enterprise lookup',
   'systemGeneral.enterpriseLookup.description':
     'Configure QCC and Tianyancha credentials so assistants can look up company information.',
-  'systemGeneral.enterpriseLookup.editHint':
-    'Every lookup consumes paid quota, so enable only the providers and categories you need.',
   'systemGeneral.enterpriseLookup.sections.routing': 'Routing and quota',
   'systemGeneral.enterpriseLookup.provider.qcc': 'QCC',
   'systemGeneral.enterpriseLookup.provider.tianyancha': 'Tianyancha',

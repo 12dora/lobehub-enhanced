@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { MCPClientParams, McpTool } from '@/libs/mcp';
 import { MCPClient } from '@/libs/mcp';
+import { normalizeEnterpriseLookupApiKey } from '@/server/enterprise/contracts/adminSystem/enterpriseLookup';
 import { SafeOutboundHttpClient } from '@/server/enterprise/security/outboundHttp';
 import { createEgressSafeOutboundTransport } from '@/server/enterprise/services/networkProxy/egress/safeOutboundTransport';
 import {
@@ -130,9 +131,12 @@ export const buildEnterpriseLookupMcpUrl = (
 export const buildEnterpriseLookupAuthHeaders = (
   provider: EnterpriseLookupProvider,
   apiKey: string,
-): Record<string, string> => ({
-  Authorization: provider === 'qcc' ? `Bearer ${apiKey}` : apiKey,
-});
+): Record<string, string> => {
+  const normalized = normalizeEnterpriseLookupApiKey(apiKey);
+  return {
+    Authorization: provider === 'qcc' ? `Bearer ${normalized}` : normalized,
+  };
+};
 
 export const buildEnterpriseLookupMcpParams = (
   provider: EnterpriseLookupProvider,

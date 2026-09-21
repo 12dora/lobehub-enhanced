@@ -10,11 +10,12 @@ import {
   platformInfraSettings,
 } from '@/database/schemas/platform/infraSettings';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
-import type {
-  AdminSystemGetEnterpriseLookupSettings,
-  AdminSystemTestEnterpriseLookupProviderInput,
-  AdminSystemTestEnterpriseLookupProviderOutput,
-  AdminSystemUpdateEnterpriseLookupSettingsInput,
+import {
+  type AdminSystemGetEnterpriseLookupSettings,
+  type AdminSystemTestEnterpriseLookupProviderInput,
+  type AdminSystemTestEnterpriseLookupProviderOutput,
+  type AdminSystemUpdateEnterpriseLookupSettingsInput,
+  normalizeEnterpriseLookupApiKey,
 } from '@/server/enterprise/contracts/adminSystem/enterpriseLookup';
 import type {
   EnterpriseLookupPersistedConfig,
@@ -95,10 +96,14 @@ const resolveProviderSecret = async (params: {
 }): Promise<{ apiKeyCiphertext?: string; apiKeyFingerprint?: string }> => {
   const action = params.action ?? { action: 'keep' as const };
   if (action.action === 'replace') {
-    const apiKeyCiphertext = await sealInfraSecret(action.value);
+    const apiKey = normalizeEnterpriseLookupApiKey(action.value);
+    if (!apiKey) {
+      throw new InfraSettingsSecretRequiredError(params.field);
+    }
+    const apiKeyCiphertext = await sealInfraSecret(apiKey);
     return {
       apiKeyCiphertext,
-      apiKeyFingerprint: fingerprintEnterpriseLookupApiKey(action.value),
+      apiKeyFingerprint: fingerprintEnterpriseLookupApiKey(apiKey),
     };
   }
 
@@ -409,9 +414,10 @@ export const testEnterpriseLookupProvider = async (
   db: LobeChatDatabase | Transaction,
   input: AdminSystemTestEnterpriseLookupProviderInput,
 ): Promise<AdminSystemTestEnterpriseLookupProviderOutput> => {
-  let apiKey = input.draft?.apiKey;
-
-  if (!apiKey) {
+  let apiKey: string | undefined;
+  if (input.draft?.apiKey !== undefined) {
+    apiKey = normalizeEnterpriseLookupApiKey(input.draft.apiKey);
+  } else {
     const row = await loadPersistedRow(db);
     apiKey = await openProviderKey(storedKeyForProvider(row.config, input.provider));
   }

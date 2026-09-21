@@ -3313,7 +3313,6 @@
   "systemGeneral.enterpriseLookup.categories.risk": "Risk",
   "systemGeneral.enterpriseLookup.categories.tender": "Tenders",
   "systemGeneral.enterpriseLookup.description": "Configure QCC and Tianyancha credentials so assistants can look up company information.",
-  "systemGeneral.enterpriseLookup.editHint": "Every lookup consumes paid quota, so enable only the providers and categories you need.",
   "systemGeneral.enterpriseLookup.errors.categoryRequired": "Select at least one category.",
   "systemGeneral.enterpriseLookup.errors.dailyLimit": "Enter a whole number between 0 and 10000.",
   "systemGeneral.enterpriseLookup.errors.defaultProvider": "The default provider must be one that is enabled.",

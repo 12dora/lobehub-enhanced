@@ -6,12 +6,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { QccCategory } from '@/types/platform/enterpriseLookup';
 
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
+import { probeProvider } from './mcpClient';
 import {
   applyEnterpriseLookupUpdate,
   enterpriseLookupSecretChanged,
   fingerprintEnterpriseLookupApiKey,
   invalidateEnterpriseLookupRuntimeConfig,
   summarizeEnterpriseLookupAfterDiff,
+  testEnterpriseLookupProvider,
   toEnterpriseLookupView,
 } from './settings';
 
@@ -102,6 +104,69 @@ describe('applyEnterpriseLookupUpdate', () => {
     expect(next.qcc.apiKeyCiphertext).toBe('sealed:qcc-secret');
     expect(next.tianyancha.apiKeyCiphertext).toBe('sealed:tyc-secret');
     expect(next.tianyancha.apiKeyFingerprint).toBe(fingerprintEnterpriseLookupApiKey('tyc-secret'));
+  });
+
+  it('strips a pasted Bearer prefix before sealing and fingerprinting both providers', async () => {
+    const next = await applyEnterpriseLookupUpdate(undefined, {
+      dailyLimitPerUser: 50,
+      defaultProvider: 'qcc',
+      fallbackEnabled: true,
+      qcc: {
+        apiKey: { action: 'replace', value: 'Bearer qcc-secret' },
+        categories: ['company'] as QccCategory[],
+        enabled: true,
+      },
+      tianyancha: {
+        apiKey: { action: 'replace', value: 'Authorization: Bearer tyc-secret' },
+        enabled: true,
+      },
+    });
+    expect(next.qcc.apiKeyCiphertext).toBe('sealed:qcc-secret');
+    expect(next.qcc.apiKeyFingerprint).toBe(fingerprintEnterpriseLookupApiKey('qcc-secret'));
+    expect(next.tianyancha.apiKeyCiphertext).toBe('sealed:tyc-secret');
+    expect(next.tianyancha.apiKeyFingerprint).toBe(fingerprintEnterpriseLookupApiKey('tyc-secret'));
+    expect(JSON.stringify(next)).not.toContain('Bearer');
+  });
+
+  it('rejects a replace value that is empty after stripping Bearer', async () => {
+    await expect(
+      applyEnterpriseLookupUpdate(undefined, {
+        ...qccEnable,
+        qcc: { ...qccEnable.qcc, apiKey: { action: 'replace', value: 'Bearer   ' } },
+      }),
+    ).rejects.toBeInstanceOf(InfraSettingsSecretRequiredError);
+
+    await expect(
+      applyEnterpriseLookupUpdate(undefined, {
+        ...qccEnable,
+        qcc: { ...qccEnable.qcc, apiKey: { action: 'replace', value: 'Bearer   ' } },
+      }),
+    ).rejects.toMatchObject({ field: 'qcc.apiKey' });
+  });
+});
+
+describe('testEnterpriseLookupProvider', () => {
+  it('strips a pasted Bearer prefix from the draft key before probing', async () => {
+    vi.mocked(probeProvider).mockClear();
+    await expect(
+      testEnterpriseLookupProvider({} as never, {
+        draft: { apiKey: 'Bearer draft-key' },
+        provider: 'qcc',
+      }),
+    ).resolves.toEqual({ ok: true, toolCount: 3 });
+    expect(probeProvider).toHaveBeenCalledWith('qcc', 'draft-key');
+    expect(probeProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns not_configured when the draft key is empty after normalization', async () => {
+    vi.mocked(probeProvider).mockClear();
+    await expect(
+      testEnterpriseLookupProvider({} as never, {
+        draft: { apiKey: '  Bearer  ' },
+        provider: 'tianyancha',
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'not_configured' });
+    expect(probeProvider).not.toHaveBeenCalled();
   });
 });
 

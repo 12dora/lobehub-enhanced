@@ -10,13 +10,43 @@ import {
 
 import { reasonSchema } from './common';
 
+/**
+ * Strip copy-paste artifacts from a vendor API key: trim, wrapping
+ * quotes/backticks, a leading `Authorization:` label, and one or more
+ * leading case-insensitive `Bearer` scheme tokens. Never log `input`.
+ */
+export const normalizeEnterpriseLookupApiKey = (input: string): string => {
+  let value = input;
+  for (let i = 0; i < 8; i += 1) {
+    let next = value.trim();
+    if (next.length >= 2) {
+      const quote = next[0];
+      if ((quote === '"' || quote === "'" || quote === '`') && next.at(-1) === quote) {
+        next = next.slice(1, -1);
+      }
+    }
+    next = next.replace(/^Authorization\s*:\s*/i, '');
+    next = next.replace(/^(?:Bearer(?:\s+|$))+/i, '');
+    if (next === value) return next;
+    value = next;
+  }
+  return value.trim();
+};
+
+const enterpriseLookupApiKeyValueSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .transform(normalizeEnterpriseLookupApiKey)
+  .pipe(z.string().min(1).max(512));
+
 const enterpriseLookupSecretActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('keep') }).strict(),
   z.object({ action: z.literal('clear') }).strict(),
   z
     .object({
       action: z.literal('replace'),
-      value: z.string().min(1).max(512),
+      value: enterpriseLookupApiKeyValueSchema,
     })
     .strict(),
 ]);
@@ -115,7 +145,7 @@ export const adminSystemTestEnterpriseLookupProviderInputSchema = z
   .object({
     draft: z
       .object({
-        apiKey: z.string().min(1).max(512).optional(),
+        apiKey: enterpriseLookupApiKeyValueSchema.optional(),
       })
       .strict()
       .optional(),

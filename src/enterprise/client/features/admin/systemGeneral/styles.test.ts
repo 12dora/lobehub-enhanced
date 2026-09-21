@@ -44,6 +44,18 @@ describe('infraSettingsStyles modal chrome', () => {
     expect(scroller).toMatch(/min-block-size:\s*0/);
   });
 
+  it('keeps the last control clear of the edge the scroller clips at', () => {
+    const section = rule('modalSection');
+
+    // The viewport is an `overflow: scroll` box and a focus ring is painted outside the control's
+    // border box (2px box-shadow on an input, a 2px outline at 2px offset on a switch) without
+    // adding to the scrollable area. Without slack on BOTH axes the bottom-most field of the
+    // longest form — 企业查询's 每人每日上限 and the switch under it — has its lower border and
+    // its whole ring cut off, and nothing can scroll them into view.
+    expect(section).toMatch(/padding-block-end:\s*4px/);
+    expect(section).toMatch(/padding-inline-end:\s*4px/);
+  });
+
   it('lets the tallest card measure the row instead of a hard-coded floor', () => {
     // `grid-auto-rows: 1fr` already makes every card as tall as the tallest one. A
     // `min-block-size` on the card on top of that cannot make anything line up that was not

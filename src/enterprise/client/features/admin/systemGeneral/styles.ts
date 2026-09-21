@@ -170,12 +170,25 @@ export const infraSettingsStyles = createStaticStyles(({ css }) => ({
     align-items: center;
     justify-content: flex-end;
   `,
+  /**
+   * The scrolled content of both modals.
+   *
+   * The ScrollArea viewport is an `overflow: scroll` box, so it clips at its padding box — and a
+   * focus ring is drawn OUTSIDE the control's border box (`box-shadow: 0 0 0 2px` on 输入框,
+   * `outline: 2px` at `outline-offset: 2px` on 开关 / 按钮) without ever counting towards the
+   * scrollable area. Content flush with an edge therefore has the last millimetres of its border
+   * and the whole of its ring cut off, with no way to scroll them into view. The inline end has
+   * been padded for that reason all along; the block end needs the same 4px, or the bottom-most
+   * control of the longest form (企业查询: 每人每日上限 and the 失败切换 switch under it) is the
+   * one that pays for it.
+   */
   modalSection: css`
     display: flex;
     flex-direction: column;
     gap: 12px;
 
     min-width: 0;
+    padding-block-end: 4px;
     padding-inline-end: 4px;
   `,
   title: css`

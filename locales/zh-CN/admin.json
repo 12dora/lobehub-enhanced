@@ -3313,7 +3313,6 @@
   "systemGeneral.enterpriseLookup.categories.risk": "风险信息",
   "systemGeneral.enterpriseLookup.categories.tender": "招投标",
   "systemGeneral.enterpriseLookup.description": "配置企查查与天眼查凭证，供助理查询企业信息。",
-  "systemGeneral.enterpriseLookup.editHint": "每次查询都会消耗付费额度，请只启用需要的供应商和类目。",
   "systemGeneral.enterpriseLookup.errors.categoryRequired": "请至少选择一个查询类目。",
   "systemGeneral.enterpriseLookup.errors.dailyLimit": "请输入 0 到 10000 之间的整数。",
   "systemGeneral.enterpriseLookup.errors.defaultProvider": "默认供应商必须是已启用的供应商。",

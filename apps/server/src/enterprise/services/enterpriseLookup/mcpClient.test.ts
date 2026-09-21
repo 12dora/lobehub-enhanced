@@ -74,6 +74,26 @@ describe('enterprise lookup MCP client', () => {
     });
   });
 
+  it('strips a stored Bearer prefix so QCC does not send Bearer Bearer', () => {
+    expect(buildEnterpriseLookupAuthHeaders('qcc', 'Bearer MMWW')).toEqual({
+      Authorization: 'Bearer MMWW',
+    });
+    expect(buildEnterpriseLookupAuthHeaders('qcc', 'Authorization: Bearer MMWW')).toEqual({
+      Authorization: 'Bearer MMWW',
+    });
+    expect(buildEnterpriseLookupAuthHeaders('qcc', '"Bearer MMWW"')).toEqual({
+      Authorization: 'Bearer MMWW',
+    });
+    expect(buildEnterpriseLookupAuthHeaders('tianyancha', 'Bearer tyc-key')).toEqual({
+      Authorization: 'tyc-key',
+    });
+    expect(buildEnterpriseLookupAuthHeaders('tianyancha', 'Authorization: Bearer tyc-key')).toEqual(
+      {
+        Authorization: 'tyc-key',
+      },
+    );
+  });
+
   it('classifies provider failures without exposing upstream text', () => {
     const unauthorized = Object.assign(new Error('MCP 401 invalid api key sk-live'), {
       data: { type: 'AUTHORIZATION_ERROR' },
