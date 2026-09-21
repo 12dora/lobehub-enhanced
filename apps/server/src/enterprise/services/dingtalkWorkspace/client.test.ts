@@ -11,6 +11,12 @@ vi.mock('debug', () => ({
   default: () => debugLog,
 }));
 
+const recordDingtalkHttpCall = vi.hoisted(() => vi.fn());
+
+vi.mock('./apiCallStats', () => ({
+  recordDingtalkHttpCall,
+}));
+
 vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
   DINGTALK_API_BASE: 'https://api.dingtalk.com',
   DINGTALK_OAPI_BASE: 'https://oapi.dingtalk.com',
@@ -90,6 +96,10 @@ describe('dingtalkWorkspaceRequest', () => {
     });
     expect(result).toEqual({ title: 'ok' });
     expect(getNotifyAppNewApiToken).toHaveBeenCalled();
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith(
+      'GET',
+      expect.stringContaining('https://api.dingtalk.com/v1.0/workflow/processInstances'),
+    );
   });
 
   it('maps missing notify-app config to DINGTALK_NOT_CONFIGURED', async () => {

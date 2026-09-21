@@ -19,6 +19,7 @@ import {
   startProcessInstance,
   terminateProcessInstance,
 } from './api';
+import { encodeSaveTemplateFields } from './formComponents';
 import { encodeFormValues, formSummary, isSuiteTemplate } from './formValues';
 import {
   invalidateApprovalListCache,
@@ -36,6 +37,7 @@ import {
   type ApprovalPreviewInput,
   canViewInstance,
   type CreateInstanceInput,
+  dingtalkTemplateAdminUrl,
   type ExecuteTaskInput,
   type InitiatedApprovalRow,
   type PendingApprovalRow,
@@ -43,6 +45,7 @@ import {
   type RedirectTaskInput,
   type RevertTaskInput,
   type SaveTemplateInput,
+  type SaveTemplateResult,
   SUMMARY_FIELD_LIMIT,
   TEMPLATE_CACHE_TTL_MS,
   TEMPLATE_CONSOLE_NOTES,
@@ -154,6 +157,8 @@ export class DingtalkApprovalService {
 
   listInitiated = async (input?: {
     limit?: number;
+    processCode?: string;
+    q?: string;
     status?: string;
   }): Promise<ApprovalListResult<InitiatedApprovalRow>> => {
     const identity = await this.prepare();
@@ -161,6 +166,8 @@ export class DingtalkApprovalService {
     return listInitiatedApprovals({
       db: this.db,
       limit: input?.limit,
+      processCode: input?.processCode,
+      q: input?.q,
       staffId: identity.staffId,
       status: input?.status,
       templates,
@@ -392,44 +399,37 @@ export class DingtalkApprovalService {
     return result;
   };
 
-  saveTemplate = async (
-    input: SaveTemplateInput,
-  ): Promise<{ notes: string[]; processCode: string }> => {
+  saveTemplate = async (input: SaveTemplateInput): Promise<SaveTemplateResult> => {
     const identity = await this.prepare();
     await this.requireApprovalAdmin(identity.staffId);
-    if (!input.name.trim() || input.fields.length === 0) {
+    const name = input.name.trim();
+    if (!name || input.fields.length === 0) {
       throw new DingtalkWorkspaceError('DINGTALK_INVALID');
     }
-    const formComponents = input.fields.map((field, index) => ({
-      componentType: field.componentType,
-      props: {
-        bizAlias: field.bizAlias,
-        componentId: field.componentId || `${field.componentType}_${index + 1}`,
-        format: field.format,
-        label: field.label,
-        options: field.options?.map((option) =>
-          typeof option === 'string' ? { key: option, value: option } : option,
-        ),
-        placeholder: field.placeholder,
-        required: field.required === true,
-        unit: field.unit,
-      },
-    }));
+    const encoded = encodeSaveTemplateFields(input.fields);
+    const processCode = input.processCode?.trim() || undefined;
     const saved = await saveFormTemplate({
       description: input.description,
-      formComponents,
-      name: input.name.trim(),
-      processCode: input.processCode,
+      formComponents: encoded.components,
+      name,
+      processCode,
     });
     invalidateApprovalListCache(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_SAVE_TEMPLATE,
       db: this.db,
       targetId: saved.processCode,
-      title: input.name.trim(),
+      title: name,
       userId: this.userId,
     });
-    return { notes: [...TEMPLATE_CONSOLE_NOTES], processCode: saved.processCode };
+    return {
+      adminUrl: dingtalkTemplateAdminUrl(saved.processCode),
+      created: !processCode,
+      fields: encoded.fields,
+      name,
+      notes: [...TEMPLATE_CONSOLE_NOTES],
+      processCode: saved.processCode,
+    };
   };
 
   deleteTemplate = async (input: { processCode: string }): Promise<void> => {

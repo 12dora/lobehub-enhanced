@@ -26,11 +26,13 @@ const mockRuleRemove = vi.fn();
 class DingtalkWorkspaceError extends Error {
   readonly code: string;
   readonly candidates?: unknown;
-  constructor(code: string, extras?: { candidates?: unknown }) {
+  readonly hint?: unknown;
+  constructor(code: string, extras?: { candidates?: unknown; hint?: unknown }) {
     super(`upstream ${code}`);
     this.name = 'DingtalkWorkspaceError';
     this.code = code;
     this.candidates = extras?.candidates;
+    this.hint = extras?.hint;
   }
 }
 
@@ -312,6 +314,27 @@ describe('dingtalkApprovalRouter', () => {
       ],
       name: '费用报销',
       processCode: undefined,
+    });
+  });
+
+  it('rejects listPendingApprovals limit above 50', async () => {
+    await expect(createCaller().listPendingApprovals({ limit: 300 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockListPending).not.toHaveBeenCalled();
+  });
+
+  it('forwards DINGTALK_INVALID hint on saveTemplate', async () => {
+    mockSaveTemplate.mockRejectedValueOnce(
+      new DingtalkWorkspaceError('DINGTALK_INVALID', { hint: 'DDDateField props.unit' }),
+    );
+    await expect(
+      createCaller().saveTemplate({
+        fields: [{ componentType: 'DDDateField', label: '日期' }],
+        name: '请假',
+      }),
+    ).rejects.toMatchObject({
+      cause: { data: { code: 'DINGTALK_INVALID', hint: 'DDDateField props.unit' } },
     });
   });
 });

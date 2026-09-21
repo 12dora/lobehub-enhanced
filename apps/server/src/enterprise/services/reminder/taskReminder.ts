@@ -1131,6 +1131,7 @@ export class ReminderTaskService {
       if (narrowed.length > 1) {
         return { candidates: narrowed.map(this.toAmbiguousCandidate), kind: 'ambiguous' };
       }
+      this.requestDirectorySyncOnLookupMiss();
       return { kind: 'unknown', suggestions: await this.suggestUnknownName(name, dept) };
     }
 
@@ -1156,7 +1157,16 @@ export class ReminderTaskService {
         kind: 'ambiguous',
       };
     }
+    this.requestDirectorySyncOnLookupMiss();
     return { kind: 'unknown', suggestions: await this.suggestUnknownName(name, dept) };
+  };
+
+  private requestDirectorySyncOnLookupMiss = (): void => {
+    // A miss may mean the mirror is stale (sync runs every 12 h): ask for an early
+    // sync, rate-limited to once per hour inside the helper. Never blocks the lookup.
+    void import('@/server/enterprise/services/dingtalkDirectory/sync')
+      .then(({ requestDirectorySyncOnLookupMiss }) => requestDirectorySyncOnLookupMiss(this.db))
+      .catch(() => undefined);
   };
 
   private resolveSelfRecipient = async (): Promise<

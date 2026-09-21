@@ -25,6 +25,7 @@ const mockUpdateStatus = vi.fn();
 const mockFindById = vi.fn();
 const mockDeliverReminder = vi.fn();
 const mockResolveStaffId = vi.fn();
+const mockRequestDirectorySyncOnLookupMiss = vi.fn();
 const mockTransaction = vi.fn(async (fn: (tx: Record<string, never>) => unknown) => fn({}));
 
 vi.mock('@/database/models/dingtalkDirectory', () => ({
@@ -73,6 +74,11 @@ vi.mock('@/database/models/user', () => ({
 
 vi.mock('@/server/services/messenger/platforms/dingtalk/resolveStaffId', () => ({
   resolveDingTalkStaffId: (...args: unknown[]) => mockResolveStaffId(...args),
+}));
+
+vi.mock('@/server/enterprise/services/dingtalkDirectory/sync', () => ({
+  requestDirectorySyncOnLookupMiss: (...args: unknown[]) =>
+    mockRequestDirectorySyncOnLookupMiss(...args),
 }));
 
 vi.mock('./worker', () => ({
@@ -151,6 +157,11 @@ const mockDb = { transaction: mockTransaction };
 
 const service = (deps?: ConstructorParameters<typeof ReminderTaskService>[3]) =>
   new ReminderTaskService(mockDb as never, 'user_1', undefined, deps);
+
+const flushLookupMissSync = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
 describe('ReminderTaskService', () => {
   beforeEach(() => {
@@ -296,6 +307,28 @@ describe('ReminderTaskService', () => {
         ok: false,
         unknown: ['不存在的人'],
       });
+      await flushLookupMissSync();
+      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(mockDb);
+    });
+
+    it('requests a directory sync when a name·dept lookup is unknown', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
+
+      await expect(service().resolveRecipients(['胡玉琴A·不存在的部门'])).resolves.toEqual({
+        ambiguous: [],
+        ok: false,
+        unknown: ['胡玉琴A·不存在的部门'],
+      });
+      await flushLookupMissSync();
+      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(mockDb);
+    });
+
+    it('does not request a directory sync for a unique name hit', async () => {
+      mockSearch.mockResolvedValue({ departments: [], users: [hyq] });
+
+      await expect(service().resolveRecipients(['胡玉琴A'])).resolves.toMatchObject({ ok: true });
+      await flushLookupMissSync();
+      expect(mockRequestDirectorySyncOnLookupMiss).not.toHaveBeenCalled();
     });
 
     it('attaches unknownSuggestions for a one-character name typo', async () => {
@@ -355,6 +388,18 @@ describe('ReminderTaskService', () => {
         unknown: ['我'],
       });
       expect(mockListActiveUsersNearName).not.toHaveBeenCalled();
+      await flushLookupMissSync();
+      expect(mockRequestDirectorySyncOnLookupMiss).not.toHaveBeenCalled();
+    });
+
+    it('does not request a directory sync for an unknown staff: token', async () => {
+      mockGetUsers.mockResolvedValue([]);
+
+      await expect(service().resolveRecipients(['staff:missing'])).resolves.toMatchObject({
+        unknown: ['staff:missing'],
+      });
+      await flushLookupMissSync();
+      expect(mockRequestDirectorySyncOnLookupMiss).not.toHaveBeenCalled();
     });
   });
 

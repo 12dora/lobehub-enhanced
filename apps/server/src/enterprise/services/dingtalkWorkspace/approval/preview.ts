@@ -272,7 +272,9 @@ const previewSaveTemplate = (args: Record<string, unknown>): PreviewBody => {
       { label: '控件', value: fieldLabels.join('、') || '无' },
     ],
     title: processCode ? `更新模板「${name}」` : `创建模板「${name}」`,
-    warnings: ['审批流程、可见范围和模板管理员无法通过接口配置，需在钉钉 OA 管理后台完成。'],
+    warnings: [
+      '审批流程、可见范围和模板管理员无法通过接口配置。请登录钉钉管理后台打开该模板，在「流程设计」中设置后发布。',
+    ],
   };
 };
 

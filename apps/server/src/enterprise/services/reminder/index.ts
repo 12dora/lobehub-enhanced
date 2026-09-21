@@ -191,6 +191,13 @@ export class ReminderService {
     kind?: 'department' | 'user',
   ): Promise<ReminderDirectorySearchResult> => {
     const hits = await this.directory.search(q, kind ? { kind } : undefined);
+    if (hits.users.length === 0 && hits.departments.length === 0) {
+      // A miss may mean the mirror is stale (sync runs every 12 h): ask for an early
+      // sync, rate-limited to once per hour inside the helper. Never blocks the lookup.
+      void import('@/server/enterprise/services/dingtalkDirectory/sync')
+        .then(({ requestDirectorySyncOnLookupMiss }) => requestDirectorySyncOnLookupMiss(this.db))
+        .catch(() => undefined);
+    }
     const nameCounts = new Map<string, number>();
     for (const user of hits.users) {
       nameCounts.set(user.name, (nameCounts.get(user.name) ?? 0) + 1);

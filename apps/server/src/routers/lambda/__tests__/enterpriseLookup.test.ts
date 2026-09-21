@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockListCapabilities = vi.fn();
 const mockQuery = vi.fn();
+const mockCompanyProfile = vi.fn();
 const mockStatus = vi.fn();
 
 vi.mock('@/database/core/db-adaptor', () => ({
@@ -25,6 +26,7 @@ vi.mock('@/server/enterprise/services/enterpriseLookup', () => {
     ENTERPRISE_LOOKUP_NOT_CONFIGURED: 'ENTERPRISE_LOOKUP_NOT_CONFIGURED',
     ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE: 'ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE',
     EnterpriseLookupService: vi.fn(() => ({
+      companyProfile: mockCompanyProfile,
       listCapabilities: mockListCapabilities,
       query: mockQuery,
       status: mockStatus,
@@ -116,6 +118,29 @@ describe('enterpriseLookupRouter', () => {
       code: 'BAD_REQUEST',
     });
     expect(mockListCapabilities).not.toHaveBeenCalled();
+  });
+
+  it('forwards companyProfile name, provider and aspects', async () => {
+    mockCompanyProfile.mockResolvedValueOnce({
+      aspects: ['basic'],
+      candidates: [{ name: '华为技术有限公司' }],
+      match: 'unique',
+      provider: 'qcc',
+      queriedAt: '2026-09-21 20:07',
+      query: '华为技术有限公司',
+    });
+    await expect(
+      createCaller().companyProfile({
+        aspects: ['basic'],
+        name: '华为技术有限公司',
+        provider: 'qcc',
+      }),
+    ).resolves.toMatchObject({ match: 'unique', provider: 'qcc' });
+    expect(mockCompanyProfile).toHaveBeenCalledWith({
+      aspects: ['basic'],
+      name: '华为技术有限公司',
+      provider: 'qcc',
+    });
   });
 
   it('does not accept a client-supplied userId', async () => {

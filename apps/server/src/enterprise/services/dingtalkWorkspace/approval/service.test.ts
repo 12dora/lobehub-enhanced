@@ -224,7 +224,7 @@ describe('DingtalkApprovalService', () => {
   it('threads format, unit and bizAlias into DingTalk form component props', async () => {
     mockSaveForm.mockResolvedValueOnce({ processCode: 'PROC-NEW' });
     const service = new DingtalkApprovalService({} as never, 'user-1');
-    await service.saveTemplate({
+    const result = await service.saveTemplate({
       fields: [
         {
           bizAlias: 'start_date',
@@ -251,6 +251,7 @@ describe('DingtalkApprovalService', () => {
               format: 'yyyy-MM-dd',
               label: '开始日期',
               required: true,
+              unit: '天',
             }),
           },
           {
@@ -258,10 +259,71 @@ describe('DingtalkApprovalService', () => {
             props: expect.objectContaining({
               label: '金额',
               unit: '元',
+              upper: '0',
             }),
           },
         ],
         name: '新模板',
+      }),
+    );
+    expect(result).toMatchObject({
+      adminUrl:
+        'https://aflow.dingtalk.com/dingtalk/web/query/oaDesigner?from=oaAdminHomeWeb&processCode=PROC-NEW',
+      created: true,
+      name: '新模板',
+      processCode: 'PROC-NEW',
+    });
+    expect(result.fields).toEqual([
+      { componentType: 'DDDateField', label: '开始日期', required: true },
+      { componentType: 'MoneyField', label: '金额', required: false },
+    ]);
+    expect(result.notes).toEqual([
+      '审批流程、可见范围和模板管理员无法通过接口配置。请登录钉钉管理后台打开该模板，在「流程设计」中设置后发布。',
+    ]);
+  });
+
+  it('rejects unsupported component types before calling DingTalk', async () => {
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(
+      service.saveTemplate({
+        fields: [{ componentType: 'UnknownWidget', label: 'x' }],
+        name: '新模板',
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_INVALID', hint: 'UnknownWidget' });
+    expect(mockSaveForm).not.toHaveBeenCalled();
+  });
+
+  it('encodes select options and date-range labels before save', async () => {
+    mockSaveForm.mockResolvedValueOnce({ processCode: 'PROC-NEW' });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.saveTemplate({
+      fields: [
+        { componentType: 'DDSelectField', label: '类型', options: ['A', 'B'] },
+        { componentType: 'DDDateRangeField', label: ['开始时间', '结束时间'] },
+      ],
+      name: '新模板',
+    });
+    expect(mockSaveForm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        formComponents: [
+          expect.objectContaining({
+            componentType: 'DDSelectField',
+            props: expect.objectContaining({
+              options: [
+                { key: 'option_0', value: 'A' },
+                { key: 'option_1', value: 'B' },
+              ],
+            }),
+          }),
+          expect.objectContaining({
+            componentType: 'DDDateRangeField',
+            props: expect.objectContaining({
+              format: 'yyyy-MM-dd',
+              label: '["开始时间","结束时间"]',
+              unit: '天',
+            }),
+          }),
+        ],
       }),
     );
   });

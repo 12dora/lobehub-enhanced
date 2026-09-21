@@ -5,10 +5,14 @@ import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
 import { dingtalkDepartments } from '@/database/schemas/dingtalkDirectory';
 import type { LobeChatDatabase } from '@/database/type';
 
-const uniqueIds = (values: Array<string | undefined> | undefined): string[] => {
+import { DINGTALK_DEPT_ID_PREFIX, DINGTALK_STAFF_ID_PREFIX, stripDingtalkIdPrefix } from './ids';
+
+const uniqueIds = (values: Array<string | undefined> | undefined, prefix?: string): string[] => {
   const seen = new Set<string>();
   for (const value of values ?? []) {
-    const id = value?.trim();
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    const id = prefix ? stripDingtalkIdPrefix(trimmed, prefix) : trimmed;
     if (id) seen.add(id);
   }
   return [...seen];
@@ -17,8 +21,8 @@ const uniqueIds = (values: Array<string | undefined> | undefined): string[] => {
 export const collectOriginatorIds = (
   conditions: ApprovalRuleConditions | null | undefined,
 ): { deptIds: string[]; staffIds: string[] } => ({
-  deptIds: uniqueIds(conditions?.originators?.deptIds),
-  staffIds: uniqueIds(conditions?.originators?.staffIds),
+  deptIds: uniqueIds(conditions?.originators?.deptIds, DINGTALK_DEPT_ID_PREFIX),
+  staffIds: uniqueIds(conditions?.originators?.staffIds, DINGTALK_STAFF_ID_PREFIX),
 });
 
 export const pickOriginatorLabels = (

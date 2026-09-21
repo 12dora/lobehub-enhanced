@@ -213,10 +213,14 @@ export interface AppendTaskInput {
 
 export interface SaveTemplateFieldInput {
   bizAlias?: string;
+  children?: SaveTemplateFieldInput[];
   componentId?: string;
   componentType: string;
+  /** TextNote body; falls back to label. */
+  content?: string;
   format?: string;
-  label: string;
+  /** Range/location labels may arrive as a 2-item array and are JSON-encoded. */
+  label: string | string[];
   options?: Array<string | TemplateFieldOption>;
   placeholder?: string;
   required?: boolean;
@@ -228,6 +232,15 @@ export interface SaveTemplateInput {
   fields: SaveTemplateFieldInput[];
   name: string;
   processCode?: string;
+}
+
+export interface SaveTemplateResult {
+  adminUrl: string;
+  created: boolean;
+  fields: Array<{ componentType: string; label: string; required: boolean }>;
+  name: string;
+  notes: string[];
+  processCode: string;
 }
 
 export interface ApprovalPreviewLine {
@@ -273,12 +286,13 @@ export interface ApprovalServiceContext {
 
 export const TEMPLATE_CACHE_TTL_MS = 5 * 60_000;
 export const PENDING_CACHE_TTL_MS = 60_000;
-export const INCOMPLETE_CACHE_TTL_MS = 10_000;
+export const SWEEP_CACHE_TTL_MS = 5 * 60_000;
+export const INCOMPLETE_CACHE_TTL_MS = 30_000;
 export const PENDING_INSTANCE_CAP = 300;
 export const INSTANCE_DETAIL_CONCURRENCY = 2;
 export const INSTANCE_IDS_QUERY_CONCURRENCY = 2;
 export const SCAN_API_MAX_RPS = 8;
-export const SCAN_TIME_BUDGET_MS = 25_000;
+export const SCAN_TIME_BUDGET_MS = 60_000;
 export const SCAN_RATE_LIMIT_RETRY_COUNT = 3;
 export const SCAN_RATE_LIMIT_BACKOFF_MS = [500, 1000, 2000] as const;
 export const INSTANCE_ID_PAGE_SIZE = 20;
@@ -291,6 +305,12 @@ export const SUMMARY_FIELD_LIMIT = 6;
 export const PREMIUM_TODO_PAGE_SIZE = 20;
 export const PREMIUM_TODO_MAX_PAGE = 10;
 
+export const DINGTALK_OA_ADMIN_URL = 'https://oa.dingtalk.com/';
+
+/** Template editor (流程设计). Requires an already-logged-in OA admin session. */
+export const dingtalkTemplateAdminUrl = (processCode: string): string =>
+  `https://aflow.dingtalk.com/dingtalk/web/query/oaDesigner?from=oaAdminHomeWeb&processCode=${encodeURIComponent(processCode)}`;
+
 export const TEMPLATE_CONSOLE_NOTES = [
-  'Approval flow, visibility, and template admins cannot be set via API. Finish those in the DingTalk OA admin console.',
+  '审批流程、可见范围和模板管理员无法通过接口配置。请登录钉钉管理后台打开该模板，在「流程设计」中设置后发布。',
 ] as const;

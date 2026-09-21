@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const invalidateApprovalRuleWorkerMemory = vi.hoisted(() => vi.fn());
+
 class DingtalkWorkspaceError extends Error {
   readonly code: string;
   constructor(code: string) {
@@ -24,6 +26,8 @@ const listRuns = vi.fn();
 const remove = vi.fn();
 const countActive = vi.fn();
 const getUsers = vi.fn();
+const getDepartment = vi.fn();
+const search = vi.fn();
 const selectWhere = vi.fn();
 
 class DingtalkApprovalRuleEnableBlockedError extends Error {
@@ -55,8 +59,14 @@ vi.mock('../approval', () => ({
 }));
 vi.mock('@/database/models/dingtalkDirectory', () => ({
   DingTalkDirectoryModel: class {
+    getDepartment = getDepartment;
     getUsers = getUsers;
+    search = search;
   },
+}));
+vi.mock('./workerMemory', () => ({
+  invalidateApprovalRuleWorkerMemory: (...args: unknown[]) =>
+    invalidateApprovalRuleWorkerMemory(...args),
 }));
 vi.mock('@/database/models/dingtalkApprovalRule', () => ({
   DingtalkApprovalRuleEnableBlockedError,
@@ -110,6 +120,8 @@ describe('DingtalkApprovalRuleService', () => {
     getUsers.mockResolvedValue([
       { deptPath: '捷发 / 安环部', name: '张三', staffId: 'staff_originator' },
     ]);
+    getDepartment.mockResolvedValue(undefined);
+    search.mockResolvedValue({ departments: [], users: [] });
     selectWhere.mockResolvedValue([{ deptId: 'dept_1', name: '研发部' }]);
     resolveStaff.mockResolvedValue({
       deptPath: '捷发 / 财务',
@@ -133,6 +145,7 @@ describe('DingtalkApprovalRuleService', () => {
         processCode: 'PROC_1',
       }),
     ).rejects.toMatchObject({ code: 'DINGTALK_AUTOMATION_OFF' });
+    expect(invalidateApprovalRuleWorkerMemory).not.toHaveBeenCalled();
   });
 
   it('rejects a 21st active rule', async () => {
@@ -222,6 +235,36 @@ describe('DingtalkApprovalRuleService', () => {
       }),
     );
     expect(created.id).toBe('rule_1');
+    expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+  });
+
+  it('invalidates worker memory after update, setEnabled, and remove', async () => {
+    findById.mockResolvedValue({
+      action: 'agree',
+      conditions: { match: 'all' },
+      enabled: true,
+      expiresAt: null,
+      id: 'rule_1',
+      name: '自动同意',
+      processCode: 'PROC_1',
+      remark: null,
+      redirectToStaffId: null,
+      staffId: 'staff_me',
+    });
+    update.mockResolvedValue({ id: 'rule_1', name: '新名称', staffId: 'staff_me' });
+    await service.update('rule_1', { name: '新名称' });
+    expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+
+    invalidateApprovalRuleWorkerMemory.mockClear();
+    update.mockResolvedValue({ enabled: false, id: 'rule_1', staffId: 'staff_me' });
+    await service.setEnabled('rule_1', false);
+    expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+
+    invalidateApprovalRuleWorkerMemory.mockClear();
+    remove.mockResolvedValue(true);
+    await expect(service.remove('rule_1')).resolves.toEqual({ success: true });
+    expect(invalidateApprovalRuleWorkerMemory).toHaveBeenCalledWith('staff_me');
+    expect(remove).toHaveBeenCalledWith('rule_1');
   });
 
   it('strict tier defaults expiry to 30 days and rejects refuse without remark in preview', async () => {
@@ -373,5 +416,70 @@ describe('DingtalkApprovalRuleService', () => {
     await expect(service.setEnabled('rule_1', true)).rejects.toMatchObject({
       code: 'DINGTALK_INVALID',
     });
+  });
+
+  it('stores originators as raw staffIds, not staff: tokens', async () => {
+    getUsers.mockResolvedValueOnce([{ name: '胡玉琴A', staffId: '276329315736818882' }]);
+    await service.create({
+      action: 'agree',
+      conditions: {
+        match: 'all',
+        originators: { staffIds: ['staff:276329315736818882'] },
+      },
+      name: '本人发起自动通过',
+      processCode: 'PROC_1',
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conditions: {
+          fields: [],
+          match: 'all',
+          originators: { staffIds: ['276329315736818882'] },
+        },
+      }),
+    );
+  });
+
+  it('treats 我 as the caller staffId', async () => {
+    await service.create({
+      action: 'agree',
+      conditions: { match: 'all', originators: { staffIds: ['我'] } },
+      name: '本人发起自动通过',
+      processCode: 'PROC_1',
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conditions: {
+          fields: [],
+          match: 'all',
+          originators: { staffIds: ['staff_me'] },
+        },
+      }),
+    );
+  });
+
+  it('surfaces DINGTALK_AMBIGUOUS candidates when an originator name is not unique', async () => {
+    getUsers.mockResolvedValueOnce([]);
+    resolveStaff.mockResolvedValueOnce({
+      ambiguous: [
+        { deptPath: '安环部', name: '胡玉琴A', staffId: 's1' },
+        { deptPath: '财务部', name: '胡玉琴A', staffId: 's2' },
+      ],
+    });
+    await expect(
+      service.create({
+        action: 'agree',
+        conditions: { match: 'all', originators: { staffIds: ['胡玉琴A'] } },
+        name: '自动同意',
+        processCode: 'PROC_1',
+      }),
+    ).rejects.toMatchObject({
+      candidates: [
+        { deptPath: '安环部', name: '胡玉琴A', staffId: 's1' },
+        { deptPath: '财务部', name: '胡玉琴A', staffId: 's2' },
+      ],
+      code: 'DINGTALK_AMBIGUOUS',
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });

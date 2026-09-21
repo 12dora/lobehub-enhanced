@@ -90,6 +90,7 @@ const trpcCodeFor = (code: string): TRPCError['code'] => {
     case 'DINGTALK_UNAVAILABLE': {
       return 'INTERNAL_SERVER_ERROR';
     }
+    case 'DINGTALK_AMBIGUOUS':
     case 'DINGTALK_INVALID': {
       return 'BAD_REQUEST';
     }
@@ -103,7 +104,13 @@ const mapError = (error: unknown, procedure: string): never => {
   if (error instanceof TRPCError) throw error;
   const code = workspaceCode(error);
   if (code) {
+    const data: Record<string, unknown> = { code };
+    if (error && typeof error === 'object' && 'candidates' in error) {
+      const candidates = (error as { candidates?: unknown }).candidates;
+      if (candidates !== undefined) data.candidates = candidates;
+    }
     throw new TRPCError({
+      cause: { data },
       code: trpcCodeFor(code),
       message: code,
     });

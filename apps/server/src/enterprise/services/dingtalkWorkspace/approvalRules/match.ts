@@ -1,5 +1,7 @@
 import type { ApprovalRuleConditions, ApprovalRuleFieldOp } from '@lobechat/types';
 
+import { DINGTALK_DEPT_ID_PREFIX, DINGTALK_STAFF_ID_PREFIX, stripDingtalkIdPrefix } from './ids';
+
 /** Component types that accept numeric comparison ops. */
 export const NUMERIC_COMPONENT_TYPES = new Set([
   'CalculateField',
@@ -270,20 +272,31 @@ const findFormValue = (
   return undefined;
 };
 
+const canonicalStaffId = (value: string): string =>
+  stripDingtalkIdPrefix(value, DINGTALK_STAFF_ID_PREFIX);
+
+const canonicalDeptId = (value: string): string =>
+  stripDingtalkIdPrefix(value, DINGTALK_DEPT_ID_PREFIX);
+
 const originatorMatches = (
   conditions: ApprovalRuleConditions,
   originator: ApprovalMatchOriginator,
 ): boolean => {
-  const staffIds = conditions.originators?.staffIds?.filter(Boolean) ?? [];
-  const deptIds = conditions.originators?.deptIds?.filter(Boolean) ?? [];
+  const staffIds = (conditions.originators?.staffIds ?? [])
+    .map((id) => canonicalStaffId(id))
+    .filter(Boolean);
+  const deptIds = (conditions.originators?.deptIds ?? [])
+    .map((id) => canonicalDeptId(id))
+    .filter(Boolean);
   if (staffIds.length === 0 && deptIds.length === 0) return true;
 
-  const staffHit = staffIds.length > 0 && staffIds.includes(originator.staffId);
+  const originatorStaffId = canonicalStaffId(originator.staffId);
+  const staffHit = staffIds.length > 0 && staffIds.includes(originatorStaffId);
   if (staffHit) return true;
 
   if (deptIds.length === 0) return false;
   const wanted = new Set(deptIds);
-  return originator.deptIds.some((deptId) => wanted.has(deptId));
+  return originator.deptIds.some((deptId) => wanted.has(canonicalDeptId(deptId)));
 };
 
 /**

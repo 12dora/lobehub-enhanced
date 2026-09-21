@@ -4,6 +4,7 @@ import debug from 'debug';
 import { getMessengerDingTalkConfig } from '@/config/messenger';
 import { pinyinFieldsFromFullName } from '@/database/utils/pinyin';
 import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
+import { recordDingtalkHttpCall } from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 const log = debug('lobe-server:messenger:dingtalk:notify-app');
@@ -435,6 +436,7 @@ const fetchOapiGettoken = async (
 
   let response: Pick<Response, 'ok' | 'json' | 'status'>;
   try {
+    recordDingtalkHttpCall('GET', url.toString());
     response = await fetchImpl(url.toString(), {
       cache: 'no-store',
       method: 'GET',
@@ -588,6 +590,7 @@ const fetchNewApiAccessToken = async (
 
   let response: Pick<Response, 'ok' | 'json' | 'status'>;
   try {
+    recordDingtalkHttpCall('POST', DINGTALK_NEW_API_ACCESS_TOKEN_URL);
     response = await fetchImpl(DINGTALK_NEW_API_ACCESS_TOKEN_URL, {
       body: JSON.stringify({ appKey, appSecret }),
       cache: 'no-store',
@@ -761,6 +764,7 @@ const oapiPost = async (
 
   let response: Pick<Response, 'ok' | 'json' | 'status'>;
   try {
+    recordDingtalkHttpCall('POST', url);
     response = await fetchImpl(endpoint.toString(), {
       body: JSON.stringify(body),
       cache: 'no-store',
@@ -968,6 +972,7 @@ const newApiPost = async (
 
   let response: Pick<Response, 'ok' | 'json' | 'status'>;
   try {
+    recordDingtalkHttpCall('POST', url);
     response = await fetchImpl(url, {
       body: JSON.stringify(body),
       cache: 'no-store',
@@ -1124,6 +1129,8 @@ export const listDepartments = async (params?: {
   const fetchImpl = params?.fetchImpl ?? doFetch;
   const tokenRef = { current: await getNotifyAppToken({ config, fetchImpl }) };
 
+  // Root is not in listsub(1). Children already include name/parentId/order from
+  // listsub — never department/get each child (that would double billed calls).
   const rootRecord = await oapiPostWithTokenRetry(
     DINGTALK_DEPT_GET_URL,
     { dept_id: Number(DINGTALK_DIRECTORY_ROOT_DEPT_ID), language: 'zh_CN' },

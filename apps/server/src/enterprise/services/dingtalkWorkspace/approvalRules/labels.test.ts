@@ -24,6 +24,18 @@ describe('originator labels', () => {
     expect(collectOriginatorIds({ match: 'all' })).toEqual({ deptIds: [], staffIds: [] });
   });
 
+  it('strips leftover staff: / dept: prefixes so labels still resolve', () => {
+    expect(
+      collectOriginatorIds({
+        match: 'all',
+        originators: {
+          deptIds: ['dept:d1', 'd1'],
+          staffIds: ['staff:276329315736818882'],
+        },
+      }),
+    ).toEqual({ deptIds: ['d1'], staffIds: ['276329315736818882'] });
+  });
+
   it('picks only the ids that belong to the rule', () => {
     expect(
       pickOriginatorLabels(

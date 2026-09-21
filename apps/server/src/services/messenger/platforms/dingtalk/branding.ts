@@ -20,7 +20,8 @@ const isBuiltInBrandingName = (name: string): boolean =>
 /**
  * Published platform branding display name (`platform_branding.display_name` →
  * `RuntimeBranding.name`). Empty, built-in (LobeHub / LobeChat / AIHub), or
- * failed reads fall back to 「AI 平台」.
+ * failed reads fall back to 「AI 助手」. This is the SITE name, used in
+ * "login on the web" / "view in …" copy — not the DingTalk robot's name.
  */
 export const resolveDingTalkBrandingDisplayName = async (): Promise<string> => {
   try {
@@ -32,4 +33,14 @@ export const resolveDingTalkBrandingDisplayName = async (): Promise<string> => {
     log('resolveServerRuntimeBranding failed: %O', error);
     return DINGTALK_BRANDING_FALLBACK;
   }
+};
+
+/**
+ * Name of the DingTalk chat robot as shown to employees ("find the robot
+ * 「…」 in DingTalk"). Prefers connector setting `robotDisplayName`; empty
+ * falls back to `DINGTALK_BRANDING_FALLBACK` (「AI 助手」), never the site
+ * branding name.
+ */
+export const resolveDingTalkRobotDisplayName = (stored?: string | null): string => {
+  return stored?.trim() || DINGTALK_BRANDING_FALLBACK;
 };

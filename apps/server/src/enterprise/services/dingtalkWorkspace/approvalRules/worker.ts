@@ -1,5 +1,6 @@
 import type { ApprovalAutomationTier, ApprovalRuleAction } from '@lobechat/types';
 import { APPROVAL_AUTOMATION_TIERS } from '@lobechat/types';
+import debug from 'debug';
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 
 import { getServerDB } from '@/database/core/db-adaptor';
@@ -28,12 +29,37 @@ import { resolveVerifiedDingtalkIdentity } from '../identity';
 import { notifyUser } from '../notify';
 import { type ApprovalMatchFormValue, matchApprovalRule } from './match';
 import { ruleExceedsTierMaxExpiry } from './tier';
+import { getPendingApprovalTaskCount } from './todoCount';
+import {
+  APPROVAL_RULE_EVALUATED_TTL_MS,
+  APPROVAL_RULE_REVERIFY_MS,
+  fingerprintEnabledApprovalRules,
+  markOwnerScanStarted,
+  ownerTaskIsRemembered,
+  rememberOwnerTask,
+  resetApprovalRuleWorkerMemoryForTest,
+  syncOwnerTaskMemory,
+} from './workerMemory';
 
-export const APPROVAL_RULE_SWEEP_INTERVAL_MS = 120_000;
+export {
+  APPROVAL_RULE_EVALUATED_TTL_MS,
+  APPROVAL_RULE_REVERIFY_MS,
+  invalidateApprovalRuleWorkerMemory,
+} from './workerMemory';
+
+const log = debug('lobe-server:dingtalk-workspace:approval-rules');
+
+export const APPROVAL_RULE_SWEEP_INTERVAL_MS = 180_000;
+export const APPROVAL_RULE_SWEEP_JITTER_MS = 30_000;
 export const APPROVAL_RULE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 export const APPROVAL_RULE_INSTANCE_CAP = 300;
 export const APPROVAL_RULE_DETAIL_CONCURRENCY = 5;
 export const APPROVAL_RULE_PROCESS_CODE_CAP = 50;
+
+export const nextApprovalRuleSweepDelayMs = (random: () => number = Math.random): number => {
+  const jitter = Math.round((random() * 2 - 1) * APPROVAL_RULE_SWEEP_JITTER_MS);
+  return Math.max(0, APPROVAL_RULE_SWEEP_INTERVAL_MS + jitter);
+};
 
 /** Terminal DingTalk outcomes: keep the unique run row so the task is not retried. */
 const TERMINAL_EXECUTE_CODES = new Set([
@@ -149,6 +175,7 @@ export interface ApprovalRuleCycleCounts {
 
 export interface ApprovalRuleCycleResult {
   counts: ApprovalRuleCycleCounts;
+  dingtalkCalls: number;
   skippedReason?: 'automation_off' | 'feature_disabled' | 'in_flight';
 }
 
@@ -169,6 +196,7 @@ export interface ApprovalRuleCycleDeps {
   disable?: typeof DingtalkApprovalRuleModel.disable;
   executeTaskAs?: typeof executeTaskAs;
   getInstanceDetail?: typeof getInstanceDetail;
+  getPendingTaskCount?: (staffId: string) => Promise<number>;
   listAllActiveRules?: typeof DingtalkApprovalRuleModel.listAllActiveRules;
   listExpiredEnabled?: (now: Date) => Promise<DingtalkApprovalRuleItem[]>;
   listRunningInstanceIds?: ListRunningInstanceIds;
@@ -263,26 +291,34 @@ const listExpiredEnabledRules = async (
       ),
     );
 
-const mapPool = async <T>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T) => Promise<void>,
-): Promise<void> => {
-  if (items.length === 0) return;
-  let cursor = 0;
-  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (cursor < items.length) {
-        const index = cursor;
-        cursor += 1;
-        const item = items[index];
-        if (item === undefined) continue;
-        await mapper(item);
-      }
-    }),
-  );
+/** Shanghai midnight of the next calendar day (UTC+8, no DST). */
+const shanghaiDayEndMs = (day: string): number => {
+  const ms = Date.parse(`${day}T16:00:00.000Z`);
+  return Number.isFinite(ms) ? ms : Number.NaN;
 };
+
+const logCycle = (result: ApprovalRuleCycleResult): ApprovalRuleCycleResult => {
+  log('cycle %O', {
+    dingtalkCalls: result.dingtalkCalls,
+    executed: result.counts.executed,
+    expired: result.counts.expired,
+    failed: result.counts.failed,
+    skipped: result.counts.skipped,
+    skippedReason: result.skippedReason,
+  });
+  return result;
+};
+
+const emptyResult = (
+  skippedReason?: ApprovalRuleCycleResult['skippedReason'],
+  dingtalkCalls = 0,
+  counts: ApprovalRuleCycleCounts = emptyCounts(),
+): ApprovalRuleCycleResult =>
+  logCycle({
+    counts,
+    dingtalkCalls,
+    ...(skippedReason ? { skippedReason } : {}),
+  });
 
 const notifyBestEffort = async (
   send: typeof notifyUser,
@@ -329,10 +365,11 @@ export const runApprovalRulesCycle = async (
   deps: ApprovalRuleCycleDeps = {},
 ): Promise<ApprovalRuleCycleResult> => {
   const now = deps.now ?? new Date();
+  const nowMs = now.getTime();
   const counts = emptyCounts();
   const capabilities = await (deps.capabilities ?? getDingtalkWorkspaceCapabilities)();
-  if (!capabilities.approval) return { counts, skippedReason: 'feature_disabled' };
-  if (capabilities.automationTier === 'off') return { counts, skippedReason: 'automation_off' };
+  if (!capabilities.approval) return emptyResult('feature_disabled');
+  if (capabilities.automationTier === 'off') return emptyResult('automation_off');
 
   const limits = APPROVAL_AUTOMATION_TIERS[capabilities.automationTier];
   const cap = limits.perRuleDailyCap;
@@ -356,9 +393,15 @@ export const runApprovalRulesCycle = async (
   const listIds: ListRunningInstanceIds = (deps.listRunningInstanceIds ??
     listRunningInstanceIds) as ListRunningInstanceIds;
   const loadDetail = deps.getInstanceDetail ?? getInstanceDetail;
+  const getPendingCount = deps.getPendingTaskCount ?? getPendingApprovalTaskCount;
   const execute = deps.executeTaskAs ?? executeTaskAs;
   const redirect = deps.redirectTaskAs ?? redirectTaskAs;
   const comment = deps.addCommentAs ?? addCommentAs;
+  let dingtalkCalls = 0;
+  const callDingTalk = async <T>(fn: () => Promise<T>): Promise<T> => {
+    dingtalkCalls += 1;
+    return fn();
+  };
   const lookupNames =
     deps.lookupOriginatorNames ?? ((staffIds: string[]) => lookupOriginatorNames(db, staffIds));
   const transact =
@@ -399,19 +442,20 @@ export const runApprovalRulesCycle = async (
   }
 
   const active = await listActive(db);
-  if (active.length === 0) return { counts };
+  if (active.length === 0) return emptyResult(undefined, 0, counts);
 
-  const byProcess = new Map<string, DingtalkApprovalRuleItem[]>();
+  const byOwner = new Map<string, DingtalkApprovalRuleItem[]>();
   for (const rule of active) {
     if (ruleExceedsTierMaxExpiry(rule.expiresAt, limits.maxExpiryDays, now)) continue;
-    const list = byProcess.get(rule.processCode) ?? [];
+    const list = byOwner.get(rule.staffId) ?? [];
     list.push(rule);
-    byProcess.set(rule.processCode, list);
+    byOwner.set(rule.staffId, list);
   }
-  if (byProcess.size === 0) return { counts };
+  if (byOwner.size === 0) return emptyResult(undefined, 0, counts);
 
-  const sinceMs = now.getTime() - APPROVAL_RULE_LOOKBACK_MS;
+  const sinceMs = nowMs - APPROVAL_RULE_LOOKBACK_MS;
   const detailCache = new Map<string, ApprovalInstanceDetail>();
+  const instanceIdsCache = new Map<string, string[]>();
   const deptCache = new Map<string, string[]>();
   let abortCycle = false;
 
@@ -448,105 +492,161 @@ export const runApprovalRulesCycle = async (
     });
   };
 
-  const selectedCodes = takeProcessCodes([...byProcess.keys()]);
+  const loadDetailCounted = async (instanceId: string): Promise<ApprovalInstanceDetail> => {
+    const loaded = (await callDingTalk(() => loadDetail(instanceId))) as ApprovalInstanceDetail;
+    detailCache.set(instanceId, loaded);
+    return loaded;
+  };
 
-  for (const processCode of selectedCodes) {
+  const listIdsCounted = async (processCode: string): Promise<string[]> => {
+    const cached = instanceIdsCache.get(processCode);
+    if (cached) return cached;
+    let ids = await callDingTalk(() => listIds(processCode, sinceMs, APPROVAL_RULE_INSTANCE_CAP));
+    if (ids.length > APPROVAL_RULE_INSTANCE_CAP) ids = ids.slice(0, APPROVAL_RULE_INSTANCE_CAP);
+    instanceIdsCache.set(processCode, ids);
+    return ids;
+  };
+
+  const ownerIds = [...byOwner.keys()].sort((left, right) => left.localeCompare(right));
+
+  for (const ownerStaffId of ownerIds) {
     if (abortCycle) break;
-    const rules = byProcess.get(processCode);
-    if (!rules || rules.length === 0) continue;
+    const ownerRules = byOwner.get(ownerStaffId);
+    if (!ownerRules || ownerRules.length === 0) continue;
 
-    let instanceIds: string[];
+    let pendingCount: number;
     try {
-      instanceIds = await listIds(processCode, sinceMs, APPROVAL_RULE_INSTANCE_CAP);
+      pendingCount = await callDingTalk(() => getPendingCount(ownerStaffId));
     } catch (error) {
-      console.error('[dingtalk-approval-rules] list instances failed', {
+      console.error('[dingtalk-approval-rules] pending count failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',
       });
       if (isRateLimited(error)) break;
       continue;
     }
-    if (instanceIds.length > APPROVAL_RULE_INSTANCE_CAP) {
-      instanceIds = instanceIds.slice(0, APPROVAL_RULE_INSTANCE_CAP);
+    if (pendingCount <= 0) continue;
+
+    if (
+      cap !== null &&
+      ownerRules.every(
+        (item) => isSameShanghaiDay(item.dailyCountDate, today) && item.dailyCount >= cap,
+      )
+    ) {
+      continue;
     }
 
-    await mapPool(instanceIds, APPROVAL_RULE_DETAIL_CONCURRENCY, async (instanceId) => {
-      if (abortCycle || detailCache.has(instanceId)) return;
+    const fingerprint = fingerprintEnabledApprovalRules(ownerRules);
+    const memory = syncOwnerTaskMemory(ownerStaffId, fingerprint, nowMs);
+    if (
+      pendingCount <= memory.rememberedCount &&
+      nowMs - memory.lastReverifyAtMs < APPROVAL_RULE_REVERIFY_MS
+    ) {
+      continue;
+    }
+
+    markOwnerScanStarted(ownerStaffId, fingerprint, nowMs);
+
+    const evaluatedExpiry = nowMs + APPROVAL_RULE_EVALUATED_TTL_MS;
+    const quotaExpiryMs = shanghaiDayEndMs(today);
+    const quotaExpiry =
+      Number.isFinite(quotaExpiryMs) && quotaExpiryMs > nowMs ? quotaExpiryMs : evaluatedExpiry;
+
+    const selectedCodes = takeProcessCodes([
+      ...new Set(ownerRules.map((rule) => rule.processCode)),
+    ]);
+    let ownerRunningFound = 0;
+
+    ownerScan: for (const processCode of selectedCodes) {
+      if (abortCycle || ownerRunningFound >= pendingCount) break;
+
+      const rules = ownerRules
+        .filter((rule) => rule.processCode === processCode)
+        .sort((left, right) => {
+          const byTime = left.createdAt.getTime() - right.createdAt.getTime();
+          return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
+        });
+      if (rules.length === 0) continue;
+
+      let instanceIds: string[];
       try {
-        const loaded = (await loadDetail(instanceId)) as ApprovalInstanceDetail;
-        detailCache.set(instanceId, loaded);
+        instanceIds = await listIdsCounted(processCode);
       } catch (error) {
-        console.error('[dingtalk-approval-rules] instance detail failed', {
+        console.error('[dingtalk-approval-rules] list instances failed', {
           errorClass: error instanceof Error ? error.name : 'UnknownError',
         });
-        if (isRateLimited(error)) abortCycle = true;
+        if (isRateLimited(error)) {
+          abortCycle = true;
+          break;
+        }
+        continue;
       }
-    });
-    if (abortCycle) break;
 
-    const runningDetails: Array<{ detail: ApprovalInstanceDetail; instanceId: string }> = [];
-    for (const instanceId of instanceIds) {
-      const detail = detailCache.get(instanceId);
-      if (!detail || (detail.status && detail.status !== 'RUNNING')) continue;
-      runningDetails.push({ detail, instanceId });
-    }
+      for (const instanceId of instanceIds) {
+        if (abortCycle || ownerRunningFound >= pendingCount) break ownerScan;
 
-    const originatorNames = await lookupNames(
-      runningDetails
-        .map(({ detail }) => detail.originatorUserId)
-        .filter((id): id is string => Boolean(id)),
-    );
-
-    await mapPool(
-      runningDetails,
-      APPROVAL_RULE_DETAIL_CONCURRENCY,
-      async ({ detail, instanceId }) => {
-        if (abortCycle) return;
+        let detail = detailCache.get(instanceId);
+        if (!detail) {
+          try {
+            detail = await loadDetailCounted(instanceId);
+          } catch (error) {
+            console.error('[dingtalk-approval-rules] instance detail failed', {
+              errorClass: error instanceof Error ? error.name : 'UnknownError',
+            });
+            if (isRateLimited(error)) {
+              abortCycle = true;
+              break ownerScan;
+            }
+            continue;
+          }
+        }
+        if (detail.status && detail.status !== 'RUNNING') continue;
 
         const originatorStaffId = detail.originatorUserId ?? '';
         const originatorDeptId =
           detail.originatorDeptId === undefined || detail.originatorDeptId === null
             ? null
             : String(detail.originatorDeptId);
-        const originatorName = originatorNames.get(originatorStaffId) ?? originatorStaffId;
         const formValues = toFormValues(detail);
         const title = detail.title ?? '';
 
-        const runningTasks = (detail.tasks ?? []).filter(
-          (task) => task.status === 'RUNNING' && task.userId,
+        const runningForOwner = (detail.tasks ?? []).filter(
+          (task) => task.status === 'RUNNING' && task.userId === ownerStaffId,
         );
+        ownerRunningFound += runningForOwner.length;
+        if (runningForOwner.length === 0) continue;
 
-        for (const task of runningTasks) {
-          if (abortCycle) return;
-          const handlerStaffId = task.userId;
-          if (!handlerStaffId) continue;
-          const ownerRules = rules
-            .filter((rule) => rule.staffId === handlerStaffId)
-            .sort((left, right) => {
-              const byTime = left.createdAt.getTime() - right.createdAt.getTime();
-              return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
-            });
-          if (ownerRules.length === 0) continue;
+        const originatorNames = await lookupNames(originatorStaffId ? [originatorStaffId] : []);
+        const originatorName = originatorNames.get(originatorStaffId) ?? originatorStaffId;
 
-          let originatorDeptIds = deptCache.get(originatorStaffId);
-          if (!originatorDeptIds) {
-            originatorDeptIds = await collectDepts(originatorStaffId, originatorDeptId);
-            deptCache.set(originatorStaffId, originatorDeptIds);
-          }
+        let originatorDeptIds = deptCache.get(originatorStaffId);
+        if (!originatorDeptIds) {
+          originatorDeptIds = await collectDepts(originatorStaffId, originatorDeptId);
+          deptCache.set(originatorStaffId, originatorDeptIds);
+        }
 
-          for (const rule of ownerRules) {
-            if (abortCycle) return;
+        for (const task of runningForOwner) {
+          if (abortCycle) break ownerScan;
+          const taskId = String(task.taskId);
+          if (ownerTaskIsRemembered(ownerStaffId, taskId, nowMs, fingerprint)) continue;
+
+          let matchedAny = false;
+          let abortInstance = false;
+
+          for (const rule of rules) {
+            if (abortCycle || abortInstance) break;
             const matched = matchApprovalRule(rule.conditions, {
               formValues,
               originator: { deptIds: originatorDeptIds, staffId: originatorStaffId },
             });
             if (!matched) continue;
+            matchedAny = true;
 
             const identity = await resolveIdentity(db, rule.userId);
             const identityStaffId = 'error' in identity ? null : identity.staffId;
             if (
               !identityStaffId ||
               identityStaffId !== rule.staffId ||
-              identityStaffId !== handlerStaffId
+              identityStaffId !== ownerStaffId
             ) {
               await disable(db, rule.id, 'identity_invalid');
               await notifyBestEffort(notify, rule.staffId, {
@@ -557,13 +657,12 @@ export const runApprovalRulesCycle = async (
               break;
             }
 
-            const taskId = String(task.taskId);
-
             if (
               cap !== null &&
               isSameShanghaiDay(rule.dailyCountDate, today) &&
               rule.dailyCount >= cap
             ) {
+              rememberOwnerTask(ownerStaffId, taskId, quotaExpiry, fingerprint);
               await notifyQuotaOnce(rule, title);
               counts.skipped += 1;
               break;
@@ -606,6 +705,7 @@ export const runApprovalRulesCycle = async (
             });
 
             if (claim.kind === 'busy') {
+              rememberOwnerTask(ownerStaffId, taskId, evaluatedExpiry, fingerprint);
               counts.skipped += 1;
               break;
             }
@@ -614,6 +714,7 @@ export const runApprovalRulesCycle = async (
                 rule.dailyCount = cap;
                 rule.dailyCountDate = today;
               }
+              rememberOwnerTask(ownerStaffId, taskId, quotaExpiry, fingerprint);
               await notifyQuotaOnce(rule, title);
               counts.skipped += 1;
               break;
@@ -622,13 +723,13 @@ export const runApprovalRulesCycle = async (
             try {
               let fresh: ApprovalInstanceDetail;
               try {
-                fresh = (await loadDetail(instanceId)) as ApprovalInstanceDetail;
-                detailCache.set(instanceId, fresh);
+                fresh = await loadDetailCounted(instanceId);
               } catch (error) {
                 if (isRateLimited(error) || errorCodeOf(error) === 'DINGTALK_UNAVAILABLE') {
                   await releaseClaim(rule, taskId);
                   if (isRateLimited(error)) abortCycle = true;
-                  return;
+                  abortInstance = true;
+                  break;
                 }
                 throw error;
               }
@@ -653,24 +754,32 @@ export const runApprovalRulesCycle = async (
 
               if (!skipCommentRepost) {
                 if (rule.action === 'agree' || rule.action === 'refuse') {
-                  await execute(identityStaffId, {
-                    processInstanceId: instanceId,
-                    remark: rule.remark ?? undefined,
-                    result: rule.action,
-                    taskId: task.taskId,
-                  });
+                  const result = rule.action;
+                  await callDingTalk(() =>
+                    execute(identityStaffId, {
+                      processInstanceId: instanceId,
+                      remark: rule.remark ?? undefined,
+                      result,
+                      taskId: task.taskId,
+                    }),
+                  );
                 } else if (rule.action === 'redirect') {
-                  if (!rule.redirectToStaffId) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
-                  await redirect(identityStaffId, {
-                    remark: rule.remark ?? undefined,
-                    taskId: task.taskId,
-                    toUserId: rule.redirectToStaffId,
-                  });
+                  const toUserId = rule.redirectToStaffId;
+                  if (!toUserId) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+                  await callDingTalk(() =>
+                    redirect(identityStaffId, {
+                      remark: rule.remark ?? undefined,
+                      taskId: task.taskId,
+                      toUserId,
+                    }),
+                  );
                 } else {
-                  await comment(identityStaffId, {
-                    processInstanceId: instanceId,
-                    text: commentText,
-                  });
+                  await callDingTalk(() =>
+                    comment(identityStaffId, {
+                      processInstanceId: instanceId,
+                      text: commentText,
+                    }),
+                  );
                 }
               }
             } catch (error) {
@@ -682,7 +791,8 @@ export const runApprovalRulesCycle = async (
                   console.error('[dingtalk-approval-rules] execute failed', {
                     errorClass: error instanceof Error ? error.name : 'UnknownError',
                   });
-                  return;
+                  abortInstance = true;
+                  break;
                 }
                 counts.failed += 1;
                 console.error('[dingtalk-approval-rules] execute failed', {
@@ -714,6 +824,9 @@ export const runApprovalRulesCycle = async (
               taskId,
             });
             if (!finalized) {
+              if (rule.action === 'comment') {
+                rememberOwnerTask(ownerStaffId, taskId, evaluatedExpiry, fingerprint);
+              }
               counts.skipped += 1;
               break;
             }
@@ -736,21 +849,37 @@ export const runApprovalRulesCycle = async (
               title: '自动审批已执行',
             });
             counts.executed += 1;
+            if (rule.action === 'comment') {
+              rememberOwnerTask(ownerStaffId, taskId, evaluatedExpiry, fingerprint);
+            }
             break;
           }
+
+          if (!matchedAny) {
+            rememberOwnerTask(ownerStaffId, taskId, evaluatedExpiry, fingerprint);
+          }
+          if (abortCycle) break ownerScan;
+          if (abortInstance) break;
         }
-      },
-    );
+      }
+    }
   }
 
-  return { counts };
+  return emptyResult(undefined, dingtalkCalls, counts);
 };
 
 let started = false;
-let timer: ReturnType<typeof setInterval> | undefined;
+let timer: ReturnType<typeof setTimeout> | undefined;
 let inflight: Promise<ApprovalRuleCycleResult> | null = null;
 
 export const isApprovalRuleWorkerStarted = (): boolean => started;
+
+const unrefTimer = (handle: ReturnType<typeof setTimeout>): void => {
+  if (typeof handle === 'object' && handle !== null && 'unref' in handle) {
+    const unref = Reflect.get(handle, 'unref');
+    if (typeof unref === 'function') unref.call(handle);
+  }
+};
 
 const tick = (deps: ApprovalRuleCycleDeps = {}): void => {
   if (!started) return;
@@ -763,11 +892,20 @@ const tick = (deps: ApprovalRuleCycleDeps = {}): void => {
       console.error('[dingtalk-approval-rules] sweep failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',
       });
-      return { counts: emptyCounts() } satisfies ApprovalRuleCycleResult;
+      return emptyResult();
     })
     .finally(() => {
       inflight = null;
     });
+};
+
+const scheduleNext = (deps: ApprovalRuleCycleDeps): void => {
+  if (!started) return;
+  timer = setTimeout(() => {
+    tick(deps);
+    scheduleNext(deps);
+  }, nextApprovalRuleSweepDelayMs());
+  unrefTimer(timer);
 };
 
 export const ensureDingtalkApprovalRuleWorkerStarted = (deps: ApprovalRuleCycleDeps = {}): void => {
@@ -775,14 +913,13 @@ export const ensureDingtalkApprovalRuleWorkerStarted = (deps: ApprovalRuleCycleD
   if (!isApprovalRuleWorkerRuntime()) return;
   started = true;
   tick(deps);
-  timer = setInterval(() => tick(deps), APPROVAL_RULE_SWEEP_INTERVAL_MS);
-  timer.unref();
+  scheduleNext(deps);
 };
 
 export const stopDingtalkApprovalRuleWorker = (): void => {
   started = false;
   if (timer) {
-    clearInterval(timer);
+    clearTimeout(timer);
     timer = undefined;
   }
 };
@@ -791,6 +928,7 @@ export const stopDingtalkApprovalRuleWorkerForTest = (): void => {
   stopDingtalkApprovalRuleWorker();
   inflight = null;
   processCodeOffset = 0;
+  resetApprovalRuleWorkerMemoryForTest();
 };
 
 /** Test helper: run one cycle while holding the in-process single-flight latch. */
@@ -798,7 +936,7 @@ export const runApprovalRulesCycleSingleFlight = async (
   db: LobeChatDatabase,
   deps: ApprovalRuleCycleDeps = {},
 ): Promise<ApprovalRuleCycleResult> => {
-  if (inflight) return { counts: emptyCounts(), skippedReason: 'in_flight' };
+  if (inflight) return emptyResult('in_flight');
   inflight = runApprovalRulesCycle(db, deps).finally(() => {
     inflight = null;
   });

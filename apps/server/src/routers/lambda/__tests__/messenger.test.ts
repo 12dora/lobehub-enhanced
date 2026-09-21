@@ -556,7 +556,7 @@ describe('messengerRouter.availablePlatforms', () => {
     });
   });
 
-  it('returns capabilities and a null botUsername for dingtalk', async () => {
+  it('returns capabilities and the robot display name as botUsername for dingtalk', async () => {
     const caller = createCaller(await createContextInner({ userId: 'user-1' }));
     const result = await caller.availablePlatforms();
 
@@ -564,7 +564,7 @@ describe('messengerRouter.availablePlatforms', () => {
       expect.objectContaining({
         appId: 'app_key',
         binding: { linked: false, platformUsername: null },
-        botUsername: null,
+        botUsername: 'AI 助手',
         capabilities: { chat: true, push: false },
         connectionMode: 'websocket',
         enabled: true,
@@ -578,6 +578,21 @@ describe('messengerRouter.availablePlatforms', () => {
       'user-1',
       ['dingtalk'],
     );
+  });
+
+  it('prefers connector robotDisplayName for dingtalk botUsername', async () => {
+    mockGetMessengerDingTalkConfig.mockResolvedValue({
+      chatEnabled: true,
+      clientId: 'app_key',
+      pushEnabled: false,
+      robotCode: 'robot_1',
+      robotDisplayName: '审批助手',
+    });
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const result = await caller.availablePlatforms();
+
+    expect(result[0]).toEqual(expect.objectContaining({ botUsername: '审批助手' }));
   });
 
   it('forwards the caller binding when the user is mapped', async () => {

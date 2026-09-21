@@ -19,7 +19,8 @@ export const isValidDingTalkStaffId = (staffId: string): boolean =>
 
 export const DINGTALK_INSTALLATION_KEY = 'dingtalk:singleton';
 
-export const DINGTALK_BRANDING_FALLBACK = 'AI 平台';
+/** Fallback robot / product label when branding is empty or built-in. */
+export const DINGTALK_BRANDING_FALLBACK = 'AI 助手';
 
 export const formatDingTalkUnknownUserReply = (displayName: string): string =>
   `请先使用钉钉账号登录 ${displayName} 网页端一次，再回来对话。`;

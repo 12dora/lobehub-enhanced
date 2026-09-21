@@ -1,5 +1,6 @@
 import { dingtalkWorkspaceRequest } from '../client';
 import { DingtalkWorkspaceError } from '../errors';
+import { remapFormsInvalidError } from './formError';
 import { isRateLimitedError, paceInstanceDetail, paceInstanceIdsQuery } from './scanPace';
 import {
   type EncodedFormComponentValue,
@@ -657,6 +658,27 @@ export const listPremiumTodoTasks = async (
   return { hasMore: hasMore || list.length >= limit, list };
 };
 
+export const countPendingTasks = async (staffId: string): Promise<number> => {
+  const body = await dingtalkWorkspaceRequest<unknown>({
+    api: 'v1',
+    method: 'GET',
+    path: '/v1.0/workflow/processes/todoTasks/numbers',
+    query: { userId: staffId },
+  });
+  const unwrapped = unwrapResult(body);
+  if (typeof unwrapped === 'number' && Number.isFinite(unwrapped)) {
+    return Math.max(0, Math.floor(unwrapped));
+  }
+  if (typeof unwrapped === 'string' && /^\d+$/.test(unwrapped.trim())) {
+    return Number(unwrapped.trim());
+  }
+  const record = asRecord(unwrapped) ?? asRecord(body);
+  const value = record?.result ?? record?.number ?? record?.count;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value.trim());
+  throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
+};
+
 export const saveFormTemplate = async (input: {
   description?: string;
   formComponents: Array<{
@@ -667,21 +689,25 @@ export const saveFormTemplate = async (input: {
   name: string;
   processCode?: string;
 }): Promise<{ processCode: string }> => {
-  const body = await dingtalkWorkspaceRequest<unknown>({
-    api: 'v1',
-    body: {
-      description: input.description,
-      formComponents: input.formComponents,
-      name: input.name,
-      processCode: input.processCode,
-    },
-    method: 'POST',
-    path: '/v1.0/workflow/forms',
-  });
-  const result = asRecord(unwrapResult(body)) ?? asRecord(body);
-  const processCode = asString(result?.processCode);
-  if (!processCode) throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
-  return { processCode };
+  try {
+    const body = await dingtalkWorkspaceRequest<unknown>({
+      api: 'v1',
+      body: {
+        description: input.description,
+        formComponents: input.formComponents,
+        name: input.name,
+        processCode: input.processCode,
+      },
+      method: 'POST',
+      path: '/v1.0/workflow/forms',
+    });
+    const result = asRecord(unwrapResult(body)) ?? asRecord(body);
+    const processCode = asString(result?.processCode);
+    if (!processCode) throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
+    return { processCode };
+  } catch (error) {
+    return remapFormsInvalidError(error);
+  }
 };
 
 export const deleteFormTemplate = async (processCode: string): Promise<void> => {

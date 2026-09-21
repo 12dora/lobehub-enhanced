@@ -18,7 +18,11 @@ export const DINGTALK_DIRECTORY_STATUS_KEY = 'messenger:dingtalk:directory-statu
 export const DINGTALK_DIRECTORY_SYNC_LOCK_KEY = 'messenger:dingtalk:directory-sync-lock';
 export const DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS = 30 * 60;
 export const DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS = 60_000;
-export const DINGTALK_DIRECTORY_SYNC_INTERVAL_MS = 60 * 60 * 1000;
+/** Periodic walk. Miss-triggered refresh is capped separately at 1 h. */
+export const DINGTALK_DIRECTORY_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS = 60 * 60 * 1000;
+export const DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_KEY =
+  'messenger:dingtalk:directory-sync-miss-cooldown';
 
 export const RELEASE_DIRECTORY_SYNC_LOCK_SCRIPT =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
@@ -303,9 +307,66 @@ const tickDirectorySync = async (deps: DingTalkDirectorySyncDeps = {}): Promise<
   }
 };
 
+export type DirectorySyncOnLookupMissResult = 'running' | 'throttled' | 'triggered';
+
+let memoryMissCooldownUntil = 0;
+
+const acquireMissCooldown = async (now: number): Promise<boolean> => {
+  if (memoryMissCooldownUntil > now) return false;
+  const redis = getAgentRuntimeRedisClient();
+  if (redis) {
+    try {
+      const result = await redis.set(
+        DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_KEY,
+        '1',
+        'EX',
+        Math.ceil(DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS / 1000),
+        'NX',
+      );
+      if (result !== 'OK') return false;
+      memoryMissCooldownUntil = now + DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS;
+      return true;
+    } catch (error) {
+      log('miss-cooldown redis failed: %O', error);
+    }
+  }
+  if (memoryMissCooldownUntil > now) return false;
+  memoryMissCooldownUntil = now + DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS;
+  return true;
+};
+
 /**
- * Hourly directory walk. First run is delayed 60 s after boot so the process
+ * Early directory refresh when a reminder/approval name lookup misses.
+ * At most once per hour. Admin 「同步」 still goes through
+ * {@link runGuardedDirectorySync} and is not gated here.
+ */
+export const requestDirectorySyncOnLookupMiss = async (
+  db: LobeChatDatabase,
+  deps: DingTalkDirectorySyncDeps = {},
+): Promise<DirectorySyncOnLookupMissResult> => {
+  const now = deps.now?.().getTime() ?? Date.now();
+  const status = await readDingTalkDirectoryStatus(db, deps);
+  if (status.state === 'running') return 'running';
+  if (status.lastRunAt) {
+    const last = Date.parse(status.lastRunAt);
+    if (Number.isFinite(last) && now - last < DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS) {
+      return 'throttled';
+    }
+  }
+  if (!(await acquireMissCooldown(now))) return 'throttled';
+
+  void runGuardedDirectorySync(db, deps).catch((error) => {
+    console.error('[dingtalk-directory] miss-triggered sync failed', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  });
+  return 'triggered';
+};
+
+/**
+ * 12-hour directory walk. First run is delayed 60 s after boot so the process
  * can finish listening. Skipped when the notify app (服务号) is not configured.
+ * A name-lookup miss may trigger an extra walk at most once per hour.
  */
 export const ensureDingTalkDirectorySyncWorkerStarted = (
   deps: DingTalkDirectorySyncDeps = {},
@@ -336,6 +397,7 @@ export const ensureDingTalkDirectorySyncWorkerStarted = (
 
 export const stopDingTalkDirectorySyncWorker = (): void => {
   started = false;
+  memoryMissCooldownUntil = 0;
   if (bootTimer) {
     clearTimeout(bootTimer);
     bootTimer = undefined;

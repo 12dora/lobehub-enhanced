@@ -87,6 +87,11 @@ export const resolveStaff = async (
     directory,
     near.map((user) => user.staffId),
   );
+  // A miss may mean the mirror is stale (sync runs every 12 h): ask for an early
+  // sync, rate-limited to once per hour inside the helper. Never blocks the lookup.
+  void import('@/server/enterprise/services/dingtalkDirectory/sync')
+    .then(({ requestDirectorySyncOnLookupMiss }) => requestDirectorySyncOnLookupMiss(db))
+    .catch(() => undefined);
   return {
     notFound: true,
     suggestions: suggestions.length > 0 ? suggestions : near.map((user) => toCandidate(user)),

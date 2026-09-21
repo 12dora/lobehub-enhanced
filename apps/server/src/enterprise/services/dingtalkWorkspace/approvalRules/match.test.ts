@@ -99,6 +99,30 @@ describe('matchApprovalRule originator', () => {
     );
   });
 
+  it('tolerates leftover staff: / dept: prefixes on stored conditions', () => {
+    const rule = conditions({
+      originators: { deptIds: ['dept:dept_parent'], staffIds: ['staff:276329315736818882'] },
+    });
+    expect(
+      matchApprovalRule(rule, {
+        formValues: [],
+        originator: originator('276329315736818882', ['dept_leaf']),
+      }),
+    ).toBe(true);
+    expect(
+      matchApprovalRule(rule, {
+        formValues: [],
+        originator: originator('someone_else', ['dept_parent']),
+      }),
+    ).toBe(true);
+    expect(
+      matchApprovalRule(rule, {
+        formValues: [],
+        originator: originator('someone_else', ['dept_other']),
+      }),
+    ).toBe(false);
+  });
+
   it('matches by department including ancestors supplied by the caller', () => {
     const rule = conditions({ originators: { deptIds: ['dept_parent'] } });
     expect(

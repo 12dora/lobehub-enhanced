@@ -27,12 +27,16 @@ const { fetchDirectoryReplaceAllInput, resolveNotifyAppConfig } =
 const {
   acquireDirectorySyncLock,
   DINGTALK_DIRECTORY_STATUS_KEY,
+  DINGTALK_DIRECTORY_SYNC_INTERVAL_MS,
   DINGTALK_DIRECTORY_SYNC_LOCK_KEY,
   DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS,
+  DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_KEY,
+  DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS,
   ensureDingTalkDirectorySyncWorkerStarted,
   isDingTalkDirectorySyncWorkerRuntime,
   isDingTalkDirectorySyncWorkerStarted,
   readDingTalkDirectoryStatus,
+  requestDirectorySyncOnLookupMiss,
   runGuardedDirectorySync,
   stopDingTalkDirectorySyncWorkerForTest,
   syncDingTalkDirectory,
@@ -211,6 +215,80 @@ describe('runGuardedDirectorySync', () => {
     await expect(
       runGuardedDirectorySync({} as never, { createDirectoryModel: async () => model }),
     ).resolves.toBeNull();
+    expect(model.replaceAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('directory sync interval', () => {
+  it('walks every 12 hours, not every hour', () => {
+    expect(DINGTALK_DIRECTORY_SYNC_INTERVAL_MS).toBe(12 * 60 * 60 * 1000);
+    expect(DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS).toBe(60 * 60 * 1000);
+  });
+});
+
+describe('requestDirectorySyncOnLookupMiss', () => {
+  it('triggers a guarded sync when the directory is stale', async () => {
+    const model = createModel();
+    await expect(
+      requestDirectorySyncOnLookupMiss({} as never, {
+        createDirectoryModel: async () => model,
+        now: () => new Date('2026-09-16T04:00:00.000Z'),
+      }),
+    ).resolves.toBe('triggered');
+    expect(redisMocks.set).toHaveBeenCalledWith(
+      DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_KEY,
+      '1',
+      'EX',
+      3600,
+      'NX',
+    );
+    await vi.waitFor(() => {
+      expect(model.replaceAll).toHaveBeenCalled();
+    });
+    await expect(
+      requestDirectorySyncOnLookupMiss({} as never, {
+        createDirectoryModel: async () => model,
+        now: () => new Date('2026-09-16T04:05:00.000Z'),
+      }),
+    ).resolves.toBe('throttled');
+  });
+
+  it('throttles to at most once per hour after a successful run', async () => {
+    redisMocks.get.mockResolvedValueOnce(
+      JSON.stringify({
+        departments: 8,
+        lastError: null,
+        lastRunAt: '2026-09-16T03:30:00.000Z',
+        state: 'ok',
+        users: 20,
+      }),
+    );
+    const model = createModel();
+    await expect(
+      requestDirectorySyncOnLookupMiss({} as never, {
+        createDirectoryModel: async () => model,
+        now: () => new Date('2026-09-16T04:00:00.000Z'),
+      }),
+    ).resolves.toBe('throttled');
+    expect(model.replaceAll).not.toHaveBeenCalled();
+  });
+
+  it('does not start a second walk while one is running', async () => {
+    redisMocks.get.mockResolvedValueOnce(
+      JSON.stringify({
+        departments: 8,
+        lastError: null,
+        lastRunAt: '2026-09-15T04:00:00.000Z',
+        state: 'running',
+        users: 20,
+      }),
+    );
+    const model = createModel();
+    await expect(
+      requestDirectorySyncOnLookupMiss({} as never, {
+        createDirectoryModel: async () => model,
+      }),
+    ).resolves.toBe('running');
     expect(model.replaceAll).not.toHaveBeenCalled();
   });
 });

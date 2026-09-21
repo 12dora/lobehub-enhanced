@@ -34,6 +34,8 @@ export class DingtalkWorkspaceError extends Error {
   readonly code: DingtalkWorkspaceErrorCode;
   readonly missingScopes?: string[];
   readonly upstreamCode?: string;
+  /** Clipped upstream message for server-side diagnosis only. Never sent to the model or client. */
+  upstreamMessage?: string;
 
   constructor(
     code: DingtalkWorkspaceErrorCode,

@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const debugLog = vi.hoisted(() => vi.fn());
+vi.mock('debug', () => ({
+  default: () => debugLog,
+}));
+
 class DingtalkWorkspaceError extends Error {
   readonly code: string;
   constructor(code: string) {
@@ -20,6 +25,10 @@ vi.mock('../approval/api', () => ({
   getInstanceDetail: vi.fn(),
   listRunningInstanceIds: vi.fn(),
   redirectTaskAs: vi.fn(),
+}));
+vi.mock('./todoCount', () => ({
+  getPendingApprovalTaskCount: vi.fn(async () => 1),
+  parsePendingApprovalTaskCount: vi.fn(),
 }));
 vi.mock('@/database/models/dingtalkApprovalRule', () => ({
   DingtalkApprovalRuleModel: {
@@ -50,6 +59,11 @@ vi.mock('../../platformAudit', () => ({
 const {
   APPROVAL_RULE_INSTANCE_CAP,
   APPROVAL_RULE_PROCESS_CODE_CAP,
+  APPROVAL_RULE_REVERIFY_MS,
+  APPROVAL_RULE_SWEEP_INTERVAL_MS,
+  APPROVAL_RULE_SWEEP_JITTER_MS,
+  invalidateApprovalRuleWorkerMemory,
+  nextApprovalRuleSweepDelayMs,
   runApprovalRulesCycle,
   runApprovalRulesCycleSingleFlight,
   stopDingtalkApprovalRuleWorkerForTest,
@@ -70,6 +84,7 @@ const rule = {
   redirectToStaffId: null,
   remark: null,
   staffId: 'staff_me',
+  updatedAt: new Date('2026-01-01T00:00:00.000Z'),
   userId: 'user_1',
 };
 
@@ -113,6 +128,7 @@ describe('runApprovalRulesCycle', () => {
         disable,
         executeTaskAs,
         getInstanceDetail: async () => detail,
+        getPendingTaskCount: async () => 1,
         listAllActiveRules: async () => [rule],
         listExpiredEnabled: async () => [],
         listRunningInstanceIds: async () => ['inst_1'],
@@ -253,13 +269,19 @@ describe('runApprovalRulesCycle', () => {
 
   it('does not notify again when the daily counter is already at the cap', async () => {
     tryRecordQuotaNotify.mockResolvedValue(false);
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async () => detail);
     await run({
+      getInstanceDetail,
       listAllActiveRules: async () => [{ ...rule, dailyCount: 50, dailyCountDate: '2026-03-01' }],
+      listRunningInstanceIds,
     });
     expect(notify).not.toHaveBeenCalled();
     expect(executeTaskAs).not.toHaveBeenCalled();
     expect(recordRun).not.toHaveBeenCalled();
     expect(bumpDailyCount).not.toHaveBeenCalled();
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+    expect(getInstanceDetail).not.toHaveBeenCalled();
   });
 
   it('disables the rule when the owner identity is no longer verified', async () => {
@@ -606,5 +628,275 @@ describe('runApprovalRulesCycle', () => {
     expect(second.skippedReason).toBe('in_flight');
     release();
     await first;
+  });
+
+  it('uses a 3 minute base interval with jitter', () => {
+    expect(APPROVAL_RULE_SWEEP_INTERVAL_MS).toBe(180_000);
+    expect(APPROVAL_RULE_SWEEP_JITTER_MS).toBe(30_000);
+    expect(nextApprovalRuleSweepDelayMs(() => 0.5)).toBe(180_000);
+    expect(nextApprovalRuleSweepDelayMs(() => 0)).toBe(150_000);
+    expect(nextApprovalRuleSweepDelayMs(() => 1)).toBe(210_000);
+  });
+
+  it('logs the DingTalk call count once per cycle', async () => {
+    debugLog.mockClear();
+    await run({ getPendingTaskCount: async () => 0 });
+    expect(debugLog).toHaveBeenCalledWith(
+      'cycle %O',
+      expect.objectContaining({ dingtalkCalls: 1, executed: 0 }),
+    );
+  });
+
+  it('skips listing and details when the owner pending count is 0', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const getPendingTaskCount = vi.fn(async () => 0);
+    const result = await run({ getInstanceDetail, getPendingTaskCount, listRunningInstanceIds });
+    expect(getPendingTaskCount).toHaveBeenCalledTimes(1);
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+    expect(getInstanceDetail).not.toHaveBeenCalled();
+    expect(executeTaskAs).not.toHaveBeenCalled();
+    expect(result.dingtalkCalls).toBe(1);
+  });
+
+  it('reuses one pending-count call for every rule of the same owner', async () => {
+    const getPendingTaskCount = vi.fn(async () => 0);
+    await run({
+      getPendingTaskCount,
+      listAllActiveRules: async () => [rule, { ...rule, id: 'rule_2', processCode: 'PROC_2' }],
+    });
+    expect(getPendingTaskCount).toHaveBeenCalledTimes(1);
+    expect(getPendingTaskCount).toHaveBeenCalledWith('staff_me');
+  });
+
+  it('stops fetching instance details once owner RUNNING tasks equal the pending count', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1', 'inst_2', 'inst_3']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    await run({
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listRunningInstanceIds,
+    });
+    expect(getInstanceDetail).toHaveBeenCalledTimes(2);
+    expect(getInstanceDetail).toHaveBeenNthCalledWith(1, 'inst_1');
+    expect(getInstanceDetail.mock.calls.map((call) => call[0])).not.toContain('inst_2');
+  });
+
+  it('skips a rescan when pending count equals already-evaluated non-matching tasks', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const getPendingTaskCount = vi.fn(async () => 1);
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount,
+      listAllActiveRules: async () => [
+        {
+          ...rule,
+          conditions: { match: 'all' as const, originators: { staffIds: ['nobody'] } },
+        },
+      ],
+      listRunningInstanceIds,
+    };
+    const first = await run(deps);
+    expect(first.counts.executed).toBe(0);
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+    expect(getInstanceDetail).toHaveBeenCalledTimes(1);
+
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    const second = await run(deps);
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+    expect(getInstanceDetail).not.toHaveBeenCalled();
+    expect(second.dingtalkCalls).toBe(1);
+  });
+
+  it('rescans after the 24 h evaluated TTL', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [
+        {
+          ...rule,
+          conditions: { match: 'all' as const, originators: { staffIds: ['nobody'] } },
+        },
+      ],
+      listRunningInstanceIds,
+      now: new Date('2026-03-01T00:00:00.000Z'),
+    };
+    await run(deps);
+    listRunningInstanceIds.mockClear();
+    await run({
+      ...deps,
+      now: new Date('2026-03-02T01:00:00.000Z'),
+    });
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('rescans when enabled-rule fingerprint changes even if pending count is unchanged', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const nonMatching = {
+      ...rule,
+      conditions: { match: 'all' as const, originators: { staffIds: ['nobody'] } },
+    };
+    await run({
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [nonMatching],
+      listRunningInstanceIds,
+    });
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    const result = await run({
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [
+        {
+          ...nonMatching,
+          conditions: { match: 'all' as const },
+          updatedAt: new Date('2026-03-01T00:00:00.000Z'),
+        },
+      ],
+      listRunningInstanceIds,
+    });
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+    expect(getInstanceDetail).toHaveBeenCalled();
+    expect(result.counts.executed).toBe(1);
+  });
+
+  it('rescans after invalidateApprovalRuleWorkerMemory even when pending count is unchanged', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [
+        {
+          ...rule,
+          conditions: { match: 'all' as const, originators: { staffIds: ['nobody'] } },
+        },
+      ],
+      listRunningInstanceIds,
+    };
+    await run(deps);
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    invalidateApprovalRuleWorkerMemory('staff_me');
+    await run(deps);
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+    expect(getInstanceDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it('scans when pending count exceeds remembered settled tasks', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const deps = {
+      getInstanceDetail,
+      listAllActiveRules: async () => [
+        {
+          ...rule,
+          conditions: { match: 'all' as const, originators: { staffIds: ['nobody'] } },
+        },
+      ],
+      listRunningInstanceIds,
+    };
+    await run({ ...deps, getPendingTaskCount: async () => 1 });
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    await run({ ...deps, getPendingTaskCount: async () => 2 });
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+    expect(getInstanceDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-verifies at most once every 30 minutes when pending count is not higher than remembered tasks', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [
+        {
+          ...rule,
+          conditions: { match: 'all' as const, originators: { staffIds: ['nobody'] } },
+        },
+      ],
+      listRunningInstanceIds,
+    };
+    await run({ ...deps, now: new Date('2026-03-01T00:00:00.000Z') });
+    listRunningInstanceIds.mockClear();
+    await run({
+      ...deps,
+      now: new Date('2026-03-01T00:10:00.000Z'),
+    });
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+
+    await run({
+      ...deps,
+      now: new Date(new Date('2026-03-01T00:00:00.000Z').getTime() + APPROVAL_RULE_REVERIFY_MS),
+    });
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rescan a successfully commented still-pending task on the next cycle', async () => {
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [{ ...rule, action: 'comment' as const, remark: '已阅' }],
+      listRunningInstanceIds,
+    };
+    const first = await run(deps);
+    expect(first.counts.executed).toBe(1);
+    expect(addCommentAs).toHaveBeenCalledTimes(1);
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    addCommentAs.mockClear();
+    const second = await run(deps);
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+    expect(getInstanceDetail).not.toHaveBeenCalled();
+    expect(addCommentAs).not.toHaveBeenCalled();
+    expect(second.dingtalkCalls).toBe(1);
+  });
+
+  it('does not rescan a quota-skipped still-pending task on the next cycle', async () => {
+    bumpDailyCount.mockResolvedValue(null);
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const live = { ...rule, dailyCount: 0, dailyCountDate: null as string | null };
+    const other = { ...rule, dailyCount: 0, id: 'rule_other', processCode: 'PROC_2' };
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listAllActiveRules: async () => [live, other],
+      listRunningInstanceIds,
+    };
+    await run(deps);
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    await run(deps);
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+    expect(getInstanceDetail).not.toHaveBeenCalled();
+  });
+
+  it('does not rescan a task whose unique run is already claimed', async () => {
+    recordRun.mockResolvedValue(false);
+    const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
+    const getInstanceDetail = vi.fn(async (_id: string) => detail);
+    const deps = {
+      getInstanceDetail,
+      getPendingTaskCount: async () => 1,
+      listRunningInstanceIds,
+    };
+    await run(deps);
+    expect(listRunningInstanceIds).toHaveBeenCalledTimes(1);
+    listRunningInstanceIds.mockClear();
+    getInstanceDetail.mockClear();
+    await run(deps);
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+    expect(getInstanceDetail).not.toHaveBeenCalled();
   });
 });

@@ -19,10 +19,12 @@ import { DingtalkApprovalService, type TemplateField } from '../approval';
 import { assertDingtalkFeature, getDingtalkWorkspaceCapabilities } from '../capabilities';
 import { type DingtalkStaffCandidate, resolveStaff, type ResolveStaffResult } from '../directory';
 import { DingtalkWorkspaceError, type DingtalkWorkspaceErrorCode } from '../errors';
-import { requireVerifiedDingtalkIdentity } from '../identity';
+import { requireVerifiedDingtalkIdentity, type VerifiedDingtalkIdentity } from '../identity';
+import { normalizeApprovalRuleConditions } from './conditions';
 import { pickOriginatorLabels, resolveOriginatorLabels } from './labels';
 import { fieldOpFitsComponentType } from './match';
 import { addUtcDays } from './tier';
+import { invalidateApprovalRuleWorkerMemory } from './workerMemory';
 
 export const DINGTALK_APPROVAL_ACTIVE_RULE_LIMIT = 20;
 const MAX_NAME_CHARS = 80;
@@ -263,7 +265,11 @@ export class DingtalkApprovalRuleService {
 
     const name = trimName(input.name);
     const remark = trimRemark(input.remark);
-    const conditions = validateConditionsShape(input.conditions);
+    const conditions = await normalizeApprovalRuleConditions(
+      this.db,
+      validateConditionsShape(input.conditions),
+      identity.staffId,
+    );
     const template = await this.requireVisibleTemplate(input.processCode);
     const schema = await this.approval.getTemplateSchema(input.processCode);
     validateConditionsAgainstSchema(conditions, schema.fields);
@@ -300,8 +306,10 @@ export class DingtalkApprovalRuleService {
       remark,
       staffId: identity.staffId,
     });
-    if (input.enabled === false) return this.model.update(created.id, { enabled: false });
-    return created;
+    const saved =
+      input.enabled === false ? await this.model.update(created.id, { enabled: false }) : created;
+    invalidateApprovalRuleWorkerMemory(identity.staffId);
+    return saved;
   };
 
   update = async (
@@ -324,7 +332,11 @@ export class DingtalkApprovalRuleService {
     const nextConditions =
       patch.conditions === undefined
         ? existing.conditions
-        : validateConditionsShape(patch.conditions);
+        : await normalizeApprovalRuleConditions(
+            this.db,
+            validateConditionsShape(patch.conditions),
+            identity.staffId,
+          );
     const processCode = patch.processCode ?? existing.processCode;
 
     if (patch.conditions || patch.processCode) {
@@ -381,7 +393,9 @@ export class DingtalkApprovalRuleService {
     }
 
     try {
-      return await this.model.update(id, next);
+      const saved = await this.model.update(id, next);
+      invalidateApprovalRuleWorkerMemory(identity.staffId);
+      return saved;
     } catch (error) {
       if (error instanceof DingtalkApprovalRuleEnableBlockedError) {
         throwWorkspace(error.blocked === 'expired' ? 'DINGTALK_INVALID' : 'DINGTALK_FORBIDDEN');
@@ -391,9 +405,10 @@ export class DingtalkApprovalRuleService {
   };
 
   remove = async (id: string): Promise<{ success: true }> => {
-    await this.assertReady();
+    const identity = await this.assertReady();
     const deleted = await this.model.delete(id);
     if (!deleted) throwWorkspace('DINGTALK_NOT_FOUND');
+    invalidateApprovalRuleWorkerMemory(identity.staffId);
     return { success: true };
   };
 
@@ -404,7 +419,11 @@ export class DingtalkApprovalRuleService {
     const { identity, tier } = await this.assertWritable();
     const name = trimName(input.name);
     const remark = trimRemark(input.remark);
-    const conditions = validateConditionsShape(input.conditions);
+    const conditions = await normalizeApprovalRuleConditions(
+      this.db,
+      validateConditionsShape(input.conditions),
+      identity.staffId,
+    );
     const template = await this.requireVisibleTemplate(input.processCode);
     const schema = await this.approval.getTemplateSchema(input.processCode);
     validateConditionsAgainstSchema(conditions, schema.fields);
@@ -477,9 +496,9 @@ export class DingtalkApprovalRuleService {
     }));
   };
 
-  private assertReady = async (): Promise<void> => {
+  private assertReady = async (): Promise<VerifiedDingtalkIdentity> => {
     await assertDingtalkFeature('approval');
-    await requireVerifiedDingtalkIdentity(this.db, this.userId);
+    return requireVerifiedDingtalkIdentity(this.db, this.userId);
   };
 
   private assertWritable = async () => {

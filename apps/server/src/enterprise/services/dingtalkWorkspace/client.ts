@@ -11,6 +11,7 @@ import {
   invalidateNotifyAppToken,
 } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 
+import { recordDingtalkHttpCall } from './apiCallStats';
 import { DingtalkWorkspaceError, type DingtalkWorkspaceErrorCode } from './errors';
 
 const log = debug('lobe-server:dingtalk-workspace:client');
@@ -328,7 +329,9 @@ const throwMapped = (
   const missingScopes =
     code === 'DINGTALK_FORBIDDEN' ? parseDingtalkMissingScopes(message) : undefined;
   log('dingtalk request failed code=%s upstream=%s status=%s', code, upstreamCode, status);
-  throw new DingtalkWorkspaceError(code, upstreamCode ?? undefined, missingScopes);
+  const mapped = new DingtalkWorkspaceError(code, upstreamCode ?? undefined, missingScopes);
+  if (message) mapped.upstreamMessage = message;
+  throw mapped;
 };
 
 const doFetch: DingtalkWorkspaceFetch = async (input, init) => {
@@ -360,6 +363,7 @@ const executeOnce = async (
   );
   const pathname = new URL(url).pathname;
   log('%s %s', req.method, pathname);
+  recordDingtalkHttpCall(req.method, url);
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };

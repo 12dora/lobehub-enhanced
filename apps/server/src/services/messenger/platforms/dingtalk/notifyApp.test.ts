@@ -21,6 +21,12 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   })),
 }));
 
+const recordDingtalkHttpCall = vi.hoisted(() => vi.fn());
+
+vi.mock('@/server/enterprise/services/dingtalkWorkspace/apiCallStats', () => ({
+  recordDingtalkHttpCall,
+}));
+
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const { resolveServerRuntimeBranding } =
   await import('@/server/enterprise/services/branding/runtimeBranding');
@@ -31,6 +37,7 @@ const {
   DINGTALK_ASYNCSEND_V2_URL,
   DINGTALK_DEPT_GET_URL,
   DINGTALK_DEPT_LISTSUB_URL,
+  DINGTALK_NEW_API_ACCESS_TOKEN_URL,
   DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY,
   DINGTALK_NOTIFY_TOKEN_REDIS_KEY,
   DINGTALK_OA_HEAD_BGCOLOR,
@@ -77,6 +84,7 @@ const tokenFetch = vi.fn(async (_input: string | URL, _init?: RequestInit) =>
 
 beforeEach(() => {
   resetNotifyAppStateForTest();
+  recordDingtalkHttpCall.mockReset();
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({ notifyApp: NOTIFY_APP } as never);
   mockRedisGet.mockReset().mockResolvedValue(null);
   mockRedisSet.mockReset().mockResolvedValue('OK');
@@ -140,6 +148,11 @@ describe('getNotifyAppToken', () => {
     const again = await getNotifyAppToken({ fetchImpl: tokenFetch, now: 2_000 });
     expect(again).toBe('tok');
     expect(tokenFetch).toHaveBeenCalledTimes(1);
+    expect(recordDingtalkHttpCall).toHaveBeenCalledTimes(1);
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith(
+      'GET',
+      expect.stringContaining(DINGTALK_OAPI_GETTOKEN_URL),
+    );
   });
 
   it('reuses a still-valid Redis token without refetching', async () => {
@@ -321,6 +334,11 @@ describe('sendWorkNotice', () => {
     );
 
     expect(result).toEqual([{ taskId: '99001' }]);
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith(
+      'GET',
+      expect.stringContaining(DINGTALK_OAPI_GETTOKEN_URL),
+    );
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith('POST', DINGTALK_ASYNCSEND_V2_URL);
     const call = fetchImpl.mock.calls.find((entry) => String(entry[0]).includes('/asyncsend_v2'));
     expect(String(call?.[0])).toContain(DINGTALK_ASYNCSEND_V2_URL);
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({
@@ -532,6 +550,8 @@ describe('sendRobotMessage', () => {
     );
 
     expect(result).toEqual([{ processQueryKey: 'pqk-1' }]);
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith('POST', DINGTALK_NEW_API_ACCESS_TOKEN_URL);
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith('POST', DINGTALK_ROBOT_BATCH_SEND_URL);
     const tokenCall = fetchImpl.mock.calls.find((entry) =>
       String(entry[0]).includes('/oauth2/accessToken'),
     );
@@ -752,6 +772,11 @@ describe('directory fetch', () => {
     expect(depts.map((dept) => dept.deptId)).toEqual(['1', '2', '3']);
     expect(depts[0]).toMatchObject({ name: '捷发科技', parentId: null });
     expect(depts[2]).toMatchObject({ name: '安环部', parentId: '2' });
+    const getCalls = fetchImpl.mock.calls.filter((entry) =>
+      String(entry[0]).startsWith(DINGTALK_DEPT_GET_URL),
+    );
+    expect(getCalls).toHaveLength(1);
+    expect(JSON.parse(String(getCalls[0]?.[1]?.body))).toMatchObject({ dept_id: 1 });
   });
 
   it('pages listDeptUsers with size 100', async () => {
@@ -766,6 +791,7 @@ describe('directory fetch', () => {
       cursor: 0,
       size: 100,
     });
+    expect(recordDingtalkHttpCall).toHaveBeenCalledWith('POST', DINGTALK_USER_LIST_URL);
   });
 
   it('treats numeric has_more as more pages and stops when next_cursor does not move', async () => {
@@ -837,6 +863,19 @@ describe('directory fetch', () => {
         { deptId: '3', staffId: 'left' },
       ]),
     );
+
+    const getCalls = fetchImpl.mock.calls.filter((entry) =>
+      String(entry[0]).startsWith(DINGTALK_DEPT_GET_URL),
+    );
+    const listsubCalls = fetchImpl.mock.calls.filter((entry) =>
+      String(entry[0]).startsWith(DINGTALK_DEPT_LISTSUB_URL),
+    );
+    const userListCalls = fetchImpl.mock.calls.filter((entry) =>
+      String(entry[0]).startsWith(DINGTALK_USER_LIST_URL),
+    );
+    expect(getCalls).toHaveLength(1);
+    expect(listsubCalls).toHaveLength(3);
+    expect(userListCalls).toHaveLength(4);
   });
 });
 

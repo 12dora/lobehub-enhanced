@@ -20,6 +20,7 @@ vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
 
 const {
   addCommentAs,
+  countPendingTasks,
   executeTaskAs,
   getFormSchema,
   getInstanceDetail,
@@ -29,6 +30,7 @@ const {
   redirectTaskAs,
   remapPremiumError,
   resetApprovalApiPaceForTest,
+  saveFormTemplate,
 } = await import('./api');
 
 describe('approval api wrappers', () => {
@@ -287,6 +289,37 @@ describe('approval api wrappers', () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(pending).resolves.toMatchObject({ processInstanceId: 'inst-1', title: '请假' });
     expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('countPendingTasks reads GET todoTasks/numbers', async () => {
+    mockRequest.mockResolvedValueOnce({ result: 0 });
+    await expect(countPendingTasks('staff-1')).resolves.toBe(0);
+    expect(mockRequest).toHaveBeenCalledWith({
+      api: 'v1',
+      method: 'GET',
+      path: '/v1.0/workflow/processes/todoTasks/numbers',
+      query: { userId: 'staff-1' },
+    });
+  });
+
+  it('saveFormTemplate attaches a safe hint on DINGTALK_INVALID', async () => {
+    mockRequest.mockRejectedValueOnce(
+      new DingtalkWorkspaceError(
+        'DINGTALK_INVALID',
+        'formschema.error: DDDateField props.unit error',
+      ),
+    );
+    try {
+      await saveFormTemplate({
+        formComponents: [{ componentType: 'DDDateField', props: { label: '日期' } }],
+        name: '请假',
+      });
+      throw new Error('expected throw');
+    } catch (error) {
+      expect((error as { code: string }).code).toBe('DINGTALK_INVALID');
+      expect((error as { hint?: string }).hint).toBe('DDDateField.unit');
+      expect((error as Error).message).toBe('DINGTALK_INVALID');
+    }
   });
 
   it('getInstanceDetail throws after three rate-limit retries', async () => {

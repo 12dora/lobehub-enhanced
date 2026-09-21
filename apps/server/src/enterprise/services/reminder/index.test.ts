@@ -12,6 +12,7 @@ const mockCancel = vi.fn();
 const mockHideReceived = vi.fn();
 const mockFindById = vi.fn();
 const mockResolveStaffId = vi.fn();
+const mockRequestDirectorySyncOnLookupMiss = vi.fn();
 
 vi.mock('@/database/models/dingtalkDirectory', () => ({
   DingTalkDirectoryModel: vi.fn(() => ({
@@ -49,6 +50,11 @@ vi.mock('./worker', () => ({
   stopReminderWorkerForTest: vi.fn(),
 }));
 
+vi.mock('@/server/enterprise/services/dingtalkDirectory/sync', () => ({
+  requestDirectorySyncOnLookupMiss: (...args: unknown[]) =>
+    mockRequestDirectorySyncOnLookupMiss(...args),
+}));
+
 const {
   REMINDER_CONTENT_EMPTY,
   REMINDER_NOT_FOUND,
@@ -59,6 +65,11 @@ const {
 } = await import('./index');
 
 const futureIso = () => new Date(Date.now() + 60 * 60_000).toISOString();
+
+const flushLookupMissSync = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
 describe('ReminderService', () => {
   beforeEach(() => {
@@ -100,6 +111,19 @@ describe('ReminderService', () => {
     expect(result.ambiguous).toBe(true);
     expect(result.users.every((user) => user.ambiguous)).toBe(true);
     expect(result.serverNow).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    await flushLookupMissSync();
+    expect(mockRequestDirectorySyncOnLookupMiss).not.toHaveBeenCalled();
+  });
+
+  it('requests a directory sync when searchDirectory has zero hits', async () => {
+    mockSearch.mockResolvedValue({ departments: [], users: [] });
+    const db = {} as any;
+    const service = new ReminderService(db, 'user_1');
+    const result = await service.searchDirectory('新同事');
+    expect(result.users).toEqual([]);
+    expect(result.departments).toEqual([]);
+    // The hook is a fire-and-forget dynamic import: wait for it instead of guessing ticks.
+    await vi.waitFor(() => expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(db));
   });
 
   it('rejects a fireAt that is not more than 30s in the future', async () => {

@@ -84,7 +84,18 @@ describe('getMessengerDingTalkConfig', () => {
       notifyApp: null,
       pushEnabled: true,
       robotCode: 'robot_1',
+      robotDisplayName: '',
       selectCardTemplateId: null,
+    });
+  });
+
+  it('carries robotDisplayName from settings', async () => {
+    findEnabledByPlatform.mockResolvedValueOnce({
+      ...COMPLETE_ROW,
+      settings: { ...COMPLETE_ROW.settings, robotDisplayName: '  AI 助手  ' },
+    });
+    await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+      robotDisplayName: 'AI 助手',
     });
   });
 

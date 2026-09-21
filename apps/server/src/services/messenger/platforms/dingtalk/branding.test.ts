@@ -6,7 +6,8 @@ vi.mock('@/server/enterprise/services/branding/runtimeBranding', () => ({
 
 const { resolveServerRuntimeBranding } =
   await import('@/server/enterprise/services/branding/runtimeBranding');
-const { resolveDingTalkBrandingDisplayName } = await import('./branding');
+const { resolveDingTalkBrandingDisplayName, resolveDingTalkRobotDisplayName } =
+  await import('./branding');
 const { DINGTALK_BRANDING_FALLBACK } = await import('./const');
 
 describe('resolveDingTalkBrandingDisplayName', () => {
@@ -38,5 +39,20 @@ describe('resolveDingTalkBrandingDisplayName', () => {
   it('falls back when branding resolution throws', async () => {
     vi.mocked(resolveServerRuntimeBranding).mockRejectedValueOnce(new Error('offline'));
     expect(await resolveDingTalkBrandingDisplayName()).toBe(DINGTALK_BRANDING_FALLBACK);
+  });
+});
+
+describe('resolveDingTalkRobotDisplayName', () => {
+  it('uses the stored connector robotDisplayName when set', () => {
+    expect(resolveDingTalkRobotDisplayName('AI 助手')).toBe('AI 助手');
+    expect(resolveDingTalkRobotDisplayName('  审批机器人  ')).toBe('审批机器人');
+  });
+
+  it('falls back to 「AI 助手」 when the setting is empty', () => {
+    expect(DINGTALK_BRANDING_FALLBACK).toBe('AI 助手');
+    expect(resolveDingTalkRobotDisplayName('')).toBe(DINGTALK_BRANDING_FALLBACK);
+    expect(resolveDingTalkRobotDisplayName('   ')).toBe(DINGTALK_BRANDING_FALLBACK);
+    expect(resolveDingTalkRobotDisplayName(null)).toBe(DINGTALK_BRANDING_FALLBACK);
+    expect(resolveDingTalkRobotDisplayName(undefined)).toBe(DINGTALK_BRANDING_FALLBACK);
   });
 });

@@ -108,6 +108,11 @@ export interface MessengerDingTalkConfig {
   notifyApp: MessengerDingTalkNotifyApp | null;
   pushEnabled: boolean;
   robotCode: string;
+  /**
+   * Connector setting `robotDisplayName`. Empty = callers should fall back to
+   * 「AI 助手」 (see `resolveDingTalkRobotDisplayName`).
+   */
+  robotDisplayName: string;
   selectCardTemplateId: string | null;
 }
 
@@ -134,6 +139,7 @@ const dingTalkConnectorSettingsSchema = z
     notifyWorkNoticeEnabled: z.boolean().optional(),
     pushEnabled: z.boolean().optional(),
     robotCode: z.string().trim().min(1).max(200),
+    robotDisplayName: z.string().trim().max(32).optional(),
     selectCardTemplateId: z.string().trim().max(200).nullable().optional(),
   })
   .passthrough();
@@ -271,6 +277,7 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
       notifyApp,
       pushEnabled: settings.pushEnabled ?? true,
       robotCode: settings.robotCode,
+      robotDisplayName: settings.robotDisplayName?.trim() ?? '',
       selectCardTemplateId: emptyToNull(settings.selectCardTemplateId ?? null),
     };
   });
