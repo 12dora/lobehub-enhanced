@@ -179,8 +179,18 @@ export interface ApprovalListRow {
   title: string;
 }
 
+/** Present when a standard-edition template scan did not finish every visible template. */
+export type ApprovalScanIncompleteReason = 'cap' | 'rate_limited' | 'time_budget';
+
+export interface ApprovalScanIncomplete {
+  reason: ApprovalScanIncompleteReason;
+  scannedTemplates: number;
+  totalTemplates: number;
+}
+
 export interface ListPendingApprovalsState {
   count: number;
+  incomplete?: ApprovalScanIncomplete;
   items?: ApprovalListRow[];
   success: boolean;
   truncated?: boolean;
@@ -193,6 +203,7 @@ export interface ListMyApplicationsParams {
 
 export interface ListMyApplicationsState {
   count: number;
+  incomplete?: ApprovalScanIncomplete;
   items?: ApprovalListRow[];
   success: boolean;
   truncated?: boolean;

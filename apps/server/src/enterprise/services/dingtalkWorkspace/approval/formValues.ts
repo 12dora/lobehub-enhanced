@@ -95,6 +95,12 @@ const parseMultiSelectValues = (value: string): string[] => {
   }
 };
 
+const resolveOptionValue = (field: TemplateField, token: string): string => {
+  if (field.options?.includes(token)) return token;
+  const keyed = field.optionItems?.find((item) => item.key === token);
+  return keyed?.value ?? token;
+};
+
 export const encodeFieldValue = (field: TemplateField, raw: unknown): EncodedFormComponentValue => {
   let name = field.label;
   let value: string;
@@ -113,19 +119,29 @@ export const encodeFieldValue = (field: TemplateField, raw: unknown): EncodedFor
 
   if (
     (field.componentType === 'DDSelectField' || field.componentType === 'SelectField') &&
-    field.options &&
-    field.options.length > 0 &&
-    value &&
-    !field.options.includes(value)
+    ((field.options && field.options.length > 0) ||
+      (field.optionItems && field.optionItems.length > 0))
   ) {
-    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
-  }
-
-  if (field.componentType === 'DDMultiSelectField' && field.options && field.options.length > 0) {
-    const selected = parseMultiSelectValues(value);
-    if (selected.some((item) => !field.options!.includes(item))) {
+    value = resolveOptionValue(field, value);
+    if (value && field.options && field.options.length > 0 && !field.options.includes(value)) {
       throw new DingtalkWorkspaceError('DINGTALK_INVALID');
     }
+  }
+
+  if (
+    field.componentType === 'DDMultiSelectField' &&
+    ((field.options && field.options.length > 0) ||
+      (field.optionItems && field.optionItems.length > 0))
+  ) {
+    const selected = parseMultiSelectValues(value).map((item) => resolveOptionValue(field, item));
+    if (
+      field.options &&
+      field.options.length > 0 &&
+      selected.some((item) => !field.options!.includes(item))
+    ) {
+      throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+    }
+    value = JSON.stringify(selected);
   }
 
   return {

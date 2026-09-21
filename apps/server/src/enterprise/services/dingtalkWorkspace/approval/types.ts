@@ -21,6 +21,9 @@ export interface TemplateField {
   format?: string;
   hidden?: boolean;
   label: string;
+  /** Key+value pairs from DingTalk; create-instance submits `value` text. */
+  optionItems?: TemplateFieldOption[];
+  /** Human-readable option values (not raw JSON / not option keys). */
   options?: string[];
   required: boolean;
   unit?: string;
@@ -35,6 +38,8 @@ export interface TemplateSchema {
 
 export interface VisibleTemplate {
   iconUrl?: string;
+  /** Present when the visible-templates payload carries gmtModified / modifiedTime. */
+  modifiedAt?: string;
   name: string;
   processCode: string;
 }
@@ -78,7 +83,16 @@ export interface InitiatedApprovalRow {
   title: string;
 }
 
+export type ApprovalScanIncompleteReason = 'cap' | 'rate_limited' | 'time_budget';
+
+export interface ApprovalScanIncomplete {
+  reason: ApprovalScanIncompleteReason;
+  scannedTemplates: number;
+  totalTemplates: number;
+}
+
 export interface ApprovalListResult<T> {
+  incomplete?: ApprovalScanIncomplete;
   rows: T[];
   truncated: boolean;
 }
@@ -259,8 +273,14 @@ export interface ApprovalServiceContext {
 
 export const TEMPLATE_CACHE_TTL_MS = 5 * 60_000;
 export const PENDING_CACHE_TTL_MS = 60_000;
+export const INCOMPLETE_CACHE_TTL_MS = 10_000;
 export const PENDING_INSTANCE_CAP = 300;
-export const INSTANCE_DETAIL_CONCURRENCY = 5;
+export const INSTANCE_DETAIL_CONCURRENCY = 2;
+export const INSTANCE_IDS_QUERY_CONCURRENCY = 2;
+export const SCAN_API_MAX_RPS = 8;
+export const SCAN_TIME_BUDGET_MS = 25_000;
+export const SCAN_RATE_LIMIT_RETRY_COUNT = 3;
+export const SCAN_RATE_LIMIT_BACKOFF_MS = [500, 1000, 2000] as const;
 export const INSTANCE_ID_PAGE_SIZE = 20;
 export const INSTANCE_ID_HARD_CAP = 10_000;
 export const TEMPLATE_PAGE_SIZE = 100;

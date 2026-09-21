@@ -1,6 +1,7 @@
 import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
 import type { LobeChatDatabase } from '@/database/type';
 
+import { DingtalkWorkspaceError } from '../errors';
 import {
   getInstanceDetail,
   isPremiumUnavailable,
@@ -9,17 +10,23 @@ import {
   listVisibleTemplates,
 } from './api';
 import { formSummary } from './formValues';
+import { isRateLimitedError } from './scanPace';
 import {
   type ApprovalListResult,
+  type ApprovalScanIncomplete,
+  type ApprovalScanIncompleteReason,
   DEFAULT_LIST_LIMIT,
+  INCOMPLETE_CACHE_TTL_MS,
   type InitiatedApprovalRow,
   INSTANCE_DETAIL_CONCURRENCY,
+  INSTANCE_IDS_QUERY_CONCURRENCY,
   MAX_LIST_LIMIT,
   PENDING_CACHE_TTL_MS,
   PENDING_INSTANCE_CAP,
   PENDING_LOOKBACK_MS,
   type PendingApprovalRow,
   type ProcessInstanceDetail,
+  SCAN_TIME_BUDGET_MS,
   SUMMARY_FIELD_LIMIT,
   type VisibleTemplate,
 } from './types';
@@ -53,8 +60,15 @@ export const invalidateApprovalListCache = (userId?: string): void => {
   }
 };
 
+let scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
+
 export const resetApprovalListCacheForTest = (): void => {
   cache.clear();
+  scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
+};
+
+export const setApprovalScanTimeBudgetForTest = (ms?: number): void => {
+  scanTimeBudgetMs = ms ?? SCAN_TIME_BUDGET_MS;
 };
 
 const clampLimit = (limit?: number): number => {
@@ -122,51 +136,159 @@ const rowFromDetail = (
   title: detail.title,
 });
 
+const REASON_RANK: Record<ApprovalScanIncompleteReason, number> = {
+  cap: 2,
+  rate_limited: 0,
+  time_budget: 1,
+};
+
+const pickReason = (
+  current: ApprovalScanIncompleteReason | undefined,
+  next: ApprovalScanIncompleteReason,
+): ApprovalScanIncompleteReason => {
+  if (!current) return next;
+  return REASON_RANK[next] < REASON_RANK[current] ? next : current;
+};
+
+const modifiedMs = (value?: string): number => {
+  if (!value?.trim()) return 0;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? numeric : 0;
+  }
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const sortTemplatesForScan = (templates: VisibleTemplate[]): VisibleTemplate[] => {
+  if (!templates.some((item) => item.modifiedAt)) return templates;
+  return [...templates].sort(
+    (left, right) => modifiedMs(right.modifiedAt) - modifiedMs(left.modifiedAt),
+  );
+};
+
+const cacheTtlMs = (result: ApprovalListResult<unknown>): number =>
+  result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS;
+
+type CollectedInstanceIds = {
+  ids: Array<{ id: string; processCode: string }>;
+  incomplete?: ApprovalScanIncomplete;
+};
+
+const collectInstanceIds = async (input: {
+  deadlineMs: number;
+  sinceMs: number;
+  statuses?: string[];
+  templates: VisibleTemplate[];
+  userIds?: string[];
+}): Promise<CollectedInstanceIds> => {
+  const templates = sortTemplatesForScan(input.templates);
+  const totalTemplates = templates.length;
+  if (totalTemplates === 0) return { ids: [] };
+
+  const ids: Array<{ id: string; processCode: string }> = [];
+  let scannedTemplates = 0;
+  let reason: ApprovalScanIncompleteReason | undefined;
+  const mark = (next: ApprovalScanIncompleteReason) => {
+    reason = pickReason(reason, next);
+  };
+
+  await mapWithConcurrency(templates, INSTANCE_IDS_QUERY_CONCURRENCY, async (template) => {
+    if (Date.now() >= input.deadlineMs) {
+      mark('time_budget');
+      return;
+    }
+    if (ids.length >= PENDING_INSTANCE_CAP) {
+      mark('cap');
+      return;
+    }
+    try {
+      const page = await listInstanceIds({
+        deadlineMs: input.deadlineMs,
+        max: PENDING_INSTANCE_CAP,
+        processCode: template.processCode,
+        startTime: input.sinceMs,
+        statuses: input.statuses,
+        userIds: input.userIds,
+      });
+      scannedTemplates += 1;
+      if (page.stopped) mark(page.stopped);
+      else if (page.truncated) mark('cap');
+      for (const id of page.ids) {
+        if (ids.length >= PENDING_INSTANCE_CAP) {
+          mark('cap');
+          return;
+        }
+        ids.push({ id, processCode: template.processCode });
+      }
+    } catch (error) {
+      if (isRateLimitedError(error)) {
+        mark('rate_limited');
+        return;
+      }
+      throw error;
+    }
+  });
+
+  if (scannedTemplates === 0) {
+    throw new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED');
+  }
+
+  if (ids.length > PENDING_INSTANCE_CAP) mark('cap');
+  const sliced = ids.slice(0, PENDING_INSTANCE_CAP);
+  if (sliced.length >= PENDING_INSTANCE_CAP && scannedTemplates < totalTemplates) mark('cap');
+
+  return {
+    ids: sliced,
+    incomplete: reason ? { reason, scannedTemplates, totalTemplates } : undefined,
+  };
+};
+
+const loadInstanceDetails = async (
+  ids: Array<{ id: string; processCode: string }>,
+  deadlineMs: number,
+  mark: (reason: ApprovalScanIncompleteReason) => void,
+): Promise<Array<{ detail: ProcessInstanceDetail; processCode: string } | undefined>> =>
+  mapWithConcurrency(ids, INSTANCE_DETAIL_CONCURRENCY, async (item) => {
+    if (Date.now() >= deadlineMs) {
+      mark('time_budget');
+      return undefined;
+    }
+    try {
+      const detail = await getInstanceDetail(item.id);
+      return { detail, processCode: item.processCode };
+    } catch (error) {
+      if (isRateLimitedError(error)) mark('rate_limited');
+      return undefined;
+    }
+  });
+
 const listPendingByScan = async (
   db: LobeChatDatabase,
   staffId: string,
   templates: VisibleTemplate[],
   limit: number,
 ): Promise<ApprovalListResult<PendingApprovalRow>> => {
-  const sinceMs = Date.now() - PENDING_LOOKBACK_MS;
-  const nameByCode = new Map(templates.map((item) => [item.processCode, item.name]));
-  const ids: Array<{ id: string; processCode: string }> = [];
-  let truncated = false;
-
-  for (const template of templates) {
-    if (ids.length >= PENDING_INSTANCE_CAP) {
-      truncated = true;
-      break;
-    }
-    const page = await listInstanceIds({
-      max: PENDING_INSTANCE_CAP - ids.length,
-      processCode: template.processCode,
-      startTime: sinceMs,
-      statuses: ['RUNNING'],
-    });
-    truncated = truncated || page.truncated;
-    for (const id of page.ids) {
-      ids.push({ id, processCode: template.processCode });
-      if (ids.length >= PENDING_INSTANCE_CAP) {
-        truncated = true;
-        break;
-      }
-    }
-  }
-
-  const details = await mapWithConcurrency(ids, INSTANCE_DETAIL_CONCURRENCY, async (item) => {
-    try {
-      const detail = await getInstanceDetail(item.id);
-      return { detail, processCode: item.processCode };
-    } catch {
-      return undefined;
-    }
+  const deadlineMs = Date.now() + scanTimeBudgetMs;
+  const collected = await collectInstanceIds({
+    deadlineMs,
+    sinceMs: Date.now() - PENDING_LOOKBACK_MS,
+    statuses: ['RUNNING'],
+    templates,
   });
 
+  let reason = collected.incomplete?.reason;
+  const mark = (next: ApprovalScanIncompleteReason) => {
+    reason = pickReason(reason, next);
+  };
+
+  const details = await loadInstanceDetails(collected.ids, deadlineMs, mark);
   const names = await loadOriginatorNames(
     db,
     details.map((item) => item?.detail.originatorUserId),
   );
+  const nameByCode = new Map(templates.map((item) => [item.processCode, item.name]));
 
   const rows: PendingApprovalRow[] = [];
   for (const item of details) {
@@ -179,7 +301,18 @@ const listPendingByScan = async (
 
   rows.sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''));
   const sliced = rows.slice(0, limit);
-  return { rows: sliced, truncated: truncated || rows.length > limit };
+  const incomplete = reason
+    ? {
+        reason,
+        scannedTemplates: collected.incomplete?.scannedTemplates ?? templates.length,
+        totalTemplates: templates.length,
+      }
+    : undefined;
+  return {
+    incomplete,
+    rows: sliced,
+    truncated: Boolean(incomplete) || rows.length > limit,
+  };
 };
 
 const enrichPremiumRows = async (
@@ -262,7 +395,7 @@ export const listPendingApprovals = async (input: {
     result = await listPendingByScan(input.db, input.staffId, input.templates, limit);
   }
 
-  cacheSet(cacheKey, result, PENDING_CACHE_TTL_MS, now);
+  cacheSet(cacheKey, result, cacheTtlMs(result), Date.now());
   return result;
 };
 
@@ -280,42 +413,22 @@ export const listInitiatedApprovals = async (input: {
   const cached = cacheGet<ApprovalListResult<InitiatedApprovalRow>>(cacheKey, now);
   if (cached) return cached;
 
-  const sinceMs = Date.now() - PENDING_LOOKBACK_MS;
-  const ids: Array<{ id: string; processCode: string }> = [];
-  let truncated = false;
-  const statuses = input.status ? [input.status] : undefined;
+  const deadlineMs = Date.now() + scanTimeBudgetMs;
+  const collected = await collectInstanceIds({
+    deadlineMs,
+    sinceMs: Date.now() - PENDING_LOOKBACK_MS,
+    statuses: input.status ? [input.status] : undefined,
+    templates: input.templates,
+    userIds: [input.staffId],
+  });
 
-  for (const template of input.templates) {
-    if (ids.length >= PENDING_INSTANCE_CAP) {
-      truncated = true;
-      break;
-    }
-    const page = await listInstanceIds({
-      max: PENDING_INSTANCE_CAP - ids.length,
-      processCode: template.processCode,
-      startTime: sinceMs,
-      statuses,
-      userIds: [input.staffId],
-    });
-    truncated = truncated || page.truncated;
-    for (const id of page.ids) {
-      ids.push({ id, processCode: template.processCode });
-      if (ids.length >= PENDING_INSTANCE_CAP) {
-        truncated = true;
-        break;
-      }
-    }
-  }
+  let reason = collected.incomplete?.reason;
+  const mark = (next: ApprovalScanIncompleteReason) => {
+    reason = pickReason(reason, next);
+  };
 
   const nameByCode = new Map(input.templates.map((item) => [item.processCode, item.name]));
-  const details = await mapWithConcurrency(ids, INSTANCE_DETAIL_CONCURRENCY, async (item) => {
-    try {
-      const detail = await getInstanceDetail(item.id);
-      return { detail, processCode: item.processCode };
-    } catch {
-      return undefined;
-    }
-  });
+  const details = await loadInstanceDetails(collected.ids, deadlineMs, mark);
 
   const originatorNames = await loadOriginatorNames(
     input.db,
@@ -338,8 +451,19 @@ export const listInitiatedApprovals = async (input: {
   }
   rows.sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''));
   const sliced = rows.slice(0, limit);
-  const result = { rows: sliced, truncated: truncated || rows.length > limit };
-  cacheSet(cacheKey, result, PENDING_CACHE_TTL_MS, now);
+  const incomplete = reason
+    ? {
+        reason,
+        scannedTemplates: collected.incomplete?.scannedTemplates ?? input.templates.length,
+        totalTemplates: input.templates.length,
+      }
+    : undefined;
+  const result: ApprovalListResult<InitiatedApprovalRow> = {
+    incomplete,
+    rows: sliced,
+    truncated: Boolean(incomplete) || rows.length > limit,
+  };
+  cacheSet(cacheKey, result, cacheTtlMs(result), Date.now());
   return result;
 };
 

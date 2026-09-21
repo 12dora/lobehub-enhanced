@@ -14,6 +14,23 @@ describe('DingtalkWorkspaceError', () => {
     expect(error.upstreamCode).toBe('60011');
     expect(error.message).toBe('DINGTALK_FORBIDDEN');
     expect(error.name).toBe('DingtalkWorkspaceError');
+    expect(error.missingScopes).toBeUndefined();
+  });
+
+  it('stores de-duplicated missingScopes without the apply URL or message text', () => {
+    const error = new DingtalkWorkspaceError(
+      'DINGTALK_FORBIDDEN',
+      'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+      ['Calendar.Event.Write', 'Calendar.Event.Write', 'Calendar.EventSchedule.Read'],
+    );
+    expect(error.missingScopes).toEqual(['Calendar.Event.Write', 'Calendar.EventSchedule.Read']);
+    expect(error.missingScopes?.join(',')).not.toContain('https://');
+    expect(error.missingScopes?.join(',')).not.toContain('权限');
+  });
+
+  it('omits empty missingScopes', () => {
+    const error = new DingtalkWorkspaceError('DINGTALK_FORBIDDEN', '60011', []);
+    expect(error.missingScopes).toBeUndefined();
   });
 
   it('recognizes contracted codes only', () => {

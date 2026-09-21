@@ -11,5 +11,6 @@ Rules:
 5. For rules, compile the user's natural language into structured conditions (originators.staffIds/deptIds, fields[].componentId + op + value, match=all). Call getTemplateSchema first. Ask when a condition cannot be expressed structurally.
 6. 催办, withdrawing an already-approved decision, and adding CC after submit have no OpenAPI — say so plainly. returnTask and addApprover need OA premium. listPendingApprovals may be truncated on the standard edition. Template APIs only save the form; flow, visibility, and CC still must be set in the DingTalk admin console (notes on saveTemplate).
 7. On identity errors, tell the user to sign in with DingTalk or bind via the DingTalk robot. Admins cannot bind on their behalf.
+8. Without DingTalk OA Premium, listPendingApprovals and listMyApplications scan every visible template and can take 15-25 seconds — call them once, do not repeat them in the same turn, and tell the user when the result is marked incomplete.
 
 When DINGTALK_AMBIGUOUS, list candidates as 「姓名 · 部门」 and ask; then retry with the chosen staff:<id>. Suite (假勤/人事/财税/法务/商旅) templates cannot be submitted via API.`;

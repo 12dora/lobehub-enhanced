@@ -1,7 +1,6 @@
 import { isRecord, pickTrimmedString } from '@lobechat/utils/object';
 import debug from 'debug';
 
-import { SafeOutboundHttpClient } from '@/server/enterprise/security/outboundHttp';
 import {
   DINGTALK_API_BASE,
   DINGTALK_OAPI_BASE,
@@ -34,8 +33,6 @@ export type DingtalkWorkspaceFetch = (
   init?: RequestInit,
 ) => Promise<Pick<Response, 'json' | 'ok' | 'status' | 'text'>>;
 
-const outbound = new SafeOutboundHttpClient({ timeoutMs: DINGTALK_WORKSPACE_TIMEOUT_MS });
-
 /** Process-wide cap below DingTalk's 40 rps/app/API limit (90018). */
 export const DINGTALK_WORKSPACE_MAX_RPS = 30;
 export const DINGTALK_WORKSPACE_RATE_MAX_WAITERS = 200;
@@ -67,13 +64,17 @@ export const resetDingtalkWorkspaceRequestRateForTest = (input?: {
   rateWaiters = 0;
 };
 
+const unrefTimer = (timer: ReturnType<typeof setTimeout>): void => {
+  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+    const unref = Reflect.get(timer, 'unref');
+    if (typeof unref === 'function') unref.call(timer);
+  }
+};
+
 const sleepMs = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
-      const unref = Reflect.get(timer, 'unref');
-      if (typeof unref === 'function') unref.call(timer);
-    }
+    unrefTimer(timer);
   });
 
 const withRateMutex = async <T>(fn: () => T): Promise<T> => {
@@ -158,21 +159,60 @@ const isInvalidAccessToken = (code: string | null, message: string | null): bool
   );
 };
 
+const withTimeout = (timeoutMs: number): { abort: () => void; signal: AbortSignal } => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  unrefTimer(timer);
+  return {
+    abort: () => clearTimeout(timer),
+    signal: controller.signal,
+  };
+};
+
+/** Paths must be root-relative on the fixed DingTalk origin (no open redirects / SSRF). */
+const assertPinnedWorkspacePath = (path: string): void => {
+  if (!path.startsWith('/') || path.startsWith('//')) {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  }
+  const firstSlash = path.indexOf('/');
+  const beforeSlash = firstSlash <= 0 ? '' : path.slice(0, firstSlash);
+  if (beforeSlash.includes('://') || beforeSlash.includes('\\') || beforeSlash.includes('@')) {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  }
+};
+
 const buildUrl = (
   api: DingtalkWorkspaceApi,
   path: string,
   query: DingtalkWorkspaceRequest['query'],
   accessToken?: string,
 ): string => {
+  assertPinnedWorkspacePath(path);
   const base = api === 'v1' ? DINGTALK_API_BASE : DINGTALK_OAPI_BASE;
-  const normalized = path.startsWith('/') ? path : `/${path}`;
-  const url = new URL(`${base}${normalized}`);
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(base);
+  } catch {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  }
+  let url: URL;
+  try {
+    url = new URL(path, baseUrl);
+  } catch {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  }
+  if (url.origin !== baseUrl.origin) {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  }
   if (api === 'legacy' && accessToken) url.searchParams.set('access_token', accessToken);
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (value === undefined) continue;
       url.searchParams.set(key, String(value));
     }
+  }
+  if (url.origin !== baseUrl.origin) {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
   }
   return url.toString();
 };
@@ -216,6 +256,33 @@ const isOapiFailure = (record: Record<string, unknown> | null, responseOk: boole
   return true;
 };
 
+/**
+ * DingTalk 403 bodies name the missing scope after 权限, e.g.
+ * `应用尚未开通所需的权限：[Calendar.Event.Write]，点击链接申请…`.
+ * Captures scope codes only — never the surrounding text or apply URL.
+ * Built per call so a leftover lastIndex cannot skip matches.
+ */
+export const parseDingtalkMissingScopes = (message: string | null): string[] | undefined => {
+  if (!message) return undefined;
+  const marker = message.indexOf('权限');
+  if (marker < 0) return undefined;
+  const rest = message.slice(marker);
+  const scopes: string[] = [];
+  const seen = new Set<string>();
+  const missingScopeBrackets = /[[［]([A-Z][\w.]+(?:\s*,\s*[A-Z][\w.]+)*)[\]］]/gi;
+  for (const match of rest.matchAll(missingScopeBrackets)) {
+    const listed = match[1];
+    if (!listed) continue;
+    for (const part of listed.split(/\s*,\s*/)) {
+      const scope = part.trim();
+      if (!scope || seen.has(scope)) continue;
+      seen.add(scope);
+      scopes.push(scope);
+    }
+  }
+  return scopes.length > 0 ? scopes : undefined;
+};
+
 const mapUpstreamToCode = (
   status: number,
   upstreamCode: string | null,
@@ -223,12 +290,20 @@ const mapUpstreamToCode = (
 ): DingtalkWorkspaceErrorCode => {
   const haystack = `${upstreamCode ?? ''} ${message ?? ''}`.toLowerCase();
   if (/premium|高级版|oa高级/.test(haystack)) return 'DINGTALK_PREMIUM_REQUIRED';
-  if (status === 429 || /90018|ratelimit|rate.?limit|qpslimit|too many requests/.test(haystack)) {
+  // 403 QpsLimit / QpsLimitForApi / QpsLimitForAppkeyAndApi must not become FORBIDDEN.
+  if (
+    status === 429 ||
+    /90018|ratelimit|rate.?limit|qpslimitforappkeyandapi|qpslimitforapi|qpslimit|too many requests/.test(
+      haystack,
+    )
+  ) {
     return 'DINGTALK_RATE_LIMITED';
   }
   if (
     status === 403 ||
-    /60011|forbidden|accessdenied|permissiondenied|没有权限|无权限|access.?denied/.test(haystack)
+    /60011|forbidden|accessdenied|permissiondenied|accesstokenpermissiondenied|没有权限|无权限|access.?denied/.test(
+      haystack,
+    )
   ) {
     return 'DINGTALK_FORBIDDEN';
   }
@@ -250,19 +325,26 @@ const throwMapped = (
   message: string | null,
 ): never => {
   const code = mapUpstreamToCode(status, upstreamCode, message);
+  const missingScopes =
+    code === 'DINGTALK_FORBIDDEN' ? parseDingtalkMissingScopes(message) : undefined;
   log('dingtalk request failed code=%s upstream=%s status=%s', code, upstreamCode, status);
-  throw new DingtalkWorkspaceError(code, upstreamCode ?? undefined);
+  throw new DingtalkWorkspaceError(code, upstreamCode ?? undefined, missingScopes);
 };
 
 const doFetch: DingtalkWorkspaceFetch = async (input, init) => {
   if (fetchOverride) return fetchOverride(input, init);
-  return outbound.fetch(input, {
-    body: typeof init?.body === 'string' ? init.body : undefined,
-    headers: init?.headers as Record<string, string> | undefined,
-    method: init?.method,
-    secretBearing: true,
-    timeoutMs: DINGTALK_WORKSPACE_TIMEOUT_MS,
-  });
+  const timeout = withTimeout(DINGTALK_WORKSPACE_TIMEOUT_MS);
+  try {
+    return await globalThis.fetch(input, {
+      body: init?.body,
+      headers: init?.headers,
+      method: init?.method,
+      redirect: 'error',
+      signal: timeout.signal,
+    });
+  } finally {
+    timeout.abort();
+  }
 };
 
 const executeOnce = async (
@@ -276,6 +358,8 @@ const executeOnce = async (
     req.query,
     req.api === 'legacy' ? accessToken : undefined,
   );
+  const pathname = new URL(url).pathname;
+  log('%s %s', req.method, pathname);
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -285,10 +369,12 @@ const executeOnce = async (
 
   let response: Pick<Response, 'json' | 'ok' | 'status' | 'text'>;
   try {
+    // `redirect: 'error'` so a 30x cannot forward the token off the pinned origin.
     response = await doFetch(url, {
       body: hasBody ? JSON.stringify(req.body ?? {}) : undefined,
       headers,
       method: req.method,
+      redirect: 'error',
     });
   } catch (error) {
     if (error instanceof DingtalkWorkspaceError) throw error;
@@ -296,13 +382,15 @@ const executeOnce = async (
       throw new DingtalkWorkspaceError(
         error.errcode === 'notify_app_not_configured'
           ? 'DINGTALK_NOT_CONFIGURED'
-          : isTimeoutError(error)
-            ? 'DINGTALK_UNAVAILABLE'
-            : 'DINGTALK_UNAVAILABLE',
+          : 'DINGTALK_UNAVAILABLE',
         error.errcode === null || error.errcode === undefined ? undefined : String(error.errcode),
       );
     }
-    log('network error: %O', error);
+    if (isTimeoutError(error)) {
+      log('request timeout method=%s path=%s', req.method, pathname);
+      throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
+    }
+    log('network error method=%s path=%s', req.method, pathname);
     throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
   }
 

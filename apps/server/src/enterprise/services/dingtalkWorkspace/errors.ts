@@ -27,17 +27,33 @@ export const isDingtalkWorkspaceErrorCode = (value: unknown): value is DingtalkW
 
 /**
  * Stable DingTalk workspace failure. `upstreamCode` is for logs only — never
- * put it in model-facing or client-facing copy.
+ * put it in model-facing or client-facing copy. `missingScopes` are DingTalk
+ * scope codes parsed from a 403 body (never the message text or apply URL).
  */
 export class DingtalkWorkspaceError extends Error {
   readonly code: DingtalkWorkspaceErrorCode;
+  readonly missingScopes?: string[];
   readonly upstreamCode?: string;
 
-  constructor(code: DingtalkWorkspaceErrorCode, upstreamCode?: string) {
+  constructor(
+    code: DingtalkWorkspaceErrorCode,
+    upstreamCode?: string,
+    missingScopes?: readonly string[],
+  ) {
     super(code);
     this.name = 'DingtalkWorkspaceError';
     this.code = code;
     if (upstreamCode) this.upstreamCode = upstreamCode;
+    if (missingScopes && missingScopes.length > 0) {
+      const unique: string[] = [];
+      const seen = new Set<string>();
+      for (const scope of missingScopes) {
+        if (!scope || seen.has(scope)) continue;
+        seen.add(scope);
+        unique.push(scope);
+      }
+      if (unique.length > 0) this.missingScopes = unique;
+    }
   }
 }
 

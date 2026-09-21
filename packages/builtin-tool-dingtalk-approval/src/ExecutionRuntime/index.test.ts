@@ -206,8 +206,102 @@ describe('DingtalkApprovalExecutionRuntime', () => {
       ],
       truncated: true,
     });
+    expect(result.state).not.toHaveProperty('incomplete');
     expect(result.content).toContain('truncated=true');
     expect(result.content).toContain('pi-1');
+  });
+
+  it('passes incomplete scan metadata on listPendingApprovals and warns the model', async () => {
+    const incomplete = {
+      reason: 'rate_limited' as const,
+      scannedTemplates: 3,
+      totalTemplates: 12,
+    };
+    const listPendingApprovals = vi.fn().mockResolvedValue({
+      incomplete,
+      rows: [],
+      truncated: true,
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ listPendingApprovals }));
+
+    const result = await runtime.listPendingApprovals();
+    const payload = JSON.parse(result.content.slice(result.content.indexOf('{'))) as {
+      count: number;
+      incomplete?: typeof incomplete;
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.state).toMatchObject({
+      count: 0,
+      incomplete,
+      items: [],
+      truncated: true,
+    });
+    expect(payload).toMatchObject({ count: 0, incomplete });
+    expect(result.content).toContain(
+      '结果可能不完整:仅扫描了 3/12 个审批模板(钉钉接口限流),请稍后重试或指定审批模板。',
+    );
+    expect(result.content).not.toContain('没有待审批');
+  });
+
+  it('passes incomplete scan metadata on listMyApplications with a time-budget note', async () => {
+    const incomplete = {
+      reason: 'time_budget' as const,
+      scannedTemplates: 4,
+      totalTemplates: 20,
+    };
+    const listMyApplications = vi.fn().mockResolvedValue({
+      incomplete,
+      rows: [
+        {
+          processInstanceId: 'pi-2',
+          title: '差旅报销',
+        },
+      ],
+      truncated: true,
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ listMyApplications }));
+
+    const result = await runtime.listMyApplications();
+    const payload = JSON.parse(result.content.slice(result.content.indexOf('{'))) as {
+      incomplete?: typeof incomplete;
+    };
+
+    expect(result.state).toMatchObject({
+      count: 1,
+      incomplete,
+      truncated: true,
+    });
+    expect(payload.incomplete).toEqual(incomplete);
+    expect(result.content).toContain(
+      '结果可能不完整:仅扫描了 4/20 个审批模板(超时),请稍后重试或指定审批模板。',
+    );
+  });
+
+  it('maps incomplete cap reason and ignores malformed incomplete objects', async () => {
+    const listPendingApprovals = vi.fn().mockResolvedValue({
+      incomplete: { reason: 'cap', scannedTemplates: 8, totalTemplates: 30 },
+      rows: [{ processInstanceId: 'pi-1', title: '请假' }],
+      truncated: true,
+    });
+    const listMyApplications = vi.fn().mockResolvedValue({
+      incomplete: { reason: 'unknown', scannedTemplates: 1, totalTemplates: 2 },
+      rows: [],
+      truncated: false,
+    });
+    const runtime = createDingtalkApprovalRuntime(
+      makeService({ listMyApplications, listPendingApprovals }),
+    );
+
+    const pending = await runtime.listPendingApprovals();
+    expect(pending.state).toMatchObject({
+      incomplete: { reason: 'cap', scannedTemplates: 8, totalTemplates: 30 },
+    });
+    expect(pending.content).toContain('仅扫描了 8/30 个审批模板(扫描上限)');
+
+    const applications = await runtime.listMyApplications();
+    expect(applications.state).not.toHaveProperty('incomplete');
+    expect(applications.content).not.toContain('结果可能不完整');
   });
 
   it('puts compact rows on listMyApplications and listApprovalRules state', async () => {

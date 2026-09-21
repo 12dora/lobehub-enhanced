@@ -1,5 +1,6 @@
 import { dingtalkWorkspaceRequest } from '../client';
 import { DingtalkWorkspaceError } from '../errors';
+import { isRateLimitedError, paceInstanceDetail, paceInstanceIdsQuery } from './scanPace';
 import {
   type EncodedFormComponentValue,
   type ForecastActivityRule,
@@ -14,9 +15,12 @@ import {
   type ProcessInstanceOperationRecord,
   type ProcessInstanceTask,
   type TemplateField,
+  type TemplateFieldOption,
   type TemplateSchema,
   type VisibleTemplate,
 } from './types';
+
+export { isRateLimitedError, resetApprovalApiPaceForTest } from './scanPace';
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -146,16 +150,45 @@ export const parseInstanceDetail = (
   };
 };
 
-const parseOptions = (value: unknown): string[] | undefined => {
+const parseOptionItem = (item: unknown): TemplateFieldOption | undefined => {
+  if (typeof item === 'string') {
+    const trimmed = item.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return parseOptionItem(JSON.parse(trimmed) as unknown);
+      } catch {
+        return { value: trimmed };
+      }
+    }
+    return { value: trimmed };
+  }
+  if (Array.isArray(item)) {
+    // A nested JSON array is not a single option.
+    return undefined;
+  }
+  const record = asRecord(item);
+  if (!record) return undefined;
+  const value = asString(record.value) ?? asString(record.label) ?? asString(record.key);
+  if (!value) return undefined;
+  return { key: asString(record.key), value };
+};
+
+const parseOptionItems = (value: unknown): TemplateFieldOption[] | undefined => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    try {
+      return parseOptionItems(JSON.parse(trimmed) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
   if (!Array.isArray(value) || value.length === 0) return undefined;
-  const options = value
-    .map((item) => {
-      if (typeof item === 'string') return item;
-      const record = asRecord(item);
-      return asString(record?.value) ?? asString(record?.key) ?? asString(record?.label);
-    })
-    .filter((item): item is string => Boolean(item));
-  return options.length > 0 ? options : undefined;
+  const items = value
+    .map((item) => parseOptionItem(item))
+    .filter((item): item is TemplateFieldOption => Boolean(item));
+  return items.length > 0 ? items : undefined;
 };
 
 const parseSchemaField = (raw: unknown): TemplateField | undefined => {
@@ -171,6 +204,7 @@ const parseSchemaField = (raw: unknown): TemplateField | undefined => {
         .map((child) => parseSchemaField(child))
         .filter((child): child is TemplateField => Boolean(child))
     : undefined;
+  const optionItems = parseOptionItems(props.options) ?? parseOptionItems(props.objOptions);
   return {
     bizAlias: asString(props.bizAlias) ?? asString(record.bizAlias),
     children: children && children.length > 0 ? children : undefined,
@@ -179,7 +213,8 @@ const parseSchemaField = (raw: unknown): TemplateField | undefined => {
     format: asString(props.format) ?? asString(record.format),
     hidden: asBoolean(props.hidden) === true || asBoolean(props.invisible) === true,
     label,
-    options: parseOptions(props.options) ?? parseOptions(props.objOptions),
+    optionItems: optionItems?.some((item) => item.key) ? optionItems : undefined,
+    options: optionItems?.map((item) => item.value),
     required: asBoolean(props.required) === true,
     unit: asString(props.unit) ?? asString(record.unit),
   };
@@ -203,46 +238,70 @@ export const parseTemplateSchema = (processCode: string, body: unknown): Templat
 export const getInstanceDetail = async (
   processInstanceId: string,
 ): Promise<ProcessInstanceDetail> => {
-  const body = await dingtalkWorkspaceRequest<unknown>({
-    api: 'v1',
-    method: 'GET',
-    path: '/v1.0/workflow/processInstances',
-    query: { processInstanceId },
-  });
+  const body = await paceInstanceDetail(() =>
+    dingtalkWorkspaceRequest<unknown>({
+      api: 'v1',
+      method: 'GET',
+      path: '/v1.0/workflow/processInstances',
+      query: { processInstanceId },
+    }),
+  );
   return parseInstanceDetail(processInstanceId, body);
 };
 
+export type InstanceIdScanStop = 'cap' | 'rate_limited' | 'time_budget';
+
 export const listInstanceIds = async (input: {
+  deadlineMs?: number;
   max?: number;
   processCode: string;
   startTime: number;
   statuses?: string[];
   userIds?: string[];
-}): Promise<{ ids: string[]; truncated: boolean }> => {
+}): Promise<{ ids: string[]; stopped?: InstanceIdScanStop; truncated: boolean }> => {
   const cap = Math.min(Math.max(1, input.max ?? INSTANCE_ID_HARD_CAP), INSTANCE_ID_HARD_CAP);
   const ids: string[] = [];
   let nextToken: string | number = 0;
   let truncated = false;
+  let stopped: InstanceIdScanStop | undefined;
 
   for (;;) {
     const remaining = cap - ids.length;
     if (remaining <= 0) {
       truncated = true;
+      stopped = 'cap';
       break;
     }
-    const body = await dingtalkWorkspaceRequest<unknown>({
-      api: 'v1',
-      body: {
-        maxResults: Math.min(INSTANCE_ID_PAGE_SIZE, remaining),
-        nextToken,
-        processCode: input.processCode,
-        startTime: input.startTime,
-        statuses: input.statuses,
-        userIds: input.userIds,
-      },
-      method: 'POST',
-      path: '/v1.0/workflow/processes/instanceIds/query',
-    });
+    if (input.deadlineMs != null && Date.now() >= input.deadlineMs) {
+      truncated = true;
+      stopped = 'time_budget';
+      break;
+    }
+    let body: unknown;
+    try {
+      body = await paceInstanceIdsQuery(() =>
+        dingtalkWorkspaceRequest<unknown>({
+          api: 'v1',
+          body: {
+            maxResults: Math.min(INSTANCE_ID_PAGE_SIZE, remaining),
+            nextToken,
+            processCode: input.processCode,
+            startTime: input.startTime,
+            statuses: input.statuses,
+            userIds: input.userIds,
+          },
+          method: 'POST',
+          path: '/v1.0/workflow/processes/instanceIds/query',
+        }),
+      );
+    } catch (error) {
+      if (isRateLimitedError(error) && ids.length > 0) {
+        truncated = true;
+        stopped = 'rate_limited';
+        break;
+      }
+      throw error;
+    }
     const result = asRecord(unwrapResult(body)) ?? asRecord(body);
     const page = asStringArray(result?.list);
     ids.push(...page.slice(0, remaining));
@@ -251,11 +310,12 @@ export const listInstanceIds = async (input: {
     nextToken = /^\d+$/.test(token) ? Number(token) : token;
     if (ids.length >= cap && token) {
       truncated = true;
+      stopped = 'cap';
       break;
     }
   }
 
-  return { ids, truncated };
+  return { ids, stopped, truncated };
 };
 
 export const listRunningInstanceIds = async (
@@ -290,7 +350,15 @@ export const listVisibleTemplates = async (staffId: string): Promise<VisibleTemp
       const processCode = asString(record?.processCode);
       const name = asString(record?.name);
       if (!processCode || !name) continue;
-      templates.push({ iconUrl: asString(record?.iconUrl), name, processCode });
+      templates.push({
+        iconUrl: asString(record?.iconUrl),
+        modifiedAt:
+          asString(record?.gmtModified) ??
+          asString(record?.modifiedTime) ??
+          asString(record?.gmtCreate),
+        name,
+        processCode,
+      });
     }
     const token = asString(result?.nextToken);
     if (!token || processList.length === 0) break;

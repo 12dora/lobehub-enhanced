@@ -160,6 +160,28 @@ describe('dingtalkApprovalRouter', () => {
     expect(mockRuleRemove).toHaveBeenCalledWith('rule-1');
   });
 
+  it('returns incomplete scan metadata from listPending and listInitiated', async () => {
+    const incomplete = {
+      reason: 'rate_limited' as const,
+      scannedTemplates: 3,
+      totalTemplates: 12,
+    };
+    mockListPending.mockResolvedValueOnce({ incomplete, rows: [], truncated: true });
+    mockListInitiated.mockResolvedValueOnce({ incomplete, rows: [], truncated: true });
+
+    const caller = createCaller();
+    await expect(caller.listPendingApprovals()).resolves.toEqual({
+      incomplete,
+      rows: [],
+      truncated: true,
+    });
+    await expect(caller.listMyApplications()).resolves.toEqual({
+      incomplete,
+      rows: [],
+      truncated: true,
+    });
+  });
+
   it('maps DingtalkWorkspaceError to a TRPC error carrying the stable code, never upstream text', async () => {
     mockExecuteTask.mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_NOT_TASK_OWNER'));
 

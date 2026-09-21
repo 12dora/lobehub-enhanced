@@ -6,6 +6,8 @@ import type {
   ApprovalDetailLine,
   ApprovalListRow,
   ApprovalRuleListRow,
+  ApprovalScanIncomplete,
+  ApprovalScanIncompleteReason,
   ApproveTaskParams,
   ApproveTaskState,
   CommentApprovalParams,
@@ -109,6 +111,39 @@ const truncatedFlag = (value: unknown): boolean | undefined => {
   return undefined;
 };
 
+const APPROVAL_SCAN_INCOMPLETE_REASONS = ['cap', 'rate_limited', 'time_budget'] as const;
+
+const isIncompleteReason = (value: unknown): value is ApprovalScanIncompleteReason =>
+  typeof value === 'string' &&
+  (APPROVAL_SCAN_INCOMPLETE_REASONS as readonly string[]).includes(value);
+
+const parseIncomplete = (value: unknown): ApprovalScanIncomplete | undefined => {
+  if (!isRecord(value) || !isRecord(value.incomplete)) return undefined;
+  const { reason, scannedTemplates, totalTemplates } = value.incomplete;
+  if (
+    !isIncompleteReason(reason) ||
+    typeof scannedTemplates !== 'number' ||
+    !Number.isFinite(scannedTemplates) ||
+    typeof totalTemplates !== 'number' ||
+    !Number.isFinite(totalTemplates)
+  ) {
+    return undefined;
+  }
+  return { reason, scannedTemplates, totalTemplates };
+};
+
+const INCOMPLETE_REASON_HINT: Record<ApprovalScanIncompleteReason, string> = {
+  cap: '扫描上限',
+  rate_limited: '钉钉接口限流',
+  time_budget: '超时',
+};
+
+const incompleteListNote = (incomplete: ApprovalScanIncomplete): string =>
+  `结果可能不完整:仅扫描了 ${incomplete.scannedTemplates}/${incomplete.totalTemplates} 个审批模板(${INCOMPLETE_REASON_HINT[incomplete.reason]}),请稍后重试或指定审批模板。\n`;
+
+const PENDING_TRUNCATED_NOTE =
+  '列表可能不完整（truncated=true）。标准版无待办列表接口，结果来自有界扫描。\n';
+
 const pickString = (value: unknown, keys: string[]): string | undefined => {
   if (!isRecord(value)) return undefined;
   for (const key of keys) {
@@ -210,10 +245,12 @@ const shrinkLongStrings = (value: unknown, maxLen: number): unknown => {
 const lastResortPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
   const processInstanceId = optionalString(payload.processInstanceId);
   const processCode = optionalString(payload.processCode);
+  const incomplete = parseIncomplete(payload);
   return {
     truncated: true,
     ...(processInstanceId ? { processInstanceId } : {}),
     ...(processCode ? { processCode } : {}),
+    ...(incomplete ? { incomplete } : {}),
   };
 };
 
@@ -436,6 +473,39 @@ const mapApprovalListItem = (value: unknown): ApprovalListRow | undefined => {
   };
 };
 
+const formatApprovalList = (
+  data: unknown,
+): {
+  incomplete?: ApprovalScanIncomplete;
+  items: ApprovalListRow[];
+  mappedCount: number;
+  truncated?: boolean;
+} => {
+  const mapped = asList(data)
+    .map(mapApprovalListItem)
+    .filter((item): item is ApprovalListRow => !!item);
+  const capped = capRows(mapped);
+  const incomplete = parseIncomplete(data);
+  return {
+    incomplete,
+    items: capped.items,
+    mappedCount: mapped.length,
+    truncated: mergeTruncated(truncatedFlag(data), capped.truncated || undefined),
+  };
+};
+
+const approvalListPayload = (listed: {
+  incomplete?: ApprovalScanIncomplete;
+  items: ApprovalListRow[];
+  mappedCount: number;
+  truncated?: boolean;
+}): Record<string, unknown> => ({
+  count: listed.mappedCount,
+  items: listed.items,
+  truncated: listed.truncated,
+  ...(listed.incomplete ? { incomplete: listed.incomplete } : {}),
+});
+
 const mapRuleListItem = (value: unknown): ApprovalRuleListRow | undefined => {
   if (!isRecord(value)) return undefined;
   const id = optionalString(value.id);
@@ -648,23 +718,20 @@ export class DingtalkApprovalExecutionRuntime {
   ): Promise<BuiltinServerRuntimeOutput> {
     try {
       const data = await this.service.listPendingApprovals(args);
-      const mapped = asList(data)
-        .map(mapApprovalListItem)
-        .filter((item): item is ApprovalListRow => !!item);
-      const capped = capRows(mapped);
-      const serviceTruncated = truncatedFlag(data);
-      const truncated = mergeTruncated(serviceTruncated, capped.truncated || undefined);
+      const listed = formatApprovalList(data);
       const state: ListPendingApprovalsState = {
-        count: mapped.length,
-        items: capped.items,
+        count: listed.mappedCount,
+        items: listed.items,
         success: true,
-        truncated,
+        truncated: listed.truncated,
+        ...(listed.incomplete ? { incomplete: listed.incomplete } : {}),
       };
-      const note =
-        serviceTruncated === true
-          ? '列表可能不完整（truncated=true）。标准版无待办列表接口，结果来自有界扫描。\n'
+      const note = listed.incomplete
+        ? incompleteListNote(listed.incomplete)
+        : truncatedFlag(data) === true
+          ? PENDING_TRUNCATED_NOTE
           : '';
-      return readOk({ count: mapped.length, items: capped.items, truncated }, state, note);
+      return readOk(approvalListPayload(listed), state, note);
     } catch (error) {
       return dingtalkFailureResult(error);
     }
@@ -674,19 +741,16 @@ export class DingtalkApprovalExecutionRuntime {
     args: ListMyApplicationsParams = {},
   ): Promise<BuiltinServerRuntimeOutput> {
     try {
-      const data = await this.service.listMyApplications(args);
-      const mapped = asList(data)
-        .map(mapApprovalListItem)
-        .filter((item): item is ApprovalListRow => !!item);
-      const capped = capRows(mapped);
-      const truncated = mergeTruncated(truncatedFlag(data), capped.truncated || undefined);
+      const listed = formatApprovalList(await this.service.listMyApplications(args));
       const state: ListMyApplicationsState = {
-        count: mapped.length,
-        items: capped.items,
+        count: listed.mappedCount,
+        items: listed.items,
         success: true,
-        truncated,
+        truncated: listed.truncated,
+        ...(listed.incomplete ? { incomplete: listed.incomplete } : {}),
       };
-      return readOk({ count: mapped.length, items: capped.items, truncated }, state);
+      const note = listed.incomplete ? incompleteListNote(listed.incomplete) : '';
+      return readOk(approvalListPayload(listed), state, note);
     } catch (error) {
       return dingtalkFailureResult(error);
     }

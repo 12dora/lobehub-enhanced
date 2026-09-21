@@ -10,6 +10,8 @@ export {
   type ApprovalPreviewResult,
   type ApprovalRuleAction,
   type ApprovalRuleConditions,
+  type ApprovalScanIncomplete,
+  type ApprovalScanIncompleteReason,
   type ApproveTaskParams,
   type ApproveTaskState,
   type CommentApprovalParams,

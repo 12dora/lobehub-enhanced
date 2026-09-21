@@ -97,6 +97,21 @@ describe('encodeFormValues', () => {
     ).toThrow(DingtalkWorkspaceError);
   });
 
+  it('maps a select option key to the submitted value text', () => {
+    const encoded = encodeFieldValue(
+      {
+        componentId: 'DDSelectField-1',
+        componentType: 'DDSelectField',
+        label: '公司',
+        optionItems: [{ key: 'option_0', value: '浙江捷发科技股份有限公司' }],
+        options: ['浙江捷发科技股份有限公司'],
+        required: true,
+      },
+      'option_0',
+    );
+    expect(encoded.value).toBe('浙江捷发科技股份有限公司');
+  });
+
   it('rejects suite templates', () => {
     expect(
       isSuiteTemplate({

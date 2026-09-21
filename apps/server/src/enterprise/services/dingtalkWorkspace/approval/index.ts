@@ -16,6 +16,8 @@ export type {
   ApprovalListResult,
   ApprovalPreview,
   ApprovalPreviewInput,
+  ApprovalScanIncomplete,
+  ApprovalScanIncompleteReason,
   CreateInstanceInput,
   ExecuteTaskInput,
   FormValueInput,

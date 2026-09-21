@@ -58,4 +58,12 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('staffToken');
     expect(systemPrompt).toContain('Never pass a raw DingTalk userId');
   });
+
+  it('tells the model that standard-edition list scans are slow and may be incomplete', () => {
+    expect(systemPrompt).toContain('Without DingTalk OA Premium');
+    expect(systemPrompt).toContain('listPendingApprovals and listMyApplications');
+    expect(systemPrompt).toContain('15-25 seconds');
+    expect(systemPrompt).toContain('do not repeat them in the same turn');
+    expect(systemPrompt).toContain('marked incomplete');
+  });
 });

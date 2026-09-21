@@ -46,9 +46,19 @@ export interface DingtalkWorkspacePermissionProbe {
 const DEFAULT_TIER: ApprovalAutomationTier = 'moderate';
 const TIERS = new Set<ApprovalAutomationTier>(['moderate', 'off', 'relaxed', 'strict']);
 
-const APPROVAL_SCOPES = ['Workflow.Form.Read'];
-const TODO_SCOPES = ['Todo.Todo.Read'];
-const CALENDAR_SCOPES = ['Calendar.Event.Read'];
+const APPROVAL_FORM_READ_SCOPES = ['Workflow.Form.Read'];
+const APPROVAL_INSTANCE_WRITE_SCOPES = ['Workflow.Instance.Write'];
+const TODO_READ_SCOPES = ['Todo.Todo.Read'];
+const TODO_WRITE_SCOPES = ['Todo.Todo.Write'];
+const CALENDAR_EVENT_READ_SCOPES = ['Calendar.Event.Read'];
+const CALENDAR_EVENT_WRITE_SCOPES = ['Calendar.Event.Write'];
+const CALENDAR_SCHEDULE_READ_SCOPES = ['Calendar.EventSchedule.Read'];
+const CALENDAR_ROOMS_SCOPES = ['VideoConference.Conference.Read'];
+
+/** Write-scope probes POST this exact payload. Never retry them with a filled body. */
+const EMPTY_WRITE_PROBE_BODY = Object.freeze({}) as Record<string, never>;
+
+const MAX_PROBE_MISSING_SCOPES = 16;
 
 interface CapabilitiesSnapshot extends DingtalkWorkspaceCapabilities {
   fetchedAt: number;
@@ -168,15 +178,109 @@ export const assertDingtalkFeature = async (feature: DingtalkWorkspaceFeature): 
 
 const notConfigured = (): DingtalkPermissionProbe => ({ ok: false, reason: 'not_configured' });
 
-const probeFromError = (error: unknown, missingScopes: string[]): DingtalkPermissionProbe => {
+type SubProbeOutcome =
+  | { kind: 'ignore' }
+  | { kind: 'missing'; scopes: string[] }
+  | { kind: 'not_configured' }
+  | { kind: 'ok' }
+  | { kind: 'unreachable' };
+
+type SubProbeKind = 'read' | 'warning' | 'write';
+
+const scopesFromError = (error: DingtalkWorkspaceError, fallback: readonly string[]): string[] => {
+  if (error.missingScopes && error.missingScopes.length > 0) return error.missingScopes;
+  return [...fallback];
+};
+
+const outcomeFromWriteOrWarning = (
+  error: unknown,
+  fallback: readonly string[],
+): SubProbeOutcome => {
   if (error instanceof DingtalkWorkspaceError) {
-    if (error.code === 'DINGTALK_NOT_CONFIGURED') return notConfigured();
+    if (error.code === 'DINGTALK_NOT_CONFIGURED') return { kind: 'not_configured' };
     if (error.code === 'DINGTALK_FORBIDDEN') {
-      return { missingScopes, ok: false, reason: 'forbidden' };
+      return { kind: 'missing', scopes: scopesFromError(error, fallback) };
     }
-    return { ok: false, reason: 'unreachable' };
+    // Scope is checked before the body: 400/404 means the scope is present.
+    if (error.code === 'DINGTALK_INVALID' || error.code === 'DINGTALK_NOT_FOUND') {
+      return { kind: 'ok' };
+    }
+    // Rate limit / 5xx / timeout: do not fail the capability.
+    return { kind: 'ignore' };
   }
-  return { ok: false, reason: 'unreachable' };
+  return { kind: 'ignore' };
+};
+
+const outcomeFromRead = (error: unknown, fallback: readonly string[]): SubProbeOutcome => {
+  if (error instanceof DingtalkWorkspaceError) {
+    if (error.code === 'DINGTALK_NOT_CONFIGURED') return { kind: 'not_configured' };
+    if (error.code === 'DINGTALK_FORBIDDEN') {
+      return { kind: 'missing', scopes: scopesFromError(error, fallback) };
+    }
+    return { kind: 'unreachable' };
+  }
+  return { kind: 'unreachable' };
+};
+
+const runSubProbe = async (
+  kind: SubProbeKind,
+  fallback: readonly string[],
+  request: () => Promise<unknown>,
+): Promise<SubProbeOutcome> => {
+  try {
+    await request();
+    return { kind: 'ok' };
+  } catch (error) {
+    if (kind === 'read') return outcomeFromRead(error, fallback);
+    return outcomeFromWriteOrWarning(error, fallback);
+  }
+};
+
+const mergeProbeOutcomes = (
+  outcomes: Array<{ outcome: SubProbeOutcome; required: boolean }>,
+): DingtalkPermissionProbe => {
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  let requiredMissing = false;
+  let sawNotConfigured = false;
+  let requiredUnreachable = false;
+
+  const addScopes = (scopes: string[]) => {
+    for (const scope of scopes) {
+      if (!scope || seen.has(scope)) continue;
+      seen.add(scope);
+      if (missing.length < MAX_PROBE_MISSING_SCOPES) missing.push(scope);
+    }
+  };
+
+  for (const { outcome, required } of outcomes) {
+    switch (outcome.kind) {
+      case 'missing': {
+        addScopes(outcome.scopes);
+        if (required) requiredMissing = true;
+        break;
+      }
+      case 'not_configured': {
+        sawNotConfigured = true;
+        break;
+      }
+      case 'unreachable': {
+        if (required) requiredUnreachable = true;
+        break;
+      }
+      default: {
+        break;
+      }
+    }
+  }
+
+  if (requiredMissing) {
+    return { missingScopes: missing, ok: false, reason: 'forbidden' };
+  }
+  if (sawNotConfigured) return notConfigured();
+  if (requiredUnreachable) return { ok: false, reason: 'unreachable' };
+  if (missing.length > 0) return { missingScopes: missing, ok: true };
+  return { ok: true };
 };
 
 const firstActiveDirectoryProbeUser = async (): Promise<{
@@ -204,56 +308,127 @@ const firstActiveDirectoryProbeUser = async (): Promise<{
   }
 };
 
-const probeApproval = async (): Promise<DingtalkPermissionProbe> => {
-  try {
-    await dingtalkWorkspaceRequest({
-      api: 'v1',
-      method: 'GET',
-      path: '/v1.0/workflow/processes/userVisibilities/templates',
-      query: { maxResults: 1, nextToken: 0 },
-    });
-    return { ok: true };
-  } catch (error) {
-    return probeFromError(error, APPROVAL_SCOPES);
-  }
+const probeApproval = async (staffId: string): Promise<DingtalkPermissionProbe> => {
+  const outcomes: Array<{ outcome: SubProbeOutcome; required: boolean }> = [
+    {
+      required: true,
+      outcome: await runSubProbe('read', APPROVAL_FORM_READ_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          method: 'GET',
+          path: '/v1.0/workflow/processes/userVisibilities/templates',
+          query: { userId: staffId, maxResults: 1, nextToken: 0 },
+        }),
+      ),
+    },
+    {
+      required: true,
+      outcome: await runSubProbe('write', APPROVAL_INSTANCE_WRITE_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          body: EMPTY_WRITE_PROBE_BODY,
+          method: 'POST',
+          path: '/v1.0/workflow/processInstances',
+        }),
+      ),
+    },
+  ];
+  return mergeProbeOutcomes(outcomes);
 };
 
 const probeTodo = async (unionId: string): Promise<DingtalkPermissionProbe> => {
-  try {
-    await dingtalkWorkspaceRequest({
-      api: 'v1',
-      body: { isDone: false, nextToken: '' },
-      method: 'POST',
-      path: `/v1.0/todo/users/${encodeURIComponent(unionId)}/org/tasks/query`,
-    });
-    return { ok: true };
-  } catch (error) {
-    return probeFromError(error, TODO_SCOPES);
-  }
+  const encoded = encodeURIComponent(unionId);
+  const outcomes: Array<{ outcome: SubProbeOutcome; required: boolean }> = [
+    {
+      required: true,
+      outcome: await runSubProbe('read', TODO_READ_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          body: { isDone: false },
+          method: 'POST',
+          path: `/v1.0/todo/users/${encoded}/org/tasks/query`,
+        }),
+      ),
+    },
+    {
+      required: true,
+      outcome: await runSubProbe('write', TODO_WRITE_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          body: EMPTY_WRITE_PROBE_BODY,
+          method: 'POST',
+          path: `/v1.0/todo/users/${encoded}/tasks`,
+        }),
+      ),
+    },
+  ];
+  return mergeProbeOutcomes(outcomes);
 };
 
 const probeCalendar = async (unionId: string): Promise<DingtalkPermissionProbe> => {
   const from = new Date();
   const to = new Date(from.getTime() + 60 * 60_000);
-  try {
-    await dingtalkWorkspaceRequest({
-      api: 'v1',
-      method: 'GET',
-      path: `/v1.0/calendar/users/${encodeURIComponent(unionId)}/calendars/primary/events`,
-      query: {
-        maxResults: 1,
-        timeMax: to.toISOString(),
-        timeMin: from.toISOString(),
-      },
-    });
-    return { ok: true };
-  } catch (error) {
-    return probeFromError(error, CALENDAR_SCOPES);
-  }
+  const timeMin = from.toISOString();
+  const timeMax = to.toISOString();
+  const encoded = encodeURIComponent(unionId);
+  const outcomes: Array<{ outcome: SubProbeOutcome; required: boolean }> = [
+    {
+      required: true,
+      outcome: await runSubProbe('read', CALENDAR_EVENT_READ_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          method: 'GET',
+          path: `/v1.0/calendar/users/${encoded}/calendars/primary/events`,
+          query: {
+            maxResults: 1,
+            timeMax,
+            timeMin,
+          },
+        }),
+      ),
+    },
+    {
+      required: true,
+      outcome: await runSubProbe('write', CALENDAR_EVENT_WRITE_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          body: EMPTY_WRITE_PROBE_BODY,
+          method: 'POST',
+          path: `/v1.0/calendar/users/${encoded}/calendars/primary/events`,
+        }),
+      ),
+    },
+    {
+      required: true,
+      outcome: await runSubProbe('read', CALENDAR_SCHEDULE_READ_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          body: { endTime: timeMax, startTime: timeMin, userIds: [unionId] },
+          method: 'POST',
+          path: `/v1.0/calendar/users/${encoded}/querySchedule`,
+        }),
+      ),
+    },
+    // Rooms is optional: missing VideoConference.Conference.Read is a warning only.
+    {
+      required: false,
+      outcome: await runSubProbe('warning', CALENDAR_ROOMS_SCOPES, () =>
+        dingtalkWorkspaceRequest({
+          api: 'v1',
+          method: 'GET',
+          path: '/v1.0/rooms/meetingRoomLists',
+          query: { maxResults: 1, unionId },
+        }),
+      ),
+    },
+  ];
+  return mergeProbeOutcomes(outcomes);
 };
 
 /**
- * Cheap read-only permission probes with the notify-app token.
+ * Permission probes with the notify-app token. Write scopes are checked by
+ * POSTing `{}` (DingTalk rejects invalid params after the scope check and
+ * never creates a resource).
  */
 export const probeWorkspacePermissions = async (): Promise<DingtalkWorkspacePermissionProbe> => {
   const notify = await resolveNotifyAppConfig();
@@ -267,10 +442,13 @@ export const probeWorkspacePermissions = async (): Promise<DingtalkWorkspacePerm
 
   const probeUser = await firstActiveDirectoryProbeUser();
   const unreachable: DingtalkPermissionProbe = { ok: false, reason: 'unreachable' };
+  if (!probeUser) {
+    return { approval: unreachable, calendar: unreachable, todo: unreachable };
+  }
   const [approval, todo, calendar] = await Promise.all([
-    probeApproval(),
-    probeUser ? probeTodo(probeUser.unionId) : Promise.resolve(unreachable),
-    probeUser ? probeCalendar(probeUser.unionId) : Promise.resolve(unreachable),
+    probeApproval(probeUser.staffId),
+    probeTodo(probeUser.unionId),
+    probeCalendar(probeUser.unionId),
   ]);
   return { approval, calendar, todo };
 };

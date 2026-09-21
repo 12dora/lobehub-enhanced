@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockListTemplates = vi.fn();
+const mockListPending = vi.fn();
+const mockListInitiated = vi.fn();
 const mockExecuteTask = vi.fn();
 const mockRuleCreate = vi.fn();
 const mockRuleList = vi.fn();
@@ -17,8 +19,8 @@ vi.mock('@/server/enterprise/services/dingtalkWorkspace/approval', () => ({
     executeTask: mockExecuteTask,
     getInstance: vi.fn(),
     getTemplateSchema: vi.fn(),
-    listInitiated: vi.fn(),
-    listPending: vi.fn(),
+    listInitiated: mockListInitiated,
+    listPending: mockListPending,
     listTemplates: mockListTemplates,
     redirectTask: vi.fn(),
     revertTask: vi.fn(),
@@ -93,6 +95,29 @@ describe('dingtalkApprovalRuntime.factory', () => {
         name: '自动同意',
       }),
     );
+  });
+
+  it('passes incomplete scan metadata through listPendingApprovals and listMyApplications', async () => {
+    const incomplete = {
+      reason: 'time_budget' as const,
+      scannedTemplates: 4,
+      totalTemplates: 20,
+    };
+    mockListPending.mockResolvedValueOnce({ incomplete, rows: [], truncated: true });
+    mockListInitiated.mockResolvedValueOnce({ incomplete, rows: [], truncated: true });
+
+    const runtime = await dingtalkApprovalRuntime.factory({
+      serverDB: {},
+      userId: 'user-1',
+    } as any);
+
+    const pending = await runtime.listPendingApprovals();
+    expect(pending.state).toMatchObject({ incomplete, truncated: true });
+    expect(pending.content).toContain('结果可能不完整:仅扫描了 4/20 个审批模板(超时)');
+
+    const initiated = await runtime.listMyApplications();
+    expect(initiated.state).toMatchObject({ incomplete, truncated: true });
+    expect(initiated.content).toContain('结果可能不完整:仅扫描了 4/20 个审批模板(超时)');
   });
 
   it('forwards saveTemplate format, unit, and bizAlias', async () => {

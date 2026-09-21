@@ -33,8 +33,12 @@ vi.mock('./api', () => ({
   listVisibleTemplates: (...args: unknown[]) => mockListTemplates(...args),
 }));
 
-const { listInitiatedApprovals, listPendingApprovals, resetApprovalListCacheForTest } =
-  await import('./pending');
+const {
+  listInitiatedApprovals,
+  listPendingApprovals,
+  resetApprovalListCacheForTest,
+  setApprovalScanTimeBudgetForTest,
+} = await import('./pending');
 
 const templates = [{ name: '请假', processCode: 'PROC-1' }];
 const db = {} as never;
@@ -42,6 +46,7 @@ const db = {} as never;
 describe('pending listing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
     resetApprovalListCacheForTest();
     mockGetUsers.mockResolvedValue([]);
   });
@@ -167,5 +172,163 @@ describe('pending listing', () => {
     expect(mockGetUsers).toHaveBeenCalledTimes(1);
     expect(mockGetUsers).toHaveBeenCalledWith(['mgr']);
     expect(result.rows.every((row) => row.originatorName === '王经理')).toBe(true);
+  });
+
+  it('marks the pending scan incomplete when some templates are rate-limited', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds
+      .mockResolvedValueOnce({ ids: ['inst-1'], truncated: false })
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+
+    const result = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates: [
+        { name: '请假', processCode: 'PROC-1' },
+        { name: '报销', processCode: 'PROC-2' },
+      ],
+      userId: 'user-1',
+    });
+    expect(result.rows).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+    expect(result.incomplete).toEqual({
+      reason: 'rate_limited',
+      scannedTemplates: 1,
+      totalTemplates: 2,
+    });
+  });
+
+  it('throws DINGTALK_RATE_LIMITED when no template could be scanned', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    await expect(
+      listPendingApprovals({
+        db,
+        staffId: 'me',
+        templates: [
+          { name: '请假', processCode: 'PROC-1' },
+          { name: '报销', processCode: 'PROC-2' },
+        ],
+        userId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_RATE_LIMITED' });
+  });
+
+  it('returns incomplete cap when instance-id listing is truncated', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValueOnce({ ids: ['inst-1'], truncated: true });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+    const result = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.incomplete).toEqual({
+      reason: 'cap',
+      scannedTemplates: 1,
+      totalTemplates: 1,
+    });
+  });
+
+  it('throws when the scan budget expires before any template is read', async () => {
+    setApprovalScanTimeBudgetForTest(0);
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    await expect(
+      listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_RATE_LIMITED' });
+    expect(mockListInstanceIds).not.toHaveBeenCalled();
+  });
+
+  it('scans most-recently-modified templates first', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: [], truncated: false });
+    await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates: [
+        { modifiedAt: '2020-01-01T00:00:00Z', name: '旧', processCode: 'PROC-OLD' },
+        { modifiedAt: '2026-06-01T00:00:00Z', name: '新', processCode: 'PROC-NEW' },
+      ],
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds.mock.calls[0]?.[0]).toMatchObject({ processCode: 'PROC-NEW' });
+  });
+
+  it('caches incomplete pending results for 10s only', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds
+      .mockResolvedValueOnce({ ids: ['inst-1'], truncated: false })
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'))
+      .mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+    const twoTemplates = [
+      { name: '请假', processCode: 'PROC-1' },
+      { name: '报销', processCode: 'PROC-2' },
+    ];
+    await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates: twoTemplates,
+      userId: 'user-1',
+    });
+    await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates: twoTemplates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates: twoTemplates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it('marks initiated lists incomplete instead of returning a silent empty page', async () => {
+    mockListInstanceIds
+      .mockResolvedValueOnce({ ids: [], truncated: false })
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    const result = await listInitiatedApprovals({
+      db,
+      staffId: 'me',
+      templates: [
+        { name: '请假', processCode: 'PROC-1' },
+        { name: '报销', processCode: 'PROC-2' },
+      ],
+      userId: 'user-1',
+    });
+    expect(result.rows).toEqual([]);
+    expect(result.truncated).toBe(true);
+    expect(result.incomplete?.reason).toBe('rate_limited');
   });
 });

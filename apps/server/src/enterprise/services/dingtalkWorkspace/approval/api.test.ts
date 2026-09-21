@@ -23,14 +23,19 @@ const {
   executeTaskAs,
   getFormSchema,
   getInstanceDetail,
+  listVisibleTemplates,
   listRunningInstanceIds,
+  parseTemplateSchema,
   redirectTaskAs,
   remapPremiumError,
+  resetApprovalApiPaceForTest,
 } = await import('./api');
 
 describe('approval api wrappers', () => {
   beforeEach(() => {
     mockRequest.mockReset();
+    resetApprovalApiPaceForTest({ maxRps: Number.POSITIVE_INFINITY });
+    vi.useRealTimers();
   });
 
   it('executeTaskAs posts actionerUserId from the given staff id', async () => {
@@ -186,5 +191,112 @@ describe('approval api wrappers', () => {
     } catch (error) {
       expect((error as DingtalkWorkspaceError).code).toBe('DINGTALK_PREMIUM_REQUIRED');
     }
+  });
+
+  it('parseTemplateSchema decodes JSON-string options to human-readable values', () => {
+    const schema = parseTemplateSchema('PROC-1', {
+      result: {
+        name: '合同',
+        schemaContent: {
+          items: [
+            {
+              componentName: 'DDSelectField',
+              props: {
+                id: 'Select_1',
+                label: '公司',
+                options: [
+                  '{"value":"浙江捷发科技股份有限公司","key":"option_0"}',
+                  '{"value":"杭州分公司","key":"option_1"}',
+                  'plain-option',
+                  { key: 'option_2', value: 'already-object' },
+                ],
+              },
+            },
+            {
+              children: [
+                {
+                  componentName: 'DDSelectField',
+                  props: {
+                    id: 'Select_row',
+                    label: '明细公司',
+                    options: ['{"value":"浙江捷发科技股份有限公司","key":"option_0"}'],
+                  },
+                },
+              ],
+              componentName: 'TableField',
+              props: { id: 'Table_1', label: '明细' },
+            },
+          ],
+        },
+      },
+    });
+    expect(schema.fields[0]).toMatchObject({
+      options: ['浙江捷发科技股份有限公司', '杭州分公司', 'plain-option', 'already-object'],
+      optionItems: [
+        { key: 'option_0', value: '浙江捷发科技股份有限公司' },
+        { key: 'option_1', value: '杭州分公司' },
+        { value: 'plain-option' },
+        { key: 'option_2', value: 'already-object' },
+      ],
+    });
+    expect(schema.fields[1]?.children?.[0]).toMatchObject({
+      componentId: 'Select_row',
+      options: ['浙江捷发科技股份有限公司'],
+      optionItems: [{ key: 'option_0', value: '浙江捷发科技股份有限公司' }],
+    });
+  });
+
+  it('listVisibleTemplates keeps modified time when the payload has it', async () => {
+    mockRequest.mockResolvedValueOnce({
+      result: {
+        nextToken: '',
+        processList: [
+          {
+            gmtModified: '2026-09-01 12:00:00',
+            name: '请假',
+            processCode: 'PROC-1',
+          },
+        ],
+      },
+    });
+    await expect(listVisibleTemplates('staff-1')).resolves.toEqual([
+      {
+        iconUrl: undefined,
+        modifiedAt: '2026-09-01 12:00:00',
+        name: '请假',
+        processCode: 'PROC-1',
+      },
+    ]);
+  });
+
+  it('getInstanceDetail retries DINGTALK_RATE_LIMITED with unref backoff', async () => {
+    vi.useFakeTimers();
+    resetApprovalApiPaceForTest({ maxRps: Number.POSITIVE_INFINITY });
+    mockRequest
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'))
+      .mockResolvedValueOnce({
+        result: {
+          formComponentValues: [],
+          originatorUserId: 'u1',
+          status: 'RUNNING',
+          tasks: [],
+          title: '请假',
+        },
+      });
+    const pending = getInstanceDetail('inst-1');
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(pending).resolves.toMatchObject({ processInstanceId: 'inst-1', title: '请假' });
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('getInstanceDetail throws after three rate-limit retries', async () => {
+    vi.useFakeTimers();
+    resetApprovalApiPaceForTest({ maxRps: Number.POSITIVE_INFINITY });
+    mockRequest.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    const pending = getInstanceDetail('inst-1');
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'DINGTALK_RATE_LIMITED' });
+    await vi.advanceTimersByTimeAsync(4000);
+    await assertion;
+    expect(mockRequest).toHaveBeenCalledTimes(4);
   });
 });
