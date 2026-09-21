@@ -23,6 +23,7 @@ import {
   listRunningInstanceIds,
   redirectTaskAs,
 } from '../approval/api';
+import { invalidatePendingCaches } from '../approval/pending';
 import { getDingtalkWorkspaceCapabilities } from '../capabilities';
 import { DingtalkWorkspaceError } from '../errors';
 import { resolveVerifiedDingtalkIdentity } from '../identity';
@@ -816,6 +817,8 @@ export const runApprovalRulesCycle = async (
               });
               break;
             }
+
+            invalidatePendingCaches(rule.userId);
 
             const finalized = await updateRun(db, {
               errorCode: null,

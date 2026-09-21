@@ -235,6 +235,12 @@ export interface MeetingRoomView {
   roomStatus?: number;
 }
 
+/** Sanitized booking-policy row from DINGTALK_ROOM_UNAVAILABLE. */
+export interface MeetingRoomIssue {
+  reason: string;
+  roomName: string;
+}
+
 export interface ListMeetingRoomsState {
   count: number;
   items?: MeetingRoomView[];

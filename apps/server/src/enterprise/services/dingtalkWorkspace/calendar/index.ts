@@ -9,6 +9,7 @@ import {
 } from '@/server/enterprise/services/audit/auditActionCatalog';
 import { assertDingtalkFeature } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { dingtalkWorkspaceRequest } from '@/server/enterprise/services/dingtalkWorkspace/client';
+import { DingtalkWorkspaceError } from '@/server/enterprise/services/dingtalkWorkspace/errors';
 import { requireVerifiedDingtalkIdentity } from '@/server/enterprise/services/dingtalkWorkspace/identity';
 import { PlatformAuditService } from '@/server/enterprise/services/platformAudit';
 
@@ -20,6 +21,7 @@ import {
   resolveStaffTokens,
   toStaffToken,
 } from '../todo/staffTokens';
+import { parseMeetingRoomIssues } from './roomIssues';
 import type {
   DingtalkCalendarCreateInput,
   DingtalkCalendarEvent,
@@ -33,6 +35,7 @@ import type {
   DingtalkFreeBusyPerson,
   DingtalkMeetingRoom,
   DingtalkWorkspacePreview,
+  DingtalkWorkspacePreviewLine,
 } from './types';
 import { isCalendarWriteApiName } from './types';
 
@@ -66,6 +69,26 @@ const MAX_LIST_ITEMS = 100;
 const MAX_ROOM_PAGES = 20;
 const MAX_SPAN_MS = 366 * 24 * 60 * 60 * 1000;
 const RESPONSE_STATUS = new Set(['needsAction', 'accepted', 'declined', 'tentative']);
+export const CALENDAR_ROOM_LIST_CACHE_MS = 10 * 60 * 1000;
+
+type CachedRoomList = { expiresAt: number; items: DingtalkMeetingRoom[] };
+const roomListCache = new Map<string, CachedRoomList>();
+
+export const resetCalendarRoomListCacheForTest = (): void => {
+  roomListCache.clear();
+};
+
+const rethrowWithRoomIssues: (error: unknown, extras?: { timeApplied?: boolean }) => never = (
+  error,
+  extras,
+) => {
+  if (error instanceof DingtalkWorkspaceError && error.code === 'DINGTALK_ROOM_UNAVAILABLE') {
+    const issues = parseMeetingRoomIssues(error.upstreamMessage);
+    if (issues.length > 0) Object.assign(error, { roomIssues: issues });
+    if (extras?.timeApplied) Object.assign(error, { timeApplied: true });
+  }
+  throw error;
+};
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -655,8 +678,7 @@ export class DingtalkCalendarService {
     return { people };
   };
 
-  listMeetingRooms = async (): Promise<{ items: DingtalkMeetingRoom[] }> => {
-    const identity = await this.actor();
+  private async fetchMeetingRoomsUncached(unionId: string): Promise<DingtalkMeetingRoom[]> {
     const items: DingtalkMeetingRoom[] = [];
     let nextToken: string | number | undefined;
     for (let page = 0; page < MAX_ROOM_PAGES; page++) {
@@ -667,7 +689,7 @@ export class DingtalkCalendarService {
         query: {
           maxResults: 100,
           nextToken,
-          unionId: identity.unionId,
+          unionId,
         },
       });
       const rooms = Array.isArray(response.result) ? response.result : [];
@@ -690,6 +712,45 @@ export class DingtalkCalendarService {
         string | number | undefined;
       if (nextToken === undefined) break;
     }
+    return items;
+  }
+
+  private async loadCachedRooms(unionId: string): Promise<DingtalkMeetingRoom[]> {
+    const cached = roomListCache.get(unionId);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.items;
+    const items = await this.fetchMeetingRoomsUncached(unionId);
+    roomListCache.set(unionId, { expiresAt: now + CALENDAR_ROOM_LIST_CACHE_MS, items });
+    return items;
+  }
+
+  private async previewRoomLine(
+    unionId: string,
+    roomIds: string[],
+  ): Promise<{ value: string; warning?: string }> {
+    if (roomIds.length === 0) return { value: '清除会议室' };
+    const rooms = await this.loadCachedRooms(unionId).catch((): DingtalkMeetingRoom[] => []);
+    const byId = new Map(rooms.map((room) => [room.roomId, room.roomName]));
+    let unknown = false;
+    const labels = roomIds.map((roomId) => {
+      const name = byId.get(roomId);
+      if (name) return name;
+      unknown = true;
+      return '未知会议室';
+    });
+    return {
+      value: labels.join('、'),
+      warning: unknown ? '有会议室无法识别，请先列出会议室后使用返回的 roomId' : undefined,
+    };
+  }
+
+  listMeetingRooms = async (): Promise<{ items: DingtalkMeetingRoom[] }> => {
+    const identity = await this.actor();
+    const items = await this.fetchMeetingRoomsUncached(identity.unionId);
+    roomListCache.set(identity.unionId, {
+      expiresAt: Date.now() + CALENDAR_ROOM_LIST_CACHE_MS,
+      items,
+    });
     return { items };
   };
 
@@ -725,7 +786,7 @@ export class DingtalkCalendarService {
         await this.addRooms(identity.unionId, event.id, input.roomIds);
       } catch (error) {
         await this.deleteCreatedEvent(identity.unionId, event.id);
-        throw error;
+        rethrowWithRoomIssues(error);
       }
       meetingRooms = await this.reloadEventRooms(
         identity.unionId,
@@ -776,7 +837,13 @@ export class DingtalkCalendarService {
       path: calendarEventPath(identity.unionId, input.eventId),
     });
     if (input.roomIds !== undefined && currentRooms !== undefined) {
-      await this.replaceRooms(identity.unionId, input.eventId, currentRooms, input.roomIds);
+      try {
+        await this.replaceRooms(identity.unionId, input.eventId, currentRooms, input.roomIds);
+      } catch (error) {
+        rethrowWithRoomIssues(error, {
+          timeApplied: Boolean(nextStart || nextEnd || input.isAllDay !== undefined),
+        });
+      }
     }
     const mapped = mapEvent(updated);
     if (input.roomIds !== undefined) {
@@ -854,17 +921,22 @@ export class DingtalkCalendarService {
       const end = parsed.isAllDay
         ? { date: allDayEndDate(parsed.start, parsed.end), timeZone: TZ }
         : toDateTimePayload(parsed.end);
-      const lines = [
+      const lines: DingtalkWorkspacePreviewLine[] = [
         { label: '主题', value: parsed.summary },
         { label: '开始', value: formatDateTime(start) },
         { label: '结束', value: formatDateTime(end) },
         ...(parsed.isAllDay ? [{ label: '全天', value: '是' }] : []),
         ...(parsed.location ? [{ label: '地点', value: parsed.location }] : []),
         ...(people ? [{ label: '参与人', value: people }] : []),
-        ...(parsed.roomIds?.length ? [{ label: '会议室', value: parsed.roomIds.join('、') }] : []),
         ...(parsed.onlineMeeting ? [{ label: '钉钉会议', value: '是' }] : []),
       ];
-      return { actingAs, danger: false, lines, title: '创建日程', warnings: [] };
+      const createWarnings: string[] = [];
+      if (parsed.roomIds?.length) {
+        const rooms = await this.previewRoomLine(identity.unionId, parsed.roomIds);
+        lines.push({ label: '会议室', value: rooms.value });
+        if (rooms.warning) createWarnings.push(rooms.warning);
+      }
+      return { actingAs, danger: false, lines, title: '创建日程', warnings: createWarnings };
     }
 
     if (input.apiName === 'updateEvent') {
@@ -872,7 +944,7 @@ export class DingtalkCalendarService {
       const existing = await this.assertOrganizer(identity.unionId, eventId);
       const parsed = parseUpdateInput(args);
       const people = parsed.attendeeTokens ? await attendeesLine(parsed.attendeeTokens) : '';
-      const lines = [
+      const lines: DingtalkWorkspacePreviewLine[] = [
         { label: '日程', value: existing.summary || eventId },
         ...(parsed.summary ? [{ label: '主题', value: parsed.summary }] : []),
         ...(parsed.start
@@ -893,15 +965,12 @@ export class DingtalkCalendarService {
           : []),
         ...(people ? [{ label: '参与人', value: people }] : []),
         ...(parsed.location ? [{ label: '地点', value: parsed.location }] : []),
-        ...(parsed.roomIds !== undefined
-          ? [
-              {
-                label: '会议室',
-                value: parsed.roomIds.length > 0 ? parsed.roomIds.join('、') : '清除会议室',
-              },
-            ]
-          : []),
       ];
+      if (parsed.roomIds !== undefined) {
+        const rooms = await this.previewRoomLine(identity.unionId, parsed.roomIds);
+        lines.push({ label: '会议室', value: rooms.value });
+        if (rooms.warning) warnings.push(rooms.warning);
+      }
       return { actingAs, danger: false, lines, title: '更新日程', warnings };
     }
 

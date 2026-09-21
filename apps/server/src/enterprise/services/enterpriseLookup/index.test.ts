@@ -281,6 +281,16 @@ describe('EnterpriseLookupService', () => {
   });
 });
 
+/** Live Tianyancha `search_companies` shape: guidance blockquote then a markdown table. */
+const TIANYANCHA_SEARCH_MARKDOWN_FIXTURE = [
+  '> 后续调用建议：如需进一步查询这些后续公司的详细信息，请使用 get_company_basic_profile，并将 company_name 设为上表中的公司名称。',
+  '',
+  '| 企业名称 | 统一社会信用代码 | 法定代表人 | 经营状态 | company_id |',
+  '| --- | --- | --- | --- | --- |',
+  '| 浙江捷发科技股份有限公司 | 91330600597214350R | 邵国标 | 存续 | 2319755677 |',
+  '| 南京捷发科技有限公司 | 91320102736064154F | 王伟 | 存续 | 2319755678 |',
+].join('\n');
+
 describe('parseEnterpriseLookupCompanyCandidates', () => {
   it('reads QCC Result.Data rows', () => {
     const candidates = parseEnterpriseLookupCompanyCandidates(
@@ -316,6 +326,57 @@ describe('parseEnterpriseLookupCompanyCandidates', () => {
       '杭州捷发科技有限公司',
     ]);
     expect(candidates[0]?.creditCode).toBe('91330600597214350R');
+  });
+
+  it('prefers Tianyancha markdown table rows and ignores guidance prose', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(TIANYANCHA_SEARCH_MARKDOWN_FIXTURE);
+    expect(candidates).toEqual([
+      {
+        creditCode: '91330600597214350R',
+        legalPerson: '邵国标',
+        name: '浙江捷发科技股份有限公司',
+        status: '存续',
+      },
+      {
+        creditCode: '91320102736064154F',
+        legalPerson: '王伟',
+        name: '南京捷发科技有限公司',
+        status: '存续',
+      },
+    ]);
+    expect(candidates.map((item) => item.name)).not.toContain('这些后续公司');
+  });
+
+  it('maps markdown table columns by header aliases', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(
+      [
+        '| 公司名称 | 信用代码 | 法人 | 状态 | id |',
+        '| --- | --- | --- | --- | --- |',
+        '| 杭州捷发科技有限公司 | 91330000700000000X | 张三 | 注销 | 99 |',
+      ].join('\n'),
+    );
+    expect(candidates).toEqual([
+      {
+        creditCode: '91330000700000000X',
+        legalPerson: '张三',
+        name: '杭州捷发科技有限公司',
+        status: '注销',
+      },
+    ]);
+  });
+
+  it('ignores blockquotes, headings, list-marker prose and sentence fragments', () => {
+    const candidates = parseEnterpriseLookupCompanyCandidates(
+      [
+        '> 后续调用建议：请使用 get_company_basic_profile 查询这些后续公司',
+        '# 候选企业',
+        '- 建议调用 search_companies 获取这些后续公司',
+        '1. 请使用 get_company_basic_profile 查询这些后续公司的详情',
+        '请先核验浙江捷发科技股份有限公司是否为同一主体。',
+        '这些后续公司',
+      ].join('\n'),
+    );
+    expect(candidates).toEqual([]);
   });
 
   it('picks the unique exact-name candidate among several', () => {
@@ -486,6 +547,35 @@ describe('EnterpriseLookupService.companyProfile', () => {
     );
     expect(mockReserve).toHaveBeenCalledTimes(2);
     expect(mockAuditAppend).toHaveBeenCalledTimes(2);
+  });
+
+  it('parses Tianyancha markdown search results without guidance-prose names', async () => {
+    mockCallProviderTool.mockResolvedValueOnce({
+      content: [{ text: TIANYANCHA_SEARCH_MARKDOWN_FIXTURE, type: 'text' }],
+      isError: false,
+    });
+
+    const result = await service().companyProfile({
+      name: '捷发科技',
+      provider: 'tianyancha',
+    });
+    expect(result.match).toBe('ambiguous');
+    expect(result.candidates).toEqual([
+      {
+        creditCode: '91330600597214350R',
+        legalPerson: '邵国标',
+        name: '浙江捷发科技股份有限公司',
+        status: '存续',
+      },
+      {
+        creditCode: '91320102736064154F',
+        legalPerson: '王伟',
+        name: '南京捷发科技有限公司',
+        status: '存续',
+      },
+    ]);
+    expect(result.profile).toBeUndefined();
+    expect(mockCallProviderTool).toHaveBeenCalledTimes(1);
   });
 
   it('returns candidates and does not fetch a profile when several names match', async () => {

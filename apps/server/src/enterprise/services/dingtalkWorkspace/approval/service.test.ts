@@ -28,6 +28,8 @@ const mockAppendAudit = vi.fn();
 const mockListPending = vi.fn();
 const mockLoadTemplates = vi.fn();
 const mockInvalidate = vi.fn();
+const mockRevert = vi.fn();
+const mockAppend = vi.fn();
 const mockGetUsers = vi.fn();
 
 vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
@@ -53,20 +55,21 @@ vi.mock('../../platformAudit', () => ({
 }));
 vi.mock('./api', () => ({
   addCommentAs: (...args: unknown[]) => mockComment(...args),
-  appendTaskAs: vi.fn(),
+  appendTaskAs: (...args: unknown[]) => mockAppend(...args),
   deleteFormTemplate: (...args: unknown[]) => mockDeleteForm(...args),
   executeTaskAs: (...args: unknown[]) => mockExecute(...args),
   forecastProcess: (...args: unknown[]) => mockForecast(...args),
   getFormSchema: (...args: unknown[]) => mockGetSchema(...args),
   getInstanceDetail: (...args: unknown[]) => mockGetDetail(...args),
   redirectTaskAs: (...args: unknown[]) => mockRedirect(...args),
-  revertTaskAs: vi.fn(),
+  revertTaskAs: (...args: unknown[]) => mockRevert(...args),
   saveFormTemplate: (...args: unknown[]) => mockSaveForm(...args),
   startProcessInstance: (...args: unknown[]) => mockStart(...args),
   terminateProcessInstance: (...args: unknown[]) => mockTerminate(...args),
 }));
 vi.mock('./pending', () => ({
   invalidateApprovalListCache: (...args: unknown[]) => mockInvalidate(...args),
+  invalidatePendingCaches: (...args: unknown[]) => mockInvalidate(...args),
   listInitiatedApprovals: vi.fn(),
   listPendingApprovals: (...args: unknown[]) => mockListPending(...args),
   loadVisibleTemplatesCached: (...args: unknown[]) => mockLoadTemplates(...args),
@@ -103,6 +106,9 @@ describe('DingtalkApprovalService', () => {
     mockComment.mockResolvedValue({ result: true });
     mockStart.mockResolvedValue({ instanceId: 'inst-new' });
     mockForecast.mockResolvedValue({ workflowActivityRules: [] });
+    mockRevert.mockResolvedValue({ result: true });
+    mockAppend.mockResolvedValue({ result: true });
+    mockResolveStaff.mockResolvedValue({ deptPath: 'A', name: '李四', staffId: 'staff-2' });
     mockGetUsers.mockResolvedValue([]);
     mockGetSchema.mockResolvedValue({
       fields: [
@@ -334,5 +340,68 @@ describe('DingtalkApprovalService', () => {
     await expect(service.terminateInstance({ processInstanceId: 'inst-1' })).rejects.toMatchObject({
       code: 'DINGTALK_NOT_ORIGINATOR',
     });
+  });
+
+  it('invalidates pending caches after successful writes', async () => {
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+
+    await service.createInstance({
+      formValues: [{ label: '事由', value: '北京出差' }],
+      processCode: 'PROC-1',
+    });
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+    mockInvalidate.mockClear();
+
+    mockGetDetail.mockResolvedValue(runningDetail);
+    await service.executeTask({ processInstanceId: 'inst-1', result: 'agree', taskId: 't-1' });
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+    mockInvalidate.mockClear();
+
+    await service.redirectTask({
+      processInstanceId: 'inst-1',
+      taskId: 't-1',
+      toStaffToken: 'staff:staff-2',
+    });
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+    mockInvalidate.mockClear();
+
+    mockGetDetail.mockResolvedValue({
+      ...runningDetail,
+      originatorUserId: 'me',
+      status: 'RUNNING',
+    });
+    await service.terminateInstance({ processInstanceId: 'inst-1' });
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+    mockInvalidate.mockClear();
+
+    mockGetDetail.mockResolvedValue(runningDetail);
+    await service.revertTask({
+      processInstanceId: 'inst-1',
+      revertAction: 'REVERT_FOR_RESUBMIT',
+      targetActivityId: 'act-1',
+      taskId: 't-1',
+    });
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+    mockInvalidate.mockClear();
+
+    await service.appendTask({
+      appenderStaffTokens: ['staff:staff-2'],
+      processInstanceId: 'inst-1',
+      taskId: 't-1',
+      type: 'after',
+    });
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+  });
+
+  it('does not invalidate pending caches when a write is rejected', async () => {
+    mockGetDetail.mockResolvedValueOnce({
+      ...runningDetail,
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'someone-else' }],
+    });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(
+      service.executeTask({ processInstanceId: 'inst-1', result: 'agree', taskId: 't-1' }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_NOT_TASK_OWNER' });
+    expect(mockInvalidate).not.toHaveBeenCalled();
   });
 });

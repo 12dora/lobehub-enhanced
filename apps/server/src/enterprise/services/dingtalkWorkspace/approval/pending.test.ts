@@ -36,6 +36,7 @@ vi.mock('./api', () => ({
 }));
 
 const {
+  invalidatePendingCaches,
   listInitiatedApprovals,
   listPendingApprovals,
   resetApprovalListCacheForTest,
@@ -514,5 +515,86 @@ describe('pending listing', () => {
     expect(result.rows).toHaveLength(2);
     expect(result.truncated).toBe(false);
     expect(result.incomplete).toBeUndefined();
+  });
+
+  it('invalidatePendingCaches drops the per-user pending result so the next list refetches', async () => {
+    mockCountPending.mockResolvedValue(0);
+    const first = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(first.rows).toEqual([]);
+    expect(mockCountPending).toHaveBeenCalledTimes(1);
+    expect(mockListPremium).not.toHaveBeenCalled();
+
+    invalidatePendingCaches('user-1');
+    mockCountPending.mockResolvedValue(1);
+    mockListPremium.mockResolvedValueOnce({
+      hasMore: false,
+      list: [
+        {
+          processInstanceId: 'inst-new',
+          taskId: 't-new',
+          title: '请假',
+        },
+      ],
+    });
+    mockGetDetail.mockResolvedValueOnce({
+      formComponentValues: [],
+      originatorUserId: 'me',
+      processInstanceId: 'inst-new',
+      tasks: [{ status: 'RUNNING', taskId: 't-new', userId: 'me' }],
+      title: '请假',
+    });
+
+    const second = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockCountPending).toHaveBeenCalledTimes(2);
+    expect(mockListPremium).toHaveBeenCalledTimes(1);
+    expect(second.rows).toHaveLength(1);
+    expect(second.rows[0]?.processInstanceId).toBe('inst-new');
+  });
+
+  it('invalidatePendingCaches drops the shared sweep cache', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    invalidatePendingCaches('user-1');
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidatePendingCaches does not drop another user cache', async () => {
+    mockListPremium.mockResolvedValue({ hasMore: false, list: [] });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-2' });
+    expect(mockListPremium).toHaveBeenCalledTimes(2);
+    invalidatePendingCaches('user-1');
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-2' });
+    expect(mockListPremium).toHaveBeenCalledTimes(2);
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListPremium).toHaveBeenCalledTimes(3);
+  });
+
+  it('invalidatePendingCaches never throws', () => {
+    expect(() => invalidatePendingCaches('')).not.toThrow();
+    expect(() => invalidatePendingCaches('user-1')).not.toThrow();
   });
 });

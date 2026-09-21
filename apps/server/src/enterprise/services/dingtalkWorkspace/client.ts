@@ -309,6 +309,8 @@ const mapUpstreamToCode = (
     return 'DINGTALK_FORBIDDEN';
   }
   if (status === 404 || /not.?found|不存在|60121/.test(haystack)) return 'DINGTALK_NOT_FOUND';
+  // Named booking-policy code must win over generic HTTP 400 → INVALID.
+  if (/meetingroomnotavailable/.test(haystack)) return 'DINGTALK_ROOM_UNAVAILABLE';
   if (
     status === 400 ||
     /invalidparameter|invalid.?argument|88|40035|非法|参数错误/.test(haystack)

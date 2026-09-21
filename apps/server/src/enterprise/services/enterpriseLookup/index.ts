@@ -289,29 +289,249 @@ const looksLikeCompany = (
   };
 };
 
-const CREDIT_CODE_PATTERN = /[0-9A-HJ-NPQRTUWXY]{2}\d{6}[0-9A-HJ-NPQRTUWXY]{10}/;
-const COMPANY_NAME_PATTERN =
-  /[\u4E00-\u9FFFA-Z0-9()（）.-]{2,40}(?:股份有限公司|有限责任公司|有限公司|集团有限公司|集团公司|公司|厂|合作社)/gi;
+const UNIFIED_SOCIAL_CREDIT_CODE_RE = /[0-9A-Z]{18}/;
+const COMPANY_NAME_CELL_RE =
+  /^[\u4E00-\u9FFFA-Z0-9()（）.\-·]{2,80}(?:股份有限公司|有限责任公司|集团有限公司|集团公司|有限公司|普通合伙企业|有限合伙企业|合伙企业|个体工商户|研究院|事务所|合作社|集团)$/;
+const COMPANY_NAME_PROSE_RE = /这些|后续|建议|调用|查询|包括|以及|如需|请使用|获取|详情/;
+const MARKDOWN_LIST_MARKER_RE = /^(?:[-*+]|\d+[.)])\s+/;
+const MARKDOWN_HEADING_RE = /^#{1,6}\s/;
+const MARKDOWN_CELL_LINK_RE = /\[([^\]]+)\]\([^)]*\)/g;
+const TABLE_NAME_HEADERS = [
+  '企业名称',
+  '公司名称',
+  '名称',
+  'name',
+  'company_name',
+  'companyname',
+] as const;
+const TABLE_CREDIT_HEADERS = [
+  '统一社会信用代码',
+  '信用代码',
+  'uscc',
+  'creditcode',
+  'credit_code',
+] as const;
+const TABLE_LEGAL_HEADERS = ['法定代表人', '法人', 'legalperson', 'legal_person'] as const;
+const TABLE_STATUS_HEADERS = ['经营状态', '登记状态', '状态', 'status'] as const;
+const TABLE_ID_HEADERS = ['company_id', 'companyid', 'id'] as const;
 
-const parseTextCompanyCandidates = (text: string): EnterpriseLookupCompanyCandidate[] => {
+interface MarkdownTableColumnMap {
+  creditCode?: number;
+  id?: number;
+  legalPerson?: number;
+  name?: number;
+  status?: number;
+}
+
+const stripMarkdownCell = (value: string): string =>
+  value
+    .trim()
+    .replaceAll('**', '')
+    .replaceAll('__', '')
+    .replaceAll(MARKDOWN_CELL_LINK_RE, '$1')
+    .trim();
+
+const normalizeTableHeader = (value: string): string =>
+  stripMarkdownCell(value).replaceAll(/\s+/g, '').toLowerCase();
+
+const isUnifiedSocialCreditCode = (value: string): boolean =>
+  value.length === 18 && UNIFIED_SOCIAL_CREDIT_CODE_RE.test(value);
+
+const findUnifiedSocialCreditCode = (value: string): string | undefined => {
+  const match = UNIFIED_SOCIAL_CREDIT_CODE_RE.exec(value);
+  return match?.[0];
+};
+
+const looksLikeSentence = (value: string): boolean => /[：:。；;！？!?，、]/.test(value);
+
+const isCompanyNameCell = (value: string): boolean =>
+  COMPANY_NAME_CELL_RE.test(value) && !COMPANY_NAME_PROSE_RE.test(value);
+
+const isAcceptableCompanyName = (name: string, creditCode?: string): boolean => {
+  if (!name || looksLikeSentence(name) || COMPANY_NAME_PROSE_RE.test(name)) return false;
+  if (isUnifiedSocialCreditCode(name)) return false;
+  if (isCompanyNameCell(name)) return true;
+  return !!creditCode && name.length >= 2 && name.length <= 80 && !/[a-z]/.test(name);
+};
+
+const optionalTableCell = (value: string | undefined): string | undefined => {
+  if (!value) return undefined;
+  const trimmed = stripMarkdownCell(value);
+  if (!trimmed || trimmed === '-' || trimmed === '—' || trimmed === '/') return undefined;
+  return trimmed;
+};
+
+const indexOfHeader = (headers: string[], aliases: readonly string[]): number | undefined => {
+  const normalized = headers.map((header) => normalizeTableHeader(header));
+  for (const alias of aliases) {
+    const found = normalized.indexOf(alias);
+    if (found >= 0) return found;
+  }
+  return undefined;
+};
+
+const splitMarkdownTableRow = (line: string): string[] | undefined => {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return undefined;
+  const raw = trimmed.split('|');
+  if (trimmed.startsWith('|')) raw.shift();
+  if (trimmed.endsWith('|')) raw.pop();
+  if (raw.length < 2) return undefined;
+  return raw.map((cell) => cell.trim());
+};
+
+const isMarkdownTableSeparator = (cells: string[]): boolean =>
+  cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replaceAll(/\s/g, '')));
+
+const isIgnoredMarkdownLine = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith('>')) return true;
+  if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
+  if (/^[-*_]{3,}$/.test(trimmed)) return true;
+  return false;
+};
+
+const mapTableHeaders = (header: string[]): MarkdownTableColumnMap | undefined => {
+  const name = indexOfHeader(header, TABLE_NAME_HEADERS);
+  const creditCode = indexOfHeader(header, TABLE_CREDIT_HEADERS);
+  const legalPerson = indexOfHeader(header, TABLE_LEGAL_HEADERS);
+  const status = indexOfHeader(header, TABLE_STATUS_HEADERS);
+  const id = indexOfHeader(header, TABLE_ID_HEADERS);
+  if (name == null && creditCode == null) return undefined;
+  return { creditCode, id, legalPerson, name, status };
+};
+
+const candidateFromCells = (
+  cells: string[],
+  columnMap?: MarkdownTableColumnMap,
+): EnterpriseLookupCompanyCandidate | undefined => {
+  const stripped = cells.map((cell) => stripMarkdownCell(cell)).filter(Boolean);
+  const mappedName = optionalTableCell(columnMap?.name == null ? undefined : cells[columnMap.name]);
+  const mappedCredit = optionalTableCell(
+    columnMap?.creditCode == null ? undefined : cells[columnMap.creditCode],
+  );
+  const mappedId = optionalTableCell(columnMap?.id == null ? undefined : cells[columnMap.id]);
+  const creditCode =
+    (mappedCredit && isUnifiedSocialCreditCode(mappedCredit) ? mappedCredit : undefined) ??
+    stripped.find((cell) => isUnifiedSocialCreditCode(cell));
+  let name = mappedName;
+  if (!name || name === creditCode || name === mappedId) {
+    name = stripped.find(
+      (cell) => cell !== creditCode && cell !== mappedId && isCompanyNameCell(cell),
+    );
+  }
+  if (!name || !isAcceptableCompanyName(name, creditCode)) return undefined;
+  if (!isCompanyNameCell(name) && columnMap?.name == null) return undefined;
+
+  const legalPerson = optionalTableCell(
+    columnMap?.legalPerson == null ? undefined : cells[columnMap.legalPerson],
+  );
+  const status = optionalTableCell(columnMap?.status == null ? undefined : cells[columnMap.status]);
+
+  return {
+    name,
+    ...(creditCode ? { creditCode } : {}),
+    ...(legalPerson && !isUnifiedSocialCreditCode(legalPerson) && !isCompanyNameCell(legalPerson)
+      ? { legalPerson }
+      : {}),
+    ...(status && !isUnifiedSocialCreditCode(status) && !isCompanyNameCell(status)
+      ? { status }
+      : {}),
+  };
+};
+
+const pushCompanyCandidate = (
+  found: EnterpriseLookupCompanyCandidate[],
+  seen: Set<string>,
+  candidate: EnterpriseLookupCompanyCandidate,
+): boolean => {
+  const key = companyCandidateDedupeKey(candidate);
+  if (seen.has(key)) return found.length >= 20;
+  seen.add(key);
+  found.push(candidate);
+  return found.length >= 20;
+};
+
+const parseMarkdownTableCompanyCandidates = (text: string): EnterpriseLookupCompanyCandidate[] => {
+  const lines = text.split('\n');
   const found: EnterpriseLookupCompanyCandidate[] = [];
   const seen = new Set<string>();
-  for (const line of text.split(/\n+/)) {
-    COMPANY_NAME_PATTERN.lastIndex = 0;
-    const name = line.match(COMPANY_NAME_PATTERN)?.[0]?.trim();
-    if (!name) continue;
-    const creditCode = line.match(CREDIT_CODE_PATTERN)?.[0];
-    const candidate: EnterpriseLookupCompanyCandidate = {
-      name,
-      ...(creditCode ? { creditCode } : {}),
-    };
-    const key = companyCandidateDedupeKey(candidate);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    found.push(candidate);
-    if (found.length >= 20) break;
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? '';
+    if (isIgnoredMarkdownLine(line)) {
+      index += 1;
+      continue;
+    }
+    const firstCells = splitMarkdownTableRow(line);
+    if (!firstCells) {
+      index += 1;
+      continue;
+    }
+
+    const block: string[][] = [firstCells];
+    index += 1;
+    while (index < lines.length) {
+      const current = lines[index] ?? '';
+      if (isIgnoredMarkdownLine(current)) break;
+      const cells = splitMarkdownTableRow(current);
+      if (!cells) break;
+      block.push(cells);
+      index += 1;
+    }
+
+    const header = block[0];
+    if (!header) continue;
+    const columnMap = mapTableHeaders(header);
+    let start = 0;
+    if (block.length >= 2 && block[1] && isMarkdownTableSeparator(block[1])) {
+      start = 2;
+    } else if (columnMap) {
+      start = 1;
+    }
+
+    for (const row of block.slice(start)) {
+      const candidate = candidateFromCells(row, columnMap);
+      if (!candidate) continue;
+      if (pushCompanyCandidate(found, seen, candidate)) return found;
+    }
   }
   return found;
+};
+
+const parseLooseMarkdownCompanyCandidates = (text: string): EnterpriseLookupCompanyCandidate[] => {
+  const found: EnterpriseLookupCompanyCandidate[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of text.split('\n')) {
+    if (isIgnoredMarkdownLine(rawLine)) continue;
+    const trimmed = rawLine.trim();
+    const tableCells = splitMarkdownTableRow(trimmed);
+    if (tableCells && isMarkdownTableSeparator(tableCells)) continue;
+    if (tableCells && mapTableHeaders(tableCells)) continue;
+
+    const withoutListMarker = MARKDOWN_LIST_MARKER_RE.test(trimmed)
+      ? trimmed.replace(MARKDOWN_LIST_MARKER_RE, '')
+      : trimmed;
+    const line = stripMarkdownCell(withoutListMarker);
+    if (!line || looksLikeSentence(line) || /[a-z]/.test(line)) continue;
+
+    const cells = (tableCells ?? line.split(/[·|／、,，;；\t/]+/)).map((cell) =>
+      stripMarkdownCell(cell),
+    );
+    const candidate = candidateFromCells(cells, undefined);
+    if (!candidate) continue;
+    const creditCode = candidate.creditCode ?? findUnifiedSocialCreditCode(line);
+    const next = creditCode && !candidate.creditCode ? { ...candidate, creditCode } : candidate;
+    if (pushCompanyCandidate(found, seen, next)) return found;
+  }
+  return found;
+};
+
+const parseTextCompanyCandidates = (text: string): EnterpriseLookupCompanyCandidate[] => {
+  const fromTables = parseMarkdownTableCompanyCandidates(text);
+  if (fromTables.length > 0) return fromTables.slice(0, 20);
+  return parseLooseMarkdownCompanyCandidates(text);
 };
 
 export const parseEnterpriseLookupCompanyCandidates = (

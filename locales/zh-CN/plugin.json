@@ -363,6 +363,7 @@
   "builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_TASK_OWNER": "不是该任务的当前处理人",
   "builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_PREMIUM_REQUIRED": "需要钉钉 OA 审批高级版",
   "builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_RATE_LIMITED": "请求过于频繁，请稍后重试",
+  "builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_ROOM_UNAVAILABLE": "会议室该时段无法预订",
   "builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_RULE_LIMIT": "已达到规则数量上限",
   "builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_UNAVAILABLE": "钉钉服务暂时不可用",
   "builtins.lobe-dingtalk-workspace.ui.error.unknown": "操作失败",

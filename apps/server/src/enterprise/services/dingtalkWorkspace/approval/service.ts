@@ -23,6 +23,7 @@ import { encodeSaveTemplateFields } from './formComponents';
 import { encodeFormValues, formSummary, isSuiteTemplate } from './formValues';
 import {
   invalidateApprovalListCache,
+  invalidatePendingCaches,
   listInitiatedApprovals,
   listPendingApprovals,
   loadVisibleTemplatesCached,
@@ -247,7 +248,7 @@ export class DingtalkApprovalService {
       targetSelectActioners,
     });
 
-    invalidateApprovalListCache(this.userId);
+    invalidatePendingCaches(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_CREATE,
       db: this.db,
@@ -269,7 +270,7 @@ export class DingtalkApprovalService {
       throw new DingtalkWorkspaceError('DINGTALK_INVALID');
     }
     const result = await executeTaskAs(identity.staffId, input);
-    invalidateApprovalListCache(this.userId);
+    invalidatePendingCaches(this.userId);
     await appendApprovalAudit({
       action:
         input.result === 'agree'
@@ -296,7 +297,7 @@ export class DingtalkApprovalService {
       taskId: input.taskId,
       toUserId: target.staffId,
     });
-    invalidateApprovalListCache(this.userId);
+    invalidatePendingCaches(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_REDIRECT,
       db: this.db,
@@ -341,7 +342,7 @@ export class DingtalkApprovalService {
       processInstanceId: input.processInstanceId,
       remark: input.remark,
     });
-    invalidateApprovalListCache(this.userId);
+    invalidatePendingCaches(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_TERMINATE,
       db: this.db,
@@ -359,7 +360,7 @@ export class DingtalkApprovalService {
       input.taskId,
     );
     const result = await revertTaskAs(identity.staffId, input);
-    invalidateApprovalListCache(this.userId);
+    invalidatePendingCaches(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_REVERT,
       db: this.db,
@@ -388,7 +389,7 @@ export class DingtalkApprovalService {
       taskId: input.taskId,
       type: input.type,
     });
-    invalidateApprovalListCache(this.userId);
+    invalidatePendingCaches(this.userId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_APPEND,
       db: this.db,

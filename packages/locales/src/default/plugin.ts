@@ -339,6 +339,8 @@ export default {
     'Requires DingTalk OA Premium',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_RATE_LIMITED':
     'Too many requests. Try again later.',
+  'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_ROOM_UNAVAILABLE':
+    'Meeting room is not available for this time',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_RULE_LIMIT': 'Rule limit reached',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_UNAVAILABLE':
     'DingTalk is temporarily unavailable',

@@ -19,12 +19,17 @@ vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
 vi.mock('../capabilities', () => ({ getDingtalkWorkspaceCapabilities: vi.fn() }));
 vi.mock('../notify', () => ({ notifyUser: vi.fn() }));
 vi.mock('../identity', () => ({ resolveVerifiedDingtalkIdentity: vi.fn() }));
+const mockInvalidatePendingCaches = vi.hoisted(() => vi.fn());
+
 vi.mock('../approval/api', () => ({
   addCommentAs: vi.fn(),
   executeTaskAs: vi.fn(),
   getInstanceDetail: vi.fn(),
   listRunningInstanceIds: vi.fn(),
   redirectTaskAs: vi.fn(),
+}));
+vi.mock('../approval/pending', () => ({
+  invalidatePendingCaches: (...args: unknown[]) => mockInvalidatePendingCaches(...args),
 }));
 vi.mock('./todoCount', () => ({
   getPendingApprovalTaskCount: vi.fn(async () => 1),
@@ -153,6 +158,7 @@ describe('runApprovalRulesCycle', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockInvalidatePendingCaches.mockReset();
     stopDingtalkApprovalRuleWorkerForTest();
     rule.dailyCount = 0;
     rule.dailyCountDate = null;
@@ -224,6 +230,7 @@ describe('runApprovalRulesCycle', () => {
         lines: [expect.stringContaining('已按规则「自动同意」自动同意')],
       }),
     );
+    expect(mockInvalidatePendingCaches).toHaveBeenCalledWith('user_1');
   });
 
   it('skips DingTalk when the (rule, task) row is already claimed', async () => {
@@ -440,6 +447,7 @@ describe('runApprovalRulesCycle', () => {
     expect(result.counts.skipped).toBe(1);
     expect(notify).not.toHaveBeenCalled();
     expect(writeAudit).not.toHaveBeenCalled();
+    expect(mockInvalidatePendingCaches).toHaveBeenCalledWith('user_1');
   });
 
   it('keeps the unique row on a definitive DingTalk rejection and releases the slot', async () => {
@@ -456,6 +464,7 @@ describe('runApprovalRulesCycle', () => {
     );
     expect(rollbackDailyCount).toHaveBeenCalled();
     expect(result.counts.failed).toBe(1);
+    expect(mockInvalidatePendingCaches).not.toHaveBeenCalled();
   });
 
   it('reclaims a stale IN_PROGRESS row without bumping the daily counter again', async () => {

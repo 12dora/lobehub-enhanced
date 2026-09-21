@@ -139,4 +139,32 @@ describe('dingtalkWorkspaceRouter', () => {
       message: 'DINGTALK_AMBIGUOUS',
     });
   });
+
+  it('forwards DINGTALK_ROOM_UNAVAILABLE roomIssues in error data', async () => {
+    const error = new DingtalkWorkspaceError('DINGTALK_ROOM_UNAVAILABLE') as InstanceType<
+      typeof DingtalkWorkspaceError
+    > & {
+      roomIssues: Array<{ reason: string; roomName: string }>;
+      timeApplied: boolean;
+    };
+    error.roomIssues = [{ reason: '预订时长不得少于 30 分钟', roomName: '捷发2楼会议室' }];
+    error.timeApplied = true;
+    mockCalendar.updateEvent.mockRejectedValueOnce(error);
+    await expect(
+      createCaller().calendar.updateEvent({
+        eventId: 'evt-1',
+        roomIds: ['room-B'],
+        start: '2026-09-22T14:00:00+08:00',
+      }),
+    ).rejects.toMatchObject({
+      cause: {
+        data: {
+          code: 'DINGTALK_ROOM_UNAVAILABLE',
+          roomIssues: [{ reason: '预订时长不得少于 30 分钟', roomName: '捷发2楼会议室' }],
+          timeApplied: true,
+        },
+      },
+      message: 'DINGTALK_ROOM_UNAVAILABLE',
+    });
+  });
 });

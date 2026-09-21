@@ -47,6 +47,7 @@ const TRPC_BY_DINGTALK_CODE: Record<string, TRPC_ERROR_CODE_KEY> = {
   DINGTALK_NOT_TASK_OWNER: 'FORBIDDEN',
   DINGTALK_PREMIUM_REQUIRED: 'FORBIDDEN',
   DINGTALK_RATE_LIMITED: 'TOO_MANY_REQUESTS',
+  DINGTALK_ROOM_UNAVAILABLE: 'BAD_REQUEST',
   DINGTALK_RULE_LIMIT: 'BAD_REQUEST',
   DINGTALK_UNAVAILABLE: 'INTERNAL_SERVER_ERROR',
 };
@@ -56,16 +57,22 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isDingtalkWorkspaceError = (
   error: unknown,
-): error is DingtalkWorkspaceError & { candidates?: unknown } => {
+): error is DingtalkWorkspaceError & {
+  candidates?: unknown;
+  roomIssues?: unknown;
+  timeApplied?: boolean;
+} => {
   if (error instanceof DingtalkWorkspaceError) return true;
   return isRecord(error) && typeof error.code === 'string' && error.code.startsWith('DINGTALK_');
 };
 
-const mapError = (error: unknown, procedure: string): never => {
+const mapError: (error: unknown, procedure: string) => never = (error, procedure) => {
   if (error instanceof TRPCError) throw error;
   if (isDingtalkWorkspaceError(error)) {
     const data: Record<string, unknown> = { code: error.code };
     if (error.candidates !== undefined) data.candidates = error.candidates;
+    if (error.roomIssues !== undefined) data.roomIssues = error.roomIssues;
+    if (error.timeApplied === true) data.timeApplied = true;
     throw new TRPCError({
       cause: { data },
       code: TRPC_BY_DINGTALK_CODE[error.code] ?? 'BAD_REQUEST',

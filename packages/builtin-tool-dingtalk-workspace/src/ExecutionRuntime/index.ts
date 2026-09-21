@@ -12,6 +12,7 @@ import type {
   GetEventParams,
   ListEventsParams,
   ListTodosParams,
+  MeetingRoomIssue,
   QueryFreeBusyParams,
   RespondEventParams,
   SearchDirectoryParams,
@@ -74,6 +75,7 @@ const KNOWN_DINGTALK_ERROR_CODES = new Set([
   'DINGTALK_NOT_TASK_OWNER',
   'DINGTALK_PREMIUM_REQUIRED',
   'DINGTALK_RATE_LIMITED',
+  'DINGTALK_ROOM_UNAVAILABLE',
   'DINGTALK_RULE_LIMIT',
   'DINGTALK_UNAVAILABLE',
 ]);
@@ -158,6 +160,29 @@ const formatCandidate = (candidate: AmbiguousCandidate): string => {
   const token = toStaffToken(candidate.staffId);
   const dept = candidate.leafDeptName || candidate.deptPath;
   return dept ? `${candidate.name} · ${dept}（${token}）` : `${candidate.name}（${token}）`;
+};
+
+const extractRoomIssues = (error: unknown): MeetingRoomIssue[] => {
+  for (const record of nestedErrorRecords(error)) {
+    if (!Array.isArray(record.roomIssues)) continue;
+    const issues: MeetingRoomIssue[] = [];
+    for (const item of record.roomIssues) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      if (typeof row.roomName !== 'string' || typeof row.reason !== 'string') continue;
+      if (isUnsafeHint(row.roomName) || isUnsafeHint(row.reason)) continue;
+      issues.push({ reason: row.reason, roomName: row.roomName });
+    }
+    if (issues.length > 0) return issues;
+  }
+  return [];
+};
+
+const extractTimeApplied = (error: unknown): boolean => {
+  for (const record of nestedErrorRecords(error)) {
+    if (record.timeApplied === true) return true;
+  }
+  return false;
 };
 
 const extractCandidates = (error: unknown): AmbiguousCandidate[] => {
@@ -469,6 +494,18 @@ const friendlyDingtalkErrorContent = (code: string, error: unknown): string => {
       return hint
         ? `参数无效（DINGTALK_INVALID）：${hint}`
         : '参数无效（DINGTALK_INVALID）。请根据说明修正时间、人员或必填字段后重试。';
+    }
+    case 'DINGTALK_ROOM_UNAVAILABLE': {
+      const issues = extractRoomIssues(error);
+      const timeApplied = extractTimeApplied(error);
+      const details =
+        issues.length > 0
+          ? issues
+              .map((issue) => `会议室「${issue.roomName}」该时段无法预订:${issue.reason}`)
+              .join('。')
+          : '所选会议室该时段无法预订';
+      const partial = timeApplied ? '日程时间已更新，会议室未更换。' : '';
+      return `${details}。${partial}请调整时间或更换会议室后重试。（DINGTALK_ROOM_UNAVAILABLE）`;
     }
     case 'DINGTALK_RATE_LIMITED': {
       return '钉钉接口限流（DINGTALK_RATE_LIMITED），请稍后重试，不要并行密集调用。';

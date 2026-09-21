@@ -13,13 +13,17 @@ export const DINGTALK_API_CALL_STATS_MAX_DAYS = 40;
 export const DINGTALK_API_CALL_STATS_MAX_APIS_PER_DAY = 256;
 
 const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const NUMERIC_SEGMENT = /^\d+$/;
-// Case-sensitive and requires `-`/`_` after `PROC` so `processInstances` is not treated as an id.
+const NUMERIC_ID_SEGMENT = /^\d{5,}$/;
+// Case-sensitive `PROC` + `-`/`_` so `processes` / `processInstances` stay as-is.
 const PROCESS_CODE_SEGMENT = /^PROC[-_]\w+$/;
+const HEX_SEGMENT = /^[0-9a-f]{16,}$/i;
+const BASE64URL_SEGMENT = /^[\w-]{16,}$/;
+const TASK_OR_DING_ID_SEGMENT = /^(?:task|ding)[\w-]{12,}$/i;
 
-/** Path parents whose next segment is a userId / unionId / taskId / eventId / roomId. */
-const ID_HOLDER_SEGMENTS = new Set(['calendars', 'events', 'meetingRooms', 'tasks', 'users']);
-const KEEP_AFTER_HOLDER = new Set(['me', 'org', 'primary']);
+const hasDigit = (segment: string): boolean => /\d/.test(segment);
+const hasHyphenOrUnderscore = (segment: string): boolean => /[-_]/.test(segment);
+const isMixedCaseWithDigit = (segment: string): boolean =>
+  /[A-Z]/.test(segment) && /[a-z]/.test(segment) && hasDigit(segment);
 
 export const dingtalkApiCallStatsRedisKey = (date: string): string =>
   `${DINGTALK_API_CALL_STATS_KEY_PREFIX}${date}`;
@@ -62,24 +66,28 @@ const pathnameOf = (urlOrPath: string): string => {
   return path.startsWith('/') ? path : `/${path}`;
 };
 
-const isIdSegment = (segment: string, previous: string | undefined): boolean => {
+const isIdSegment = (segment: string): boolean => {
+  if (segment.includes('=')) return true;
   if (UUID_SEGMENT.test(segment)) return true;
-  if (NUMERIC_SEGMENT.test(segment)) return true;
+  if (NUMERIC_ID_SEGMENT.test(segment)) return true;
   if (PROCESS_CODE_SEGMENT.test(segment)) return true;
-  if (!previous || !ID_HOLDER_SEGMENTS.has(previous)) return false;
-  return !KEEP_AFTER_HOLDER.has(segment);
+  if (TASK_OR_DING_ID_SEGMENT.test(segment)) return true;
+  if (HEX_SEGMENT.test(segment)) return true;
+  if (BASE64URL_SEGMENT.test(segment) && (hasDigit(segment) || hasHyphenOrUnderscore(segment))) {
+    return true;
+  }
+  return segment.length >= 20 && isMixedCaseWithDigit(segment);
 };
 
 /**
- * `'<METHOD> <path template>'`. Query strings are dropped. Path ids / uuids /
- * unionIds / processCodes become `:id`.
+ * `'<METHOD> <path template>'`. Query strings are dropped. Only path segments
+ * that look like identifiers become `:id` — never camelCase/lowercase API words
+ * such as `processes` or `processInstances`.
  */
 export const toDingtalkApiCallKey = (method: string, urlOrPath: string): string => {
   const pathname = pathnameOf(urlOrPath);
   const parts = pathname.split('/').filter((part) => part.length > 0);
-  const templated = parts.map((segment, index) =>
-    isIdSegment(segment, index > 0 ? parts[index - 1] : undefined) ? ':id' : segment,
-  );
+  const templated = parts.map((segment) => (isIdSegment(segment) ? ':id' : segment));
   return `${method.toUpperCase()} /${templated.join('/')}`;
 };
 

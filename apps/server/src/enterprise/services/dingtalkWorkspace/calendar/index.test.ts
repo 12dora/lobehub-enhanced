@@ -27,7 +27,7 @@ vi.mock('@/server/enterprise/services/platformAudit', () => ({
   PlatformAuditService: vi.fn(() => ({ append: mockAppend })),
 }));
 
-const { DingtalkCalendarService } = await import('./index');
+const { DingtalkCalendarService, resetCalendarRoomListCacheForTest } = await import('./index');
 const { DingtalkWorkspaceError } = await import('../errors');
 
 const identity = { name: '张三', staffId: 'staff-me', unionId: 'union-me' };
@@ -59,6 +59,7 @@ describe('DingtalkCalendarService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCalendarRoomListCacheForTest();
     mockAssertFeature.mockResolvedValue(undefined);
     mockRequireIdentity.mockResolvedValue(identity);
     mockAppend.mockResolvedValue({});
@@ -519,6 +520,90 @@ describe('DingtalkCalendarService', () => {
     );
   });
 
+  it('createEvent room-unavailable keeps compensation and attaches roomIssues', async () => {
+    const bookingError = new DingtalkWorkspaceError(
+      'DINGTALK_ROOM_UNAVAILABLE',
+      'meetingRoomNotAvailable',
+    );
+    bookingError.upstreamMessage =
+      'code: 321001, developerMessage: [{"roomName":"捷发2楼会议室","text":"The reservation period shall not be less than 30 minutes."}]';
+    mockRequest
+      .mockResolvedValueOnce({ ...myEvent, id: 'evt-new' })
+      .mockRejectedValueOnce(bookingError)
+      .mockResolvedValueOnce({});
+    await expect(
+      service.createEvent({
+        end: '2026-09-22T11:00:00+08:00',
+        roomIds: ['room-1'],
+        start: '2026-09-22T10:00:00+08:00',
+        summary: '周会',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DINGTALK_ROOM_UNAVAILABLE',
+      roomIssues: [{ reason: '预订时长不得少于 30 分钟', roomName: '捷发2楼会议室' }],
+    });
+    expect(mockRequest).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: 'DELETE',
+        path: '/v1.0/calendar/users/union-me/calendars/primary/events/evt-new',
+        query: { pushNotification: true },
+      }),
+    );
+  });
+
+  it('updateEvent room-unavailable after a time change sets timeApplied', async () => {
+    const bookingError = new DingtalkWorkspaceError(
+      'DINGTALK_ROOM_UNAVAILABLE',
+      'meetingRoomNotAvailable',
+    );
+    bookingError.upstreamMessage =
+      'code: 321001, developerMessage: [{"roomName":"捷发2楼会议室","text":"The reservation period shall not be less than 30 minutes."}]';
+    mockRequest
+      .mockResolvedValueOnce({ ...myEvent })
+      .mockResolvedValueOnce(eventsViewWithRooms([{ roomId: 'room-A' }]))
+      .mockResolvedValueOnce({ ...myEvent })
+      .mockRejectedValueOnce(bookingError);
+    await expect(
+      service.updateEvent({
+        end: '2026-09-22T15:00:00+08:00',
+        eventId: 'evt-1',
+        roomIds: ['room-B'],
+        start: '2026-09-22T14:00:00+08:00',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DINGTALK_ROOM_UNAVAILABLE',
+      roomIssues: [expect.objectContaining({ roomName: '捷发2楼会议室' })],
+      timeApplied: true,
+    });
+    expect(mockRequest.mock.calls.some((call) => call[0]?.method === 'PUT')).toBe(true);
+  });
+
+  it('updateEvent room-only replacement failure does not set timeApplied', async () => {
+    const bookingError = new DingtalkWorkspaceError(
+      'DINGTALK_ROOM_UNAVAILABLE',
+      'meetingRoomNotAvailable',
+    );
+    bookingError.upstreamMessage =
+      'developerMessage: [{"roomName":"捷发2楼会议室","text":"already booked"}]';
+    mockRequest
+      .mockResolvedValueOnce({ ...myEvent })
+      .mockResolvedValueOnce(eventsViewWithRooms([{ roomId: 'room-A' }]))
+      .mockResolvedValueOnce({ ...myEvent })
+      .mockRejectedValueOnce(bookingError);
+    let caught: { code?: string; roomIssues?: unknown; timeApplied?: boolean } | undefined;
+    try {
+      await service.updateEvent({ eventId: 'evt-1', roomIds: ['room-B'] });
+    } catch (error) {
+      caught = error as { code?: string; roomIssues?: unknown; timeApplied?: boolean };
+    }
+    expect(caught).toMatchObject({
+      code: 'DINGTALK_ROOM_UNAVAILABLE',
+      roomIssues: [{ reason: '该时段已被预订', roomName: '捷发2楼会议室' }],
+    });
+    expect(caught?.timeApplied).toBeUndefined();
+  });
+
   it('listEvents maps attendee unionIds to staff tokens and drops unionIds', async () => {
     const mapped = new DingtalkCalendarService(
       directoryDb([
@@ -667,12 +752,16 @@ describe('DingtalkCalendarService', () => {
   });
 
   it('preview(updateEvent) shows the room replacement including a clear', async () => {
-    mockRequest.mockResolvedValueOnce(myEvent);
+    mockRequest
+      .mockResolvedValueOnce(myEvent)
+      .mockResolvedValueOnce({ result: [{ roomId: 'room-B', roomName: '捷发2楼会议室' }] });
     const replaced = await service.preview({
       apiName: 'updateEvent',
       args: { eventId: 'evt-1', roomIds: ['room-B'] },
     });
-    expect(replaced.lines).toEqual(expect.arrayContaining([{ label: '会议室', value: 'room-B' }]));
+    expect(replaced.lines).toEqual(
+      expect.arrayContaining([{ label: '会议室', value: '捷发2楼会议室' }]),
+    );
 
     mockRequest.mockResolvedValueOnce(myEvent);
     const cleared = await service.preview({
@@ -682,5 +771,45 @@ describe('DingtalkCalendarService', () => {
     expect(cleared.lines).toEqual(
       expect.arrayContaining([{ label: '会议室', value: '清除会议室' }]),
     );
+  });
+
+  it('preview resolves room names and reuses the 10-minute in-process cache', async () => {
+    mockRequest.mockResolvedValue({
+      result: [{ roomId: '57e7f532-room', roomName: '捷发2楼会议室' }],
+    });
+    const args = {
+      end: '2026-09-22T11:00:00+08:00',
+      roomIds: ['57e7f532-room'],
+      start: '2026-09-22T10:00:00+08:00',
+      summary: '周会',
+    };
+    const first = await service.preview({ apiName: 'createEvent', args });
+    expect(first.lines).toEqual(
+      expect.arrayContaining([{ label: '会议室', value: '捷发2楼会议室' }]),
+    );
+    expect(first.warnings).toEqual([]);
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    await service.preview({ apiName: 'createEvent', args });
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('preview shows 未知会议室 and a warning for unknown room ids', async () => {
+    mockRequest.mockResolvedValue({ result: [] });
+    const preview = await service.preview({
+      apiName: 'createEvent',
+      args: {
+        end: '2026-09-22T11:00:00+08:00',
+        roomIds: ['57e7f532-unknown'],
+        start: '2026-09-22T10:00:00+08:00',
+        summary: '周会',
+      },
+    });
+    expect(preview.lines).toEqual(
+      expect.arrayContaining([{ label: '会议室', value: '未知会议室' }]),
+    );
+    expect(preview.warnings).toEqual(
+      expect.arrayContaining(['有会议室无法识别，请先列出会议室后使用返回的 roomId']),
+    );
+    expect(JSON.stringify(preview.lines)).not.toContain('57e7f532');
   });
 });

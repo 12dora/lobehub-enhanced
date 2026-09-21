@@ -64,14 +64,29 @@ type SweepSession = {
 
 const sweepInflight = new Map<string, Promise<SharedSweepResult>>();
 const sweepSessions = new Map<string, SweepSession>();
+/** Bumped on invalidate so an in-flight list/sweep cannot write a stale result back. */
+const cacheGenerations = new Map<string, number>();
 
-export const invalidateApprovalListCache = (userId?: string): void => {
-  if (!userId) {
-    cache.clear();
-    sweepInflight.clear();
-    sweepSessions.clear();
-    return;
-  }
+const cacheGenerationOf = (userId: string): number => cacheGenerations.get(userId) ?? 0;
+
+const bumpCacheGeneration = (userId: string): void => {
+  cacheGenerations.set(userId, cacheGenerationOf(userId) + 1);
+};
+
+const cacheSetIfCurrent = <T>(
+  userId: string,
+  generation: number,
+  key: string,
+  value: T,
+  ttlMs: number,
+  now: number,
+): void => {
+  if (cacheGenerationOf(userId) !== generation) return;
+  cacheSet(key, value, ttlMs, now);
+};
+
+const dropUserPendingCaches = (userId: string): void => {
+  bumpCacheGeneration(userId);
   const prefix = `${userId}:`;
   for (const key of cache.keys()) {
     if (key.startsWith(prefix) || key.includes(`:${userId}:`)) cache.delete(key);
@@ -80,12 +95,42 @@ export const invalidateApprovalListCache = (userId?: string): void => {
   sweepSessions.delete(sweepKeyFor(userId));
 };
 
+/**
+ * Drop the per-user pending/initiated result cache, shared sweep, and any
+ * count memo. Best-effort: never throws (writes must not fail because of this).
+ */
+export const invalidatePendingCaches = (userId: string): void => {
+  try {
+    const id = userId.trim();
+    if (!id) return;
+    dropUserPendingCaches(id);
+  } catch {
+    // best-effort
+  }
+};
+
+export const invalidateApprovalListCache = (userId?: string): void => {
+  try {
+    if (!userId?.trim()) {
+      cache.clear();
+      sweepInflight.clear();
+      sweepSessions.clear();
+      cacheGenerations.clear();
+      return;
+    }
+    dropUserPendingCaches(userId.trim());
+  } catch {
+    // best-effort
+  }
+};
+
 let scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
 
 export const resetApprovalListCacheForTest = (): void => {
   cache.clear();
   sweepInflight.clear();
   sweepSessions.clear();
+  cacheGenerations.clear();
   scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
 };
 
@@ -321,9 +366,12 @@ const loadSharedSweep = async (input: {
     wantInitiated: input.wantInitiated === true,
   };
   sweepSessions.set(key, nextSession);
+  const generation = cacheGenerationOf(input.userId);
   const promise = runSharedSweep(input.staffId, input.templates, nextSession)
     .then((result) => {
-      cacheSet(
+      cacheSetIfCurrent(
+        input.userId,
+        generation,
         key,
         result,
         result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS,
@@ -568,6 +616,7 @@ export const listPendingApprovals = async (input: {
   const cacheKey = `${input.userId}:pending:${limit}`;
   const cached = cacheGet<ApprovalListResult<PendingApprovalRow>>(cacheKey, now);
   if (cached) return cached;
+  const generation = cacheGenerationOf(input.userId);
 
   let pendingTarget: number | undefined;
   try {
@@ -577,7 +626,7 @@ export const listPendingApprovals = async (input: {
   }
   if (pendingTarget === 0) {
     const empty: ApprovalListResult<PendingApprovalRow> = { rows: [], truncated: false };
-    cacheSet(cacheKey, empty, PENDING_CACHE_TTL_MS, Date.now());
+    cacheSetIfCurrent(input.userId, generation, cacheKey, empty, PENDING_CACHE_TTL_MS, Date.now());
     return empty;
   }
 
@@ -611,7 +660,7 @@ export const listPendingApprovals = async (input: {
     );
   }
 
-  cacheSet(cacheKey, result, cacheTtlMs(result), Date.now());
+  cacheSetIfCurrent(input.userId, generation, cacheKey, result, cacheTtlMs(result), Date.now());
   return result;
 };
 
@@ -711,6 +760,7 @@ export const listInitiatedApprovals = async (input: {
   const cacheKey = `${input.userId}:initiated:${input.status ?? 'all'}:${input.processCode ?? ''}:${input.q ?? ''}:${limit}`;
   const cached = cacheGet<ApprovalListResult<InitiatedApprovalRow>>(cacheKey, now);
   if (cached) return cached;
+  const generation = cacheGenerationOf(input.userId);
 
   const targeted = Boolean(input.processCode?.trim() || input.q?.trim());
   const otherStatus = Boolean(input.status && input.status !== 'RUNNING');
@@ -747,7 +797,7 @@ export const listInitiatedApprovals = async (input: {
     });
   }
 
-  cacheSet(cacheKey, result, cacheTtlMs(result), Date.now());
+  cacheSetIfCurrent(input.userId, generation, cacheKey, result, cacheTtlMs(result), Date.now());
   return result;
 };
 
@@ -760,7 +810,8 @@ export const loadVisibleTemplatesCached = async (
   const cacheKey = `${userId}:templates`;
   const cached = cacheGet<VisibleTemplate[]>(cacheKey, now);
   if (cached) return cached;
+  const generation = cacheGenerationOf(userId);
   const templates = await listVisibleTemplates(staffId);
-  cacheSet(cacheKey, templates, ttlMs, now);
+  cacheSetIfCurrent(userId, generation, cacheKey, templates, ttlMs, now);
   return templates;
 };

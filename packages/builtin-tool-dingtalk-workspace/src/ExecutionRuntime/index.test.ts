@@ -144,6 +144,7 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
     ['DINGTALK_PREMIUM_REQUIRED', 'OA 审批高级版'],
     ['DINGTALK_NOT_FOUND', '未找到该待办或日程'],
     ['DINGTALK_INVALID', '参数无效'],
+    ['DINGTALK_ROOM_UNAVAILABLE', '该时段无法预订'],
     ['DINGTALK_RATE_LIMITED', '钉钉接口限流'],
     ['DINGTALK_UNAVAILABLE', '钉钉服务暂时不可用'],
     ['DINGTALK_IDENTITY_UNBOUND', '未绑定钉钉身份'],
@@ -304,6 +305,70 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
       candidates: [expect.objectContaining({ name: '胡玉琴A', staffId: 's1' })],
       code: 'DINGTALK_AMBIGUOUS',
     });
+  });
+
+  it('maps DINGTALK_ROOM_UNAVAILABLE roomIssues to Chinese booking guidance', async () => {
+    const runtime = createDingtalkWorkspaceRuntime(
+      makeService({
+        createEvent: vi.fn().mockRejectedValue(
+          coded('DINGTALK_ROOM_UNAVAILABLE', 'DINGTALK_ROOM_UNAVAILABLE', {
+            cause: {
+              data: {
+                code: 'DINGTALK_ROOM_UNAVAILABLE',
+                roomIssues: [{ reason: '预订时长不得少于 30 分钟', roomName: '捷发2楼会议室' }],
+              },
+            },
+          }),
+        ),
+      }),
+    );
+
+    const result = await runtime.createEvent({
+      end: '2026-09-22T10:20:00+08:00',
+      roomIds: ['room-1'],
+      start: '2026-09-22T10:00:00+08:00',
+      summary: '同步会',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('DINGTALK_ROOM_UNAVAILABLE');
+    expect(result.content).toContain(
+      '会议室「捷发2楼会议室」该时段无法预订:预订时长不得少于 30 分钟',
+    );
+    expect(result.content).toContain('请调整时间或更换会议室后重试');
+    expect(result.content).not.toContain('meetingRoomNotAvailable');
+    expect(result.content).not.toContain('developerMessage');
+    expect(result.error).toMatchObject({ code: 'DINGTALK_ROOM_UNAVAILABLE' });
+  });
+
+  it('says the time was changed but the room was not on updateEvent room-unavailable', async () => {
+    const runtime = createDingtalkWorkspaceRuntime(
+      makeService({
+        updateEvent: vi.fn().mockRejectedValue(
+          coded('DINGTALK_ROOM_UNAVAILABLE', 'DINGTALK_ROOM_UNAVAILABLE', {
+            cause: {
+              data: {
+                code: 'DINGTALK_ROOM_UNAVAILABLE',
+                roomIssues: [{ reason: '该时段已被预订', roomName: '捷发2楼会议室' }],
+                timeApplied: true,
+              },
+            },
+          }),
+        ),
+      }),
+    );
+
+    const result = await runtime.updateEvent({
+      end: '2026-09-22T15:00:00+08:00',
+      eventId: 'evt-1',
+      roomIds: ['room-B'],
+      start: '2026-09-22T14:00:00+08:00',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('日程时间已更新，会议室未更换');
+    expect(result.content).toContain('会议室「捷发2楼会议室」该时段无法预订:该时段已被预订');
+    expect(result.content).not.toContain('The reservation period');
   });
 
   it('keeps a safe DINGTALK_INVALID hint', async () => {

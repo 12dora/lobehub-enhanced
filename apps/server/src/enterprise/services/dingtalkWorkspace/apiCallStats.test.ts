@@ -27,7 +27,7 @@ const {
 } = await import('./apiCallStats');
 
 describe('toDingtalkApiCallKey', () => {
-  it('drops query strings and templates ids / uuids / unionIds / processCodes', () => {
+  it('drops query strings and templates only identifier-looking segments', () => {
     expect(toDingtalkApiCallKey('GET', 'https://oapi.dingtalk.com/gettoken?appkey=k')).toBe(
       'GET /gettoken',
     );
@@ -40,16 +40,16 @@ describe('toDingtalkApiCallKey', () => {
         'https://api.dingtalk.com/v1.0/workflow/processInstances?processInstanceId=abc',
       ),
     ).toBe('GET /v1.0/workflow/processInstances');
-    expect(toDingtalkApiCallKey('POST', '/v1.0/todo/users/iiHvS0V4s6abc/tasks/task-99')).toBe(
-      'POST /v1.0/todo/users/:id/tasks/:id',
-    );
+    expect(
+      toDingtalkApiCallKey('POST', '/v1.0/todo/users/iiHvS0V4s6abcdef/tasks/task0123456789ab'),
+    ).toBe('POST /v1.0/todo/users/:id/tasks/:id');
     expect(
       toDingtalkApiCallKey(
         'GET',
-        '/v1.0/calendar/users/union-1/calendars/primary/events/3fa85f64-5717-4562-b3fc-2c963f66afa6',
+        '/v1.0/calendar/users/iiHvS0V4s6abcdef/calendars/primary/events/3fa85f64-5717-4562-b3fc-2c963f66afa6',
       ),
     ).toBe('GET /v1.0/calendar/users/:id/calendars/primary/events/:id');
-    expect(toDingtalkApiCallKey('GET', '/v1.0/rooms/meetingRooms/room-7')).toBe(
+    expect(toDingtalkApiCallKey('GET', '/v1.0/rooms/meetingRooms/ding0123456789ab')).toBe(
       'GET /v1.0/rooms/meetingRooms/:id',
     );
     expect(toDingtalkApiCallKey('POST', '/v1.0/workflow/forms/PROC-FF6Y2ABCD')).toBe(
@@ -57,6 +57,107 @@ describe('toDingtalkApiCallKey', () => {
     );
     expect(toDingtalkApiCallKey('POST', '/topapi/v2/department/get')).toBe(
       'POST /topapi/v2/department/get',
+    );
+    expect(toDingtalkApiCallKey('GET', '/v1.0/workflow/processInstances/12345')).toBe(
+      'GET /v1.0/workflow/processInstances/:id',
+    );
+    expect(toDingtalkApiCallKey('GET', '/v1.0/calendar/users/abc=def/querySchedule')).toBe(
+      'GET /v1.0/calendar/users/:id/querySchedule',
+    );
+  });
+
+  it('keeps DingTalk dictionary path segments used in this codebase', () => {
+    const keys = [
+      ['GET', '/v1.0/workflow/processInstances'],
+      ['POST', '/v1.0/workflow/processes/instanceIds/query'],
+      ['GET', '/v1.0/workflow/processes/userVisibilities/templates'],
+      ['GET', '/v1.0/workflow/forms/schemas/processCodes'],
+      ['POST', '/v1.0/workflow/processes/forecast'],
+      ['POST', '/v1.0/workflow/processInstances'],
+      ['POST', '/v1.0/workflow/processInstances/execute'],
+      ['POST', '/v1.0/workflow/tasks/redirect'],
+      ['POST', '/v1.0/workflow/processInstances/comments'],
+      ['POST', '/v1.0/workflow/processInstances/terminate'],
+      ['POST', '/v1.0/workflow/premium/tasks/revert'],
+      ['POST', '/v1.0/workflow/premium/tasks/append'],
+      ['GET', '/v1.0/workflow/premium/processCentres/todoTasks'],
+      ['GET', '/v1.0/workflow/processes/todoTasks/numbers'],
+      ['POST', '/v1.0/workflow/forms'],
+      ['DELETE', '/v1.0/workflow/processCentres/schemas'],
+      ['GET', '/v1.0/workflow/processes/managements/templates'],
+      ['POST', '/topapi/v2/user/get'],
+      ['GET', '/v1.0/rooms/meetingRoomLists'],
+      ['POST', '/v1.0/todo/users/me/org/tasks/query'],
+      ['POST', '/v1.0/todo/users/me/tasks'],
+      ['GET', '/v1.0/calendar/users/me/calendars/primary/events'],
+      ['GET', '/v1.0/calendar/users/me/calendars/primary/eventsview'],
+      ['POST', '/v1.0/calendar/users/me/querySchedule'],
+    ] as const;
+    for (const [method, path] of keys) {
+      expect(toDingtalkApiCallKey(method, path)).toBe(`${method} ${path}`);
+    }
+  });
+
+  it('templates interpolated unionId / taskId / eventId / roomId on real call-site shapes', () => {
+    const unionId = 'iiHvS0V4s6abcdef';
+    const taskId = 'task0123456789ab';
+    const eventId = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+    expect(toDingtalkApiCallKey('POST', `/v1.0/todo/users/${unionId}/org/tasks/query`)).toBe(
+      'POST /v1.0/todo/users/:id/org/tasks/query',
+    );
+    expect(toDingtalkApiCallKey('POST', `/v1.0/todo/users/${unionId}/tasks`)).toBe(
+      'POST /v1.0/todo/users/:id/tasks',
+    );
+    expect(toDingtalkApiCallKey('PUT', `/v1.0/todo/users/${unionId}/tasks/${taskId}`)).toBe(
+      'PUT /v1.0/todo/users/:id/tasks/:id',
+    );
+    expect(toDingtalkApiCallKey('DELETE', `/v1.0/todo/users/${unionId}/tasks/${taskId}`)).toBe(
+      'DELETE /v1.0/todo/users/:id/tasks/:id',
+    );
+    expect(
+      toDingtalkApiCallKey('GET', `/v1.0/calendar/users/${unionId}/calendars/primary/events`),
+    ).toBe('GET /v1.0/calendar/users/:id/calendars/primary/events');
+    expect(
+      toDingtalkApiCallKey(
+        'GET',
+        `/v1.0/calendar/users/${unionId}/calendars/primary/events/${eventId}`,
+      ),
+    ).toBe('GET /v1.0/calendar/users/:id/calendars/primary/events/:id');
+    expect(
+      toDingtalkApiCallKey(
+        'POST',
+        `/v1.0/calendar/users/${unionId}/calendars/primary/events/${eventId}/meetingRooms`,
+      ),
+    ).toBe('POST /v1.0/calendar/users/:id/calendars/primary/events/:id/meetingRooms');
+    expect(
+      toDingtalkApiCallKey(
+        'POST',
+        `/v1.0/calendar/users/${unionId}/calendars/primary/events/${eventId}/meetingRooms/batchRemove`,
+      ),
+    ).toBe('POST /v1.0/calendar/users/:id/calendars/primary/events/:id/meetingRooms/batchRemove');
+    expect(
+      toDingtalkApiCallKey(
+        'POST',
+        `/v1.0/calendar/users/${unionId}/calendars/primary/events/${eventId}/respond`,
+      ),
+    ).toBe('POST /v1.0/calendar/users/:id/calendars/primary/events/:id/respond');
+    expect(
+      toDingtalkApiCallKey('GET', `/v1.0/calendar/users/${unionId}/calendars/primary/eventsview`),
+    ).toBe('GET /v1.0/calendar/users/:id/calendars/primary/eventsview');
+    expect(toDingtalkApiCallKey('POST', `/v1.0/calendar/users/${unionId}/querySchedule`)).toBe(
+      'POST /v1.0/calendar/users/:id/querySchedule',
+    );
+  });
+
+  it('does not collapse processes / processInstances into :id (live over-templating)', () => {
+    expect(toDingtalkApiCallKey('POST', '/v1.0/workflow/processes/instanceIds/query')).toBe(
+      'POST /v1.0/workflow/processes/instanceIds/query',
+    );
+    expect(toDingtalkApiCallKey('GET', '/v1.0/workflow/processInstances')).toBe(
+      'GET /v1.0/workflow/processInstances',
+    );
+    expect(toDingtalkApiCallKey('GET', '/v1.0/workflow/premium/processCentres/todoTasks')).toBe(
+      'GET /v1.0/workflow/premium/processCentres/todoTasks',
     );
   });
 });
