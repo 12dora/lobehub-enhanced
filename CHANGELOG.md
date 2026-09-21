@@ -5,6 +5,14 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.8.6 (2026-09-21)
+
+#### 🐛 Fixes
+
+- 新建审批模板:调用钉钉前先校验整张表单,一次列出全部问题;可用组件清单按真实接口逐个验证(流水号由钉钉自动生成,无需字段)。
+- 企业查询结果与回答改为每行并排两项,长字段单独成行,减少空间浪费。
+- 模型连接在输出前被重置时(`ECONNRESET`)自动重试一次,不再直接报错中断。
+
 ## 1.8.5 (2026-09-21)
 
 全场景真实接口复测后的修正。
