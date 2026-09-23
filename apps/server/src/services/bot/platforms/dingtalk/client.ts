@@ -6,6 +6,7 @@ import {
   getDingTalkSession,
   isSessionWebhookLive,
 } from '@lobechat/chat-adapter-dingtalk';
+import { convertGfmTablesForDingTalk } from '@lobechat/chat-adapter-dingtalk/markdownTables';
 import type { Chat as ChatBot, Message } from 'chat';
 import debug from 'debug';
 
@@ -53,14 +54,16 @@ function createMessenger(config: BotProviderConfig, platformThreadId: string): P
   const isDm = decoded.senderStaffId === undefined;
 
   const sendText = async (text: string) => {
+    // sampleMarkdown shows GFM tables as raw pipes. Attachments are sent separately.
+    const rendered = convertGfmTablesForDingTalk(text);
     const title =
-      text
+      rendered
         .split('\n')
         .find((line) => line.trim())
         ?.slice(0, 32) || 'Reply';
     if (isSessionWebhookLive(session) && session?.sessionWebhook) {
       const payload: Record<string, unknown> = {
-        markdown: { text, title },
+        markdown: { text: rendered, title },
         msgtype: 'markdown',
       };
       if (!isDm && (decoded.senderStaffId || session.senderStaffId)) {
@@ -70,7 +73,7 @@ function createMessenger(config: BotProviderConfig, platformThreadId: string): P
       return;
     }
 
-    const msgParamObj: Record<string, unknown> = { text, title };
+    const msgParamObj: Record<string, unknown> = { text: rendered, title };
     if (!isDm && (decoded.senderStaffId || session?.senderStaffId)) {
       msgParamObj.at = {
         atUserIds: [decoded.senderStaffId || session?.senderStaffId],

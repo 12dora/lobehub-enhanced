@@ -99,10 +99,12 @@ const isAbortError = (error: unknown): boolean => {
  * CALLBACK frames are acked immediately (DingTalk retries after 60s if the
  * client is silent) and only then handed to `onRobotMessage` / `onCardCallback`.
  *
- * Liveness: any application frame updates `lastFrameAt`. A watchdog terminates
- * a silent socket after 3 minutes (configurable). Protocol-level `ws` ping
- * every 30s terminates if `pong` does not arrive within 10s. Gateway and
- * WebSocket open are bounded at 15s so a hung attempt can never block forever.
+ * Liveness: an application frame or a protocol `pong` (the answer to our ping)
+ * updates `lastFrameAt`. A watchdog terminates a socket that stays silent —
+ * including one that stops answering pings — after 3 minutes (configurable).
+ * Protocol-level `ws` ping every 30s terminates if `pong` does not arrive
+ * within 10s. Gateway and WebSocket open are bounded at 15s so a hung
+ * attempt can never block forever.
  *
  * Ping stays at 30s (official `dingtalk-stream` uses 8s): fewer false kills
  * through HTTP(S)_PROXY, still far faster than the 180s frame watchdog that
@@ -139,7 +141,7 @@ export class DingTalkStreamConnection {
     return this.currentState;
   }
 
-  /** Epoch ms of the last application frame (or socket open). `null` before the first open. */
+  /** Epoch ms of the last application frame, protocol pong, or socket open. `null` before the first open. */
   get lastFrameAt(): number | null {
     return this.lastFrameAtMs;
   }
@@ -344,6 +346,9 @@ export class DingTalkStreamConnection {
       });
 
       this.socket.on('pong', () => {
+        // An idle socket that still answers pings is alive. Reset the silence
+        // clock here; the watchdog remains for a peer that stops answering.
+        this.touchFrame();
         this.awaitingPong = false;
         if (this.pongTimer) {
           clearTimeout(this.pongTimer);

@@ -18,6 +18,7 @@ import { BaseFormatConverter, Message, parseMarkdown, stringifyMarkdown } from '
 
 import { DingTalkApiClient } from './api';
 import { verifyDingTalkForwardHeaders } from './forwardAuth';
+import { convertGfmTablesForDingTalk } from './markdownTables';
 import {
   decodeDingTalkThreadId,
   encodeDingTalkThreadId,
@@ -281,18 +282,46 @@ export async function downloadMediaFromRawMessage(
   return attachments;
 }
 
-const extractText = (payload: DingTalkRobotMessage): string => {
+const mediaCaption = (kind: string, fileName?: string): string =>
+  fileName?.trim() ? `[${kind}] ${fileName.trim()}` : `[${kind}]`;
+
+/**
+ * User-visible text for an inbound robot message. File and picture messages
+ * carry no `text` body; store a one-line caption so the turn is not blank.
+ * Attachment bytes stay on `extractMediaMetadata` / `downloadMediaFromRawMessage`.
+ */
+export const extractText = (payload: DingTalkRobotMessage): string => {
   if (payload.msgtype === 'text') {
     return payload.text?.content ?? '';
   }
   if (payload.msgtype === 'richText') {
     const rich = payload.content?.richText ?? payload.richText?.richText ?? [];
-    return rich
+    const text = rich
       .map((part) => part.text ?? '')
       .filter(Boolean)
       .join('\n');
+    if (text.trim()) return text;
+    if (rich.some((part) => part.picture?.downloadCode)) return '[图片]';
+    return '';
   }
-  return '';
+  switch (payload.msgtype) {
+    case 'picture':
+    case 'image': {
+      return mediaCaption('图片', payload.content?.fileName || payload.picture?.fileName);
+    }
+    case 'file': {
+      return mediaCaption('文件', payload.content?.fileName);
+    }
+    case 'audio': {
+      return mediaCaption('语音', payload.content?.fileName);
+    }
+    case 'video': {
+      return mediaCaption('视频', payload.content?.fileName);
+    }
+    default: {
+      return '';
+    }
+  }
 };
 
 const isBotMention = (payload: DingTalkRobotMessage): boolean => {
@@ -566,8 +595,10 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
     const atUserIds = this.isDM(threadId)
       ? []
       : ([decoded.senderStaffId || session?.senderStaffId].filter(Boolean) as string[]);
-    const chunks = chunkMarkdown(markdown);
-    const pieces = chunks.length > 0 ? chunks : [markdown];
+    // sampleMarkdown shows GFM tables as raw pipes. Convert before chunking.
+    const rendered = convertGfmTablesForDingTalk(markdown);
+    const chunks = chunkMarkdown(rendered);
+    const pieces = chunks.length > 0 ? chunks : [rendered];
 
     for (const chunk of pieces) {
       const body = this.withGroupMention(chunk, session, atUserIds);

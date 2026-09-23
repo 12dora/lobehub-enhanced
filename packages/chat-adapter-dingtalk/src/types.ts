@@ -180,7 +180,11 @@ export const DINGTALK_GATEWAY_OPEN_TIMEOUT_MS = 15_000;
 export const DINGTALK_SOCKET_OPEN_TIMEOUT_MS = 15_000;
 /** How often the frame-silence watchdog runs. */
 export const DINGTALK_STREAM_WATCHDOG_INTERVAL_MS = 30_000;
-/** Terminate + reconnect when no DingTalk frame arrives for this long. */
+/**
+ * Terminate + reconnect when nothing has proved the socket alive for this long.
+ * Application frames and protocol `pong`s both reset the clock. A socket that
+ * stops answering pings still hits this watchdog (and the shorter pong timeout).
+ */
 export const DINGTALK_STREAM_FRAME_SILENCE_MS = 180_000;
 /** `ws` protocol-level ping interval. */
 export const DINGTALK_STREAM_WS_PING_INTERVAL_MS = 30_000;

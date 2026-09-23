@@ -8,6 +8,7 @@ import {
   decodeDingTalkThreadId,
   encodeDingTalkThreadId,
   extractMediaMetadata,
+  extractText,
 } from './adapter';
 import { buildDingTalkForwardHeaders } from './forwardAuth';
 import { clearDingTalkCards, clearDingTalkSessions, rememberDingTalkCard } from './threadId';
@@ -172,7 +173,23 @@ describe('DingTalkAdapter inbound', () => {
     expect(message.attachments).toEqual([
       expect.objectContaining({ mimeType: 'image/jpeg', name: 'image.jpg', type: 'image' }),
     ]);
+    expect(message.text).toBe('[图片]');
     expect(extractMediaMetadata(payload)).toHaveLength(1);
+  });
+
+  it('stores a picture filename in the caption when one is present', async () => {
+    await init();
+    const payload = makePayload({
+      content: { downloadCode: 'dl_pic_2', fileName: '合同页.png' },
+      msgtype: 'picture',
+      text: undefined,
+    });
+    await adapter.handleWebhook(makeRequest(payload));
+    const message = await processMessage.mock.calls[0][2]();
+    expect(message.text).toBe('[图片] 合同页.png');
+    expect(message.attachments).toEqual([
+      expect.objectContaining({ name: '合同页.png', type: 'image' }),
+    ]);
   });
 
   it('extracts file metadata including fileName', async () => {
@@ -184,6 +201,43 @@ describe('DingTalkAdapter inbound', () => {
     expect(extractMediaMetadata(payload)).toEqual([
       expect.objectContaining({ mimeType: 'application/pdf', name: 'report.pdf', type: 'file' }),
     ]);
+  });
+
+  it('stores a file caption so the user turn is not blank', async () => {
+    await init();
+    const payload = makePayload({
+      content: { downloadCode: 'dl_file_1', fileName: '合同.pdf' },
+      msgtype: 'file',
+      text: undefined,
+    });
+    await adapter.handleWebhook(makeRequest(payload));
+    const message = await processMessage.mock.calls[0][2]();
+    expect(message.text).toBe('[文件] 合同.pdf');
+    expect(extractText(payload)).toBe('[文件] 合同.pdf');
+    expect(message.attachments).toEqual([
+      expect.objectContaining({ mimeType: 'application/pdf', name: '合同.pdf', type: 'file' }),
+    ]);
+  });
+
+  it('keeps richText wording and captions a picture-only richText message', () => {
+    expect(
+      extractText(
+        makePayload({
+          content: { richText: [{ text: '看这份' }, { picture: { downloadCode: 'dl' } }] },
+          msgtype: 'richText',
+          text: undefined,
+        }),
+      ),
+    ).toBe('看这份');
+    expect(
+      extractText(
+        makePayload({
+          content: { richText: [{ picture: { downloadCode: 'dl' } }] },
+          msgtype: 'richText',
+          text: undefined,
+        }),
+      ),
+    ).toBe('[图片]');
   });
 
   it('@-mentions the asker on group replies via session webhook', async () => {
@@ -208,6 +262,33 @@ describe('DingTalkAdapter inbound', () => {
     expect(body.at.atUserIds).toEqual(['staff_alice']);
     expect(body.markdown.text).toContain('@Alice');
     expect(body.markdown.text).toContain('here is the answer');
+  });
+
+  it('converts GFM tables before sampleMarkdown send', async () => {
+    await init();
+    const payload = makePayload({
+      conversationId: 'cid_group_1',
+      conversationType: '2',
+      isInAtList: true,
+    });
+    await adapter.handleWebhook(makeRequest(payload));
+
+    const fetchMock = fetch as unknown as Mock;
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response('{"errcode":0}', { status: 200 }));
+
+    const markdown = [
+      '| 项目 | 内容 | 项目 | 内容 |',
+      '| --- | --- | --- | --- |',
+      '| 甲方 | 福瑞思 | 乙方 | 开关厂 |',
+    ].join('\n');
+    await adapter.sendMarkdown('dingtalk:cid_group_1:staff_alice', markdown);
+
+    const [, initReq] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(initReq.body as string);
+    expect(body.markdown.text).toContain('**甲方**：福瑞思');
+    expect(body.markdown.text).toContain('**乙方**：开关厂');
+    expect(body.markdown.text).not.toContain('| 甲方 |');
   });
 
   it('returns 401 when forward-auth headers are missing', async () => {

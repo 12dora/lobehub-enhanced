@@ -2268,11 +2268,13 @@ describe('GeneralChatAgent', () => {
             stream: vi.fn().mockResolvedValue({ content: 'summary' }),
           },
           messages: {
-            query: vi.fn().mockResolvedValue([
-              { content: 'history', id: 'msg-history', role: 'user' },
-              { content: 'loading', id: 'assistant-existing', role: 'assistant' },
-              preservedMessage,
-            ]),
+            query: vi
+              .fn()
+              .mockResolvedValue([
+                { content: 'history', id: 'msg-history', role: 'user' },
+                { content: 'loading', id: 'assistant-existing', role: 'assistant' },
+                preservedMessage,
+              ]),
           } as any,
           stream: {
             publishChunk: vi.fn(),
@@ -2287,7 +2289,10 @@ describe('GeneralChatAgent', () => {
         modelRuntimeConfig: mockModelRuntimeConfig,
       });
       const state = createMockState({
-        messages: [{ content: 'history', id: 'msg-history', role: 'user' }, preservedMessage] as any,
+        messages: [
+          { content: 'history', id: 'msg-history', role: 'user' },
+          preservedMessage,
+        ] as any,
         metadata: { agentId: 'agent-123', threadId: 'thread-123', topicId: 'topic-123' },
         modelRuntimeConfig: mockModelRuntimeConfig,
         tools: [{ name: 'search' }] as any,
@@ -3879,6 +3884,150 @@ describe('GeneralChatAgent', () => {
           type: 'call_tools_batch',
         },
       ]);
+    });
+
+    const dingTalkMetadata = {
+      agentId: 'agt_1',
+      botContext: {
+        messengerInstallationKey: 'dingtalk:singleton',
+        platform: 'dingtalk',
+      },
+      topicId: 'topic_1',
+    };
+
+    it('parks tool-level always approvals on a DingTalk messenger turn', async () => {
+      const agent = new GeneralChatAgent({
+        agentConfig: { maxSteps: 100 },
+        operationId: 'test-session',
+        modelRuntimeConfig: mockModelRuntimeConfig,
+      });
+
+      const alwaysTool: ChatToolPayload = {
+        id: 'call-1',
+        identifier: 'lobe-dingtalk-approval',
+        apiName: 'saveTemplate',
+        arguments: '{"name":"项目结案申请"}',
+        type: 'builtin',
+      };
+
+      const state = createMockState({
+        metadata: dingTalkMetadata,
+        toolManifestMap: {
+          'lobe-dingtalk-approval': {
+            identifier: 'lobe-dingtalk-approval',
+            api: [{ name: 'saveTemplate', humanIntervention: 'always' }],
+          },
+        },
+        userInterventionConfig: { approvalMode: 'headless' },
+      });
+
+      const result = await agent.runner(
+        createMockContext('llm_result', {
+          hasToolsCalling: true,
+          parentMessageId: 'msg-1',
+          toolsCalling: [alwaysTool],
+        }),
+        state,
+      );
+
+      expect(result).toEqual([
+        {
+          pendingToolsCalling: [alwaysTool],
+          reason: 'human_intervention_required',
+          type: 'request_human_approve',
+        },
+      ]);
+    });
+
+    it('keeps required tools auto-running on a DingTalk messenger turn', async () => {
+      const agent = new GeneralChatAgent({
+        agentConfig: { maxSteps: 100 },
+        operationId: 'test-session',
+        modelRuntimeConfig: mockModelRuntimeConfig,
+      });
+
+      const toolCall: ChatToolPayload = {
+        id: 'call-1',
+        identifier: 'lobe-local-system',
+        apiName: 'runCommand',
+        arguments: '{}',
+        type: 'default',
+      };
+
+      const state = createMockState({
+        metadata: dingTalkMetadata,
+        toolManifestMap: {
+          'lobe-local-system': {
+            identifier: 'lobe-local-system',
+            api: [{ humanIntervention: 'required', name: 'runCommand' }],
+          },
+        },
+        userInterventionConfig: { approvalMode: 'headless' },
+      });
+
+      const result = await agent.runner(
+        createMockContext('llm_result', {
+          hasToolsCalling: true,
+          parentMessageId: 'msg-1',
+          toolsCalling: [toolCall],
+        }),
+        state,
+      );
+
+      expect(result).toEqual([
+        {
+          payload: { parentMessageId: 'msg-1', toolCalling: toolCall },
+          type: 'call_tool',
+        },
+      ]);
+    });
+
+    it('explains a security block in Chinese on a DingTalk messenger turn', async () => {
+      const agent = new GeneralChatAgent({
+        agentConfig: { maxSteps: 100 },
+        operationId: 'test-session',
+        modelRuntimeConfig: mockModelRuntimeConfig,
+      });
+
+      const blacklistedTool: ChatToolPayload = {
+        id: 'call-1',
+        identifier: 'bash',
+        apiName: 'bash',
+        arguments: '{"command":"rm -rf /"}',
+        type: 'builtin',
+      };
+
+      const state = createMockState({
+        metadata: dingTalkMetadata,
+        toolManifestMap: {
+          bash: { identifier: 'bash', humanIntervention: 'never' },
+        },
+        userInterventionConfig: { approvalMode: 'headless' },
+      });
+
+      const result = await agent.runner(
+        createMockContext('llm_result', {
+          hasToolsCalling: true,
+          parentMessageId: 'msg-1',
+          toolsCalling: [blacklistedTool],
+        }),
+        state,
+      );
+
+      expect(result).toEqual([
+        {
+          payload: {
+            blockedContent: expect.stringContaining('该操作需要本人确认'),
+            blockedReason: 'im_confirmation_required',
+            parentMessageId: 'msg-1',
+            toolsCalling: [blacklistedTool],
+          },
+          type: 'resolve_blocked_tools',
+        },
+      ]);
+      const payload = (result as Array<{ payload?: { blockedContent?: string } }>)[0]?.payload;
+      expect(payload?.blockedContent).not.toContain('Blocked by security/privacy');
+      expect(payload?.blockedContent).toContain('/agent/agt_1/topic_1');
     });
   });
 });

@@ -15,6 +15,13 @@ import { getMessageGatewayClient } from '@/server/services/gateway/MessageGatewa
 import { isQueueAgentRuntimeEnabled } from '@/server/services/queue/impls';
 import { SystemAgentService } from '@/server/services/systemAgent';
 
+import { DINGTALK_CHANNEL_SYSTEM_PROMPT } from './dingtalkChannelPrompt';
+import {
+  composeDingTalkFinalText,
+  DINGTALK_EMPTY_TURN_REPLY,
+  isBlankDingTalkAssistantText,
+  renderDingTalkPartial,
+} from './dingtalkOutbound';
 import { formatPrompt as formatPromptUtil } from './formatPrompt';
 import type { BotReplyLocale, PlatformClient } from './platforms';
 import {
@@ -187,11 +194,64 @@ export interface AgentWaitingForHumanEvent {
   finalState?: unknown;
   lastAssistantContent?: string;
   operationId?: string;
+  /** Topic created or reused for this run. Present once startup has returned. */
+  topicId?: string;
 }
 
 export interface AgentRunSettledInfo {
   reason?: string;
 }
+
+/**
+ * Headless stays the approval mode for every messenger run: overridable tools
+ * still auto-run, and a platform policy must not overlay a topic mode onto a
+ * bot. DingTalk messenger parks tool-level `always` calls inside the runtime
+ * when `botContext` is a messenger install; this helper only selects the resume
+ * payload.
+ */
+const execResumeArgs = (params: {
+  prompt: string;
+  resumeApproval?: BridgeHandlerOpts['resumeApproval'];
+  resumeHistory?: BridgeHandlerOpts['resumeHistory'];
+  resumeToolResult?: BridgeHandlerOpts['resumeToolResult'];
+}): {
+  parentMessageId?: string;
+  prompt: string;
+  resume?: boolean;
+  resumeApproval?: BridgeHandlerOpts['resumeApproval'];
+  resumeToolResult?: BridgeHandlerOpts['resumeToolResult'];
+} => {
+  if (params.resumeApproval) {
+    return {
+      parentMessageId: params.resumeApproval.parentMessageId,
+      prompt: '',
+      resume: true,
+      resumeApproval: params.resumeApproval,
+    };
+  }
+  if (params.resumeHistory) {
+    return {
+      parentMessageId: params.resumeHistory.parentMessageId,
+      prompt: '',
+      resume: true,
+    };
+  }
+  if (params.resumeToolResult) {
+    return {
+      parentMessageId: params.resumeToolResult.parentMessageId,
+      prompt: params.resumeToolResult.content,
+      resume: true,
+      resumeToolResult: params.resumeToolResult,
+    };
+  }
+  return { prompt: params.prompt };
+};
+
+const topicIdFromWaitingState = (finalState: unknown): string | undefined => {
+  if (!finalState || typeof finalState !== 'object') return undefined;
+  const metadata = (finalState as { metadata?: { topicId?: unknown } }).metadata;
+  return typeof metadata?.topicId === 'string' && metadata.topicId ? metadata.topicId : undefined;
+};
 
 interface BridgeHandlerOpts {
   agentId: string;
@@ -232,6 +292,24 @@ interface BridgeHandlerOpts {
    * `thread.post` / `progressMessage.edit`. DingTalk AI-card streaming.
    */
   replySink?: AgentReplySink;
+  /**
+   * Resume a parked approval (`humanIntervention: 'always'` write). Same
+   * payload the web client sends as `aiAgent.execAgent({ resumeApproval })`.
+   */
+  resumeApproval?: {
+    decision: 'approved' | 'rejected' | 'rejected_continue';
+    parentMessageId: string;
+    rejectionReason?: string;
+    toolCallId: string;
+  };
+  /**
+   * Continue from history after the pending tool row was already resolved
+   * (card-send failure writes the Chinese tool result first). Does not send
+   * `resumeApproval`, so execAgent will not overwrite that content.
+   */
+  resumeHistory?: {
+    parentMessageId: string;
+  };
   /**
    * Resume a parked `askUserQuestion` / `toolResult` intervention. Same
    * payload the web client sends as `aiAgent.execAgent({ resumeToolResult })`.
@@ -617,6 +695,8 @@ export class AgentBridgeService {
           onWaitingForHuman: opts.onWaitingForHuman,
           replyLocale,
           replySink,
+          resumeApproval: opts.resumeApproval,
+          resumeHistory: opts.resumeHistory,
           resumeToolResult: opts.resumeToolResult,
           topicTitlePrefix: opts.topicTitlePrefix,
           trigger: RequestTrigger.Bot,
@@ -769,6 +849,8 @@ export class AgentBridgeService {
           onWaitingForHuman: opts.onWaitingForHuman,
           replyLocale,
           replySink,
+          resumeApproval: opts.resumeApproval,
+          resumeHistory: opts.resumeHistory,
           resumeToolResult: opts.resumeToolResult,
           topicId,
           topicTitlePrefix: opts.topicTitlePrefix,
@@ -838,11 +920,9 @@ export class AgentBridgeService {
       onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       replyLocale: BotReplyLocale;
       replySink?: AgentReplySink;
-      resumeToolResult?: {
-        content: string;
-        parentMessageId: string;
-        toolCallId: string;
-      };
+      resumeApproval?: BridgeHandlerOpts['resumeApproval'];
+      resumeHistory?: BridgeHandlerOpts['resumeHistory'];
+      resumeToolResult?: BridgeHandlerOpts['resumeToolResult'];
       topicId?: string;
       topicTitlePrefix?: string;
       trigger?: string;
@@ -880,11 +960,16 @@ export class AgentBridgeService {
       onWaitingForHuman,
       replyLocale,
       replySink,
+      resumeApproval,
+      resumeHistory,
       resumeToolResult,
       topicId,
       topicTitlePrefix,
       trigger,
     } = opts;
+
+    const channelInstructions =
+      botContext?.platform === 'dingtalk' ? DINGTALK_CHANNEL_SYSTEM_PROMPT : undefined;
 
     const queueMode = isQueueAgentRuntimeEnabled();
     const aiAgentService = new AiAgentService(this.db, this.userId, {
@@ -986,6 +1071,7 @@ export class AgentBridgeService {
     const prompt = this.formatPrompt(userMessage, client, {
       includeSpeakerTag: botContext?.platform !== 'dingtalk',
     });
+    const resumed = execResumeArgs({ prompt, resumeApproval, resumeHistory, resumeToolResult });
     const initialTopicTitle = topicId
       ? undefined
       : buildInitialTopicTitle(topicTitlePrefix, userMessage.text);
@@ -1031,7 +1117,7 @@ export class AgentBridgeService {
       'executeWithCallback: agentId=%s, queueMode=%s, prompt=%s, files=%d',
       agentId,
       queueMode,
-      prompt.slice(0, 100),
+      resumed.prompt.slice(0, 100),
       files?.length ?? 0,
     );
 
@@ -1046,12 +1132,16 @@ export class AgentBridgeService {
         client,
         files,
         initialTopicTitle,
+        instructions: channelInstructions,
         onWaitingForHuman,
         progressMessage,
-        prompt,
+        prompt: resumed.prompt,
         replyLocale,
         replySink,
-        resumeToolResult,
+        resumeApproval: resumed.resumeApproval,
+        resumeToolResult: resumed.resumeToolResult,
+        resumedParentMessageId: resumed.parentMessageId,
+        resumed: resumed.resume,
         topicId,
         trigger,
         webhookBody,
@@ -1072,12 +1162,16 @@ export class AgentBridgeService {
       firstReplyPrefix,
       gatewayConnectionId,
       initialTopicTitle,
+      instructions: channelInstructions,
       onWaitingForHuman,
       progressMessage,
-      prompt,
+      prompt: resumed.prompt,
       replyLocale,
       replySink,
-      resumeToolResult,
+      resumeApproval: resumed.resumeApproval,
+      resumeToolResult: resumed.resumeToolResult,
+      resumedParentMessageId: resumed.parentMessageId,
+      resumed: resumed.resume,
       topicId,
       topicTitlePrefix,
       trigger,
@@ -1102,16 +1196,16 @@ export class AgentBridgeService {
       client?: PlatformClient;
       files?: any;
       initialTopicTitle?: string;
+      instructions?: string;
       onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       progressMessage?: SentMessage;
       prompt: string;
       replyLocale: BotReplyLocale;
       replySink?: AgentReplySink;
-      resumeToolResult?: {
-        content: string;
-        parentMessageId: string;
-        toolCallId: string;
-      };
+      resumeApproval?: BridgeHandlerOpts['resumeApproval'];
+      resumeToolResult?: BridgeHandlerOpts['resumeToolResult'];
+      resumed?: boolean;
+      resumedParentMessageId?: string;
       topicId?: string;
       trigger?: string;
       webhookBody: Record<string, unknown>;
@@ -1126,11 +1220,15 @@ export class AgentBridgeService {
       client,
       files,
       initialTopicTitle,
+      instructions,
       progressMessage,
       prompt,
       replyLocale,
       replySink,
+      resumeApproval,
       resumeToolResult,
+      resumed,
+      resumedParentMessageId,
       topicId,
       trigger,
       webhookBody,
@@ -1179,13 +1277,17 @@ export class AgentBridgeService {
               },
             },
           ],
-          parentMessageId: resumeToolResult?.parentMessageId,
-          prompt: resumeToolResult?.content ?? prompt,
-          resume: Boolean(resumeToolResult),
+          instructions,
+          parentMessageId: resumedParentMessageId,
+          prompt,
+          resume: Boolean(resumed),
+          resumeApproval,
           resumeToolResult,
           signal,
           title: topicId ? '' : (initialTopicTitle ?? ''),
           trigger,
+          // Headless keeps required tools auto-running. DingTalk messenger parks
+          // tool-level `always` inside GeneralChatAgent from botContext.
           userInterventionConfig: { approvalMode: 'headless' },
         }),
       );
@@ -1268,16 +1370,16 @@ export class AgentBridgeService {
       firstReplyPrefix?: string;
       gatewayConnectionId?: string;
       initialTopicTitle?: string;
+      instructions?: string;
       onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
       progressMessage?: SentMessage;
       prompt: string;
       replyLocale: BotReplyLocale;
       replySink?: AgentReplySink;
-      resumeToolResult?: {
-        content: string;
-        parentMessageId: string;
-        toolCallId: string;
-      };
+      resumeApproval?: BridgeHandlerOpts['resumeApproval'];
+      resumeToolResult?: BridgeHandlerOpts['resumeToolResult'];
+      resumed?: boolean;
+      resumedParentMessageId?: string;
       topicId?: string;
       topicTitlePrefix?: string;
       trigger?: string;
@@ -1298,11 +1400,15 @@ export class AgentBridgeService {
       firstReplyPrefix,
       gatewayConnectionId,
       initialTopicTitle,
+      instructions,
       onWaitingForHuman,
       prompt,
       replyLocale,
       replySink,
+      resumeApproval,
       resumeToolResult,
+      resumed,
+      resumedParentMessageId,
       topicId,
       topicTitlePrefix,
       trigger,
@@ -1339,6 +1445,7 @@ export class AgentBridgeService {
       }, EXECUTION_TIMEOUT);
 
       let resolvedTopicId = topicId ?? '';
+      let deliveredDingTalkText = '';
 
       const getElapsedMs = () => (operationStartTime > 0 ? Date.now() - operationStartTime : 0);
 
@@ -1369,11 +1476,15 @@ export class AgentBridgeService {
                   (typeof event.lastLLMContent === 'string' && event.lastLLMContent) ||
                   (typeof event.content === 'string' && event.content) ||
                   '';
-                if (replySink?.onPartial && partial) {
-                  try {
-                    await replySink.onPartial(partial);
-                  } catch (error) {
-                    log('executeWithCallback[local]: replySink.onPartial failed: %O', error);
+                if (replySink?.onPartial) {
+                  const rendered = renderDingTalkPartial(partial);
+                  if (rendered) {
+                    deliveredDingTalkText = rendered;
+                    try {
+                      await replySink.onPartial(rendered);
+                    } catch (error) {
+                      log('executeWithCallback[local]: replySink.onPartial failed: %O', error);
+                    }
                   }
                 }
 
@@ -1449,6 +1560,7 @@ export class AgentBridgeService {
                       finalState: event.finalState,
                       lastAssistantContent: event.lastAssistantContent,
                       operationId: event.operationId,
+                      topicId: resolvedTopicId || topicIdFromWaitingState(event.finalState),
                     });
                   } catch (error) {
                     log('onComplete: waiting_for_human handler failed: %O', error);
@@ -1515,8 +1627,12 @@ export class AgentBridgeService {
                 }
 
                 try {
+                  const rawAssistant =
+                    typeof event.lastAssistantContent === 'string'
+                      ? event.lastAssistantContent
+                      : '';
                   const lastAssistantContent = firstReplyPrefix
-                    ? `${firstReplyPrefix}\n\n${event.lastAssistantContent ?? ''}`.trim()
+                    ? `${firstReplyPrefix}\n\n${rawAssistant}`.trim()
                     : event.lastAssistantContent;
                   // Convert hook-event attachments (JSON-safe) to chat-sdk
                   // Attachment shape. Only the *last* chunk carries
@@ -1527,10 +1643,20 @@ export class AgentBridgeService {
                   );
                   const hasText = !!lastAssistantContent;
                   const hasAttachments = !!lastChunkAttachments?.length;
-                  // Whitespace-only bodies are not real answers. Pass `''` so
-                  // DingTalk recall/finalize still run and markdown send no-ops
-                  // instead of posting a blank bubble.
-                  const sinkContent = lastAssistantContent?.trim() ? lastAssistantContent : '';
+                  // Whitespace-only bodies are not real answers. DingTalk also
+                  // drops "..." and, after tool calls with no other delivery,
+                  // sends one short line instead of a blank bubble.
+                  let sinkContent = lastAssistantContent?.trim() ? lastAssistantContent : '';
+                  if (replySink) {
+                    sinkContent = composeDingTalkFinalText({
+                      deliveredText: deliveredDingTalkText,
+                      firstReplyPrefix,
+                      otherMessageSent: hasAttachments,
+                      rawContent: rawAssistant,
+                      toolCalls: (event as { toolCalls?: unknown }).toolCalls,
+                      totalToolCalls: (event as { totalToolCalls?: unknown }).totalToolCalls,
+                    });
+                  }
 
                   // Always complete the sink so the thinking placeholder is
                   // recalled/finalized even when the model returned no text
@@ -1556,7 +1682,13 @@ export class AgentBridgeService {
                       topicId: resolvedTopicId,
                     });
 
-                    if (resolvedTopicId && prompt && sinkContent) {
+                    if (
+                      resolvedTopicId &&
+                      prompt &&
+                      sinkContent &&
+                      sinkContent !== DINGTALK_EMPTY_TURN_REPLY &&
+                      !isBlankDingTalkAssistantText(rawAssistant)
+                    ) {
                       const topicModel = new TopicModel(this.db, this.userId, this.workspaceId);
                       topicModel
                         .findById(resolvedTopicId)
@@ -1702,13 +1834,17 @@ export class AgentBridgeService {
               },
             },
           ],
-          parentMessageId: resumeToolResult?.parentMessageId,
-          prompt: resumeToolResult?.content ?? prompt,
-          resume: Boolean(resumeToolResult),
+          instructions,
+          parentMessageId: resumedParentMessageId,
+          prompt,
+          resume: Boolean(resumed),
+          resumeApproval,
           resumeToolResult,
           signal,
           title: topicId ? '' : (initialTopicTitle ?? ''),
           trigger,
+          // Headless keeps required tools auto-running. DingTalk messenger parks
+          // tool-level `always` inside GeneralChatAgent from botContext.
           userInterventionConfig: { approvalMode: 'headless' },
         }),
       )

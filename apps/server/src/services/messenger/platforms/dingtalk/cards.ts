@@ -9,6 +9,7 @@ import {
   isSessionWebhookLive,
   rememberDingTalkCard,
 } from '@lobechat/chat-adapter-dingtalk';
+import { convertGfmTablesForDingTalk } from '@lobechat/chat-adapter-dingtalk/markdownTables';
 import { isRecord } from '@lobechat/utils/object';
 import debug from 'debug';
 
@@ -132,7 +133,9 @@ export const sendDingTalkMarkdown = async (
   const resolved = resolveSendTarget(threadId);
   const { decoded, isGroup, session } = resolved;
   const staffId = options?.staffId || resolved.staffId;
-  const chunks = chunkMarkdown(text);
+  // sampleMarkdown shows GFM tables as raw pipes. Convert before chunking.
+  // Already-converted text is unchanged (the helper is idempotent).
+  const chunks = chunkMarkdown(convertGfmTablesForDingTalk(text));
   let processQueryKey: string | undefined;
   for (const chunk of chunks) {
     if (options?.beforeChunk && !(await options.beforeChunk())) {

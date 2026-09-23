@@ -6,6 +6,7 @@ export {
   downloadMediaFromRawMessage,
   encodeDingTalkThreadId,
   extractMediaMetadata,
+  extractText,
 } from './adapter';
 export type {
   DingTalkRecallMessageParams,
@@ -13,11 +14,21 @@ export type {
   DingTalkSendOtoParams,
   DingTalkSendResult,
 } from './api';
+export { assertDingTalkSessionWebhook, DingTalkApiClient, extractProcessQueryKey } from './api';
+export type { DingTalkConfirmCardContent, DingTalkConfirmCardTarget } from './card/confirm';
 export {
-  assertDingTalkSessionWebhook,
-  DingTalkApiClient,
-  extractProcessQueryKey,
-} from './api';
+  buildDingTalkConfirmCardParamMap,
+  buildDingTalkConfirmDeliverBody,
+  DINGTALK_CONFIRM_CARD_TEMPLATE_ENV,
+  DINGTALK_CONFIRM_OVERFLOW_LINE,
+  fitDingTalkConfirmCardContent,
+  formatDingTalkConfirmOverflowLine,
+  parseDingTalkConfirmAction,
+  readDingTalkConfirmCardTemplateId,
+  sendDingTalkStreamConfirmCard,
+  truncateCardParam,
+  updateDingTalkConfirmCard,
+} from './card/confirm';
 export {
   buildActionCardParam,
   buildSampleActionCardParam,
@@ -31,6 +42,7 @@ export {
   DINGTALK_FORWARD_WINDOW_SECONDS,
   verifyDingTalkForwardHeaders,
 } from './forwardAuth';
+export { convertGfmTablesForDingTalk } from './markdownTables';
 export type { DingTalkStreamFrame, DingTalkStreamOptions } from './stream';
 export { DingTalkStreamConnection } from './stream';
 export type { DingTalkCardMemory, RememberDingTalkCardInput } from './threadId';

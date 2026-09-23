@@ -36,9 +36,11 @@ import type {
   UnpinMessageParams,
   UnpinMessageState,
 } from '@lobechat/builtin-tool-message/executionRuntime';
-import type { DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
+import { type DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
+import { convertGfmTablesForDingTalk } from '@lobechat/chat-adapter-dingtalk/markdownTables';
 
 import type { MessageRuntimeService } from '@/server/services/toolExecution/serverRuntimes/message/adapters/types';
+import { DINGTALK_GROUP_HISTORY_UNAVAILABLE } from '@/server/services/toolExecution/serverRuntimes/message/dingtalkHistory';
 import { PlatformUnsupportedError } from '@/server/services/toolExecution/serverRuntimes/message/PlatformUnsupportedError';
 
 import { sendDingTalkAttachments } from './sendAttachments';
@@ -50,12 +52,13 @@ export class DingTalkMessageService implements MessageRuntimeService {
   ) {}
 
   private markdownParam(content: string) {
+    const rendered = convertGfmTablesForDingTalk(content);
     const title =
-      content
+      rendered
         .split('\n')
         .find((line) => line.trim())
         ?.slice(0, 32) || 'Reply';
-    return JSON.stringify({ text: content, title });
+    return JSON.stringify({ text: rendered, title });
   }
 
   sendDirectMessage = async (params: SendDirectMessageParams): Promise<SendDirectMessageState> => {
@@ -97,7 +100,7 @@ export class DingTalkMessageService implements MessageRuntimeService {
   };
 
   readMessages = async (_params: ReadMessagesParams): Promise<ReadMessagesState> => {
-    throw new PlatformUnsupportedError('DingTalk', 'readMessages');
+    throw new Error(DINGTALK_GROUP_HISTORY_UNAVAILABLE);
   };
 
   editMessage = async (_params: EditMessageParams): Promise<EditMessageState> => {
@@ -109,7 +112,7 @@ export class DingTalkMessageService implements MessageRuntimeService {
   };
 
   searchMessages = async (_params: SearchMessagesParams): Promise<SearchMessagesState> => {
-    throw new PlatformUnsupportedError('DingTalk', 'searchMessages');
+    throw new Error(DINGTALK_GROUP_HISTORY_UNAVAILABLE);
   };
 
   reactToMessage = async (_params: ReactToMessageParams): Promise<ReactToMessageState> => {

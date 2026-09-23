@@ -4,6 +4,7 @@ import {
   getDingTalkCard,
   getDingTalkSession,
   isSessionWebhookLive,
+  parseDingTalkConfirmAction,
 } from '@lobechat/chat-adapter-dingtalk';
 import debug from 'debug';
 
@@ -20,9 +21,14 @@ import type {
   MessengerPlatformBinder,
   UnlinkedMessageContext,
 } from '../../types';
+import { claimDingTalkApprovalNotice, loadDingTalkPendingApproval } from './approvalStore';
 import { resolveDingTalkBrandingDisplayName } from './branding';
 import { sendDingTalkChoiceList } from './cards';
-import { DINGTALK_MARKDOWN_TITLE_FALLBACK, formatDingTalkUnknownUserReply } from './const';
+import {
+  DINGTALK_ASKER_ONLY_REPLY,
+  DINGTALK_MARKDOWN_TITLE_FALLBACK,
+  formatDingTalkUnknownUserReply,
+} from './const';
 
 const log = debug('lobe-server:messenger:dingtalk');
 
@@ -177,14 +183,33 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     const msgtype = typeof payload.msgtype === 'string' ? payload.msgtype : undefined;
     if (!outTrackId || !userId || msgtype) return null;
     const card = getDingTalkCard(outTrackId);
-    if (!card) return null;
-    if (card.askerStaffId && userId !== card.askerStaffId) {
+    if (card?.askerStaffId && userId !== card.askerStaffId) {
       return {
         callbackId: outTrackId,
         chatId: card.threadId,
         data: 'messenger:not_asker',
         fromUserId: userId,
       };
+    }
+    const pending = await loadDingTalkPendingApproval(outTrackId);
+    if (pending?.askerStaffId && userId !== pending.askerStaffId) {
+      return {
+        callbackId: outTrackId,
+        chatId: pending.threadId,
+        data: 'messenger:not_asker',
+        fromUserId: userId,
+      };
+    }
+    if (pending && userId === pending.askerStaffId) {
+      const decision = parseDingTalkConfirmAction(payload.content);
+      if (decision) {
+        return {
+          callbackId: outTrackId,
+          chatId: pending.threadId,
+          data: `messenger:confirm:${decision}`,
+          fromUserId: userId,
+        };
+      }
     }
     return null;
   }
@@ -201,6 +226,17 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
       });
     }
     if (ack.toast) {
+      // Group members who are not the asker each hit this toast. One billed
+      // markdown per (card, clicker); the stream ack is already empty, so the
+      // callback response cannot carry the warning.
+      if (
+        ack.toast === DINGTALK_ASKER_ONLY_REPLY &&
+        action.callbackId &&
+        action.fromUserId &&
+        !(await claimDingTalkApprovalNotice('not-asker', action.callbackId, action.fromUserId))
+      ) {
+        return;
+      }
       await this.sendDmText(action.chatId, ack.toast);
     }
   }

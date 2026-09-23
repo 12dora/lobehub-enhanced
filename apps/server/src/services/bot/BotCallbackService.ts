@@ -25,6 +25,14 @@ import {
 import { SystemAgentService } from '@/server/services/systemAgent';
 
 import { AgentBridgeService } from './AgentBridgeService';
+import {
+  clearDingTalkDeliveredTextForThread,
+  composeDingTalkFinalText,
+  isBlankDingTalkAssistantText,
+  rememberDingTalkDeliveredText,
+  renderDingTalkPartial,
+  takeDingTalkDeliveredText,
+} from './dingtalkOutbound';
 import type {
   BotMessageAttachment,
   BotReplyLocale,
@@ -164,9 +172,11 @@ export class BotCallbackService {
           (typeof body.lastLLMContent === 'string' && body.lastLLMContent) ||
           (typeof body.content === 'string' && body.content) ||
           '';
-        if (sink?.onPartial && partial) {
+        const rendered = renderDingTalkPartial(partial);
+        if (sink?.onPartial && rendered) {
+          rememberDingTalkDeliveredText(platformThreadId, body.operationId, rendered);
           try {
-            await sink.onPartial(partial);
+            await sink.onPartial(rendered);
           } catch (error) {
             log('handleStep: dingtalk sink onPartial failed: %O', error);
           }
@@ -449,6 +459,13 @@ export class BotCallbackService {
       } catch (error) {
         log('handleCompletion: dingtalk sink finalize on waiting_for_human failed: %O', error);
       }
+      // Confirm cards are armed only on the local agent runtime
+      // (MessengerRouter onWaitingForHuman → forwardDingTalkWaitingHuman).
+      // Queue mode (AGENT_RUNTIME_MODE=queue) lands here instead and only
+      // forwards questions — it does not send a confirm card or apply the
+      // 30 minute timeout. Production runs local mode; do not route approvals
+      // from this callback.
+      clearDingTalkDeliveredTextForThread(platformThreadId);
       await forwardDingTalkWaitingQuestion(platformThreadId, {
         finalState: body.finalState,
         lastAssistantContent,
@@ -462,6 +479,7 @@ export class BotCallbackService {
       : undefined;
     if (dingtalkSink) {
       if (reason === 'error') {
+        clearDingTalkDeliveredTextForThread(platformThreadId);
         const errorBody = renderAgentError(
           errorType,
           errorMessage,
@@ -473,19 +491,30 @@ export class BotCallbackService {
         return;
       }
       if (reason === 'interrupted') {
+        clearDingTalkDeliveredTextForThread(platformThreadId);
         await dingtalkSink.onError?.(renderStopped(errorMessage, replyLocale));
         return;
       }
-      const hasText = !!lastAssistantContent?.trim();
       const hasAttachments = !!attachments?.length;
+      // `...` is the runtime placeholder, not an answer. Do not send it.
+      // After tool calls, send one short line only when this turn delivered
+      // nothing else (no files, no real streamed partial).
+      const outbound = composeDingTalkFinalText({
+        deliveredText: takeDingTalkDeliveredText(platformThreadId, body.operationId),
+        firstReplyPrefix: body.firstReplyPrefix,
+        otherMessageSent: hasAttachments,
+        rawContent: rawAssistantContent,
+        toolCalls: body.toolCalls,
+        totalToolCalls: body.totalToolCalls,
+      });
       // Always complete the sink so the thinking placeholder is replaced even
       // when the model returned no text (`reason` is `done` or `completed`).
-      // Pass `''` for whitespace-only content so markdown send no-ops after
+      // Pass `''` when there is nothing to say so markdown send no-ops after
       // recall instead of posting a blank bubble.
-      await dingtalkSink.onComplete?.(hasText ? (lastAssistantContent ?? '') : '', {
+      await dingtalkSink.onComplete?.(outbound, {
         attachments: hasAttachments ? attachments : undefined,
       });
-      if (!hasText && !hasAttachments) {
+      if (!outbound && !hasAttachments) {
         log('handleCompletion: dingtalk sink completed with empty body');
       }
       return;
@@ -733,7 +762,8 @@ export class BotCallbackService {
       !topicId ||
       !userId ||
       !userPrompt ||
-      !lastAssistantContent
+      !lastAssistantContent ||
+      isBlankDingTalkAssistantText(lastAssistantContent)
     ) {
       return;
     }

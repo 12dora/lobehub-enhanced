@@ -1,8 +1,10 @@
 import './push';
 
+import { restoreDingTalkApprovalTimers } from './approvalConfirm';
 import { dropStaleDingTalkQueues } from './queue';
 
 void dropStaleDingTalkQueues();
+void restoreDingTalkApprovalTimers();
 
 export { tryAutoLinkDingTalk } from './autoLink';
 export { MessengerDingTalkBinder } from './binder';

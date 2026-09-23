@@ -24,16 +24,29 @@ export const formatBotPlatformContext = ({
   warnings,
 }: BotPlatformInfo): string => {
   const safePlatformName = sanitizePromptText(platformName);
+  // DingTalk robots cannot read group history. The generic readMessages
+  // instruction makes the model call a tool that always fails. Match the
+  // platform id and the registry display name ("DingTalk").
+  const historyIsReadable = platformName.trim().toLowerCase() !== 'dingtalk';
+  const behavior = [
+    '- Act like a knowledgeable group member: respond naturally, stay on topic, and match the conversational tone.',
+  ];
+  if (historyIsReadable) {
+    behavior.push(
+      '- When the user\'s message references prior context you don\'t have (e.g. "what do you think?", "summarize this", "look at that"), use `readMessages` IMMEDIATELY to fetch recent chat history before responding. Never ask the user to repeat what was already said in the channel.',
+    );
+  }
+  behavior.push(
+    '- When you lack enough context to give a useful answer, silently read more history rather than asking clarifying questions — the answer is usually already in the chat.',
+    '- Keep responses concise and conversational — IM platforms have character limits and small viewports. Avoid long preambles or formal structure unless the question demands it.',
+    '- Do NOT reference UI elements from other environments (e.g. "check the sidebar", "click the button above").',
+  );
   const lines = [
     `<bot_platform_context platform="${safePlatformName}">`,
     `You are a participant in a **${safePlatformName}** conversation — not an external assistant being consulted.`,
     '',
     '<behavior>',
-    '- Act like a knowledgeable group member: respond naturally, stay on topic, and match the conversational tone.',
-    '- When the user\'s message references prior context you don\'t have (e.g. "what do you think?", "summarize this", "look at that"), use `readMessages` IMMEDIATELY to fetch recent chat history before responding. Never ask the user to repeat what was already said in the channel.',
-    '- When you lack enough context to give a useful answer, silently read more history rather than asking clarifying questions — the answer is usually already in the chat.',
-    '- Keep responses concise and conversational — IM platforms have character limits and small viewports. Avoid long preambles or formal structure unless the question demands it.',
-    '- Do NOT reference UI elements from other environments (e.g. "check the sidebar", "click the button above").',
+    ...behavior,
     '</behavior>',
     '',
     '<message_delivery>',

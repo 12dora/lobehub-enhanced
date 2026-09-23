@@ -1419,6 +1419,105 @@ describe('BotCallbackService', () => {
     expect(mockEditMessage).not.toHaveBeenCalled();
   });
 
+  it('does not send a DingTalk bubble for an ellipsis placeholder', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn(), onPartial: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        content: '...',
+        lastLLMContent: '...',
+        platformThreadId: 'dingtalk:cid',
+        type: 'step',
+      }),
+    );
+    expect(sink.onPartial).not.toHaveBeenCalled();
+
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '...',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        type: 'completion',
+      }),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith('', expect.anything());
+  });
+
+  it('sends a short Chinese line when a tool-using DingTalk turn ends with no text', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '...',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'done',
+        toolCalls: 1,
+        type: 'completion',
+      }),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith(
+      '（本轮没有生成回复，请重试或换个说法）',
+      expect.anything(),
+    );
+  });
+
+  it('does not add the empty-turn line when the DingTalk turn already sent a file', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        attachments: [
+          {
+            mimeType: 'application/pdf',
+            name: '合同.pdf',
+            type: 'file',
+            url: 'https://example.com/a.pdf',
+          },
+        ],
+        lastAssistantContent: '...',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'done',
+        toolCalls: 2,
+        type: 'completion',
+      } as any),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith(
+      '',
+      expect.objectContaining({ attachments: expect.any(Array) }),
+    );
+  });
+
+  it('converts GFM tables in the DingTalk completion before the sink sends them', async () => {
+    const { getDingTalkReplySink } =
+      await import('@/server/services/messenger/platforms/dingtalk/cards');
+    const sink = { onComplete: vi.fn(), onError: vi.fn() };
+    vi.mocked(getDingTalkReplySink).mockReturnValueOnce(sink as any);
+
+    await service.handleCallback(
+      makeBody({
+        lastAssistantContent: '| 项目 | 内容 |\n| --- | --- |\n| 甲方 | 福瑞思 |',
+        platformThreadId: 'dingtalk:cid',
+        reason: 'completed',
+        type: 'completion',
+      }),
+    );
+
+    expect(sink.onComplete).toHaveBeenCalledWith('**甲方**：福瑞思', expect.anything());
+  });
+
   it('prefixes DingTalk auto titles with DINGTALK_TOPIC_TITLE_PREFIX when the body omits topicTitlePrefix', async () => {
     const { DINGTALK_TOPIC_TITLE_PREFIX } =
       await import('@/server/services/messenger/platforms/dingtalk/const');

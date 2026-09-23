@@ -615,6 +615,103 @@ describe('AgentBridgeService', () => {
       expect(thread.post).not.toHaveBeenCalled();
     });
 
+    it('keeps a streamed DingTalk answer and does not replace it with "..."', async () => {
+      mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+      const onCompleteHook = vi.fn();
+      const onPartialHook = vi.fn();
+      mockExecAgent.mockImplementation(
+        async (opts: {
+          hooks?: Array<{ handler?: (event: unknown) => Promise<void>; id?: string }>;
+          instructions?: string;
+        }) => {
+          const step = opts.hooks?.find((hook) => hook.id === 'bot-step-progress');
+          await step?.handler?.({ content: '...', lastLLMContent: '...', shouldContinue: true });
+          await step?.handler?.({
+            content: '| 项目 | 内容 |\n| --- | --- |\n| 甲方 | 福瑞思 |',
+            shouldContinue: true,
+          });
+          const completion = opts.hooks?.find((hook) => hook.id === 'bot-completion');
+          await completion?.handler?.({
+            lastAssistantContent: '...',
+            reason: 'completed',
+            toolCalls: 1,
+          });
+          return {
+            assistantMessageId: 'assistant-msg-1',
+            createdAt: new Date().toISOString(),
+            operationId: 'op-1',
+            topicId: 'topic-1',
+          };
+        },
+      );
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: onCompleteHook,
+        onError: vi.fn(),
+        onPartial: onPartialHook,
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
+        client,
+        replySink,
+      });
+
+      expect(onPartialHook).toHaveBeenCalledTimes(1);
+      expect(onPartialHook).toHaveBeenCalledWith('**甲方**：福瑞思');
+      expect(onCompleteHook).toHaveBeenCalledWith('**甲方**：福瑞思', expect.anything());
+    });
+
+    it('uses the empty-turn line when a local DingTalk run ends on "..." after tools', async () => {
+      mockIsQueueAgentRuntimeEnabled.mockReturnValue(false);
+      const onCompleteHook = vi.fn();
+      mockExecAgent.mockImplementation(
+        async (opts: {
+          hooks?: Array<{ handler?: (event: unknown) => Promise<void>; id?: string }>;
+        }) => {
+          const completion = opts.hooks?.find((hook) => hook.id === 'bot-completion');
+          await completion?.handler?.({
+            lastAssistantContent: '...',
+            reason: 'completed',
+            toolCalls: 2,
+          });
+          return {
+            assistantMessageId: 'assistant-msg-1',
+            createdAt: new Date().toISOString(),
+            operationId: 'op-1',
+            topicId: 'topic-1',
+          };
+        },
+      );
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+      const replySink = {
+        onComplete: onCompleteHook,
+        onError: vi.fn(),
+        onPartial: vi.fn(),
+        onStart: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
+        client,
+        replySink,
+      });
+
+      expect(onCompleteHook).toHaveBeenCalledWith(
+        '（本轮没有生成回复，请重试或换个说法）',
+        expect.anything(),
+      );
+    });
+
     it('forwards resumeToolResult to execAgent', async () => {
       const service = new AgentBridgeService(FAKE_DB, USER_ID);
       const thread = createThread({ topicId: 'topic-1' });
@@ -641,6 +738,64 @@ describe('AgentBridgeService', () => {
           resumeToolResult,
         }),
       );
+    });
+
+    it('forwards resumeApproval on the same path as a web confirm', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+      const resumeApproval = {
+        decision: 'approved' as const,
+        parentMessageId: 'msg_tool_1',
+        toolCallId: 'call_1',
+      };
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: {
+          messengerInstallationKey: 'dingtalk:singleton',
+          platform: 'dingtalk',
+          platformThreadId: 'dingtalk:cid',
+        } as any,
+        client,
+        resumeApproval,
+      });
+
+      expect(mockExecAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parentMessageId: 'msg_tool_1',
+          prompt: '',
+          resume: true,
+          resumeApproval,
+          userInterventionConfig: { approvalMode: 'headless' },
+        }),
+      );
+    });
+
+    it('resumes history without resumeApproval so a prewritten tool result stays', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread({ topicId: 'topic-1' });
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleSubscribedMessage(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: 'dingtalk:cid' } as any,
+        client,
+        resumeHistory: { parentMessageId: 'msg_tool_1' },
+      });
+
+      const payload = mockExecAgent.mock.calls.at(-1)?.[0];
+      expect(payload).toEqual(
+        expect.objectContaining({
+          parentMessageId: 'msg_tool_1',
+          prompt: '',
+          resume: true,
+        }),
+      );
+      expect(payload.resumeApproval).toBeUndefined();
+      expect(payload.resumeToolResult).toBeUndefined();
     });
   });
 
@@ -745,11 +900,31 @@ describe('AgentBridgeService', () => {
         client,
       });
 
-      expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ title: '' }));
+      expect(mockExecAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ instructions: undefined, title: '' }),
+      );
       expect(mockFormatPrompt).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ includeSpeakerTag: true }),
       );
+    });
+
+    it('injects DingTalk channel rules into the system instructions', async () => {
+      const service = new AgentBridgeService(FAKE_DB, USER_ID);
+      const thread = createThread();
+      const message = createMessage();
+      const client = createClient();
+
+      await service.handleMention(thread, message, {
+        agentId: 'agent-1',
+        botContext: { platform: 'dingtalk', platformThreadId: THREAD_ID } as any,
+        client,
+      });
+
+      const instructions = mockExecAgent.mock.calls[0][0].instructions as string;
+      expect(instructions).toContain('不能渲染 Markdown 表格');
+      expect(instructions).toContain('钉钉 · ');
+      expect(instructions).toContain('其他群');
     });
 
     it('does not override title when continuing an existing topic', async () => {

@@ -11,9 +11,45 @@
 - **网页续聊 mirror**：在 AIHub 网页端继续钉钉单聊产生的话题时，把该轮用户问题与助手回复以一条 Markdown（标题「网页续聊」）发回原钉钉 1:1 会话。仅 1:1，群聊话题跳过；入站钉钉回复不回写。归属按 `topics.id` + `topics.user_id`（任意 workspace，含 `/切换` 到工作区助手后带 `workspace_id` 的话题）；不能镜像他人话题。本部署网页对话走客户端 runtime，由 `messenger.mirrorWebTurn` 在 `completeRun` 触发；网关 / 异构运行时由服务端 `CompletionLifecycle` 触发。
 - **指令**：`/助手`（列出并切换）、`/切换 N`、`/新会话`、`/会话`（最近 5 个）、`/继续 N`、`/当前`、`/停止`、`/帮助`；同时接受英文别名 `/agents /use /new /topics /resume /status /stop /help`。
 - **回复**：配置了 AI 卡片模板时，先把「正在思考…」写入卡片首帧，流式 `replace` 后 `finalize`（`isFinalize` + 最终正文）覆盖思考文案。无模板或卡片失败时先发一条可撤回的 Markdown「正在思考…」（走机器人 1:1 / 群发接口以拿到 `processQueryKey`，即使会话 webhook 仍有效也不走 webhook，因为 webhook 不返回 `processQueryKey`），答案或错误发出前 `recall` 该占位消息；撤回失败只记日志。模型无正文或只有空白时仍会撤回占位，不补发空白气泡。队列完成回调若找不到本进程的回复 sink（例如部分失败后重试）不再走通用 `createMessage`，避免重复答案。钉钉撤回接口 HTTP 200 且带 `failedResult` 时按失败 `warn` 记 keys，不抛错。超长 Markdown 按段落分片。卡片接口失败自动回退 Markdown。
+- **写操作确认**：钉钉对话里，工具自己声明 `humanIntervention: 'always'` 的调用会停在与网页相同的待确认状态，并向原会话发确认卡片。详见下文「写操作确认」。
 - **任务提醒**：任务事件（运行完成 / 运行失败 / 等待处理 / 任务完成）写入站内通知并按用户在任务页「提醒设置」中的渠道选择推送到钉钉（ActionCard，含直达链接）。投递结果记录在 `notification_deliveries`（channel = `dingtalk`），含 `sent` / `failed` / `skipped`。推送 `skipped`（例如账号未映射）仍会写一条 `{ status: 'skipped', failed_reason }` 的投递行；仅钉钉、站内关闭时，父通知以 `isArchived=true` 插入，以便 skipped 行有 parent 且不出现在铃铛里。
 - **定时任务**：本部署没有 QStash，`taskSchedulingWorker` 每 60 s 在进程内扫描 cron 到期任务、补发心跳、执行看门狗，见 `task-scheduling.md`。
 - **客户端绑定状态**：`messenger.availablePlatforms` 每条平台除 `capabilities.push` 外还带 `binding: { linked: boolean; platformUsername?: string | null }`（调用用户）。钉钉的 `linked` 与推送同一套解析（`resolveDingTalkStaffId`）：`findByPlatform('dingtalk', '')` 命中，或邮箱符合 `<staffId>@dingtalk.jiefakj.com` 约定。`platformUsername` 为链接行用户名，缺省时回退 `platformUserId` / 身份邮箱 local-part（staffId），避免已关联却显示空白账号名。客户端可 `import type { MessengerPlatformBinding } from '@lobechat/types'` 或 `@/services/messenger`。
+
+## 写操作确认
+
+钉钉对话里，工具自己声明 `humanIntervention: 'always'` 的调用（审批模板保存、同意 / 拒绝、转交、删模板，待办 / 日程写入等）会把这一轮停在与网页相同的待确认状态，并向**原会话**发一张互动卡片（群聊发到群里）。卡片上是工具中文名和可读摘要：`saveTemplate` 逐个控件列出类型、必填 / 选填、选项、默认值以及调用方提交的其它字段；其它调用逐项列出全部参数。用户提交的值不隐藏，也不用表格。摘要放进卡片参数上限时，正文只保留前半段，`note` 写成「内容较长，完整内容请在网页端确认：<话题深链>」，`statusText` 为「请到网页端确认」。导入的模板不能只藏「批准」，所以 `status` 仍是空字符串，拒绝和批准都在；服务端忽略这种卡上的批准点击（`agree`，以及旧的 `approve`）。无法解析操作对象时同样处理，`note` 写明原因和网页链接。只有发起该轮的钉钉用户能点；其他人会收到「仅提问人可操作」（同一张卡、同一个人只发一次），状态不变。点一次后，要等原来的运行结束并真正恢复执行，卡片才改成「已批准，执行中…」（`status` 为 `agree`）、「已拒绝」或「已失效（超时未确认）」（二者 `status` 为 `reject`）。恢复没被接受时卡片仍是待确认，可以再点。再点、或超时后再点，不再改卡片、也不再调钉钉。30 分钟未点按拒绝处理，原因是「超时未确认」。待确认记录在 Redis 里保留 24 小时，过期靠这个计时器和进程重启后的对账，不靠 key 的 TTL。点击先记成 `resuming`：进程在恢复完成前崩溃时，重启若工具行仍是待确认，就把卡片退回可点（已超时则拒绝为「超时未确认」）；工具行已经有结果则只补上卡片状态。每次确认最多一次发送加一次更新（`updateCardDataByKey` 只提交变化的字段），不轮询。安全策略拦截的操作仍然不执行，模型看到的是中文说明，而不是 “Blocked by security/privacy.”。`required` 类工具仍按无头模式直接执行。
+
+确认卡片只在**本地** Agent Runtime 下发出（`AGENT_RUNTIME_MODE` 不是 `queue`）。队列模式的完成回调只把 `waiting_for_human` 交给提问转发，不会发确认卡，也不会按 30 分钟超时拒绝。本部署使用本地模式。
+
+普通版 StandardCard（`/v1.0/im/v1.0/robot/interactiveCards/send`，模板 ID 固定 `StandardCard`）不能把按钮点击送到 Stream 主题 `/v1.0/card/instances/callback`（普通版不支持互动卡片回调）。确认卡因此走「创建并投放卡片」：`POST /v1.0/card/instances/createAndDeliver`，`callbackType` 为 `STREAM`。这需要卡片平台上的模板。未配置模板、或接口报错时，不发卡片；该工具结果写成「该操作需要本人确认，钉钉内确认卡片发送失败；请到网页端 <话题深链> 确认」，模型据此告诉用户去网页确认。不使用回复「确认」的纯文本兜底。
+
+### 确认卡片模板（管理员）
+
+生产使用的是已导入并发布的模板，由钉钉官方「审批模板」示例改来。模板 ID 只放在环境变量 `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`（当前发布的 ID 是 `335db3e9-304f-40de-b9e9-79a94be7368b.schema`），不要写进代码。改过模板并重新发布后，更新该环境变量并重启服务。权限仍需「互动卡片实例写权限」。Stream 连接已经订阅 `/v1.0/card/instances/callback`，创建卡片时带 `callbackType=STREAM`，按钮点击进这条连接。不要为这张卡再配 HTTP 回调地址。
+
+公有变量（`cardParamMap`，全部字符串）：
+
+- `lastMessage`：会话列表里的摘要，例如「AI 平台操作确认：<title>」。
+- `title`：标题，例如「保存审批模板「项目结案申请」」。
+- `content`：多行正文（预览行）。模板大约能渲染 60 行。超出参数上限时只保留前半段，完整内容改到网页确认。
+- `statusText`：展示为「状态：<statusText>」。取值：待确认 / 已批准，执行中… / 已拒绝 / 已失效（超时未确认）/ 请到网页端确认。
+- `note`：一行提示。能在卡片上批准时为「仅发起人可操作」。正文放不下时为「内容较长，完整内容请在网页端确认：<话题深链>」。无法解析操作对象时为「无法解析操作对象… 请到网页端确认：< 话题深链 >」。
+- `createTime`：展示为「时间：<createTime>」，格式 `YYYY-MM-DD HH:mm`，时区 Asia/Shanghai。
+- `status`：控制按钮。空字符串显示「拒绝」「批准」；`agree` 隐藏按钮并显示「已批准」角标；`reject` 隐藏按钮并显示「已拒绝」角标。
+
+两个按钮的事件类型是**回传请求**，参数名 `action`：批准为 `agree`，拒绝为 `reject`。服务端仍接受旧值 `approve`。
+
+这张模板不能只藏「批准」。正文放不下，或无法解析操作对象时，`status` 保持空字符串（两个按钮都在），`statusText` 为「请到网页端确认」，说明写在 `note`。服务端忽略这种卡上的 `agree` / `approve`，同一人只回复一次，卡片状态不变；「拒绝」仍然有效。
+
+状态对应：
+
+- 待确认：`status` 为空，`statusText` 为待确认
+- 已批准：`status` 为 `agree`，`statusText` 为已批准，执行中…
+- 已拒绝：`status` 为 `reject`，`statusText` 为已拒绝
+- 超时：`status` 为 `reject`，`statusText` 为已失效（超时未确认）
+
+更新走 `PUT /v1.0/card/instances`，`cardUpdateOptions.updateCardDataByKey` 为 true，只提交变化的键（`status`、`statusText`）。每次确认一次发送加一次更新。
 
 ## 钉钉开发者后台配置
 
@@ -56,11 +92,11 @@
 
 新的定时提醒是一条 `automationMode='schedule'` 的任务，而不是独立调度对象：
 
-| 表 | 角色 |
-| --- | --- |
-| `tasks` | 提醒任务。`config.reminder.kind='reminder'`，`schedule_timezone='Asia/Shanghai'`，`status='scheduled'`，`assignee_agent_id` 为空。`instruction` 第一行是 `@姓名·部门` mention，空行后是正文。`name` 为 ≤12 字摘要（工具 `title`，缺省取正文首行）。 |
-| `reminders` | 提醒档案：正文（不含 mention 行）、`repeat_rule`、下次 `fire_at`、投递计数。新行 `source='task'` 且 `task_id` 指向任务（`ON DELETE CASCADE`，`task_id` 非空唯一）。`status` 与任务对齐：`scheduled` / `sent`（任务 completed）/ `canceled`。 |
-| `reminder_recipients` / `reminder_deliveries` | 不变，仍按 `reminder_id`。`listReceived`（我收到的）继续读投递行。 |
+| 表                                            | 角色                                                                                                                                                                                                                                                |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tasks`                                       | 提醒任务。`config.reminder.kind='reminder'`，`schedule_timezone='Asia/Shanghai'`，`status='scheduled'`，`assignee_agent_id` 为空。`instruction` 第一行是 `@姓名·部门` mention，空行后是正文。`name` 为 ≤12 字摘要（工具 `title`，缺省取正文首行）。 |
+| `reminders`                                   | 提醒档案：正文（不含 mention 行）、`repeat_rule`、下次 `fire_at`、投递计数。新行 `source='task'` 且 `task_id` 指向任务（`ON DELETE CASCADE`，`task_id` 非空唯一）。`status` 与任务对齐：`scheduled` / `sent`（任务 completed）/ `canceled`。        |
+| `reminder_recipients` / `reminder_deliveries` | 不变，仍按 `reminder_id`。`listReceived`（我收到的）继续读投递行。                                                                                                                                                                                  |
 
 Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTaskService.fireForTick`：走与原先相同的工作通知 + 服务号机器人 + 站内 `reminder.received`，**不** `execAgent`。遗留 `task_id IS NULL` 行仍由 `reminderWorker` 每 60s 扫描 `fire_at <= now`。
 

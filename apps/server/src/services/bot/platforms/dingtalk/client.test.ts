@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCreateDingTalkAdapter = vi.hoisted(() => vi.fn());
 const mockDownloadMediaFromRawMessage = vi.hoisted(() => vi.fn());
+const mockSendGroupMessage = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const mockGetAccessToken = vi.hoisted(() => vi.fn().mockResolvedValue('tok'));
 const mockGatewayStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockGatewayClose = vi.hoisted(() => vi.fn());
@@ -17,12 +18,15 @@ vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
     if (last === -1) return { conversationId: rest };
     return { conversationId: rest.slice(0, last), senderStaffId: rest.slice(last + 1) };
   },
-  DingTalkApiClient: vi.fn().mockImplementation(() => ({
-    getAccessToken: mockGetAccessToken,
-    sendBySessionWebhook: vi.fn(),
-    sendGroupMessage: vi.fn(),
-    sendOtoMessage: vi.fn(),
-  })),
+  // Class, not vi.fn().mockImplementation: client.ts calls `new`, and
+  // afterEach(restoreAllMocks) drops an arrow implementation so the instance
+  // has no sendGroupMessage.
+  DingTalkApiClient: class {
+    getAccessToken = mockGetAccessToken;
+    sendBySessionWebhook = vi.fn();
+    sendGroupMessage = mockSendGroupMessage;
+    sendOtoMessage = vi.fn();
+  },
   downloadMediaFromRawMessage: mockDownloadMediaFromRawMessage,
   getDingTalkSession: vi.fn(),
   isSessionWebhookLive: vi.fn().mockReturnValue(false),
@@ -126,6 +130,22 @@ describe('DingTalkClientFactory', () => {
     expect(result).toEqual([
       { buffer, mimeType: 'image/jpeg', name: 'image.jpg', size: undefined },
     ]);
+  });
+
+  it('converts GFM tables on the markdown send path and leaves converted text unchanged', async () => {
+    const client = createClient();
+    const messenger = client.getMessenger('dingtalk:cidABC:staff1');
+    const table = ['| 项目 | 内容 |', '| --- | --- |', '| 经营范围 | 助剂销售 |'].join('\n');
+
+    await messenger.createMessage(table);
+
+    const first = JSON.parse(mockSendGroupMessage.mock.calls[0][0].msgParam) as { text: string };
+    expect(first.text).toBe('**经营范围**：助剂销售');
+    expect(mockSendGroupMessage.mock.calls[0][0].msgKey).toBe('sampleMarkdown');
+
+    await messenger.createMessage(first.text);
+    const second = JSON.parse(mockSendGroupMessage.mock.calls[1][0].msgParam) as { text: string };
+    expect(second.text).toBe(first.text);
   });
 
   it('createAdapter exposes a dingtalk adapter', () => {

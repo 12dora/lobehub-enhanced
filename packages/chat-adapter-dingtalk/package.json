@@ -4,7 +4,8 @@
   "description": "DingTalk adapter for chat SDK",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./markdownTables": "./src/markdownTables.ts"
   },
   "files": [
     "dist"

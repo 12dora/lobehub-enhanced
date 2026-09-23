@@ -498,6 +498,20 @@ describe('sendDingTalkMarkdown staffId override', () => {
     expect(param.text).toBe('hello from web');
   });
 
+  it('converts GFM tables before chunking and leaves already-converted text unchanged', async () => {
+    const table = ['| 项目 | 内容 |', '| --- | --- |', '| 经营范围 | 助剂销售 |'].join('\n');
+
+    await sendDingTalkMarkdown('dingtalk:cid', table, { staffId: 'staff_1' });
+
+    const first = JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as { text: string };
+    expect(first.text).toBe('**经营范围**：助剂销售');
+    expect(first.text).not.toContain('| --- |');
+
+    await sendDingTalkMarkdown('dingtalk:cid', first.text, { staffId: 'staff_1' });
+    const second = JSON.parse(sendOtoMessage.mock.calls[1][0].msgParam) as { text: string };
+    expect(second.text).toBe(first.text);
+  });
+
   it('stops sending remaining chunks when beforeChunk returns false', async () => {
     const beforeChunk = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const body = `${'x'.repeat(10_000)}\n\n${'y'.repeat(10_000)}\n\n${'z'.repeat(10_000)}`;

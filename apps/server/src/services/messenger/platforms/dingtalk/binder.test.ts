@@ -15,6 +15,10 @@ vi.mock('@/envs/app', () => ({
 
 const sendGroupMessage = vi.fn();
 const mockGetDingTalkCard = vi.fn();
+const mockLoadDingTalkPendingApproval = vi.fn();
+const mockClaimDingTalkApprovalNotice = vi.fn<(...args: unknown[]) => Promise<boolean>>(
+  async () => true,
+);
 
 vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   buildActionCardParam: vi.fn().mockImplementation((options: any) => ({
@@ -43,7 +47,19 @@ vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   getDingTalkCard: (...args: unknown[]) => mockGetDingTalkCard(...args),
   getDingTalkSession: vi.fn().mockReturnValue(undefined),
   isSessionWebhookLive: vi.fn().mockReturnValue(false),
+  parseDingTalkConfirmAction: (content: unknown) => {
+    const parsed = typeof content === 'string' ? JSON.parse(content) : content;
+    const action = (parsed as { cardPrivateData?: { params?: { action?: string } } })
+      ?.cardPrivateData?.params?.action;
+    if (action === 'agree' || action === 'approve') return 'approve';
+    return action === 'reject' ? action : undefined;
+  },
   rememberDingTalkCard: vi.fn(),
+}));
+
+vi.mock('./approvalStore', () => ({
+  claimDingTalkApprovalNotice: (...args: unknown[]) => mockClaimDingTalkApprovalNotice(...args),
+  loadDingTalkPendingApproval: (...args: unknown[]) => mockLoadDingTalkPendingApproval(...args),
 }));
 
 vi.mock('./branding', () => ({
@@ -78,6 +94,8 @@ const VALID_CONFIG = {
 };
 
 beforeEach(() => {
+  mockClaimDingTalkApprovalNotice.mockReset();
+  mockClaimDingTalkApprovalNotice.mockResolvedValue(true);
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(VALID_CONFIG as any);
   sendOtoMessage.mockResolvedValue({});
   sendBySessionWebhook.mockResolvedValue(undefined);
@@ -185,6 +203,11 @@ describe('MessengerDingTalkBinder group replies', () => {
 });
 
 describe('MessengerDingTalkBinder.extractCallbackAction', () => {
+  beforeEach(() => {
+    mockLoadDingTalkPendingApproval.mockReset();
+    mockLoadDingTalkPendingApproval.mockResolvedValue(null);
+  });
+
   it('returns messenger:not_asker when a different staffId taps the card', async () => {
     mockGetDingTalkCard.mockReturnValue({
       askerStaffId: 'staff_1',
@@ -203,6 +226,93 @@ describe('MessengerDingTalkBinder.extractCallbackAction', () => {
       data: 'messenger:not_asker',
       fromUserId: 'staff_2',
     });
+    expect(mockLoadDingTalkPendingApproval).not.toHaveBeenCalled();
+  });
+
+  it('routes the asker button to messenger:confirm', async () => {
+    mockGetDingTalkCard.mockReturnValue({
+      askerStaffId: 'staff_1',
+      threadId: 'dingtalk:cid:staff_1',
+    });
+    mockLoadDingTalkPendingApproval.mockResolvedValue({
+      askerStaffId: 'staff_1',
+      threadId: 'dingtalk:cid:staff_1',
+    });
+    const binder = new MessengerDingTalkBinder();
+    const action = await binder.extractCallbackAction(
+      new Request('https://example.com', {
+        body: JSON.stringify({
+          content: { cardPrivateData: { params: { action: 'approve' } } },
+          outTrackId: 'confirm-1',
+          userId: 'staff_1',
+        }),
+        method: 'POST',
+      }),
+    );
+    expect(action).toEqual({
+      callbackId: 'confirm-1',
+      chatId: 'dingtalk:cid:staff_1',
+      data: 'messenger:confirm:approve',
+      fromUserId: 'staff_1',
+    });
+  });
+
+  it('maps the imported template agree button to messenger:confirm:approve', async () => {
+    mockGetDingTalkCard.mockReturnValue({
+      askerStaffId: 'staff_1',
+      threadId: 'dingtalk:cid:staff_1',
+    });
+    mockLoadDingTalkPendingApproval.mockResolvedValue({
+      askerStaffId: 'staff_1',
+      threadId: 'dingtalk:cid:staff_1',
+    });
+    const action = await new MessengerDingTalkBinder().extractCallbackAction(
+      new Request('https://example.com', {
+        body: JSON.stringify({
+          content: { cardPrivateData: { params: { action: 'agree' } } },
+          outTrackId: 'confirm-1',
+          userId: 'staff_1',
+        }),
+        method: 'POST',
+      }),
+    );
+    expect(action?.data).toBe('messenger:confirm:approve');
+  });
+});
+
+describe('MessengerDingTalkBinder.acknowledgeCallback', () => {
+  it('sends 仅提问人可操作 once per card and clicker', async () => {
+    mockClaimDingTalkApprovalNotice.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const binder = new MessengerDingTalkBinder();
+    const action = {
+      callbackId: 'confirm-1',
+      chatId: 'dingtalk:cid:staff_1',
+      data: 'messenger:not_asker',
+      fromUserId: 'staff_2',
+    };
+    await binder.acknowledgeCallback(action, { toast: '仅提问人可操作' });
+    await binder.acknowledgeCallback(action, { toast: '仅提问人可操作' });
+    expect(sendGroupMessage).toHaveBeenCalledTimes(1);
+    expect(mockClaimDingTalkApprovalNotice).toHaveBeenCalledWith(
+      'not-asker',
+      'confirm-1',
+      'staff_2',
+    );
+  });
+
+  it('still sends other toasts', async () => {
+    mockClaimDingTalkApprovalNotice.mockResolvedValue(false);
+    await new MessengerDingTalkBinder().acknowledgeCallback(
+      {
+        callbackId: 'card_1',
+        chatId: 'dingtalk:cid:staff_1',
+        data: 'messenger:switch:agt',
+        fromUserId: 'staff_1',
+      },
+      { toast: '已切换到：Inbox' },
+    );
+    expect(mockClaimDingTalkApprovalNotice).not.toHaveBeenCalled();
+    expect(sendGroupMessage).toHaveBeenCalled();
   });
 });
 

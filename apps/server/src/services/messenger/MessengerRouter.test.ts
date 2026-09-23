@@ -164,6 +164,9 @@ vi.mock('chat', () => {
     }
   }
   return {
+    // The real `@lobechat/chat-adapter-dingtalk` index loads adapter.ts, which
+    // extends BaseFormatConverter and imports stringifyMarkdown.
+    BaseFormatConverter: class {},
     Chat: vi.fn().mockImplementation(() => mockChatBot),
     ConsoleLogger: vi.fn(),
     Message: MockMessage,
@@ -171,6 +174,7 @@ vi.mock('chat', () => {
       children: [{ children: [{ type: 'text', value: text }], type: 'paragraph' }],
       type: 'root',
     }),
+    stringifyMarkdown: () => '',
   };
 });
 vi.mock('@chat-adapter/state-ioredis', () => ({

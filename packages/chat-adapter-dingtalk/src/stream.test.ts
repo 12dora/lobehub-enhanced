@@ -9,6 +9,7 @@ import {
   DINGTALK_GATEWAY_URL,
   DINGTALK_SOCKET_OPEN_TIMEOUT_MS,
   DINGTALK_STREAM_FRAME_SILENCE_MS,
+  DINGTALK_STREAM_WATCHDOG_INTERVAL_MS,
   DINGTALK_STREAM_WS_PING_INTERVAL_MS,
   DINGTALK_STREAM_WS_PONG_TIMEOUT_MS,
   TOPIC_ROBOT,
@@ -397,13 +398,16 @@ describe('DingTalkStreamConnection', () => {
     expect(connectSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('watchdog terminates a silent socket and reconnects', async () => {
+  it('watchdog terminates a socket that stops answering pings and reconnects', async () => {
     vi.useFakeTimers();
     const sockets: MockSocket[] = [];
     const conn = create({
       WebSocketImpl: createWsCtor(sockets),
       logger: { warn: vi.fn() },
       reconnectBaseIntervalMs: 1000,
+      // No protocol ping in this window, so a pong cannot refresh liveness.
+      wsPingIntervalMs: 60 * 60_000,
+      wsPongTimeoutMs: 60 * 60_000,
     });
     await conn.connect();
     expect(sockets).toHaveLength(1);
@@ -421,6 +425,29 @@ describe('DingTalkStreamConnection', () => {
     expect(sockets).toHaveLength(2);
     expect(conn.state).toBe('connected');
     expect(conn.state).toBe('connected');
+  });
+
+  it('treats a protocol pong as liveness and keeps a quiet socket past 180s', async () => {
+    vi.useFakeTimers();
+    const sockets: MockSocket[] = [];
+    const conn = create({
+      WebSocketImpl: createWsCtor(sockets),
+      logger: { warn: vi.fn() },
+      reconnectBaseIntervalMs: 60_000,
+    });
+    await conn.connect();
+    const openedAt = conn.lastFrameAt;
+    expect(sockets[0].autoPong).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(
+      DINGTALK_STREAM_FRAME_SILENCE_MS + DINGTALK_STREAM_WATCHDOG_INTERVAL_MS,
+    );
+
+    expect(conn.state).toBe('connected');
+    expect(sockets[0].terminated).toBe(false);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].pingCalls).toBeGreaterThan(0);
+    expect(conn.lastFrameAt).toBeGreaterThan(openedAt ?? 0);
   });
 
   it('terminates when a protocol ping is not answered with pong', async () => {

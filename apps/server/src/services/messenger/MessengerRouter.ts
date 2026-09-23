@@ -33,6 +33,11 @@ import {
 import { getInstallationStore } from './installations';
 import type { InstallationCredentials } from './installations/types';
 import { messengerPlatformRegistry } from './platforms';
+import {
+  applyDingTalkConfirmClick,
+  forwardDingTalkWaitingHuman,
+  holdDingTalkPendingApproval,
+} from './platforms/dingtalk/approvalConfirm';
 import { isUnsupportedDingTalkMedia } from './platforms/dingtalk/attachments';
 import { tryAutoLinkDingTalk } from './platforms/dingtalk/autoLink';
 import { resolveDingTalkBrandingDisplayName } from './platforms/dingtalk/branding';
@@ -59,6 +64,7 @@ import {
   DINGTALK_ASKER_ONLY_REPLY,
   DINGTALK_BUSY_TTL_SECONDS,
   DINGTALK_CHAT_DISABLED_REPLY,
+  DINGTALK_CONFIRM_CLICK_REPLY,
   DINGTALK_IDLE_NEW_TOPIC_NOTICE,
   DINGTALK_NO_ACTIVE_AGENT_REPLY,
   DINGTALK_NO_TOPICS_REPLY,
@@ -87,7 +93,6 @@ import {
 } from './platforms/dingtalk/const';
 import {
   clearDingTalkPendingQuestion,
-  forwardDingTalkWaitingQuestion,
   loadDingTalkPendingQuestion,
   resolveQuestionAnswer,
   sendDingTalkPendingQuestionCard,
@@ -961,6 +966,13 @@ export class MessengerRouter {
             });
             return;
           }
+
+          const approvalHold = await holdDingTalkPendingApproval(thread.id);
+          if (approvalHold === 'pending') {
+            await binder.sendDmText(chatId, DINGTALK_CONFIRM_CLICK_REPLY);
+            return;
+          }
+          if (approvalHold === 'expired') return;
 
           const pending = await loadDingTalkPendingQuestion(thread.id);
           if (pending) {
@@ -2425,6 +2437,15 @@ export class MessengerRouter {
         await ack({ toast: DINGTALK_ASKER_ONLY_REPLY });
         return;
       }
+      const confirmMatch = parsed.command.match(/^messenger:confirm:(approve|reject)$/);
+      if (confirmMatch) {
+        await applyDingTalkConfirmClick({
+          decision: confirmMatch[1] === 'approve' ? 'approve' : 'reject',
+          outTrackId: action.callbackId,
+          userId: action.fromUserId,
+        });
+        return;
+      }
       action = { ...action, data: parsed.command };
     }
 
@@ -2730,6 +2751,13 @@ export class MessengerRouter {
     platform: MessengerPlatform,
     bridgeMethod: 'handleMention' | 'handleSubscribedMessage',
     extra?: {
+      resumeApproval?: {
+        decision: 'approved' | 'rejected' | 'rejected_continue';
+        parentMessageId: string;
+        rejectionReason?: string;
+        toolCallId: string;
+      };
+      resumeHistory?: { parentMessageId: string };
       resumeToolResult?: {
         content: string;
         parentMessageId: string;
@@ -2737,6 +2765,7 @@ export class MessengerRouter {
       };
     },
   ): Promise<void> {
+    let waitingFallback: Awaited<ReturnType<typeof forwardDingTalkWaitingHuman>> | undefined;
     log(
       'dispatchToAgent: platform=%s, tenant=%s, sender=%s, agent=%s, user=%s',
       platform,
@@ -2816,13 +2845,19 @@ export class MessengerRouter {
       onWaitingForHuman:
         platform === 'dingtalk'
           ? async (event: AgentWaitingForHumanEvent) => {
-              await forwardDingTalkWaitingQuestion(thread.id, event);
+              waitingFallback = await forwardDingTalkWaitingHuman(thread.id, event, {
+                agentId,
+                userId: link.userId,
+                workspaceId: link.workspaceId ?? undefined,
+              });
               clearDingTalkReplySink(thread.id);
               await releaseDingTalkThreadBusy(thread.id);
               forgetDingTalkLiveThread(thread.id);
             }
           : undefined,
       replySink,
+      resumeApproval: extra?.resumeApproval,
+      resumeHistory: extra?.resumeHistory,
       resumeToolResult: extra?.resumeToolResult,
       ...dingTalkBridgeOpts,
     };
@@ -2832,6 +2867,16 @@ export class MessengerRouter {
       message,
       bridgeOpts,
     );
+
+    if (
+      platform === 'dingtalk' &&
+      (waitingFallback?.resumeApproval || waitingFallback?.resumeHistory)
+    ) {
+      await this.dispatchToAgent(thread, message, client, link, agentId, platform, bridgeMethod, {
+        resumeApproval: waitingFallback.resumeApproval,
+        resumeHistory: waitingFallback.resumeHistory,
+      });
+    }
 
     if (platform === 'dingtalk') {
       await this.stampDingTalkTopicMetadata(serverDB, link, thread);

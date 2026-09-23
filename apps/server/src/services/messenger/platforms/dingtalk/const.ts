@@ -117,6 +117,19 @@ export const DINGTALK_BUSY_KEY_PREFIX = 'messenger:dingtalk:busy:';
 export const DINGTALK_BUSY_TTL_SECONDS = DINGTALK_QUEUE_TTL_SECONDS;
 export const DINGTALK_PENDING_QUESTION_KEY_PREFIX = 'messenger:dingtalk:pending-question:';
 export const DINGTALK_PENDING_QUESTION_TTL_SECONDS = 24 * 60 * 60;
+
+export const DINGTALK_PENDING_APPROVAL_KEY_PREFIX = 'messenger:dingtalk:pending-approval:';
+export const DINGTALK_PENDING_APPROVAL_THREAD_KEY_PREFIX =
+  'messenger:dingtalk:pending-approval-thread:';
+/**
+ * Confirm cards leave `pending` via the 30 min timer and startup reconcile,
+ * not via this TTL. 24h covers that window plus a restart gap so a crashed
+ * `resuming` record is still here to be reconciled.
+ */
+export const DINGTALK_PENDING_APPROVAL_TTL_SECONDS = 24 * 60 * 60;
+export const DINGTALK_CONFIRM_TIMEOUT_MS = 30 * 60 * 1000;
+export const DINGTALK_CONFIRM_TIMEOUT_REASON = '超时未确认';
+export const DINGTALK_CONFIRM_CLICK_REPLY = '请点击确认卡片上的「批准」或「拒绝」。';
 export const DINGTALK_LIST_PAGE_SIZE = 5;
 
 export const DINGTALK_STREAM_STATUS_TTL_SECONDS = 120;

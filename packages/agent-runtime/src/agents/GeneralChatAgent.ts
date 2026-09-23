@@ -26,6 +26,10 @@ import {
   type SubAgentsBatchResultPayload,
 } from '../types';
 import { shouldCompress } from '../utils/tokenCounter';
+import {
+  formatDingTalkImHeadlessBlockedContent,
+  isDingTalkMessengerMetadata,
+} from './dingtalkHeadlessApproval';
 
 const TOOL_NOT_ALLOWED_CONTENT =
   'Tool execution blocked because the tool is not allowed in the current execution scope.';
@@ -158,14 +162,17 @@ export class GeneralChatAgent implements Agent {
   /**
    * Check if tool calls need human intervention
    * Combines user's global config with tool's own config
-   * Returns [toolsNeedingIntervention, toolsToExecute]
+   * Returns [toolsNeedingIntervention, toolsToExecute, toolLevelAlwaysIds].
+   * `toolLevelAlwaysIds` are calls whose own policy is `always` (not a global
+   * security block). DingTalk messenger parks those; other headless callers block them.
    */
   private async checkInterventionNeeded(
     toolsCalling: ChatToolPayload[],
     state: AgentState,
-  ): Promise<[ChatToolPayload[], ChatToolPayload[]]> {
+  ): Promise<[ChatToolPayload[], ChatToolPayload[], Set<string>]> {
     const toolsNeedingIntervention: ChatToolPayload[] = [];
     const toolsToExecute: ChatToolPayload[] = [];
+    const toolLevelAlwaysIds = new Set<string>();
 
     // Get security blacklist for resolver metadata
     const securityBlacklist = state.securityBlacklist ?? DEFAULT_SECURITY_BLACKLIST;
@@ -231,6 +238,7 @@ export class GeneralChatAgent implements Agent {
         ) {
           toolsToExecute.push(toolCalling);
         } else {
+          if (dynamicPolicy === 'always') toolLevelAlwaysIds.add(toolCalling.id);
           toolsNeedingIntervention.push(toolCalling);
         }
         continue;
@@ -250,6 +258,7 @@ export class GeneralChatAgent implements Agent {
 
       // Phase 4: Check 'always' policy - overrides auto-run mode
       if (this.matchesAlwaysPolicy(staticConfig, toolArgs)) {
+        toolLevelAlwaysIds.add(toolCalling.id);
         toolsNeedingIntervention.push(toolCalling);
         continue;
       }
@@ -301,7 +310,7 @@ export class GeneralChatAgent implements Agent {
       }
     }
 
-    return [toolsNeedingIntervention, toolsToExecute];
+    return [toolsNeedingIntervention, toolsToExecute, toolLevelAlwaysIds];
   }
 
   /**
@@ -562,10 +571,8 @@ export class GeneralChatAgent implements Agent {
         if (hasToolsCalling && toolsCalling && toolsCalling.length > 0) {
           const { allowedTools, blockedTools } = this.partitionToolsByAllowList(toolsCalling);
           // Check which tools need human intervention
-          const [toolsNeedingIntervention, toolsToExecute] = await this.checkInterventionNeeded(
-            allowedTools,
-            state,
-          );
+          const [toolsNeedingIntervention, toolsToExecute, toolLevelAlwaysIds] =
+            await this.checkInterventionNeeded(allowedTools, state);
 
           const instructions: AgentInstruction[] = [];
 
@@ -604,17 +611,42 @@ export class GeneralChatAgent implements Agent {
             } satisfies AgentInstruction);
           }
 
-          // Request approval for tools that need intervention
-          // Non-headless mode waits for human approval; headless mode returns blocked tool results.
+          // Request approval for tools that need intervention.
+          // Non-headless mode waits for human approval. Headless mode returns
+          // blocked tool results, except DingTalk messenger: tool-level `always`
+          // parks so the chat can show a confirm card. Other headless blocks in
+          // that channel use a Chinese explanation instead of the English default.
           if (toolsNeedingIntervention.length > 0) {
             if (state.userInterventionConfig?.approvalMode === 'headless') {
-              instructions.push({
-                payload: {
-                  parentMessageId,
-                  toolsCalling: toolsNeedingIntervention,
-                },
-                type: 'resolve_blocked_tools',
-              } satisfies AgentInstruction);
+              const parkInDingTalk = isDingTalkMessengerMetadata(state.metadata);
+              const toPark = parkInDingTalk
+                ? toolsNeedingIntervention.filter((tool) => toolLevelAlwaysIds.has(tool.id))
+                : [];
+              const toBlock = parkInDingTalk
+                ? toolsNeedingIntervention.filter((tool) => !toolLevelAlwaysIds.has(tool.id))
+                : toolsNeedingIntervention;
+              if (toBlock.length > 0) {
+                instructions.push({
+                  payload: {
+                    ...(parkInDingTalk
+                      ? {
+                          blockedContent: formatDingTalkImHeadlessBlockedContent(state.metadata),
+                          blockedReason: 'im_confirmation_required',
+                        }
+                      : {}),
+                    parentMessageId,
+                    toolsCalling: toBlock,
+                  },
+                  type: 'resolve_blocked_tools',
+                } satisfies AgentInstruction);
+              }
+              if (toPark.length > 0) {
+                instructions.push({
+                  pendingToolsCalling: toPark,
+                  reason: 'human_intervention_required',
+                  type: 'request_human_approve',
+                });
+              }
             } else {
               instructions.push({
                 pendingToolsCalling: toolsNeedingIntervention,
