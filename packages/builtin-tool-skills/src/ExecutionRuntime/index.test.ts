@@ -196,6 +196,30 @@ describe('SkillsExecutionRuntime', () => {
     });
   });
 
+  describe('exportFile', () => {
+    it('passes the sandbox error message through to the model', async () => {
+      const runtime = new SkillsExecutionRuntime({
+        service: createMockService({
+          exportFile: vi.fn().mockResolvedValue({
+            error: { message: 'PAX path not found in archive' },
+            filename: 'AI助手使用培训_员工版.pptx',
+            success: false,
+          }),
+        }),
+      });
+
+      const result = await runtime.exportFile({
+        filename: 'AI助手使用培训_员工版.pptx',
+        path: '/mnt/data/ai_training/AI助手使用培训_员工版.pptx',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.content).toBe(
+        'Failed to export file: AI助手使用培训_员工版.pptx: PAX path not found in archive',
+      );
+    });
+  });
+
   describe('readReference', () => {
     it('should expose fullPath in state when provided by the service', async () => {
       const service = createMockService({

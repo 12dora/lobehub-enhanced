@@ -10,10 +10,24 @@ export interface ToolManifestInfo {
   systemRole?: string;
 }
 
+/** Device-gated builtin. Activation requires a routed desktop. */
+export const LOCAL_SYSTEM_IDENTIFIER = 'lobe-local-system';
+
+/** Shown when `lobe-local-system` is requested and this run has no active device. */
+export const LOCAL_SYSTEM_NO_DEVICE_MESSAGE = '当前没有在线的桌面设备，本地系统工具不可用';
+
 export interface ActivatorRuntimeService {
   activateSkill?: (args: ActivateSkillParams) => Promise<BuiltinServerRuntimeOutput>;
   getActivatedToolIds: () => string[];
   getToolManifests: (identifiers: string[]) => Promise<ToolManifestInfo[]>;
+  /**
+   * Whether this run has a routed desktop.
+   *
+   * `false` refuses `lobe-local-system` (no device to run it, and the prompt
+   * would keep unreplaced `{{hostname}}` / `{{workingDirectory}}` placeholders).
+   * Omit on the desktop client, where the machine itself is the device.
+   */
+  hasActiveDevice?: () => boolean;
   markActivated: (identifiers: string[]) => void;
 }
 
@@ -53,8 +67,17 @@ export class ActivatorExecutionRuntime {
       const alreadyActive = this.service.getActivatedToolIds();
       const toActivate: string[] = [];
       const alreadyActiveList: string[] = [];
+      // Explicit activation bypasses AgentToolsEngine's local-system rule
+      // (online + auto-activated device). Refuse here when the run has no device.
+      const deviceUnavailable: string[] = [];
+      const localSystemBlocked =
+        this.service.hasActiveDevice !== undefined && !this.service.hasActiveDevice();
 
       for (const id of identifiers) {
+        if (id === LOCAL_SYSTEM_IDENTIFIER && localSystemBlocked) {
+          deviceUnavailable.push(id);
+          continue;
+        }
         if (alreadyActive.includes(id)) {
           alreadyActiveList.push(id);
         } else {
@@ -130,8 +153,16 @@ export class ActivatorExecutionRuntime {
         parts.push(`\nAlready active: ${alreadyActiveList.join(', ')}`);
       }
 
+      if (deviceUnavailable.length > 0) {
+        notFound.push(...deviceUnavailable);
+        parts.push(`\n${LOCAL_SYSTEM_NO_DEVICE_MESSAGE}`);
+      }
+
       if (notFound.length > 0) {
-        parts.push(`\nNot found: ${notFound.join(', ')}`);
+        const otherNotFound = notFound.filter((id) => !deviceUnavailable.includes(id));
+        if (otherNotFound.length > 0) {
+          parts.push(`\nNot found: ${otherNotFound.join(', ')}`);
+        }
       }
 
       return {

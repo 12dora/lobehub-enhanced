@@ -9,6 +9,8 @@ import { publicProcedure, router } from '@/libs/trpc/lambda';
 import { marketUserInfo, requireMarketAuth, serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { MarketService } from '@/server/services/market';
 
+import { hasMarketSdkAuth } from '../../tools/_helpers/marketConnections';
+
 const log = debug('lambda-router:market:creds');
 
 const MARKET_STATUS_TO_TRPC_CODE: Record<number, TRPCError['code']> = {
@@ -462,6 +464,15 @@ export const credsRouter = router({
   // List OAuth connections (for creating OAuth credentials)
   listOAuthConnections: credsManageProcedure.query(async ({ ctx }) => {
     log('listOAuthConnections called');
+
+    // No market auth at all: calling the SDK logs `Missing bearer token`
+    // against market.lobehub.com. Same empty shape as an authorized account
+    // with zero connections. Bearer is only one of the methods the SDK and
+    // `requireMarketAuth` accept — a trusted-client token or M2M client
+    // credentials must still reach `listConnections`.
+    if (!hasMarketSdkAuth(ctx.marketService?.market)) {
+      return { connections: [], success: true };
+    }
 
     try {
       const result = await ctx.marketService.market.connect.listConnections();

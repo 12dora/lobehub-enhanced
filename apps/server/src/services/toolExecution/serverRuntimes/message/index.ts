@@ -1,9 +1,11 @@
 import { MessageToolIdentifier } from '@lobechat/builtin-tool-message';
 import type { BotProviderQuery } from '@lobechat/builtin-tool-message/executionRuntime';
 import { MessageExecutionRuntime } from '@lobechat/builtin-tool-message/executionRuntime';
+import { DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
 import { LarkApiClient } from '@lobechat/chat-adapter-feishu';
 import { QQApiClient } from '@lobechat/chat-adapter-qq';
 import { WechatApiClient } from '@lobechat/chat-adapter-wechat';
+import type { ChatTopicMetadata } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import { and, eq } from 'drizzle-orm';
 
@@ -17,6 +19,8 @@ import {
 import { AgentBotProviderModel } from '@/database/models/agentBotProvider';
 import { MessengerAccountLinkModel } from '@/database/models/messengerAccountLink';
 import { MessengerInstallationModel } from '@/database/models/messengerInstallation';
+import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
+import { TopicModel } from '@/database/models/topic';
 import { agents } from '@/database/schemas';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import {
@@ -25,6 +29,7 @@ import {
   mergeBotSettingsForPersist,
 } from '@/server/services/bot/agentBotProviderSettings';
 import { platformRegistry } from '@/server/services/bot/platforms';
+import { DingTalkMessageService } from '@/server/services/bot/platforms/dingtalk/service';
 import { DiscordApi } from '@/server/services/bot/platforms/discord/api';
 import { DiscordMessageService } from '@/server/services/bot/platforms/discord/service';
 import { FeishuMessageService } from '@/server/services/bot/platforms/feishu/service';
@@ -60,6 +65,45 @@ type MessengerInstallationView = {
   scope: string;
   tenantId: string;
   tenantName: string;
+};
+
+/**
+ * DingTalk-origin topic, or this deployment's enterprise DingTalk connector
+ * is enabled. Empty bot/messenger lists must not point at Settings → Messenger.
+ */
+const resolveDingtalkConnectorTurn = async (context: {
+  serverDB?: ConstructorParameters<typeof TopicModel>[0];
+  topicId?: string;
+  userId?: string;
+  workspaceId?: string | null;
+}): Promise<boolean> => {
+  if (context.serverDB && context.userId && context.topicId) {
+    try {
+      const topic = await new TopicModel(
+        context.serverDB,
+        context.userId,
+        context.workspaceId ?? undefined,
+      ).findById(context.topicId);
+      const platform = (topic?.metadata as ChatTopicMetadata | null | undefined)?.bot?.platform;
+      if (platform === 'dingtalk') return true;
+    } catch (error) {
+      console.error('[message] failed to read topic platform:', error);
+    }
+  }
+
+  if (context.serverDB) {
+    try {
+      const connector = await SystemBotProviderModel.findEnabledByPlatform(
+        context.serverDB,
+        'dingtalk',
+      );
+      if (connector) return true;
+    } catch (error) {
+      console.error('[message] failed to read dingtalk connector:', error);
+    }
+  }
+
+  return false;
 };
 
 /**
@@ -150,6 +194,19 @@ export const messageRuntime: ServerRuntimeRegistration = {
     );
 
     const service = new MessageDispatcherService({
+      // History reads throw before this factory runs (see MessageDispatcherService).
+      // Send still uses the per-agent DingTalk bot when one is configured.
+      dingtalk: async () => {
+        const { applicationId, credentials } = await resolveCredentials(
+          providerModel,
+          'dingtalk',
+          context.userId!,
+        );
+        return new DingTalkMessageService(
+          new DingTalkApiClient(applicationId, String(credentials.clientSecret ?? '')),
+          String(credentials.robotCode || applicationId),
+        );
+      },
       discord: async () => {
         const { credentials } = await resolveCredentials(providerModel, 'discord', context.userId!);
         return new DiscordMessageService(new DiscordApi(credentials.botToken));
@@ -604,7 +661,9 @@ export const messageRuntime: ServerRuntimeRegistration = {
       },
     };
 
-    return new MessageExecutionRuntime({ botProvider, service });
+    const dingtalkChannel = await resolveDingtalkConnectorTurn(context);
+
+    return new MessageExecutionRuntime({ botProvider, dingtalkChannel, service });
   },
   identifier: MessageToolIdentifier,
 };

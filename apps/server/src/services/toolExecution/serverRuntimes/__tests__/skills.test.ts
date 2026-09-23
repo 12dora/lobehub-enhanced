@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const noteRuntimeError = vi.hoisted(() => vi.fn());
+
+vi.mock('@/server/enterprise/services/platformSystem/noteRuntimeError', () => ({
+  noteRuntimeError,
+}));
+
 const mocks = vi.hoisted(() => {
   const sandboxService = {
     callTool: vi.fn(),
@@ -1220,6 +1226,51 @@ describe('skillsRuntime', () => {
       expect(mocks.createSandboxService).not.toHaveBeenCalled();
     });
 
+    it('passes the sandbox export error message through', async () => {
+      mocks.sandboxService.exportAndUploadFile.mockResolvedValue({
+        error: { message: 'no such file in container' },
+        filename: 'AI助手使用培训_员工版.pptx',
+        success: false,
+      });
+      const { skillsRuntime } = await import('../skills');
+      const runtime = await skillsRuntime.factory({
+        serverDB: {} as never,
+        toolManifestMap: {},
+        topicId: 'topic-1',
+        userId: 'user-1',
+      });
+
+      const result = await runtime.exportFile({
+        filename: 'AI助手使用培训_员工版.pptx',
+        path: '/mnt/data/ai_training/AI助手使用培训_员工版.pptx',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('no such file in container');
+      expect(result.content).toContain('AI助手使用培训_员工版.pptx');
+      expect(noteRuntimeError).not.toHaveBeenCalled();
+    });
+
+    it('records an exportFile exception as a document export failure', async () => {
+      const error = new Error('docker daemon gone');
+      mocks.sandboxService.exportAndUploadFile.mockRejectedValueOnce(error);
+      const { skillsRuntime } = await import('../skills');
+      const runtime = await skillsRuntime.factory({
+        serverDB: {} as never,
+        toolManifestMap: {},
+        topicId: 'topic-1',
+        userId: 'user-1',
+      });
+
+      const result = await runtime.exportFile({ filename: 'out.csv', path: '/tmp/out.csv' });
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('docker daemon gone');
+      expect(noteRuntimeError).toHaveBeenCalledWith('document_export', error, {
+        operation: 'exportFile',
+      });
+    });
+
     it('refuses the sandbox exportFile while a device is routed', async () => {
       const { skillsRuntime } = await import('../skills');
       const runtime = await skillsRuntime.factory({
@@ -1238,10 +1289,10 @@ describe('skillsRuntime', () => {
     });
   });
 
-  // Regression guard for the device-gating fix: builtin skills must be filtered
-  // with canExecuteOnDevice derived from the run's activeDeviceId, not the
-  // compile-time isDesktop constant (always false on the server).
-  it('gates device-only builtin skills on activeDeviceId presence', async () => {
+  // Device-only skills (lobe-agent-browser) follow `deviceOnlySkillsAvailable`.
+  // `activeDeviceId` is only the fallback when that flag was not computed.
+  // `deviceCapable` must not widen the gate.
+  it('gates device-only builtin skills on deviceOnlySkillsAvailable', async () => {
     const { filterBuiltinSkills } = await import('@/helpers/skillFilters');
     const { skillsRuntime } = await import('../skills');
 
@@ -1258,6 +1309,33 @@ describe('skillsRuntime', () => {
 
     await skillsRuntime.factory({
       activeDeviceId: 'device-1',
+      serverDB: {} as never,
+      toolManifestMap: {},
+      topicId: 'topic-1',
+      userId: 'user-1',
+    });
+
+    expect(filterBuiltinSkills).toHaveBeenLastCalledWith(expect.anything(), {
+      canExecuteOnDevice: true,
+    });
+
+    await skillsRuntime.factory({
+      activeDeviceId: 'device-1',
+      deviceCapable: true,
+      deviceOnlySkillsAvailable: false,
+      serverDB: {} as never,
+      toolManifestMap: {},
+      topicId: 'topic-1',
+      userId: 'user-1',
+    });
+
+    expect(filterBuiltinSkills).toHaveBeenLastCalledWith(expect.anything(), {
+      canExecuteOnDevice: false,
+    });
+
+    await skillsRuntime.factory({
+      deviceCapable: false,
+      deviceOnlySkillsAvailable: true,
       serverDB: {} as never,
       toolManifestMap: {},
       topicId: 'topic-1',

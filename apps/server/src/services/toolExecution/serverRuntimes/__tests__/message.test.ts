@@ -50,6 +50,25 @@ vi.mock('@/database/schemas', () => ({
   agents: { id: 'agents.id', userId: 'agents.userId' },
 }));
 
+// DingTalk connector lookup + DingTalk client/service are only reached for
+// DingTalk turns; keep them out of the module graph for these tests.
+vi.mock('@/database/models/systemBotProvider', () => ({
+  SystemBotProviderModel: { findEnabledByPlatform: vi.fn().mockResolvedValue(undefined) },
+}));
+vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
+  DingTalkApiClient: vi.fn(),
+}));
+vi.mock('@/server/services/bot/platforms/dingtalk/service', () => ({
+  DingTalkMessageService: vi.fn(),
+}));
+
+// DingTalk-origin detection reads the topic; no topic → not a DingTalk turn.
+vi.mock('@/database/models/topic', () => ({
+  TopicModel: vi.fn().mockImplementation(function () {
+    return { findById: vi.fn().mockResolvedValue(undefined) };
+  }),
+}));
+
 // `@/config/messenger` reads env-side messenger config — stub the four
 // getters used by `listMessengerPlatforms`.
 const mockGetEnabledMessengerPlatforms = vi.fn();

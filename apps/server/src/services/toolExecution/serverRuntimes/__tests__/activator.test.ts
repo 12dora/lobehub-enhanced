@@ -1,3 +1,4 @@
+import type { LobeToolManifest } from '@lobechat/context-engine';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -262,5 +263,116 @@ describe('activatorRuntime', () => {
     expect(mocks.platformFindByName).toHaveBeenCalledWith('managed.skill');
     expect(mocks.getAgentConfigById).not.toHaveBeenCalled();
     expect(mocks.findByName).not.toHaveBeenCalled();
+  });
+
+  it('loads device-only skills from deviceOnlySkillsAvailable, not deviceCapable', async () => {
+    const { filterBuiltinSkills } = await import('@/helpers/skillFilters');
+    const { activatorRuntime } = await import('../activator');
+
+    await activatorRuntime.factory({
+      activeDeviceId: 'device-1',
+      deviceCapable: true,
+      deviceOnlySkillsAvailable: false,
+      serverDB: {} as never,
+      toolManifestMap: {},
+      userId: 'user-1',
+    });
+
+    expect(filterBuiltinSkills).toHaveBeenLastCalledWith(expect.anything(), {
+      canExecuteOnDevice: false,
+    });
+  });
+
+  it('refuses lobe-local-system when the run has no active device', async () => {
+    const { activatorRuntime } = await import('../activator');
+    const localSystem: LobeToolManifest = {
+      api: [{ description: 'run', name: 'runCommand', parameters: {} }],
+      identifier: 'lobe-local-system',
+      meta: { title: 'Local System' },
+      systemRole: 'device name="{{hostname}}"',
+    };
+
+    const blocked = await activatorRuntime.factory({
+      deviceCapable: true,
+      serverDB: {} as never,
+      toolManifestMap: { 'lobe-local-system': localSystem },
+      userId: 'user-1',
+    });
+    const blockedResult = await blocked.activateTools({
+      identifiers: ['lobe-local-system'],
+      reason: 'open a shell',
+    });
+
+    expect(blockedResult.success).toBe(true);
+    expect(blockedResult.content).toContain('当前没有在线的桌面设备');
+    expect(blockedResult.content).not.toContain('{{hostname}}');
+
+    const allowed = await activatorRuntime.factory({
+      activeDeviceId: 'device-1',
+      serverDB: {} as never,
+      toolManifestMap: { 'lobe-local-system': localSystem },
+      userId: 'user-1',
+    });
+    const allowedResult = await allowed.activateTools({
+      identifiers: ['lobe-local-system'],
+      reason: 'open a shell',
+    });
+
+    expect(allowedResult.success).toBe(true);
+    expect(allowedResult.content).toContain('Successfully activated tools:');
+    expect(allowedResult.content).not.toContain('当前没有在线的桌面设备');
+  });
+
+  it('says there is no online desktop when onlineDeviceCount is zero', async () => {
+    const { LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE, activatorRuntime } = await import('../activator');
+
+    const runtime = await activatorRuntime.factory({
+      onlineDeviceCount: 0,
+      serverDB: {} as never,
+      toolManifestMap: {
+        'lobe-local-system': {
+          api: [{ description: 'run', name: 'runCommand' }],
+          identifier: 'lobe-local-system',
+          meta: { title: 'Local System' },
+          systemRole: 'device name="{{hostname}}"',
+        },
+      },
+      userId: 'user-1',
+    } as never);
+    const result = await runtime.activateTools({
+      identifiers: ['lobe-local-system'],
+      reason: 'open a shell',
+    });
+
+    expect(result.content).toContain('当前没有在线的桌面设备，本地系统工具不可用');
+    expect(result.content).not.toContain(LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE);
+    expect(result.content).not.toContain('{{hostname}}');
+  });
+
+  it('asks to select a device when desktops are online but none is routed', async () => {
+    const { LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE, activatorRuntime } = await import('../activator');
+
+    const runtime = await activatorRuntime.factory({
+      onlineDeviceCount: 2,
+      serverDB: {} as never,
+      toolManifestMap: {
+        'lobe-local-system': {
+          api: [{ description: 'run', name: 'runCommand' }],
+          identifier: 'lobe-local-system',
+          meta: { title: 'Local System' },
+          systemRole: 'device name="{{hostname}}"',
+        },
+      },
+      userId: 'user-1',
+    } as never);
+    const result = await runtime.activateTools({
+      identifiers: ['lobe-local-system'],
+      reason: 'open a shell',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain(LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE);
+    expect(result.content).not.toContain('当前没有在线的桌面设备');
+    expect(result.content).not.toContain('{{hostname}}');
   });
 });

@@ -3,8 +3,10 @@ import { RequestTrigger } from '@lobechat/types';
 import { describe, expect, it } from 'vitest';
 
 import {
+  canRunDeviceOnlySkills,
   type ExecutionPlan,
   executionTargetToRuntimeMode,
+  isDeviceCapablePlan,
   isDeviceLockedPlan,
   resolveExecutionPlan,
   resolveExecutionTarget,
@@ -816,5 +818,67 @@ describe('isDeviceLockedPlan', () => {
     ).toBe(false);
     expect(isDeviceLockedPlan({ kind: 'none', target: 'none' })).toBe(false);
     expect(isDeviceLockedPlan({ kind: 'sandbox', target: 'sandbox' })).toBe(false);
+  });
+});
+
+describe('canRunDeviceOnlySkills', () => {
+  it('allows a routed device plan', () => {
+    expect(canRunDeviceOnlySkills({ deviceId: 'device-a', kind: 'device', target: 'auto' })).toBe(
+      true,
+    );
+  });
+
+  it('rejects non-device plans', () => {
+    expect(canRunDeviceOnlySkills({ kind: 'none', target: 'none' })).toBe(false);
+    expect(canRunDeviceOnlySkills({ kind: 'sandbox', target: 'sandbox' })).toBe(false);
+  });
+
+  it('rejects a bot owner run with a gateway but no online desktop (F7)', () => {
+    // bot trigger coerces unbound `local` → `auto`; nothing online → no-online-device
+    const plan = resolveExecutionPlan({
+      agencyConfig: cfg({ executionTarget: 'local' }),
+      clientExecutionAvailable: true,
+      onlineDeviceIds: [],
+      trigger: RequestTrigger.Bot,
+    });
+    expect(plan).toEqual({ kind: 'device-unrouted', reason: 'no-online-device', target: 'auto' });
+    // The shared predicate still treats it as device-capable (remote-device picker etc.)…
+    expect(isDeviceCapablePlan(plan)).toBe(true);
+    // …but device-only skills must not be offered.
+    expect(canRunDeviceOnlySkills(plan, { onlineDeviceCount: 0 })).toBe(false);
+    expect(canRunDeviceOnlySkills(plan)).toBe(false);
+  });
+
+  it('rejects a run locked to an offline bound device', () => {
+    const plan: ExecutionPlan = {
+      kind: 'device-unrouted',
+      reason: 'bound-device-offline',
+      target: 'device',
+    };
+    expect(canRunDeviceOnlySkills(plan)).toBe(false);
+    // other devices being online does not help — the picker is stripped for locked runs
+    expect(canRunDeviceOnlySkills(plan, { onlineDeviceCount: 2 })).toBe(false);
+  });
+
+  it('allows an ambiguous run — the model can pick one of the online devices', () => {
+    expect(
+      canRunDeviceOnlySkills({
+        kind: 'device-unrouted',
+        reason: 'ambiguous-online-devices',
+        target: 'auto',
+      }),
+    ).toBe(true);
+  });
+
+  it('decides no-bound-device by the online device count when known', () => {
+    const plan: ExecutionPlan = {
+      kind: 'device-unrouted',
+      reason: 'no-bound-device',
+      target: 'local',
+    };
+    expect(canRunDeviceOnlySkills(plan, { onlineDeviceCount: 0 })).toBe(false);
+    expect(canRunDeviceOnlySkills(plan, { onlineDeviceCount: 1 })).toBe(true);
+    // unknown count (mid-run, persisted plan only) → trust the plan
+    expect(canRunDeviceOnlySkills(plan)).toBe(true);
   });
 });

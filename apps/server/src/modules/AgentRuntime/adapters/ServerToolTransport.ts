@@ -10,7 +10,7 @@ import {
 import type { ChatToolPayload } from '@lobechat/types';
 
 import { AgentModel } from '@/database/models/agent';
-import { isDeviceCapablePlan } from '@/helpers/executionTarget';
+import { canRunDeviceOnlySkills, isDeviceCapablePlan } from '@/helpers/executionTarget';
 import type { DeviceAccessReason } from '@/server/services/aiAgent/deviceToolAudit';
 import {
   isDeviceToolIdentifier,
@@ -32,6 +32,12 @@ import {
 import { resolveRunActiveDeviceId } from '../executors/resolveRunActiveDeviceId';
 import { resolveRunProjectSkills } from '../executors/resolveRunProjectSkills';
 import { resolveToolTimeoutMs } from '../resolveToolTimeout';
+
+/** Online-device count snapshotted onto operation metadata next to the plan. */
+const readOnlineDeviceCount = (metadata: { onlineDeviceCount?: unknown } | undefined) => {
+  const value = metadata?.onlineDeviceCount;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+};
 
 export class ServerToolTransport implements ToolTransport {
   maxRetries = TOOL_MAX_RETRIES;
@@ -167,6 +173,16 @@ export class ServerToolTransport implements ToolTransport {
               deviceCapable: context.state.metadata?.executionPlan
                 ? isDeviceCapablePlan(context.state.metadata.executionPlan)
                 : undefined,
+              // Narrower than deviceCapable: lobe-agent-browser has no sandbox
+              // fallback, so an unrouted plan with nothing reachable must not
+              // load it. `onlineDeviceCount` is written beside the plan at
+              // operation start; without it, `no-bound-device` trusts the plan.
+              deviceOnlySkillsAvailable: context.state.metadata?.executionPlan
+                ? canRunDeviceOnlySkills(context.state.metadata.executionPlan, {
+                    onlineDeviceCount: readOnlineDeviceCount(context.state.metadata),
+                  })
+                : undefined,
+              onlineDeviceCount: readOnlineDeviceCount(context.state.metadata),
               documentId: context.state.metadata?.documentId,
               editingAgentId: context.state.metadata?.editingAgentId,
               execSubAgent: this.ctx.execSubAgent,

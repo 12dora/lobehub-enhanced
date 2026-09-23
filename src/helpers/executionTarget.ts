@@ -267,6 +267,56 @@ export const isDeviceLockedPlan = (plan: ExecutionPlan): boolean =>
   plan.kind === 'device' ||
   (plan.kind === 'device-unrouted' && plan.reason === 'bound-device-offline');
 
+export interface DeviceOnlySkillAvailabilityOptions {
+  /**
+   * Number of devices online when the plan was resolved. Only consulted for a
+   * `no-bound-device` plan, whose reason alone does not say whether any device
+   * is reachable. Leave `undefined` when unknown (e.g. mid-run tool execution,
+   * which only carries the persisted plan) — the plan is then trusted as-is.
+   */
+  onlineDeviceCount?: number;
+}
+
+/**
+ * Narrower than {@link isDeviceCapablePlan}: whether device-ONLY skills (e.g.
+ * `lobe-agent-browser`, which needs a real desktop to drive a browser) can
+ * actually run in this plan. Such skills have no sandbox fallback — offering
+ * them with no reachable device just makes every command fail.
+ *
+ * `isDeviceCapablePlan` stays broad on purpose (it gates the remote-device
+ * picker, local-system manifest and run-start device resolution); this one
+ * additionally excludes unrouted runs that have no device to route to:
+ * - `no-online-device` — nothing online (e.g. a bot owner with a gateway but
+ *   no desktop app running);
+ * - `bound-device-offline` — locked to an offline machine, the picker is
+ *   stripped so the model cannot switch to another device;
+ * - `no-bound-device` with a known `onlineDeviceCount` of 0.
+ * `ambiguous-online-devices` stays available: the model can pick a device.
+ */
+export const canRunDeviceOnlySkills = (
+  plan: ExecutionPlan,
+  { onlineDeviceCount }: DeviceOnlySkillAvailabilityOptions = {},
+): boolean => {
+  if (plan.kind === 'device') return true;
+  if (plan.kind !== 'device-unrouted') return false;
+
+  switch (plan.reason) {
+    case 'ambiguous-online-devices': {
+      return true;
+    }
+    case 'no-online-device':
+    case 'bound-device-offline': {
+      return false;
+    }
+    case 'no-bound-device': {
+      return onlineDeviceCount === undefined ? true : onlineDeviceCount > 0;
+    }
+    default: {
+      return false;
+    }
+  }
+};
+
 export interface ResolveExecutionPlanParams {
   agencyConfig: LobeAgentAgencyConfig | undefined;
   /**

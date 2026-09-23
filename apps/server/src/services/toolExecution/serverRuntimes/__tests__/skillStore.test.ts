@@ -114,6 +114,41 @@ describe('skillStoreRuntime', () => {
     expect(mocks.SkillImporter).toHaveBeenCalledWith(serverDB, 'user-1', undefined);
   });
 
+  it('does not expose searchSkill when the user has no market access token', async () => {
+    mocks.getUserSettings.mockResolvedValue({ market: {} });
+    const { skillStoreRuntime } = await import('../skillStore');
+    const { SkillStoreExecutionRuntime } =
+      await import('@lobechat/builtin-tool-skill-store/executionRuntime');
+
+    await skillStoreRuntime.factory({
+      serverDB,
+      toolManifestMap: {},
+      userId: 'user-1',
+    });
+
+    const lastCall = vi.mocked(SkillStoreExecutionRuntime).mock.calls.at(-1)?.[0] as {
+      service: { searchSkill?: unknown };
+    };
+    expect(lastCall.service.searchSkill).toBeUndefined();
+  });
+
+  it('exposes searchSkill when a market access token is configured', async () => {
+    const { skillStoreRuntime } = await import('../skillStore');
+    const { SkillStoreExecutionRuntime } =
+      await import('@lobechat/builtin-tool-skill-store/executionRuntime');
+
+    await skillStoreRuntime.factory({
+      serverDB,
+      toolManifestMap: {},
+      userId: 'user-1',
+    });
+
+    const lastCall = vi.mocked(SkillStoreExecutionRuntime).mock.calls.at(-1)?.[0] as {
+      service: { searchSkill?: unknown };
+    };
+    expect(typeof lastCall.service.searchSkill).toBe('function');
+  });
+
   it('uses personal scope and skips the RBAC check outside a workspace', async () => {
     const { skillStoreRuntime } = await import('../skillStore');
 

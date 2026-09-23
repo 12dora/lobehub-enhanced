@@ -313,7 +313,18 @@ export const skillStoreRuntime: ServerRuntimeRegistration = {
       userId: context.userId,
     });
 
-    return new SkillStoreExecutionRuntime({ service });
+    // No market access token: do not expose searchSkill. Calling the market
+    // API without a bearer token only returns 401 "unauthorized".
+    const hasMarketToken = Boolean(marketAccessToken?.trim());
+    const runtimeService: SkillStoreRuntimeService = {
+      importFromGitHub: service.importFromGitHub,
+      importFromMarket: service.importFromMarket,
+      importFromUrl: service.importFromUrl,
+      importFromZipUrl: service.importFromZipUrl,
+      ...(hasMarketToken ? { searchSkill: service.searchSkill } : {}),
+    };
+
+    return new SkillStoreExecutionRuntime({ service: runtimeService });
   },
   identifier: SkillStoreIdentifier,
 };

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { inMemoryAgentStateManager } from '@/server/modules/AgentRuntime/InMemoryAgentStateManager';
 import { inMemoryStreamEventManager } from '@/server/modules/AgentRuntime/InMemoryStreamEventManager';
+import type { MemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 
 import {
   createMockResponsesAPIStream,
@@ -27,9 +28,19 @@ import { aiAgentRouter } from '../../../routers/lambda/aiAgent';
 
 process.env.OPENAI_API_KEY = 'sk-test-fake-api-key-for-testing';
 
+const { mockGetMemoryEmbeddingAvailability } = vi.hoisted(() => ({
+  mockGetMemoryEmbeddingAvailability: vi.fn(async (): Promise<MemoryEmbeddingAvailability> => ({
+    available: true,
+  })),
+}));
+
 let testDB: LobeChatDatabase;
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn(() => testDB),
+}));
+
+vi.mock('@/server/services/memory/userMemory/embeddingAvailability', () => ({
+  getMemoryEmbeddingAvailability: mockGetMemoryEmbeddingAvailability,
 }));
 
 vi.mock('@/server/services/file', () => ({
@@ -64,6 +75,9 @@ const setUserMemorySettings = async (enabled: boolean) => {
 };
 
 beforeEach(async () => {
+  // Memory-on cases need a definitive available probe. The test env's real
+  // probe is unavailable, which would hide the tool for a different reason.
+  mockGetMemoryEmbeddingAvailability.mockResolvedValue({ available: true });
   serverDB = await getTestDB();
   testDB = serverDB;
   userId = await createTestUser(serverDB);
@@ -133,6 +147,35 @@ describe('execAgent - memory enabled priority', () => {
 
   it('should enable memory by default when neither agent nor user configures it', async () => {
     const agent = await createTestAgent();
+
+    const caller = aiAgentRouter.createCaller(createTestContext());
+    const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });
+    await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0] as { tools?: any[] };
+    expect(hasMemoryTools(callArgs.tools ?? [])).toBe(true);
+  });
+
+  it('hides the memory tool when embedding availability is definitively false', async () => {
+    mockGetMemoryEmbeddingAvailability.mockResolvedValue({
+      available: false,
+      reason: 'missing_credentials',
+    });
+    await setUserMemorySettings(true);
+    const agent = await createTestAgent({ memory: { enabled: true } });
+
+    const caller = aiAgentRouter.createCaller(createTestContext());
+    const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });
+    await waitForOperationComplete(inMemoryAgentStateManager, result.operationId);
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0] as { tools?: any[] };
+    expect(hasMemoryTools(callArgs.tools ?? [])).toBe(false);
+  });
+
+  it('keeps the memory tool when the embedding availability check throws', async () => {
+    mockGetMemoryEmbeddingAvailability.mockRejectedValue(new Error('embedding probe failed'));
+    await setUserMemorySettings(true);
+    const agent = await createTestAgent({ memory: { enabled: true } });
 
     const caller = aiAgentRouter.createCaller(createTestContext());
     const result = await caller.execAgent({ agentId: agent.id, prompt: 'Hello' });

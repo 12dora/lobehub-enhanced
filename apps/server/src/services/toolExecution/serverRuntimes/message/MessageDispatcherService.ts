@@ -36,6 +36,8 @@ import type {
   UnpinMessageState,
 } from '@lobechat/builtin-tool-message/executionRuntime';
 
+import { DINGTALK_GROUP_HISTORY_UNAVAILABLE } from './dingtalkHistory';
+
 export type AsyncServiceFactory = () => Promise<MessageRuntimeService>;
 
 /**
@@ -77,6 +79,11 @@ export class MessageDispatcherService implements MessageRuntimeService {
   };
 
   readMessages = async (params: ReadMessagesParams): Promise<ReadMessagesState> => {
+    // Do not resolve credentials first. A missing DingTalk bot row must not
+    // surface as a Feishu (or any other platform) credential error.
+    if (params.platform === 'dingtalk') {
+      throw new Error(DINGTALK_GROUP_HISTORY_UNAVAILABLE);
+    }
     return (await this.getService(params.platform)).readMessages(params);
   };
 
@@ -89,6 +96,9 @@ export class MessageDispatcherService implements MessageRuntimeService {
   };
 
   searchMessages = async (params: SearchMessagesParams): Promise<SearchMessagesState> => {
+    if (params.platform === 'dingtalk') {
+      throw new Error(DINGTALK_GROUP_HISTORY_UNAVAILABLE);
+    }
     return (await this.getService(params.platform)).searchMessages(params);
   };
 

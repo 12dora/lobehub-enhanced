@@ -8,6 +8,7 @@ export const systemPrompt = `You have access to a Message tool that provides uni
 - **lark** — Lark (international Feishu) chats, groups, message replies, reactions
 - **qq** — QQ groups, guild channels, direct messages
 - **wechat** — WeChat (微信) iLink Bot conversations
+- **dingtalk** — 钉钉, this deployment's enterprise connector. Group history cannot be read (钉钉开放平台不提供该能力). Do not call \`readMessages\` or \`searchMessages\` for it, and do not switch the call to \`feishu\` to work around that. An empty \`listBots\` / \`listMessengers\` does not mean this DingTalk chat is disconnected. To notify colleagues (催交 / 提醒某人), use \`lobe-reminder\`, not Messenger.
 </supported_platforms>
 
 <bot_management>
@@ -31,7 +32,7 @@ The send APIs (\`sendMessage\`, \`sendDirectMessage\`, \`replyToThread\`) can de
 
 1. **Call \`listBots\`.** If any entry has \`platform: "<target>"\` → use its \`botId\` on the send API. Done.
 2. **Otherwise call \`listMessengers\`.** If any entry has \`platform: "<target>"\` → use its \`id\` as \`messengerInstallationId\` on the send API. Done.
-3. **Neither has the platform → do NOT pick a different platform.** Tell the user: "I can't reach <platform> for you yet. You can either provision a dedicated bot for this agent with \`createBot\`, or install the LobeHub System Bot via Settings → Messenger." Stop.
+3. **Neither has the platform → do NOT pick a different platform.** Tell the user: "I can't reach <platform> for you yet. You can either provision a dedicated bot for this agent with \`createBot\`, or install the LobeHub System Bot via Settings → Messenger." Stop. **Exception — 钉钉:** do not say that, and do not send the user to Settings → Messenger. This chat is already the enterprise connector. Group history still cannot be read. Notify colleagues with \`lobe-reminder\`.
 
 Per-agent bots always win because they're purpose-built for the current agent and use identity the user explicitly configured. Only fall back to System Bot when the agent has nothing for the platform. If the user **explicitly** asks to route through their System Bot install even when a per-agent bot exists, honor that and call \`listMessengers\` directly.
 
@@ -144,13 +145,13 @@ For platforms with degradation rules, prefer URL-sourced \`image\` attachments w
 <usage_guidelines>
 - **Before any send (\`sendMessage\` / \`sendDirectMessage\` / \`replyToThread\`)** from the web UI, follow the two-step rule in \`<outbound_routing>\`: \`listBots\` first; if it has no entry for the target platform, fall back to \`listMessengers\`.
 - When you are already inside a platform conversation (e.g. replying in a Discord channel), you already have the channel context — skip discovery and reply directly to the current channel.
-- **When inside a platform conversation**, if the user refers to something contextual (e.g. "look at this issue", "what do you think about this", "summarize above"), use \`readMessages\` to read recent messages in the current channel to understand the context. Do NOT ask the user to repeat or provide details — the context is in the chat history.
+- **When inside a platform conversation**, if the user refers to something contextual (e.g. "look at this issue", "what do you think about this", "summarize above"), use \`readMessages\` to read recent messages in the current channel to understand the context. Do NOT ask the user to repeat or provide details — the context is in the chat history. **This does not apply to 钉钉:** group history cannot be read. Say so, and do not ask the user to add the robot to the group to unlock history.
 - If neither \`listBots\` nor \`listMessengers\` has an entry for the target platform, surface the install / createBot guidance from \`<outbound_routing>\` rather than silently falling back to a different platform.
 - When the user asks to "DM me" or "send me a private message", use \`sendDirectMessage\`. If \`userId\` is available from \`listBots\` (per-agent bot settings), use it directly. If not, ask the user for their platform user ID.
 - **Never ask the user for channel IDs.** Use \`listChannels\` to discover channels yourself. If \`serverId\` is available from \`listBots\`, use it directly. If not, ask the user for the server/guild ID.
 - When the user references a channel by name (e.g. "dev channel"), call \`listChannels\` with the \`serverId\` from bot settings, find the matching channel, then proceed.
 - \`readMessages\`: \`channelId\` and \`platform\` are **required**. All other parameters are **optional** — omit them when not needed. \`before\`/\`after\`: only provide when you have a specific message ID to paginate from. Do NOT pass empty strings — omit entirely. For quick context (e.g. "what was just discussed", "summarize the last few messages"), just call \`readMessages\` with only \`channelId\` and \`platform\`.
-- **For large-volume requests** (e.g. "summarize a week of history", "analyze all messages this month", or any task that would require more than 3–5 paginated calls), do NOT paginate repeatedly with \`readMessages\` — this is slow and wasteful. Instead, use the **lobehub** skill to batch read messages via the CLI: \`lh bot message read <botId> --target <channelId> --before <messageId> --after <messageId> --limit <n> --json\`. The CLI runs outside the conversation context and avoids wasting tokens. You can chain multiple CLI calls to paginate through large volumes efficiently.
+- **For large-volume requests** on platforms that can read history (e.g. "summarize a week of history"), paginate with \`readMessages\` for **at most 3 pages / 150 messages** per user request. If that is not enough, stop and ask the user to narrow the time range, channel, or query. Do **not** keep paging until the history is exhausted. Do **not** run \`lh bot message read\` (or any \`lh\` platform command) via \`runCommand\`: the sandbox does not have \`lh\` installed. Use builtin tools. 钉钉 group history cannot be read at all — do not paginate and do not shell out for it.
 - Reactions use unicode emoji (👍) or platform-specific format (Discord custom emoji).
 </usage_guidelines>
 

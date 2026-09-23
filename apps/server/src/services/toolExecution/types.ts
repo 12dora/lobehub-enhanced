@@ -158,13 +158,20 @@ export interface ToolExecutionContext {
   /**
    * Whether the run's execution plan is device-capable (`device` or
    * `device-unrouted`) — derived from `state.metadata.executionPlan` by the
-   * runtime executors. Device-only skills gate listing/activation/loading on
-   * this consistently, so a `device-unrouted` run can activate them before the
-   * model routes a device; actual command execution stays gated at the device
-   * tool layer. Undefined when the caller carries no execution plan (device
-   * gates then fall back to `activeDeviceId`).
+   * runtime executors. Broader than `deviceOnlySkillsAvailable`: device-only
+   * skills must not use this flag. Undefined when the caller carries no
+   * execution plan.
    */
   deviceCapable?: boolean;
+  /**
+   * Whether device-only skills (`lobe-agent-browser`) can be activated and
+   * loaded. Narrower than `deviceCapable`: unrouted plans with no reachable
+   * device are false (`canRunDeviceOnlySkills`, using
+   * `metadata.onlineDeviceCount` when the operation recorded it). Undefined
+   * when the caller carries no execution plan — those gates then fall back
+   * to `activeDeviceId`.
+   */
+  deviceOnlySkillsAvailable?: boolean;
   /** Current page document ID for page-scoped conversations */
   documentId?: string | null;
   /**
@@ -195,6 +202,8 @@ export interface ToolExecutionContext {
   memoryToolPermission?: 'read-only' | 'read-write';
   /** Source user message ID used by Agent Signal procedure suppression. */
   messageId?: string;
+  /** Devices online when the plan was resolved (`state.metadata.onlineDeviceCount`). */
+  onlineDeviceCount?: number;
   /** Agent runtime operation ID for structured tool outcome identity. */
   operationId?: string;
   /** Immutable Skill catalog selected at operation creation. */

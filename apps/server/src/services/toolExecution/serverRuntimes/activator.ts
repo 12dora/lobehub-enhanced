@@ -3,6 +3,7 @@ import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import {
   ActivatorExecutionRuntime,
   type ActivatorRuntimeService,
+  LOCAL_SYSTEM_NO_DEVICE_MESSAGE,
   type ToolManifestInfo,
 } from '@lobechat/builtin-tool-activator/executionRuntime';
 import { SkillsExecutionRuntime } from '@lobechat/builtin-tool-skills/executionRuntime';
@@ -22,6 +23,20 @@ import { redisPolicyStateStore } from '@/server/services/agentSignal/store/adapt
 
 import { resolveRunWorkspaceId } from './resolveWorkspaceScope';
 import { type ServerRuntimeRegistration } from './types';
+
+/** Online desktops exist, but this run has not selected one yet. */
+export const LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE =
+  '有在线设备但尚未选择，请先用远程设备工具选择一台设备';
+
+/**
+ * `metadata.onlineDeviceCount` snapshotted beside the execution plan.
+ * Callers pass it on the tool context; it is not a field of the shared
+ * context type yet.
+ */
+const readOnlineDeviceCount = (context: { onlineDeviceCount?: unknown }) => {
+  const value = context.onlineDeviceCount;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+};
 
 /**
  * Tools Activator Server Runtime
@@ -125,11 +140,12 @@ export const activatorRuntime: ServerRuntimeRegistration = {
           );
 
         skillsRuntime = new SkillsExecutionRuntime({
-          // Same device gate as the skills runtime: device-only skills are
-          // activatable in device-capable runs (matching <available_skills>),
-          // with `activeDeviceId` as the fallback for callers without a plan.
+          // Same device-only gate as the skills runtime: lobe-agent-browser
+          // follows `deviceOnlySkillsAvailable` (not the broader
+          // `deviceCapable`). `activeDeviceId` is the fallback for callers
+          // without an execution plan.
           builtinSkills: filterBuiltinSkills(builtinSkills, {
-            canExecuteOnDevice: context.deviceCapable ?? !!context.activeDeviceId,
+            canExecuteOnDevice: context.deviceOnlySkillsAvailable ?? !!context.activeDeviceId,
           }).filter((skill) => !skillIsDisabled(skill)),
           service: {
             findAll: async () => {
@@ -199,6 +215,10 @@ export const activatorRuntime: ServerRuntimeRegistration = {
 
         return results;
       },
+      // lobe-local-system runs only when this operation already has a routed device.
+      // Zero online devices and "online, but none selected" both refuse here;
+      // the message is chosen from `onlineDeviceCount` after the runtime returns.
+      hasActiveDevice: () => Boolean(context.activeDeviceId),
       markActivated: (identifiers: string[]) => {
         for (const id of identifiers) {
           if (!activatedIds.includes(id)) {
@@ -215,7 +235,33 @@ export const activatorRuntime: ServerRuntimeRegistration = {
       },
     };
 
-    return new ActivatorExecutionRuntime({ service });
+    const runtime = new ActivatorExecutionRuntime({ service });
+    const onlineDeviceCount = readOnlineDeviceCount(
+      context as typeof context & { onlineDeviceCount?: unknown },
+    );
+    // The package has one refusal sentence ("no online desktop"). When the
+    // operation recorded online devices and none is selected, that sentence
+    // is false — tell the model to pick one with the remote-device tool.
+    const devicesAwaitingSelection =
+      !context.activeDeviceId && onlineDeviceCount !== undefined && onlineDeviceCount > 0;
+    if (!devicesAwaitingSelection) return runtime;
+
+    return {
+      activateSkill: (args: Parameters<typeof runtime.activateSkill>[0]) =>
+        runtime.activateSkill(args),
+      activateTools: async (args: Parameters<typeof runtime.activateTools>[0]) => {
+        const result = await runtime.activateTools(args);
+        if (!result.content?.includes(LOCAL_SYSTEM_NO_DEVICE_MESSAGE)) return result;
+
+        return {
+          ...result,
+          content: result.content.replaceAll(
+            LOCAL_SYSTEM_NO_DEVICE_MESSAGE,
+            LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE,
+          ),
+        };
+      },
+    };
   },
   identifier: LobeActivatorIdentifier,
 };

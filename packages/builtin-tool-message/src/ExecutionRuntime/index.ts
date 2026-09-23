@@ -218,18 +218,45 @@ export interface BotProviderQuery {
   ) => Promise<void>;
 }
 
+/** Empty listBots / listMessengers copy when this turn is the DingTalk connector. */
+export const DINGTALK_CHANNEL_EMPTY_MESSAGE =
+  '当前部署通过钉钉连接器对话；如需通知同事请使用提醒工具（lobe-reminder）';
+
+/**
+ * Stable model-facing sentence when DingTalk history cannot be read.
+ * Returned as the tool content itself — not wrapped in `readMessages error:`.
+ */
+export const DINGTALK_GROUP_HISTORY_UNAVAILABLE =
+  '钉钉机器人无法读取群聊历史消息（钉钉开放平台不提供该能力）';
+
+const historyToolErrorContent = (apiName: string, error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes(DINGTALK_GROUP_HISTORY_UNAVAILABLE)) {
+    return DINGTALK_GROUP_HISTORY_UNAVAILABLE;
+  }
+
+  return `${apiName} error: ${message}`;
+};
+
 export interface MessageExecutionRuntimeOptions {
   botProvider?: BotProviderQuery;
+  /**
+   * Current turn is a DingTalk conversation, or the enterprise DingTalk
+   * connector is enabled. Empty discovery must not point at Settings → Messenger.
+   */
+  dingtalkChannel?: boolean;
   service: MessageRuntimeService;
 }
 
 export class MessageExecutionRuntime {
   private botProvider?: BotProviderQuery;
+  private dingtalkChannel: boolean;
   private service: MessageRuntimeService;
 
   constructor(options: MessageExecutionRuntimeOptions) {
     this.service = options.service;
     this.botProvider = options.botProvider;
+    this.dingtalkChannel = options.dingtalkChannel === true;
   }
 
   // ==================== Core Message Operations ====================
@@ -270,7 +297,7 @@ export class MessageExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `readMessages error: ${(e as Error).message}`,
+        content: historyToolErrorContent('readMessages', e),
         success: false,
       };
     }
@@ -323,7 +350,7 @@ export class MessageExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `searchMessages error: ${(e as Error).message}`,
+        content: historyToolErrorContent('searchMessages', e),
         success: false,
       };
     }
@@ -627,7 +654,9 @@ export class MessageExecutionRuntime {
         content:
           bots.length > 0
             ? `${bots.length} configured bot(s):\n${formatted}`
-            : 'No bots configured for this agent. Set up a bot integration first.',
+            : this.dingtalkChannel
+              ? DINGTALK_CHANNEL_EMPTY_MESSAGE
+              : 'No bots configured for this agent. Set up a bot integration first.',
         state: { bots } satisfies ListBotsState,
         success: true,
       };
@@ -754,8 +783,9 @@ export class MessageExecutionRuntime {
       const installations = await this.botProvider.listMessengers();
       if (installations.length === 0) {
         return {
-          content:
-            'No System Bot installations connected. Tell the user to install via Settings → Messenger; `listMessengerPlatforms` shows what platforms are available.',
+          content: this.dingtalkChannel
+            ? DINGTALK_CHANNEL_EMPTY_MESSAGE
+            : 'No System Bot installations connected. Tell the user to install via Settings → Messenger; `listMessengerPlatforms` shows what platforms are available.',
           state: { installations } satisfies ListMessengersState,
           success: true,
         };

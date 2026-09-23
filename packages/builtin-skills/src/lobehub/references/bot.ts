@@ -4,7 +4,9 @@ Manage bot integrations that connect agents to messaging platforms.
 
 ## Supported Platforms
 
-Discord, Slack, Telegram, Lark, Feishu
+Discord, Slack, Telegram, Lark, Feishu, 钉钉
+
+钉钉 is this deployment's channel. Group history cannot be read (钉钉开放平台不提供该能力). Do not use \`lh bot message read\` for 钉钉, and do not run \`lh\` via \`runCommand\` for platform operations — \`lh\` is not installed in the sandbox. Use builtin tools. Notify colleagues (催交 / 提醒某人) with lobe-reminder.
 
 ## Subcommands
 
@@ -41,7 +43,7 @@ Discord, Slack, Telegram, Lark, Feishu
 
 - Each platform requires specific credentials (token, app ID, secrets)
 - Use \`lh bot connect\` to start a long-running bot connection
-- Use \`lh bot message read\` with \`--json\` for batch message retrieval — ideal for processing large volumes of messages
+- Batch history on platforms that support it uses lobe-message \`readMessages\`, not \`lh bot message read\` (the sandbox has no \`lh\`). 钉钉 group history cannot be read.
 - For step-by-step platform setup instructions, read the platform-specific reference under \`references/bot/\`: \`discord\`, \`telegram\`, \`slack\`, \`feishu\`, \`lark\`, \`qq\`, \`wechat\`
 `;
 

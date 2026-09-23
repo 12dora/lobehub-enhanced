@@ -31,6 +31,7 @@ import { FileModel } from '@/database/models/file';
 import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
 import { filterBuiltinSkills } from '@/helpers/skillFilters';
+import { noteRuntimeError } from '@/server/enterprise/services/platformSystem/noteRuntimeError';
 import { AgentDocumentsService } from '@/server/services/agentDocuments';
 import { deviceGateway } from '@/server/services/deviceGateway';
 import { FileService } from '@/server/services/file';
@@ -567,6 +568,7 @@ class SkillServerRuntimeService implements SkillRuntimeService {
       const result = await sandboxService.exportAndUploadFile(path, filename);
 
       return {
+        error: result.error,
         fileId: result.fileId,
         filename: result.filename,
         mimeType: result.mimeType,
@@ -576,7 +578,10 @@ class SkillServerRuntimeService implements SkillRuntimeService {
       };
     } catch (error) {
       log('Error exporting file: %O', error);
+      noteRuntimeError('document_export', error, { operation: 'exportFile' });
+      const message = error instanceof Error ? error.message : String(error);
       return {
+        error: { message },
         filename,
         success: false,
       };
@@ -806,13 +811,13 @@ export const skillsRuntime: ServerRuntimeRegistration = {
       // back to these because the raw LLM args never carry activatedSkills.
       activatedSkills: context.activatedSkills,
       builtinSkills: [
-        // Device-only skills resolve in device-capable runs — mirrors the
-        // SkillEngine gate in aiAgent that builds <available_skills>, so a
-        // `device-unrouted` run can activate/read them before the model routes
-        // a device. `activeDeviceId` is the fallback for callers without an
-        // execution plan.
+        // Device-only skills (lobe-agent-browser) follow
+        // `deviceOnlySkillsAvailable`, the same narrow gate as the SkillEngine
+        // that builds <available_skills>. `deviceCapable` stays the broader
+        // device-tool flag and is not used here. `activeDeviceId` is the
+        // fallback for callers without an execution plan.
         ...filterBuiltinSkills(builtinSkills, {
-          canExecuteOnDevice: context.deviceCapable ?? !!activeDeviceId,
+          canExecuteOnDevice: context.deviceOnlySkillsAvailable ?? !!activeDeviceId,
         }).filter((skill) => !skillIsDisabled(skill, disabledSkillIds)),
         ...agentSkillBuiltins,
       ],

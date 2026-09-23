@@ -5,7 +5,7 @@ import { MessageApiName, MessageToolIdentifier } from './types';
 
 export { MessageToolIdentifier } from './types';
 
-const platformEnum = ['discord', 'telegram', 'slack', 'feishu', 'lark', 'qq', 'wechat'];
+const platformEnum = ['discord', 'telegram', 'slack', 'feishu', 'lark', 'qq', 'wechat', 'dingtalk'];
 
 /**
  * Shared schema fragment for the outbound `attachments` array on message-

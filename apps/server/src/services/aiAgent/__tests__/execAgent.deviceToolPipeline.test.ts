@@ -1,7 +1,11 @@
+import { AgentBrowserIdentifier, ArtifactsIdentifier } from '@lobechat/builtin-skills';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { RemoteDeviceManifest } from '@lobechat/builtin-tool-remote-device';
+import { SkillStoreApiName, SkillStoreIdentifier } from '@lobechat/builtin-tool-skill-store';
 import type * as ModelBankModule from 'model-bank';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type * as RuntimeSettingsAdapterModule from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
 
 import { AiAgentService } from '../index';
 
@@ -10,8 +14,10 @@ const {
   mockCreateServerAgentToolsEngine,
   mockGenerateToolsDetailed,
   mockGetAgentConfig,
+  mockGetEffectiveMemorySettings,
   mockGetEnabledPluginManifests,
   mockGetLobehubSkillManifests,
+  mockGetRawUserSettings,
   mockMessageCreate,
   mockPluginQuery,
   mockQueryDeviceList,
@@ -20,12 +26,30 @@ const {
   mockCreateServerAgentToolsEngine: vi.fn(),
   mockGenerateToolsDetailed: vi.fn(),
   mockGetAgentConfig: vi.fn(),
+  // `{ enabled: false }` matches the previous throw path: agentMemoryEnabled ?? false.
+  mockGetEffectiveMemorySettings: vi.fn(async () => ({ enabled: false })),
   mockGetEnabledPluginManifests: vi.fn(),
   mockGetLobehubSkillManifests: vi.fn(),
+  mockGetRawUserSettings: vi.fn(
+    async (): Promise<{ market?: { accessToken?: string | null } | null } | undefined> => undefined,
+  ),
   mockMessageCreate: vi.fn(),
   mockPluginQuery: vi.fn(),
   mockQueryDeviceList: vi.fn(),
 }));
+
+// execAgent reads market.accessToken only after getEffectiveMemorySettings resolves.
+// That helper calls getRawUserSettings in-module, so a spy on the export never runs:
+// UserModel throws on this file's mock db, the catch skips the token, and searchSkill
+// is stripped even when the spy would have returned one.
+vi.mock('@/server/enterprise/services/settings/runtimeSettingsAdapter', async (importOriginal) => {
+  const actual = await importOriginal<typeof RuntimeSettingsAdapterModule>();
+  return {
+    ...actual,
+    getEffectiveMemorySettings: mockGetEffectiveMemorySettings,
+    getRawUserSettings: mockGetRawUserSettings,
+  };
+});
 
 vi.mock('@/libs/trusted-client', () => ({
   generateTrustedClientToken: vi.fn().mockReturnValue(undefined),
@@ -143,6 +167,20 @@ vi.mock('@/server/services/deviceGateway', () => ({
   },
 }));
 
+vi.mock('@/database/models/agentSkill', () => ({
+  AgentSkillModel: vi.fn().mockImplementation(() => ({
+    findAll: vi.fn().mockResolvedValue({ data: [], total: 0 }),
+  })),
+}));
+
+vi.mock('@/server/services/agentDocuments', () => ({
+  AgentDocumentsService: vi.fn().mockImplementation(() => ({
+    findRowByDocumentId: vi.fn().mockResolvedValue(undefined),
+    getAgentSkills: vi.fn().mockResolvedValue([]),
+    hasDocuments: vi.fn().mockResolvedValue(false),
+  })),
+}));
+
 vi.mock('model-bank', async (importOriginal) => {
   const actual = await importOriginal<typeof ModelBankModule>();
   return {
@@ -175,6 +213,8 @@ describe('AiAgentService.execAgent - device tool pipeline ()', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetEffectiveMemorySettings.mockResolvedValue({ enabled: false });
+    mockGetRawUserSettings.mockResolvedValue(undefined);
     mockMessageCreate.mockResolvedValue({ id: 'msg-1' });
     mockCreateOperation.mockResolvedValue({
       autoStarted: true,
@@ -508,6 +548,191 @@ describe('AiAgentService.execAgent - device tool pipeline ()', () => {
       expect(manifestMap['test-tool']).toBe(mockManifest);
       // manifestMap also includes discoverable builtin tools for activator discovery
       expect(Object.keys(manifestMap)).toContain('test-tool');
+    });
+  });
+
+  describe('local-system without a routed device', () => {
+    it('drops lobe-local-system on a gateway run that has no active device', async () => {
+      const { deviceGateway } = await import('@/server/services/deviceGateway');
+      vi.spyOn(deviceGateway, 'isConfigured', 'get').mockReturnValue(true);
+      mockQueryDeviceList.mockResolvedValue([]);
+      mockGetEnabledPluginManifests.mockReturnValue(
+        new Map([[LocalSystemManifest.identifier, LocalSystemManifest]]),
+      );
+      mockGetAgentConfig.mockResolvedValue(createBaseAgentConfig());
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      const manifestMap = mockCreateOperation.mock.calls[0][0].toolSet.manifestMap;
+      expect(manifestMap[LocalSystemManifest.identifier]).toBeUndefined();
+    });
+
+    it('keeps lobe-local-system when the run is routed to an online device', async () => {
+      const { deviceGateway } = await import('@/server/services/deviceGateway');
+      vi.spyOn(deviceGateway, 'isConfigured', 'get').mockReturnValue(true);
+      mockQueryDeviceList.mockResolvedValue([
+        { deviceId: 'dev-1', hostname: 'My PC', online: true, platform: 'win32' },
+      ]);
+      mockGetEnabledPluginManifests.mockReturnValue(
+        new Map([[LocalSystemManifest.identifier, LocalSystemManifest]]),
+      );
+      mockGetAgentConfig.mockResolvedValue(
+        createBaseAgentConfig({
+          agencyConfig: { boundDeviceId: 'dev-1', executionTarget: 'local' },
+        }),
+      );
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      const callArgs = mockCreateOperation.mock.calls[0][0];
+      expect(callArgs.toolSet.manifestMap[LocalSystemManifest.identifier]).toBe(
+        LocalSystemManifest,
+      );
+      expect(callArgs.activeDeviceId).toBe('dev-1');
+    });
+
+    it('keeps the in-process local-system manifest when no gateway is configured', async () => {
+      const { deviceGateway } = await import('@/server/services/deviceGateway');
+      vi.spyOn(deviceGateway, 'isConfigured', 'get').mockReturnValue(false);
+      mockGetEnabledPluginManifests.mockReturnValue(
+        new Map([[LocalSystemManifest.identifier, { ...LocalSystemManifest }]]),
+      );
+      mockGetAgentConfig.mockResolvedValue(createBaseAgentConfig());
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      const callArgs = mockCreateOperation.mock.calls[0][0];
+      expect(callArgs.toolSet.manifestMap[LocalSystemManifest.identifier]).toBeDefined();
+      expect(callArgs.toolSet.executorMap[LocalSystemManifest.identifier]).toBe('client');
+      expect(callArgs.appContext.onlineDeviceCount).toBe(0);
+    });
+  });
+
+  describe('device-only skills and market search', () => {
+    const skillIdentifiers = () =>
+      (
+        mockCreateOperation.mock.calls[0][0].operationSkillSet?.skills as {
+          identifier: string;
+        }[]
+      ).map((skill) => skill.identifier);
+
+    it('omits lobe-agent-browser when the bound device is offline', async () => {
+      const { deviceGateway } = await import('@/server/services/deviceGateway');
+      vi.spyOn(deviceGateway, 'isConfigured', 'get').mockReturnValue(true);
+      mockQueryDeviceList.mockResolvedValue([
+        { deviceId: 'dev-other', hostname: 'Other', online: true, platform: 'linux' },
+      ]);
+      mockGetAgentConfig.mockResolvedValue(
+        createBaseAgentConfig({
+          agencyConfig: { boundDeviceId: 'dev-1', executionTarget: 'device' },
+        }),
+      );
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      expect(skillIdentifiers()).toContain(ArtifactsIdentifier);
+      expect(skillIdentifiers()).not.toContain(AgentBrowserIdentifier);
+      expect(mockCreateOperation.mock.calls[0][0].appContext.onlineDeviceCount).toBe(1);
+    });
+
+    it('lists lobe-agent-browser when one device is auto-routed', async () => {
+      const { deviceGateway } = await import('@/server/services/deviceGateway');
+      vi.spyOn(deviceGateway, 'isConfigured', 'get').mockReturnValue(true);
+      mockQueryDeviceList.mockResolvedValue([
+        { deviceId: 'dev-1', hostname: 'My PC', online: true, platform: 'win32' },
+      ]);
+      mockGetAgentConfig.mockResolvedValue(
+        createBaseAgentConfig({ agencyConfig: { executionTarget: 'auto' } }),
+      );
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      expect(skillIdentifiers()).toContain(AgentBrowserIdentifier);
+      expect(mockCreateOperation.mock.calls[0][0].appContext.onlineDeviceCount).toBe(1);
+    });
+
+    it('removes searchSkill from a cloned skill-store manifest when there is no market token', async () => {
+      mockGetRawUserSettings.mockResolvedValue({
+        market: { accessToken: '   ' },
+      });
+      const sharedManifest = {
+        api: [
+          { description: 'search', name: SkillStoreApiName.searchSkill, parameters: {} },
+          { description: 'import', name: SkillStoreApiName.importSkill, parameters: {} },
+        ],
+        identifier: SkillStoreIdentifier,
+        meta: { title: 'Skill Store' },
+        systemRole: 'use searchSkill',
+      };
+      mockGetEnabledPluginManifests.mockReturnValue(
+        new Map([[SkillStoreIdentifier, sharedManifest]]),
+      );
+      mockGenerateToolsDetailed.mockReturnValue({
+        enabledToolIds: [SkillStoreIdentifier],
+        tools: [
+          {
+            function: { name: `${SkillStoreIdentifier}____${SkillStoreApiName.searchSkill}` },
+            type: 'function',
+          },
+          {
+            function: {
+              name: `${SkillStoreIdentifier}____${SkillStoreApiName.importSkill}`,
+            },
+            type: 'function',
+          },
+        ],
+      });
+      mockGetAgentConfig.mockResolvedValue(createBaseAgentConfig());
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      const toolSet = mockCreateOperation.mock.calls[0][0].toolSet;
+      const manifestApis = toolSet.manifestMap[SkillStoreIdentifier].api as { name: string }[];
+      const toolNames = toolSet.tools.map(
+        (tool: { function: { name: string } }) => tool.function.name,
+      );
+      expect(sharedManifest.api.map((api) => api.name)).toEqual([
+        SkillStoreApiName.searchSkill,
+        SkillStoreApiName.importSkill,
+      ]);
+      expect(manifestApis.map((api) => api.name)).toEqual([SkillStoreApiName.importSkill]);
+      expect(toolSet.manifestMap[SkillStoreIdentifier].systemRole).toContain(
+        'Do not call searchSkill',
+      );
+      expect(sharedManifest.systemRole).toBe('use searchSkill');
+      expect(toolNames).toEqual([`${SkillStoreIdentifier}____${SkillStoreApiName.importSkill}`]);
+    });
+
+    it('keeps searchSkill when a market access token is configured', async () => {
+      mockGetRawUserSettings.mockResolvedValue({
+        market: { accessToken: 'market-token' },
+      });
+      const sharedManifest = {
+        api: [
+          { description: 'search', name: SkillStoreApiName.searchSkill, parameters: {} },
+          { description: 'import', name: SkillStoreApiName.importSkill, parameters: {} },
+        ],
+        identifier: SkillStoreIdentifier,
+      };
+      mockGetEnabledPluginManifests.mockReturnValue(
+        new Map([[SkillStoreIdentifier, sharedManifest]]),
+      );
+      mockGenerateToolsDetailed.mockReturnValue({
+        enabledToolIds: [SkillStoreIdentifier],
+        tools: [
+          {
+            function: { name: `${SkillStoreIdentifier}____${SkillStoreApiName.searchSkill}` },
+            type: 'function',
+          },
+        ],
+      });
+      mockGetAgentConfig.mockResolvedValue(createBaseAgentConfig());
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'Hello' });
+
+      const toolSet = mockCreateOperation.mock.calls[0][0].toolSet;
+      expect(toolSet.manifestMap[SkillStoreIdentifier]).toBe(sharedManifest);
+      expect(toolSet.tools).toHaveLength(1);
     });
   });
 });

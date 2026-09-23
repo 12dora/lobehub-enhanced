@@ -9,12 +9,15 @@ interface MockOrgCredRow {
 }
 
 const {
+  mockListConnections,
   mockOrgCredsList,
   mockPersonalCredsList,
   mockPersonalCredsShare,
   mockPersonalCredsPublish,
   mockPersonalCredsUnshare,
+  sdkAuth,
 } = vi.hoisted(() => ({
+  mockListConnections: vi.fn(async () => ({ connections: [{ id: 'conn-1' }], success: true })),
   mockOrgCredsList: vi.fn(async (): Promise<{ data: MockOrgCredRow[] }> => ({
     data: [{ id: 1, key: 'ORG_SECRET' }],
   })),
@@ -22,6 +25,13 @@ const {
   mockPersonalCredsPublish: vi.fn(async (id: number) => ({ id, visibility: 'public' })),
   mockPersonalCredsShare: vi.fn(async (id: number) => ({ id, visibility: 'private' })),
   mockPersonalCredsUnshare: vi.fn(async (id: number) => ({ id, visibility: 'private' })),
+  // Mirrors what MarketService writes onto the SDK. `trustedToken` is applied
+  // only when the procedure passes `userInfo` (trusted-client configuration).
+  sdkAuth: {
+    clientId: undefined as string | undefined,
+    clientSecret: undefined as string | undefined,
+    trustedToken: undefined as string | undefined,
+  },
 }));
 
 vi.mock('@/business/server/trpc-middlewares/rbacPermission', () => ({
@@ -55,24 +65,58 @@ vi.mock('@/libs/trpc/lambda/middleware', () => ({
 }));
 
 vi.mock('@/server/services/market', () => ({
-  MarketService: vi.fn(() => ({
-    market: {
-      creds: {
-        list: mockPersonalCredsList,
-        publish: mockPersonalCredsPublish,
-        share: mockPersonalCredsShare,
-        unshare: mockPersonalCredsUnshare,
-      },
-      organizations: {
-        creds: vi.fn(() => ({ list: mockOrgCredsList })),
-      },
+  MarketService: vi.fn(
+    (options?: {
+      accessToken?: string;
+      clientCredentials?: { clientId?: string; clientSecret?: string };
+      trustedClientToken?: string;
+      userInfo?: unknown;
+    }) => {
+      const headers: Record<string, string> = {};
+      const accessToken = options?.accessToken?.trim();
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+      const trusted =
+        options?.trustedClientToken?.trim() ||
+        (options?.userInfo ? sdkAuth.trustedToken?.trim() : undefined);
+      if (trusted) headers['x-lobe-trust-token'] = trusted;
+
+      const clientId = options?.clientCredentials?.clientId?.trim() || sdkAuth.clientId?.trim();
+      const clientSecret =
+        options?.clientCredentials?.clientSecret?.trim() || sdkAuth.clientSecret?.trim();
+
+      return {
+        market: {
+          clientId,
+          clientSecret,
+          connect: {
+            clientId,
+            clientSecret,
+            headers,
+            listConnections: mockListConnections,
+          },
+          creds: {
+            list: mockPersonalCredsList,
+            publish: mockPersonalCredsPublish,
+            share: mockPersonalCredsShare,
+            unshare: mockPersonalCredsUnshare,
+          },
+          headers,
+          organizations: {
+            creds: vi.fn(() => ({ list: mockOrgCredsList })),
+          },
+        },
+      };
     },
-  })),
+  ),
 }));
 
 describe('credsRouter is always personal-scoped', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sdkAuth.clientId = undefined;
+    sdkAuth.clientSecret = undefined;
+    sdkAuth.trustedToken = undefined;
   });
 
   // `market.creds` is the personal-creds router used directly by the browser
@@ -264,5 +308,78 @@ describe('credsRouter share/publish/unshare', () => {
       code: 'FORBIDDEN',
       message: 'Not a member of this organization',
     });
+  });
+});
+
+describe('credsRouter.listOAuthConnections', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sdkAuth.clientId = undefined;
+    sdkAuth.clientSecret = undefined;
+    sdkAuth.trustedToken = undefined;
+  });
+
+  it('returns an empty list and does not call market when the access token is missing', async () => {
+    const { credsRouter } = await import('./creds');
+    const caller = credsRouter.createCaller({ userId: 'user-1' } as any);
+
+    await expect(caller.listOAuthConnections()).resolves.toEqual({
+      connections: [],
+      success: true,
+    });
+    expect(mockListConnections).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty list when the access token is blank', async () => {
+    const { credsRouter } = await import('./creds');
+    const caller = credsRouter.createCaller({
+      marketAccessToken: '   ',
+      userId: 'user-1',
+    } as any);
+
+    await expect(caller.listOAuthConnections()).resolves.toEqual({
+      connections: [],
+      success: true,
+    });
+    expect(mockListConnections).not.toHaveBeenCalled();
+  });
+
+  it('lists connections when a market access token is present', async () => {
+    const { credsRouter } = await import('./creds');
+    const caller = credsRouter.createCaller({
+      marketAccessToken: 'market-token',
+      userId: 'user-1',
+    } as any);
+
+    await expect(caller.listOAuthConnections()).resolves.toEqual({
+      connections: [{ id: 'conn-1' }],
+      success: true,
+    });
+    expect(mockListConnections).toHaveBeenCalledOnce();
+  });
+
+  it('lists connections for a trusted-user configuration without a bearer token', async () => {
+    sdkAuth.trustedToken = 'trust-token';
+    const { credsRouter } = await import('./creds');
+    const caller = credsRouter.createCaller({ userId: 'user-1' } as any);
+
+    await expect(caller.listOAuthConnections()).resolves.toEqual({
+      connections: [{ id: 'conn-1' }],
+      success: true,
+    });
+    expect(mockListConnections).toHaveBeenCalledOnce();
+  });
+
+  it('lists connections for a client-credential configuration without a bearer token', async () => {
+    sdkAuth.clientId = 'client-id';
+    sdkAuth.clientSecret = 'client-secret';
+    const { credsRouter } = await import('./creds');
+    const caller = credsRouter.createCaller({ userId: 'user-1' } as any);
+
+    await expect(caller.listOAuthConnections()).resolves.toEqual({
+      connections: [{ id: 'conn-1' }],
+      success: true,
+    });
+    expect(mockListConnections).toHaveBeenCalledOnce();
   });
 });

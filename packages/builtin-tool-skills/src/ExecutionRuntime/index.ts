@@ -30,6 +30,7 @@ export interface SkillImportServiceResult {
 }
 
 export interface ExportFileResult {
+  error?: { message?: string };
   fileId?: string;
   filename: string;
   mimeType?: string;
@@ -248,8 +249,11 @@ export class SkillsExecutionRuntime {
       const result = await this.service.exportFile(path, filename);
 
       if (!result.success) {
+        const detail = result.error?.message?.trim();
         return {
-          content: `Failed to export file: ${filename}`,
+          content: detail
+            ? `Failed to export file: ${filename}: ${detail}`
+            : `Failed to export file: ${filename}`,
           success: false,
         };
       }

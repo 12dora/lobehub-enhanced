@@ -22,6 +22,7 @@ import {
   injectSelfFeedbackIntentTool,
   shouldExposeSelfFeedbackIntentTool,
 } from '@lobechat/builtin-tool-self-iteration/inject';
+import { SkillStoreApiName, SkillStoreIdentifier } from '@lobechat/builtin-tool-skill-store';
 import { TaskIdentifier } from '@lobechat/builtin-tool-task/manifest';
 import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing/manifest';
 import { LOADING_FLAT } from '@lobechat/const';
@@ -98,6 +99,7 @@ import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
 import { toolsEnv } from '@/envs/tools';
 import {
+  canRunDeviceOnlySkills,
   type ExecutionPlan,
   executionTargetToRuntimeMode,
   isDeviceCapablePlan,
@@ -185,6 +187,7 @@ import { FileService } from '@/server/services/file';
 import { resolveAttachmentsByFileIds } from '@/server/services/file/resolveAttachments';
 import type { ConversationHistoryEntry } from '@/server/services/heterogeneousAgent/cloudHeteroContext';
 import { MarketService } from '@/server/services/market';
+import { getMemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 import { createSandboxService } from '@/server/services/sandbox';
 import { markdownToTxt } from '@/utils/markdownToTxt';
 
@@ -2548,6 +2551,9 @@ export class AiAgentService {
     // Captured from the same getUserSettings() as timezone so skill disable
     // does not issue a second user_settings read.
     let userToolConfig: UserToolConfig | undefined;
+    // Same row. Empty means market search would 401, so searchSkill is stripped
+    // from the skill-store manifest below.
+    let marketAccessToken: string | undefined;
     // Resolved once below (alongside the group-tool authorization fetch) and
     // forwarded into op metadata for the per-step context engine.
     let operationAgentGroup: AgentGroupConfig | undefined;
@@ -2573,6 +2579,7 @@ export class AiAgentService {
       const generalSettings = settings?.general as { timezone?: string } | undefined;
       userTimezone = generalSettings?.timezone;
       userToolConfig = settings?.tool as UserToolConfig | undefined;
+      marketAccessToken = (settings?.market as { accessToken?: string } | undefined)?.accessToken;
     } catch (error) {
       log('execAgent: failed to fetch user settings: %O', error);
     }
@@ -3181,6 +3188,21 @@ export class AiAgentService {
 
       // Live capability read (30 s cache) so a cold peek never hides enabled DingTalk tools.
       const dingtalkCapabilities = await getDingtalkWorkspaceCapabilities();
+      // Only a definitive `{ available: false }` hides memory. A thrown probe
+      // is not that answer — fail open so a db/settings blip keeps the tool.
+      let memoryEmbeddingAvailable: boolean;
+      try {
+        memoryEmbeddingAvailable = (
+          await getMemoryEmbeddingAvailability({
+            db: this.db,
+            userId: this.userId,
+            workspaceId: this.workspaceId,
+          })
+        ).available;
+      } catch (error) {
+        memoryEmbeddingAvailable = true;
+        log('execAgent: memory embedding availability failed, failing open: %O', error);
+      }
       const toolsEngine = createServerAgentToolsEngine(toolsContext, {
         additionalManifests: [
           ...activeLobehubSkillManifests,
@@ -3204,11 +3226,16 @@ export class AiAgentService {
         exactBuiltinToolIds: platformExecutionPlan?.policy.exactBuiltinToolIds,
         executionPlan,
         globalMemoryEnabled,
+        memoryEmbeddingAvailable,
         hasEnabledKnowledgeBases,
         isBotConversation,
         isGroupSupervisor,
         useApplicationBuiltinSearchTool: searchDecision.useApplicationBuiltinSearchTool,
-        enterpriseLookupConfigured: await isEnterpriseLookupConfigured(),
+        // A settings read failure must not fail the whole run; treat lookup as off.
+        enterpriseLookupConfigured: await isEnterpriseLookupConfigured().catch((error) => {
+          log('execAgent: enterprise lookup config read failed: %O', error);
+          return false;
+        }),
         dingtalkApprovalEnabled: dingtalkCapabilities.approval,
         dingtalkWorkspaceEnabled: dingtalkCapabilities.todo || dingtalkCapabilities.calendar,
         // Context-aware builtin manifests: inside a sub-agent (or group) run,
@@ -3385,14 +3412,16 @@ export class AiAgentService {
       // lobe-local-system has `discoverable: isDesktop` in builtinTools, which
       // evaluates to false on the Node.js server side, so it never enters the
       // loop above. Explicitly inject it only when the device gateway is
-      // configured AND the plan's target is 'local' — skip for sandbox/none
-      // targets to avoid leaking local-system into non-local sessions. (The
-      // plan already degrades to `none` when device access is denied, so no
-      // separate `canUseDevice` check is needed here.)
+      // configured, a device is online, and this run is already routed to one
+      // (`activeDeviceId`). A `local` target with nothing online used to inject
+      // the manifest anyway; activation then pasted unreplaced `{{hostname}}`
+      // placeholders and the shell call failed with "activeDeviceId is required".
       if (
         !platformOperationPin &&
         !disableLocalSystem &&
         gatewayConfigured &&
+        deviceOnline &&
+        activeDeviceId &&
         agentRuntimeMode === 'local' &&
         !toolManifestMap[LocalSystemManifest.identifier]
       ) {
@@ -3400,6 +3429,14 @@ export class AiAgentService {
           LocalSystemManifest as LobeToolManifest,
         );
         toolSourceMap[LocalSystemManifest.identifier] = 'builtin';
+      }
+
+      // The engine seed can still place local-system on a device-capable but
+      // unrouted plan. Drop it when this gateway run has no device to run it.
+      // Standalone Electron (no gateway) keeps the manifest and marks it
+      // `client` below — that process is the device.
+      if (gatewayConfigured && !activeDeviceId) {
+        delete toolManifestMap[LocalSystemManifest.identifier];
       }
 
       // Include lobehub skill and composio manifests for activator discovery.
@@ -3498,6 +3535,34 @@ export class AiAgentService {
             tools,
           });
           log('execAgent: injected self-feedback intent declaration tool');
+        }
+      }
+
+      // No market access token: searchSkill only 401s. Remove it from the
+      // manifest copy the model sees, and from the prebuilt tool schemas.
+      // Clone — the builtin SkillStoreManifest is shared across runs.
+      if (!marketAccessToken?.trim()) {
+        const skillStoreManifest = toolManifestMap[SkillStoreIdentifier];
+        if (skillStoreManifest?.api) {
+          const unavailableNote =
+            'Market search is not configured for this user. Do not call searchSkill.';
+          const systemRole = skillStoreManifest.systemRole
+            ? `${skillStoreManifest.systemRole}\n\n${unavailableNote}`
+            : skillStoreManifest.systemRole;
+          toolManifestMap[SkillStoreIdentifier] = {
+            ...skillStoreManifest,
+            api: skillStoreManifest.api.filter(
+              (api: { name?: string }) => api.name !== SkillStoreApiName.searchSkill,
+            ),
+            systemRole,
+          };
+        }
+        const searchSkillToolName = `${SkillStoreIdentifier}____${SkillStoreApiName.searchSkill}`;
+        if (tools) {
+          tools = tools.filter(
+            (tool: { function?: { name?: string } }) =>
+              !tool.function?.name?.startsWith(searchSkillToolName),
+          );
         }
       }
     }
@@ -4133,19 +4198,20 @@ export class AiAgentService {
           },
         );
 
-        // Device-only builtin skills (agent-browser) are gated on the run's
-        // execution plan, not the compile-time `isDesktop` constant (always false
-        // on the server). Gate the static `<available_skills>` listing on the
-        // device-CAPABLE plan rather than `activeDeviceId`: `device-unrouted`
-        // runs let the model pick a device mid-run, and this skill set is built
-        // once per operation — gating on `activeDeviceId` would hide the skill
-        // forever in those runs. Activation/loading apply the same plan gate via
-        // `ToolExecutionContext.deviceCapable`; only actual command execution is
-        // gated at the device tool layer.
+        // Device-only builtin skills (agent-browser) have no sandbox fallback.
+        // `canRunDeviceOnlySkills` is narrower than `isDeviceCapablePlan`: a
+        // routed device stays listed, ambiguous online devices stay listed so
+        // the model can pick one, and unrouted runs with nothing reachable
+        // (no device online, or locked to an offline machine) do not. Office
+        // and other sandbox skills are not in that set and stay listed.
         const skillEngine = new SkillEngine({
           enableChecker: (skill) =>
             shouldEnableBuiltinSkill(skill.identifier, {
-              canExecuteOnDevice: executionPlan ? isDeviceCapablePlan(executionPlan) : false,
+              canExecuteOnDevice: executionPlan
+                ? canRunDeviceOnlySkills(executionPlan, {
+                    onlineDeviceCount: onlineDevices.length,
+                  })
+                : false,
             }),
           skills,
         });
@@ -4177,40 +4243,48 @@ export class AiAgentService {
         executionPlan,
         searchDecision,
         userTimezone,
-        appContext: {
-          // Background self-iteration runs execute under a builtin slug (so they
-          // inherit the builtin agent's tools / systemRole / model), but their
-          // resource tools and receipts must attribute to the *reviewed* user
-          // agent, which rides on the marker. Prefer it so the tool-execution
-          // context (state.metadata.agentId) targets the reviewed agent; ordinary
-          // runs (no marker) fall back to the resolved executing agent.
-          agentId: appContext?.agentSignal?.agentId ?? resolvedAgentId,
-          // When scope === 'agent_builder', agentId stays as the builder builtin so
-          // message ownership and queryUiMessages remain correct. editingAgentId
-          // carries the actual editing target separately; only the AgentBuilder server
-          // runtime reads it, keeping the rest of the pipeline unaffected.
-          ...(appContext?.scope === 'agent_builder' && appContext?.editingAgentId
-            ? { editingAgentId: appContext.editingAgentId }
-            : {}),
-          // Run-scoped Agent Signal marker for background self-iteration / memory
-          // runs — lands in state.metadata.agentSignal so the completion path can
-          // project receipts/briefs. Undefined for ordinary chat runs.
-          ...(appContext?.agentSignal ? { agentSignal: appContext.agentSignal } : {}),
-          defaultTaskAssigneeAgentId: appContext?.defaultTaskAssigneeAgentId,
-          documentId: appContext?.documentId,
-          groupId: appContext?.groupId,
-          isSubAgent: appContext?.isSubAgent,
-          // Persist the orchestration role on state.metadata so the
-          // inactivity-watchdog abandon path can distinguish an isolated group
-          // member ('member') from a genuine callSubAgent child.
-          orchestrationRole: appContext?.orchestrationRole,
-          scope: appContext?.scope,
-          sourceMessageId: userMessageRecord?.id ?? parentMessageId ?? undefined,
-          taskId: operationTaskId,
-          threadId: appContext?.threadId,
-          topicId,
-          trigger,
-        },
+        // `onlineDeviceCount` is not an appContext field. AgentRuntimeService
+        // spreads this object onto `state.metadata` beside `executionPlan`, so
+        // mid-run skill gates can see how many devices were online when the
+        // plan was resolved (`no-bound-device` needs the count; the plan does
+        // not store it).
+        appContext: Object.assign(
+          {
+            // Background self-iteration runs execute under a builtin slug (so they
+            // inherit the builtin agent's tools / systemRole / model), but their
+            // resource tools and receipts must attribute to the *reviewed* user
+            // agent, which rides on the marker. Prefer it so the tool-execution
+            // context (state.metadata.agentId) targets the reviewed agent; ordinary
+            // runs (no marker) fall back to the resolved executing agent.
+            agentId: appContext?.agentSignal?.agentId ?? resolvedAgentId,
+            // When scope === 'agent_builder', agentId stays as the builder builtin so
+            // message ownership and queryUiMessages remain correct. editingAgentId
+            // carries the actual editing target separately; only the AgentBuilder server
+            // runtime reads it, keeping the rest of the pipeline unaffected.
+            ...(appContext?.scope === 'agent_builder' && appContext?.editingAgentId
+              ? { editingAgentId: appContext.editingAgentId }
+              : {}),
+            // Run-scoped Agent Signal marker for background self-iteration / memory
+            // runs — lands in state.metadata.agentSignal so the completion path can
+            // project receipts/briefs. Undefined for ordinary chat runs.
+            ...(appContext?.agentSignal ? { agentSignal: appContext.agentSignal } : {}),
+            defaultTaskAssigneeAgentId: appContext?.defaultTaskAssigneeAgentId,
+            documentId: appContext?.documentId,
+            groupId: appContext?.groupId,
+            isSubAgent: appContext?.isSubAgent,
+            // Persist the orchestration role on state.metadata so the
+            // inactivity-watchdog abandon path can distinguish an isolated group
+            // member ('member') from a genuine callSubAgent child.
+            orchestrationRole: appContext?.orchestrationRole,
+            scope: appContext?.scope,
+            sourceMessageId: userMessageRecord?.id ?? parentMessageId ?? undefined,
+            taskId: operationTaskId,
+            threadId: appContext?.threadId,
+            topicId,
+            trigger,
+          },
+          { onlineDeviceCount: onlineDevices.length },
+        ),
         connectorApprovalReceipt: trustedConnectorApprovalReceipt,
         autoStart,
         botContext: platformOperationPin ? undefined : botContext,

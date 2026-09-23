@@ -4,6 +4,7 @@ import {
   LocalSystemManifest,
 } from '@lobechat/builtin-tool-local-system';
 
+import { noteRuntimeError } from '@/server/enterprise/services/platformSystem/noteRuntimeError';
 import { deviceGateway } from '@/server/services/deviceGateway';
 
 import { resolveRunWorkspaceId } from './resolveWorkspaceScope';
@@ -46,7 +47,9 @@ export const localSystemRuntime: ServerRuntimeRegistration = {
       throw new Error('userId is required for Local System device proxy execution');
     }
     if (!context.activeDeviceId) {
-      throw new Error('activeDeviceId is required for Local System device proxy execution');
+      const error = new Error('activeDeviceId is required for Local System device proxy execution');
+      noteRuntimeError('local_system', error, { operation: 'activeDeviceId' });
+      throw error;
     }
 
     // Resolve the workspace scope the same way `remote-device` does, recovering

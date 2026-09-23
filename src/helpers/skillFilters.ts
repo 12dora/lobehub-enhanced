@@ -5,12 +5,19 @@ import { type BuiltinSkill, type SkillItem, type SkillListItem } from '@lobechat
 export interface BuiltinSkillFilterContext {
   /**
    * Whether the current run can execute commands on a local device. Server-side
-   * callers must derive this from the run's execution plan (`activeDeviceId`
-   * presence) — the compile-time `isDesktop` constant is always false there.
+   * callers must derive this from the run's execution plan via
+   * `canRunDeviceOnlySkills` (`@/helpers/executionTarget`) — NOT the broader
+   * `isDeviceCapablePlan`, which also counts unrouted runs with no online
+   * device (e.g. a bot owner with no desktop running) where device-only skills
+   * have nowhere to run. The compile-time `isDesktop` constant is always false
+   * on the server.
    */
   canExecuteOnDevice: boolean;
 }
 
+// Skills with no sandbox fallback — they need a real device (e.g. a desktop to
+// drive a browser). Sandbox-capable skills (office / document tools) must NOT
+// be listed here.
 const DEVICE_ONLY_BUILTIN_SKILLS = new Set([AgentBrowserIdentifier]);
 const USER_HIDDEN_BUILTIN_SKILLS = new Set(['task']);
 

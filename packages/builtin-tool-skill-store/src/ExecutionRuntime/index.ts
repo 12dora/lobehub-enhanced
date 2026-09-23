@@ -27,6 +27,25 @@ export interface SkillStoreExecutionRuntimeOptions {
   service: SkillStoreRuntimeService;
 }
 
+const isMarketSearchUnauthorized = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as {
+    errorBody?: { error?: unknown; error_description?: unknown };
+    message?: unknown;
+    status?: unknown;
+  };
+  if (record.status === 401) return true;
+  const message = typeof record.message === 'string' ? record.message.trim().toLowerCase() : '';
+  if (message === 'unauthorized' || message.includes('missing bearer token')) return true;
+  const bodyError = record.errorBody?.error;
+  const bodyDescription = record.errorBody?.error_description;
+  return (
+    (typeof bodyError === 'string' && bodyError.toLowerCase() === 'unauthorized') ||
+    (typeof bodyDescription === 'string' &&
+      bodyDescription.toLowerCase().includes('missing bearer token'))
+  );
+};
+
 export class SkillStoreExecutionRuntime {
   private service: SkillStoreRuntimeService;
 
@@ -127,6 +146,14 @@ export class SkillStoreExecutionRuntime {
         success: true,
       };
     } catch (e) {
+      // A missing market token comes back as 401 / "unauthorized". That is
+      // "search is not offered here", same as a runtime with no searchSkill.
+      if (isMarketSearchUnauthorized(e)) {
+        return {
+          content: 'Market skill search is not available in this environment.',
+          success: false,
+        };
+      }
       return {
         content: `Failed to search skills: ${(e as Error).message}`,
         success: false,

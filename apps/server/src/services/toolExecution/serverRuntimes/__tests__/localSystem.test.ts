@@ -7,6 +7,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type ToolExecutionContext } from '../../types';
 
+const noteRuntimeError = vi.hoisted(() => vi.fn());
+
+vi.mock('@/server/enterprise/services/platformSystem/noteRuntimeError', () => ({
+  noteRuntimeError,
+}));
+
 // Mock deviceGateway
 const mockExecuteToolCall = vi.fn();
 vi.mock('@/server/services/deviceGateway', () => ({
@@ -37,6 +43,7 @@ describe('localSystemRuntime', () => {
       expect(() => localSystemRuntime.factory(context)).toThrow(
         'userId is required for Local System device proxy execution',
       );
+      expect(noteRuntimeError).not.toHaveBeenCalled();
     });
 
     it('should throw when activeDeviceId is missing', () => {
@@ -47,6 +54,13 @@ describe('localSystemRuntime', () => {
 
       expect(() => localSystemRuntime.factory(context)).toThrow(
         'activeDeviceId is required for Local System device proxy execution',
+      );
+      expect(noteRuntimeError).toHaveBeenCalledWith(
+        'local_system',
+        expect.objectContaining({
+          message: 'activeDeviceId is required for Local System device proxy execution',
+        }),
+        { operation: 'activeDeviceId' },
       );
     });
 
