@@ -1,6 +1,8 @@
 import { type ToolManifest } from '@lobechat/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type * as UserMemorySelectorsModule from '@/store/userMemory/selectors';
+
 import { createAgentToolsEngine, createToolsEngine, getEnabledTools } from './index';
 
 // Mock the store and helper dependencies
@@ -166,6 +168,22 @@ vi.mock('@/store/tool', () => ({
         } as unknown as ToolManifest,
         type: 'builtin' as const,
       },
+      {
+        identifier: 'lobe-user-memory',
+        manifest: {
+          api: [
+            {
+              description: 'Search user memories',
+              name: 'searchUserMemory',
+              parameters: { properties: {}, type: 'object' },
+            },
+          ],
+          identifier: 'lobe-user-memory',
+          meta: { title: 'Memory', avatar: '🧠' },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
     ],
   }),
 }));
@@ -231,11 +249,42 @@ vi.mock('@/store/serverConfig', () => ({
   }),
 }));
 
+let mockGlobalMemoryEnabled = false;
+
 vi.mock('@/store/user/selectors', () => ({
   settingsSelectors: {
-    memoryEnabled: () => false,
+    memoryEnabled: () => mockGlobalMemoryEnabled,
   },
 }));
+
+const CURRENT_SCOPE = 'user-1:personal';
+let mockCacheScope = CURRENT_SCOPE;
+
+vi.mock('@/libs/swr/useCacheScope', () => ({
+  getCacheScope: () => mockCacheScope,
+}));
+
+let mockEmbeddingAvailabilityMap: Record<string, { available: boolean }> = {};
+
+// Real selectors against a scope-keyed map, so the test covers the lookup by
+// the current cache scope.
+vi.mock('@/store/userMemory', async () => {
+  const { userMemorySelectors } = await vi.importActual<typeof UserMemorySelectorsModule>(
+    '@/store/userMemory/selectors',
+  );
+
+  return {
+    getUserMemoryStoreState: () => ({
+      memoryEmbeddingAvailabilityMap: mockEmbeddingAvailabilityMap,
+    }),
+    userMemorySelectors,
+  };
+});
+
+/** Set the availability for the current scope (`undefined` = not loaded). */
+const setCurrentScopeAvailability = (available: boolean | undefined) => {
+  mockEmbeddingAvailabilityMap = available === undefined ? {} : { [CURRENT_SCOPE]: { available } };
+};
 
 let mockUseApplicationBuiltinSearchTool = true;
 
@@ -257,6 +306,9 @@ describe('toolEngineering', () => {
     mockEnableAgentMode = undefined;
     mockIsCanUseFC = true;
     mockDingtalkCaps = {};
+    mockGlobalMemoryEnabled = false;
+    mockCacheScope = CURRENT_SCOPE;
+    mockEmbeddingAvailabilityMap = {};
   });
 
   describe('createToolsEngine', () => {
@@ -744,6 +796,89 @@ describe('toolEngineering', () => {
       });
 
       expect(result.enabledToolIds).toContain('lobe-enterprise-lookup');
+    });
+  });
+
+  describe('memory embedding availability gate', () => {
+    const generate = (options: { explicit?: boolean; toolIds?: string[] } = {}) =>
+      createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' }).generateToolsDetailed({
+        context: options.explicit ? { isExplicitActivation: true } : undefined,
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds: options.toolIds ?? [],
+      });
+
+    it('keeps the memory tool when the toggle is on and availability is not loaded yet', () => {
+      mockGlobalMemoryEnabled = true;
+      setCurrentScopeAvailability(undefined);
+
+      expect(generate().enabledToolIds).toContain('lobe-user-memory');
+    });
+
+    it('keeps the memory tool when the toggle is on and embeddings are available', () => {
+      mockGlobalMemoryEnabled = true;
+      setCurrentScopeAvailability(true);
+
+      expect(generate().enabledToolIds).toContain('lobe-user-memory');
+    });
+
+    it('drops the memory tool from the pool when no embedding model is configured', () => {
+      mockGlobalMemoryEnabled = true;
+      setCurrentScopeAvailability(false);
+
+      const result = generate({ toolIds: ['lobe-user-memory'] });
+
+      expect(result.enabledToolIds).not.toContain('lobe-user-memory');
+      // Physically absent from the manifest pool, not merely rule-disabled.
+      expect(result.filteredTools).toContainEqual({ id: 'lobe-user-memory', reason: 'not_found' });
+    });
+
+    it('does not let explicit activation restore the memory tool without embeddings', () => {
+      mockGlobalMemoryEnabled = true;
+      setCurrentScopeAvailability(false);
+
+      const result = generate({ explicit: true, toolIds: ['lobe-user-memory'] });
+
+      expect(result.enabledToolIds).not.toContain('lobe-user-memory');
+    });
+
+    it('still respects the memory toggle when embeddings are available', () => {
+      mockGlobalMemoryEnabled = false;
+      setCurrentScopeAvailability(true);
+
+      const result = generate();
+
+      expect(result.enabledToolIds).not.toContain('lobe-user-memory');
+      expect(result.filteredTools).toContainEqual({ id: 'lobe-user-memory', reason: 'disabled' });
+    });
+
+    it('ignores an "unavailable" result from another account / workspace scope', () => {
+      mockGlobalMemoryEnabled = true;
+      // The previous scope confirmed no embedding model; the new scope has not
+      // been checked yet, so it must read as unknown and keep the tool.
+      mockEmbeddingAvailabilityMap = { 'user-1:workspace-a': { available: false } };
+      mockCacheScope = 'user-1:workspace-b';
+
+      expect(generate().enabledToolIds).toContain('lobe-user-memory');
+
+      // Once the new scope's own check lands, it alone decides.
+      mockEmbeddingAvailabilityMap = {
+        'user-1:workspace-a': { available: true },
+        'user-1:workspace-b': { available: false },
+      };
+
+      expect(generate().enabledToolIds).not.toContain('lobe-user-memory');
+    });
+
+    it('applies the same gate in chat mode', () => {
+      mockEnableAgentMode = false;
+      mockGlobalMemoryEnabled = true;
+
+      setCurrentScopeAvailability(undefined);
+      expect(generate().enabledToolIds).toContain('lobe-user-memory');
+
+      setCurrentScopeAvailability(false);
+      expect(generate().enabledToolIds).not.toContain('lobe-user-memory');
     });
   });
 

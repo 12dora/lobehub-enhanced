@@ -1,5 +1,7 @@
 import { type RetrieveMemoryParams, type RetrieveMemoryResult } from '@lobechat/types';
 
+import { type MemoryEmbeddingAvailability } from '@/services/userMemory';
+
 import { type ActivitySliceState } from './slices/activity';
 import { activityInitialState } from './slices/activity';
 import { type AgentMemorySliceState } from './slices/agent';
@@ -31,6 +33,12 @@ export interface UserMemoryStoreState
   editingMemoryContent?: string;
   editingMemoryId?: string;
   editingMemoryLayer?: 'activity' | 'context' | 'experience' | 'identity' | 'preference';
+  /**
+   * Embedding availability for the memory tool, keyed by cache scope
+   * (`${userId}:${workspaceId}`). A missing entry means unknown (not loaded for
+   * this scope yet, or the fetch failed) — callers must not hide the tool then.
+   */
+  memoryEmbeddingAvailabilityMap: Record<string, MemoryEmbeddingAvailability>;
   memoryFetchedAtMap: Record<string, number>;
   memoryMap: Record<string, RetrieveMemoryResult>;
   persona?: PersonaData;
@@ -52,6 +60,7 @@ export const initialState: UserMemoryStoreState = {
   editingMemoryContent: undefined,
   editingMemoryId: undefined,
   editingMemoryLayer: undefined,
+  memoryEmbeddingAvailabilityMap: {},
   memoryFetchedAtMap: {},
   memoryMap: {},
   persona: undefined,

@@ -1,22 +1,24 @@
-import { MemoryIdentifier } from '@lobechat/builtin-tool-memory';
+import {
+  describeMemoryFailure,
+  formatMemorySaveError,
+  MemoryIdentifier,
+  memoryUnavailableReason,
+} from '@lobechat/builtin-tool-memory';
 import {
   MemoryExecutionRuntime,
   type MemoryRuntimeService,
 } from '@lobechat/builtin-tool-memory/executionRuntime';
-import { BRANDING_PROVIDER, ENABLE_BUSINESS_FEATURES } from '@lobechat/business-const';
-import {
-  DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM,
-  MEMORY_SEARCH_TOP_K_LIMITS,
-} from '@lobechat/const';
+import { MEMORY_SEARCH_TOP_K_LIMITS } from '@lobechat/const';
 import type { LobeChatDatabase } from '@lobechat/database';
-import type {
+import {
   ActivityMemoryItemSchema,
-  AddIdentityActionSchema,
-  ContextMemoryItemSchema,
-  ExperienceMemoryItemSchema,
-  PreferenceMemoryItemSchema,
-  RemoveIdentityActionSchema,
-  UpdateIdentityActionSchema,
+  type AddIdentityActionSchema,
+  coerceActivityMemoryInput,
+  type ContextMemoryItemSchema,
+  type ExperienceMemoryItemSchema,
+  type PreferenceMemoryItemSchema,
+  type RemoveIdentityActionSchema,
+  type UpdateIdentityActionSchema,
 } from '@lobechat/memory-user-memory/schemas';
 import type {
   AddActivityMemoryResult,
@@ -32,6 +34,7 @@ import type {
   UpdateIdentityMemoryResult,
 } from '@lobechat/types';
 import { LayersEnum } from '@lobechat/types';
+import debug from 'debug';
 import type { z } from 'zod';
 
 import {
@@ -40,7 +43,6 @@ import {
   UserMemoryModel,
 } from '@/database/models/userMemory';
 import { getEffectiveMemorySettings } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
-import { getServerDefaultFilesConfig } from '@/server/globalConfig';
 import {
   initModelRuntimeFromDB,
   initModelRuntimeWithUserPayload,
@@ -58,10 +60,13 @@ import {
 import { redisPolicyStateStore } from '@/server/services/agentSignal/store/adapters/redis/policyStateStore';
 import type { UserMemoryEmbeddingRuntime } from '@/server/services/memory/userMemory/embedding';
 import { embedUserMemoryTexts } from '@/server/services/memory/userMemory/embedding';
+import { getMemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 import { normalizeSearchMemoryParams } from '@/server/services/memory/userMemory/searchParams';
 
 import type { ToolExecutionMemoryEmbeddingRuntime } from '../types';
 import type { ServerRuntimeRegistration } from './types';
+
+const log = debug('lobe-server:user-memory-runtime');
 
 type MemoryEffort = 'high' | 'low' | 'medium';
 
@@ -92,22 +97,57 @@ const applySearchLimitsByEffort = (
   };
 };
 
+const unavailableSearchResult = (reason: string): SearchMemoryResult & { reason: string } => ({
+  activities: [],
+  contexts: [],
+  experiences: [],
+  identities: [],
+  meta: {
+    appliedFilters: {},
+    appliedQueries: [],
+    layers: {
+      activities: { hasMore: false, returned: 0, total: 0 },
+      contexts: { hasMore: false, returned: 0, total: 0 },
+      experiences: { hasMore: false, returned: 0, total: 0 },
+      identities: { hasMore: false, returned: 0, total: 0 },
+      preferences: { hasMore: false, returned: 0, total: 0 },
+    },
+  },
+  preferences: [],
+  reason,
+});
+
 const getEmbeddingRuntime = async (
   serverDB: LobeChatDatabase,
   userId: string,
   workspaceId?: string,
 ) => {
-  const { provider, model: embeddingModel } =
-    getServerDefaultFilesConfig().embeddingModel || DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM;
+  const availability = await getMemoryEmbeddingAvailability({
+    db: serverDB,
+    userId,
+    workspaceId,
+  });
+  if (!availability.available || !availability.provider || !availability.model) {
+    const error = new Error(
+      availability.reason === 'not_configured'
+        ? 'Memory embedding is not configured'
+        : 'Memory embedding provider has no usable credentials',
+    ) as Error & { errorType?: string };
+    error.errorType =
+      availability.reason === 'missing_credentials'
+        ? 'InvalidProviderAPIKey'
+        : 'EmbeddingNotConfigured';
+    throw error;
+  }
 
   const agentRuntime = await initModelRuntimeFromDB(
     serverDB,
     userId,
-    ENABLE_BUSINESS_FEATURES ? BRANDING_PROVIDER : provider,
+    availability.provider,
     workspaceId,
   );
 
-  return { agentRuntime, embeddingModel };
+  return { agentRuntime, embeddingModel: availability.model, provider: availability.provider };
 };
 
 const createEmbedder = (
@@ -216,41 +256,58 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
 
   searchMemory = async (params: SearchMemoryParams): Promise<SearchMemoryResult> => {
     const normalizedParams = normalizeSearchMemoryParams(params);
-    const defaultEmbeddingConfig =
-      getServerDefaultFilesConfig().embeddingModel || DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM;
-    const embeddingModel = this.memoryEmbeddingRuntime?.model ?? defaultEmbeddingConfig.model;
-    const embeddingProvider =
-      this.memoryEmbeddingRuntime?.provider ?? defaultEmbeddingConfig.provider;
-    const modelAllowlistHooks = (await isPlatformAiModelTakeoverActive(this.serverDB))
-      ? createPlatformAiModelAllowlistHooks(
-          ((await listPlatformCatalogModels(this.serverDB, embeddingProvider)) ?? []).map(
-            (model) => ({ modelKey: model.id, type: model.type }),
-          ),
-        )
-      : undefined;
-    const modelRuntime = this.memoryEmbeddingRuntime
-      ? initModelRuntimeWithUserPayload(
-          this.memoryEmbeddingRuntime.provider,
-          this.memoryEmbeddingRuntime.payload,
-          {
-            // No-op for every embedding provider; a browser-identity runtime must never
-            // be constructed without the installation's persisted device.
-            browserProfile: await resolvePlatformBrowserProfile(
-              this.serverDB,
-              this.memoryEmbeddingRuntime.payload.runtimeProvider ??
-                this.memoryEmbeddingRuntime.provider,
+    let embeddingModel: string;
+    let modelRuntime: UserMemoryEmbeddingRuntime;
+
+    if (this.memoryEmbeddingRuntime) {
+      embeddingModel = this.memoryEmbeddingRuntime.model;
+      const embeddingProvider = this.memoryEmbeddingRuntime.provider;
+      const modelAllowlistHooks = (await isPlatformAiModelTakeoverActive(this.serverDB))
+        ? createPlatformAiModelAllowlistHooks(
+            ((await listPlatformCatalogModels(this.serverDB, embeddingProvider)) ?? []).map(
+              (model) => ({ modelKey: model.id, type: model.type }),
             ),
-            userId: this.userId,
-            ...(this.workspaceId ? { workspaceId: this.workspaceId } : {}),
-          },
-          modelAllowlistHooks,
-        )
-      : await initModelRuntimeFromDB(
-          this.serverDB,
-          this.userId,
-          defaultEmbeddingConfig.provider,
-          this.workspaceId,
-        );
+          )
+        : undefined;
+      modelRuntime = initModelRuntimeWithUserPayload(
+        this.memoryEmbeddingRuntime.provider,
+        this.memoryEmbeddingRuntime.payload,
+        {
+          // No-op for every embedding provider; a browser-identity runtime must never
+          // be constructed without the installation's persisted device.
+          browserProfile: await resolvePlatformBrowserProfile(
+            this.serverDB,
+            this.memoryEmbeddingRuntime.payload.runtimeProvider ??
+              this.memoryEmbeddingRuntime.provider,
+          ),
+          userId: this.userId,
+          ...(this.workspaceId ? { workspaceId: this.workspaceId } : {}),
+        },
+        modelAllowlistHooks,
+      );
+    } else {
+      const availability = await getMemoryEmbeddingAvailability({
+        db: this.serverDB,
+        userId: this.userId,
+        workspaceId: this.workspaceId,
+      });
+      if (!availability.available) {
+        log('[user-memory] skip searchUserMemory %O', {
+          model: availability.model,
+          provider: availability.provider,
+          reason: availability.reason,
+          userId: this.userId,
+        });
+        return unavailableSearchResult(memoryUnavailableReason(availability.reason));
+      }
+      embeddingModel = availability.model || '';
+      modelRuntime = await initModelRuntimeFromDB(
+        this.serverDB,
+        this.userId,
+        availability.provider || '',
+        this.workspaceId,
+      );
+    }
     const normalizedQueries = [
       ...new Set((normalizedParams.queries ?? []).map((query) => query.trim()).filter(Boolean)),
     ];
@@ -353,23 +410,24 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'addContextMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         status: 'failed',
         summary: 'Memory tool failed to save contextual memory.',
         toolAction: 'create',
       });
 
       return {
-        message: `Failed to save memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to save memory', error),
         success: false,
       };
     }
   };
 
   addActivityMemory = async (
-    input: z.infer<typeof ActivityMemoryItemSchema>,
+    raw: z.infer<typeof ActivityMemoryItemSchema>,
   ): Promise<AddActivityMemoryResult> => {
     try {
+      const input = ActivityMemoryItemSchema.parse(coerceActivityMemoryInput(raw));
       const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
         this.serverDB,
         this.userId,
@@ -432,14 +490,14 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'addActivityMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         status: 'failed',
         summary: 'Memory tool failed to save activity memory.',
         toolAction: 'create',
       });
 
       return {
-        message: `Failed to save memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to save memory', error),
         success: false,
       };
     }
@@ -505,14 +563,14 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'addExperienceMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         status: 'failed',
         summary: 'Memory tool failed to save experience memory.',
         toolAction: 'create',
       });
 
       return {
-        message: `Failed to save memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to save memory', error),
         success: false,
       };
     }
@@ -590,14 +648,14 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'addIdentityMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         status: 'failed',
         summary: 'Memory tool failed to save identity memory.',
         toolAction: 'create',
       });
 
       return {
-        message: `Failed to save identity memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to save identity memory', error),
         success: false,
       };
     }
@@ -667,14 +725,14 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'addPreferenceMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         status: 'failed',
         summary: 'Memory tool failed to save a user preference.',
         toolAction: 'create',
       });
 
       return {
-        message: `Failed to save memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to save memory', error),
         success: false,
       };
     }
@@ -806,7 +864,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'updateIdentityMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         objectId: input.id,
         relation: 'updated',
         status: 'failed',
@@ -815,7 +873,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
       });
 
       return {
-        message: `Failed to update identity memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to update identity memory', error),
         success: false,
       };
     }
@@ -861,7 +919,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
     } catch (error) {
       await this.emitUserMemoryOutcome({
         apiName: 'removeIdentityMemory',
-        errorReason: (error as Error).message,
+        errorReason: describeMemoryFailure(error).detail,
         objectId: input.id,
         relation: 'removed',
         status: 'failed',
@@ -870,7 +928,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
       });
 
       return {
-        message: `Failed to remove identity memory: ${(error as Error).message}`,
+        message: formatMemorySaveError('Failed to remove identity memory', error),
         success: false,
       };
     }

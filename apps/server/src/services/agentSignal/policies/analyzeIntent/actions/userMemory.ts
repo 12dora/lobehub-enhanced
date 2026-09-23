@@ -28,6 +28,7 @@ import {
 } from '@/server/modules/Mecha';
 import { AgentService } from '@/server/services/agent';
 import type { AgentSignalOperationMarker } from '@/server/services/agentSignal/operationMarker';
+import { getMemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 
 import type { RuntimeProcessorContext } from '../../../runtime/context';
 import { defineActionHandler } from '../../../runtime/middleware';
@@ -232,9 +233,23 @@ export const runMemoryActionAgent = async (
     systemRole: createAgentSignalMemoryWriterSystemRole({ memoryLanguage }),
   };
 
+  let memoryEmbeddingAvailable = false;
+  try {
+    memoryEmbeddingAvailable = (
+      await getMemoryEmbeddingAvailability({
+        db: options.db,
+        userId: options.userId,
+        workspaceId: options.workspaceId,
+      })
+    ).available;
+  } catch (error) {
+    console.error('[agent-signal] memory embedding availability failed', error);
+  }
+
   const toolsEngine = createServerAgentToolsEngine(toolsContext, {
     agentConfig: memoryToolsAgentConfig,
     globalMemoryEnabled: true,
+    memoryEmbeddingAvailable,
     model: agentConfig.model,
     provider: agentConfig.provider,
   });

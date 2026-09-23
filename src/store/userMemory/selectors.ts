@@ -50,6 +50,17 @@ export const userMemorySelectors = {
 
     return state.memoryMap[key] ?? EMPTY_RESULT;
   },
+  /**
+   * Embedding availability for one cache scope — pass the *current* scope so a
+   * previous account / workspace's result never leaks in. `false` only when the
+   * server confirmed no usable embedding model for that scope; `undefined` while
+   * unknown (not loaded yet, fetch failed, or memory module off). Callers gate
+   * on `=== false` so an unknown result keeps the memory tool available.
+   */
+  memoryEmbeddingAvailable:
+    (scope: string) =>
+    (state: UserMemoryStoreState): boolean | undefined =>
+      state.memoryEmbeddingAvailabilityMap[scope]?.available,
   memoryFetchedAtByParams: (params?: RetrieveMemoryParams) => (state: UserMemoryStoreState) => {
     if (!params) return undefined;
 

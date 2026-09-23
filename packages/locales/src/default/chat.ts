@@ -720,6 +720,8 @@ export default {
   'memory.effort.low.title': 'Low',
   'memory.effort.medium.title': 'Medium',
   'memory.effort.title': 'Aggressiveness',
+  'memory.embeddingUnavailable':
+    'Memory is unavailable: no embedding model is configured by the administrator',
   'memory.off.desc': 'AI will not search, create, or update memories in this conversation.',
   'memory.off.title': 'Disable Memory Tool',
   'memory.on.desc': 'Allow AI to actively search and manage your memories during conversation.',

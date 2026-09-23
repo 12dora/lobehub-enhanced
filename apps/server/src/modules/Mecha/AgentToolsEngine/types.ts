@@ -156,6 +156,12 @@ export interface ServerCreateAgentToolsEngineParams {
    * inside a sub-agent / group run.
    */
   manifestContext?: BuiltinToolResolveContext;
+  /**
+   * When false, `lobe-user-memory` is dropped from the manifest pool so the
+   * activator cannot offer it. Omit to keep the global-memory gate only.
+   * Set from `getMemoryEmbeddingAvailability().available`.
+   */
+  memoryEmbeddingAvailable?: boolean;
   /** Model name for function calling compatibility check */
   model: string;
   /** Provider name for function calling compatibility check */

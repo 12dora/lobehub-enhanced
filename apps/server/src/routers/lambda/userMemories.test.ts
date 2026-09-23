@@ -6,8 +6,25 @@ import { getServerDB } from '@/database/core/db-adaptor';
 import type * as UserMemoryModule from '@/database/models/userMemory';
 import { UserMemoryModel } from '@/database/models/userMemory';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
+import type * as EmbeddingAvailabilityModule from '@/server/services/memory/userMemory/embeddingAvailability';
+import { getMemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 
 import { userMemoriesRouter } from './userMemories';
+
+const noteRuntimeError = vi.hoisted(() => vi.fn());
+const getUserMessagesQueryForTopic = vi.hoisted(() => vi.fn());
+
+vi.mock('@/server/enterprise/services/platformSystem/noteRuntimeError', () => ({
+  noteRuntimeError,
+}));
+
+vi.mock('@/database/repositories/userMemory', () => ({
+  UserMemoryTopicRepository: class {
+    getUserMessagesQueryForTopic(...args: unknown[]) {
+      return getUserMessagesQueryForTopic(...args);
+    }
+  },
+}));
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn(),
@@ -22,6 +39,18 @@ vi.mock('@/server/globalConfig', () => ({
 vi.mock('@/server/modules/ModelRuntime', () => ({
   initModelRuntimeFromDB: vi.fn(),
 }));
+
+vi.mock('@/server/services/memory/userMemory/embeddingAvailability', async (importOriginal) => {
+  const actual = await importOriginal<typeof EmbeddingAvailabilityModule>();
+  return {
+    ...actual,
+    getMemoryEmbeddingAvailability: vi.fn(async () => ({
+      available: true,
+      model: 'text-embedding-3-small',
+      provider: 'openai',
+    })),
+  };
+});
 
 vi.mock('@/database/models/userMemory', async (importOriginal) => {
   const actual = await importOriginal<typeof UserMemoryModule>();
@@ -49,6 +78,8 @@ const makeServerDBMock = (query: Record<string, any> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  noteRuntimeError.mockClear();
+  getUserMessagesQueryForTopic.mockReset();
 
   embeddingsMock.mockImplementation(async ({ input }: { input: string[] | string }) => {
     const items = Array.isArray(input) ? input : [input];
@@ -163,6 +194,7 @@ describe('memoryRouter.reEmbedMemories', () => {
     expect(embeddingsMock).toHaveBeenCalledTimes(6);
 
     for (const call of embeddingsMock.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ dimensions: 1024 }));
       expect(call[1]).toEqual(expect.objectContaining({ user: 'test-user' }));
     }
   });
@@ -671,7 +703,156 @@ describe('userMemories.toolAddActivityMemory', () => {
     expect(embeddingsMock).toHaveBeenCalledTimes(4);
 
     for (const call of embeddingsMock.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ dimensions: 1024 }));
       expect(call[1]).toEqual(expect.objectContaining({ user: 'test-user' }));
     }
+  });
+});
+
+describe('userMemories.getEmbeddingAvailability', () => {
+  it('returns availability without calling the embedding provider', async () => {
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    await expect(caller.getEmbeddingAvailability()).resolves.toEqual({
+      available: true,
+      reason: undefined,
+    });
+
+    expect(getMemoryEmbeddingAvailability).toHaveBeenCalledWith({
+      db: expect.anything(),
+      userId: 'test-user',
+      workspaceId: undefined,
+    });
+    expect(embeddingsMock).not.toHaveBeenCalled();
+    expect(initModelRuntimeFromDB).not.toHaveBeenCalled();
+  });
+
+  it('returns the unavailable reason from the config check', async () => {
+    vi.mocked(getMemoryEmbeddingAvailability).mockResolvedValueOnce({
+      available: false,
+      reason: 'not_configured',
+    });
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    await expect(caller.getEmbeddingAvailability()).resolves.toEqual({
+      available: false,
+      reason: 'not_configured',
+    });
+    expect(embeddingsMock).not.toHaveBeenCalled();
+    expect(initModelRuntimeFromDB).not.toHaveBeenCalled();
+  });
+});
+
+describe('userMemories.toolSearchMemory', () => {
+  it('returns an empty result and a reason when embedding is unavailable', async () => {
+    vi.mocked(getMemoryEmbeddingAvailability).mockResolvedValueOnce({
+      available: false,
+      model: 'Qwen/Qwen3-Embedding-4B',
+      provider: 'siliconcloud',
+      reason: 'missing_credentials',
+    });
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    const result = await caller.toolSearchMemory({ queries: ['对接人'] });
+
+    expect(result.activities).toEqual([]);
+    expect(result.preferences).toEqual([]);
+    expect(result.reason).toContain('no usable credentials');
+    expect(result.reason).not.toContain('undefined');
+    expect(result.reason).toContain('Do not retry memory tools');
+    expect(embeddingsMock).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty result instead of throwing when the embedding call fails', async () => {
+    vi.mocked(UserMemoryModel).mockImplementation(
+      () =>
+        ({
+          searchMemory: vi.fn(),
+        }) as any,
+    );
+    embeddingsMock.mockRejectedValueOnce({ errorType: 'InvalidProviderAPIKey', error: {} });
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    const result = await caller.toolSearchMemory({ queries: ['初稿'] });
+
+    expect(result.contexts).toEqual([]);
+    expect(result.reason).toContain('InvalidProviderAPIKey');
+    expect(String(result.reason)).not.toMatch(/\bundefined\b/);
+    expect(noteRuntimeError).toHaveBeenCalledWith(
+      'memory',
+      expect.objectContaining({ errorType: 'InvalidProviderAPIKey' }),
+      { operation: 'toolSearchMemory' },
+    );
+  });
+
+  it('does not record an embedding model that is simply not configured', async () => {
+    const notConfigured = Object.assign(new Error('Memory embedding is not configured'), {
+      errorType: 'EmbeddingNotConfigured',
+    });
+    embeddingsMock.mockRejectedValueOnce(notConfigured);
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    const result = await caller.toolSearchMemory({ queries: ['初稿'] });
+
+    expect(result.contexts).toEqual([]);
+    expect(noteRuntimeError).not.toHaveBeenCalled();
+  });
+});
+
+describe('userMemories search failure monitoring', () => {
+  it('does not record a search skipped because embedding is not configured', async () => {
+    vi.mocked(getMemoryEmbeddingAvailability).mockResolvedValueOnce({
+      available: false,
+      reason: 'not_configured',
+    });
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    await caller.searchMemory({ queries: ['对接人'] });
+
+    expect(noteRuntimeError).not.toHaveBeenCalled();
+  });
+
+  it('records a thrown search failure', async () => {
+    const error = new Error('embed upstream 500');
+    embeddingsMock.mockRejectedValueOnce(error);
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    const result = await caller.searchMemory({ queries: ['对接人'] });
+
+    expect(result.activities).toEqual([]);
+    expect(noteRuntimeError).toHaveBeenCalledWith('memory', error, { operation: 'searchMemory' });
+  });
+
+  it('records a topic retrieval failure and skips a not-configured embed', async () => {
+    getUserMessagesQueryForTopic.mockResolvedValue('user asked about the weekly note');
+    const error = new Error('vector store down');
+    embeddingsMock.mockRejectedValueOnce(error);
+    vi.mocked(getServerDB).mockResolvedValue(makeServerDBMock() as any);
+
+    const caller = userMemoriesRouter.createCaller(mockCtx as any);
+    const failed = await caller.retrieveMemoryForTopic({ topicId: 'topic-1' });
+
+    expect(failed.activities).toEqual([]);
+    expect(noteRuntimeError).toHaveBeenCalledWith('memory', error, {
+      operation: 'retrieveMemoryForTopic',
+    });
+
+    noteRuntimeError.mockClear();
+    vi.mocked(getMemoryEmbeddingAvailability).mockResolvedValueOnce({
+      available: false,
+      reason: 'not_configured',
+    });
+    const skipped = await caller.retrieveMemoryForTopic({ topicId: 'topic-1' });
+
+    expect(skipped.activities).toEqual([]);
+    expect(noteRuntimeError).not.toHaveBeenCalled();
+    expect(getUserMessagesQueryForTopic).toHaveBeenCalledTimes(1);
   });
 });

@@ -175,6 +175,7 @@ export const createServerAgentToolsEngine = (
     exactBuiltinToolIds,
     executionPlan,
     globalMemoryEnabled = false,
+    memoryEmbeddingAvailable,
     hasEnabledKnowledgeBases = false,
     isBotConversation = false,
     isGroupSupervisor = false,
@@ -207,11 +208,13 @@ export const createServerAgentToolsEngine = (
     if (!isEnterpriseLookupEnabled) exactIds.delete(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
     if (!isDingtalkApprovalEnabled) exactIds.delete(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
     if (!isDingtalkWorkspaceEnabled) exactIds.delete(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+    if (memoryEmbeddingAvailable === false) exactIds.delete(MemoryManifest.identifier);
     const exactExclude = new Set<string>();
     if (dropDocumentPages) exactExclude.add(DocumentPagesIdentifier);
     if (!isEnterpriseLookupEnabled) exactExclude.add(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
     if (!isDingtalkApprovalEnabled) exactExclude.add(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
     if (!isDingtalkWorkspaceEnabled) exactExclude.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+    if (memoryEmbeddingAvailable === false) exactExclude.add(MemoryManifest.identifier);
     return createServerToolsEngine(
       { ...context, installedPlugins: [] },
       {
@@ -296,7 +299,7 @@ export const createServerAgentToolsEngine = (
   const chatModeRules = {
     [DocumentPagesIdentifier]: true,
     [KnowledgeBaseManifest.identifier]: hasEnabledKnowledgeBases,
-    [MemoryManifest.identifier]: globalMemoryEnabled,
+    [MemoryManifest.identifier]: globalMemoryEnabled && memoryEmbeddingAvailable !== false,
     [WebBrowsingManifest.identifier]: isSearchEnabled,
   };
 
@@ -327,7 +330,7 @@ export const createServerAgentToolsEngine = (
       hasDeviceProxy &&
       !!deviceContext?.deviceOnline &&
       !!deviceContext?.autoActivated,
-    [MemoryManifest.identifier]: globalMemoryEnabled,
+    [MemoryManifest.identifier]: globalMemoryEnabled && memoryEmbeddingAvailable !== false,
     // Only auto-enable in bot conversations; otherwise let user's plugin selection take effect
     ...(isBotConversation && { [MessageManifest.identifier]: true }),
     // Group supervisor: enable the orchestration toolset (see
@@ -359,6 +362,7 @@ export const createServerAgentToolsEngine = (
   if (!isEnterpriseLookupEnabled) excludeIdentifiers.add(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
   if (!isDingtalkApprovalEnabled) excludeIdentifiers.add(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
   if (!isDingtalkWorkspaceEnabled) excludeIdentifiers.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+  if (memoryEmbeddingAvailable === false) excludeIdentifiers.add(MemoryManifest.identifier);
 
   return createServerToolsEngine(context, {
     // Pass additional manifests (e.g., LobeHub Skills)

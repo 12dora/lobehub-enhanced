@@ -100,6 +100,7 @@ describe('memoryRuntime', () => {
     expect(mocks.initModelRuntimeFromDB).not.toHaveBeenCalled();
     expect(mocks.embeddings).toHaveBeenCalledWith(
       expect.objectContaining({
+        dimensions: 1024,
         input: ['renewal timeline'],
         model: 'server-embedding-model',
       }),

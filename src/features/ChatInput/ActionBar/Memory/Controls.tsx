@@ -4,14 +4,16 @@ import { BrainOffIcon } from '@lobehub/ui/icons';
 import { Divider } from 'antd';
 import { createStaticStyles, cssVar, cx } from 'antd-style';
 import { type LucideIcon } from 'lucide-react';
-import { Brain } from 'lucide-react';
+import { Brain, Info } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import LevelSlider from '@/features/ModelSwitchPanel/components/ControlsForm/LevelSlider';
 import { usePermission } from '@/hooks/usePermission';
+import { useCacheScope } from '@/libs/swr/useCacheScope';
 import { useAgentStore } from '@/store/agent';
 import { chatConfigByIdSelectors } from '@/store/agent/selectors';
+import { userMemorySelectors, useUserMemoryStore } from '@/store/userMemory';
 
 import { useAgentId } from '../../hooks/useAgentId';
 import { useUpdateAgentConfig } from '../../hooks/useUpdateAgentConfig';
@@ -26,6 +28,14 @@ const styles = createStaticStyles(({ css }) => ({
   description: css`
     font-size: 12px;
     color: ${cssVar.colorTextDescription};
+  `,
+  hint: css`
+    padding-block: 6px;
+    padding-inline: 8px;
+
+    font-size: 12px;
+    line-height: 1.6;
+    color: ${cssVar.colorWarningText};
   `,
   icon: css`
     border: 1px solid ${cssVar.colorFillTertiary};
@@ -101,6 +111,12 @@ const Controls = memo(() => {
   const isEnabled = useMemoryEnabled(agentId);
   const { allowed: canCreate } = usePermission('create_content');
   const effort = useAgentStore((s) => chatConfigByIdSelectors.getMemoryToolEffortById(agentId)(s));
+  // Availability is stored per cache scope; read only the current account /
+  // workspace's entry. Only a confirmed `false` hides the memory tool;
+  // `undefined` (unknown) shows no hint.
+  const cacheScope = useCacheScope();
+  const embeddingUnavailable =
+    useUserMemoryStore(userMemorySelectors.memoryEmbeddingAvailable(cacheScope)) === false;
 
   const toggleOptions: ToggleOption[] = [
     {
@@ -119,6 +135,12 @@ const Controls = memo(() => {
 
   return (
     <Flexbox gap={4}>
+      {embeddingUnavailable && (
+        <Flexbox horizontal align={'flex-start'} className={styles.hint} gap={6} role={'status'}>
+          <Icon icon={Info} size={14} style={{ flex: 'none', marginBlockStart: 3 }} />
+          <span>{t('memory.embeddingUnavailable')}</span>
+        </Flexbox>
+      )}
       {toggleOptions.map((option) => (
         <ToggleItem {...option} key={option.value} />
       ))}

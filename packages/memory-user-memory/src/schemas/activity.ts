@@ -36,6 +36,41 @@ export const WithActivitySchema = z.object({
   type: z.union([z.nativeEnum(ActivityTypeEnum), z.string()]).optional(),
 });
 
+const mapDocumentObjectType = (value: unknown): unknown => {
+  if (!Array.isArray(value)) return value;
+
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const record = item as Record<string, unknown>;
+    if (record.type !== 'document') return item;
+
+    return { ...record, type: 'knowledge' };
+  });
+};
+
+/** Parse a stringified `withActivity` once and map object type `document` to `knowledge`. */
+export const coerceActivityMemoryInput = (params: unknown): unknown => {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return params;
+
+  const record = { ...(params as Record<string, unknown>) };
+  let withActivity = record.withActivity;
+  if (typeof withActivity === 'string') {
+    try {
+      withActivity = JSON.parse(withActivity);
+    } catch {
+      return record;
+    }
+  }
+
+  if (withActivity && typeof withActivity === 'object' && !Array.isArray(withActivity)) {
+    const activity = { ...(withActivity as Record<string, unknown>) };
+    activity.associatedObjects = mapDocumentObjectType(activity.associatedObjects);
+    record.withActivity = activity;
+  }
+
+  return record;
+};
+
 export const ActivityMemoryItemSchema = z.object({
   details: z.string(),
   memoryCategory: z.string(),
@@ -215,7 +250,8 @@ export const ActivityMemorySchema: GenerateObjectSchema = {
                         type: 'string',
                       },
                       type: {
-                        description: 'Object category (e.g., transportation, device, document).',
+                        description:
+                          'Object category. Use knowledge for documents and files. One of application, item, knowledge, other, person, place.',
                         enum: ['application', 'item', 'knowledge', 'other', 'person', 'place'],
                         type: 'string',
                       },

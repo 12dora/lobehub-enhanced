@@ -1,5 +1,6 @@
 import {
   type AIChatModelCard,
+  type AIEmbeddingModelCard,
   type AIImageModelCard,
   type AIVideoModelCard,
 } from '../types/aiModel';
@@ -1798,10 +1799,63 @@ const siliconcloudVideoModels: AIVideoModelCard[] = [
   },
 ];
 
+// Qwen3-Embedding accepts `dimensions`. bge-m3 rejects that parameter, so it is omitted.
+const siliconcloudEmbeddingModels: AIEmbeddingModelCard[] = [
+  {
+    contextWindowTokens: 32_768,
+    description:
+      'Qwen3-Embedding-4B is the default memory embedding model. It supports flexible output dimensions up to 2560; user memory requests 1024. Multilingual retrieval, including Chinese.',
+    displayName: 'Qwen3-Embedding-4B',
+    enabled: true,
+    id: 'Qwen/Qwen3-Embedding-4B',
+    maxDimension: 2560,
+    organization: 'Qwen',
+    pricing: {
+      currency: 'CNY',
+      units: [{ name: 'textInput', rate: 0.14, strategy: 'fixed', unit: 'millionTokens' }],
+    },
+    releasedAt: '2025-06-06',
+    type: 'embedding',
+  },
+  {
+    contextWindowTokens: 32_768,
+    description:
+      'Qwen3-Embedding-8B is the larger Qwen3 embedding model, with output dimensions up to 4096. Disabled by default; 4B is the memory default.',
+    displayName: 'Qwen3-Embedding-8B',
+    enabled: false,
+    id: 'Qwen/Qwen3-Embedding-8B',
+    maxDimension: 4096,
+    organization: 'Qwen',
+    pricing: {
+      currency: 'CNY',
+      units: [{ name: 'textInput', rate: 0.28, strategy: 'fixed', unit: 'millionTokens' }],
+    },
+    releasedAt: '2025-06-06',
+    type: 'embedding',
+  },
+  {
+    contextWindowTokens: 32_768,
+    description:
+      'Qwen3-Embedding-0.6B is the smallest Qwen3 embedding model, with output dimensions up to 1024. Disabled by default.',
+    displayName: 'Qwen3-Embedding-0.6B',
+    enabled: false,
+    id: 'Qwen/Qwen3-Embedding-0.6B',
+    maxDimension: 1024,
+    organization: 'Qwen',
+    pricing: {
+      currency: 'CNY',
+      units: [{ name: 'textInput', rate: 0.07, strategy: 'fixed', unit: 'millionTokens' }],
+    },
+    releasedAt: '2025-06-06',
+    type: 'embedding',
+  },
+];
+
 export const allModels = [
   ...siliconcloudChatModels,
   ...siliconcloudImageModels,
   ...siliconcloudVideoModels,
+  ...siliconcloudEmbeddingModels,
 ];
 
 export default allModels;

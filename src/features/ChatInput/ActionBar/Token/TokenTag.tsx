@@ -11,6 +11,7 @@ import { createAgentToolsEngine } from '@/helpers/toolEngineering';
 import { useModelContextWindowTokens } from '@/hooks/useModelContextWindowTokens';
 import { useModelSupportToolUse } from '@/hooks/useModelSupportToolUse';
 import { useTokenCount } from '@/hooks/useTokenCount';
+import { useCacheScope } from '@/libs/swr/useCacheScope';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
 import { useAiInfraStore } from '@/store/aiInfra';
@@ -21,6 +22,7 @@ import { useToolStore } from '@/store/tool';
 import { pluginHelpers } from '@/store/tool/helpers';
 import { useUserStore } from '@/store/user';
 import { settingsSelectors, userGeneralSettingsSelectors } from '@/store/user/selectors';
+import { userMemorySelectors, useUserMemoryStore } from '@/store/userMemory';
 
 import { useAgentId } from '../../hooks/useAgentId';
 import { useChatInputStore } from '../../store';
@@ -75,6 +77,12 @@ const Token = memo(() => {
   });
   const globalMemoryEnabled = useUserStore(settingsSelectors.memoryEnabled);
   const effectiveMemoryEnabled = agentMemoryEnabled ?? globalMemoryEnabled;
+  // createAgentToolsEngine reads the current scope's entry from the userMemory
+  // store; track it so the estimate follows the availability check and scope switches.
+  const cacheScope = useCacheScope();
+  const memoryEmbeddingAvailable = useUserMemoryStore(
+    userMemorySelectors.memoryEmbeddingAvailable(cacheScope),
+  );
   const [isProviderHasBuiltinSearch, isModelHasBuiltinSearch, isModelBuiltinSearchInternal] =
     useAiInfraStore((s) => [
       aiProviderSelectors.isProviderHasBuiltinSearch(provider)(s),
@@ -88,6 +96,7 @@ const Token = memo(() => {
     isModelBuiltinSearchInternal,
     isModelHasBuiltinSearch,
     isProviderHasBuiltinSearch,
+    memoryEmbeddingAvailable,
     memoryEnabled: effectiveMemoryEnabled,
     runtimeMode,
     searchMode,

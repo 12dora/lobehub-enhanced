@@ -8,6 +8,8 @@ interface ToolContextRefreshKeyOptions {
   isModelBuiltinSearchInternal?: boolean;
   isModelHasBuiltinSearch?: boolean;
   isProviderHasBuiltinSearch?: boolean;
+  /** `undefined` = unknown (not loaded / failed); only `false` hides the memory tool. */
+  memoryEmbeddingAvailable?: boolean;
   memoryEnabled?: boolean;
   runtimeMode?: RuntimeEnvMode;
   searchMode?: LobeAgentChatConfig['searchMode'];
@@ -26,6 +28,7 @@ export const getToolContextRefreshKey = ({
   isModelBuiltinSearchInternal,
   isModelHasBuiltinSearch,
   isProviderHasBuiltinSearch,
+  memoryEmbeddingAvailable,
   memoryEnabled,
   runtimeMode,
   searchMode,
@@ -44,4 +47,5 @@ export const getToolContextRefreshKey = ({
     isProviderHasBuiltinSearch ? 'provider-search-on' : 'provider-search-off',
     isModelHasBuiltinSearch ? 'model-search-on' : 'model-search-off',
     isModelBuiltinSearchInternal ? 'internal-search-on' : 'internal-search-off',
+    memoryEmbeddingAvailable === false ? 'memory-embedding-off' : 'memory-embedding-unknown-or-on',
   ].join('|');

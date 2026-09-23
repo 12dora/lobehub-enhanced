@@ -81,4 +81,54 @@ describe('MemoryExecutionRuntime', () => {
     expect(result.content).toContain('addPreferenceMemory with error detail');
     expect(addPreferenceMemory).not.toHaveBeenCalled();
   });
+
+  it('surfaces InvalidProviderAPIKey instead of the word undefined', async () => {
+    const runtime = new MemoryExecutionRuntime({
+      service: createService({
+        searchMemory: vi.fn().mockRejectedValue({ error: {}, errorType: 'InvalidProviderAPIKey' }),
+      }),
+    });
+
+    const result = await runtime.searchUserMemory({ queries: ['对接人'] });
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('InvalidProviderAPIKey');
+    expect(result.content).not.toContain('undefined');
+    expect(result.content).toContain('Do not retry memory tools in this turn');
+  });
+
+  it('parses a string withActivity and maps document to knowledge', async () => {
+    const addActivityMemory = vi.fn().mockResolvedValue({
+      activityId: 'activity-1',
+      memoryId: 'memory-1',
+      message: 'saved',
+      success: true,
+    });
+    const runtime = new MemoryExecutionRuntime({
+      service: createService({ addActivityMemory }),
+    });
+
+    const result = await runtime.addActivityMemory({
+      details: '初稿已完成',
+      memoryCategory: 'work',
+      memoryType: 'activity',
+      summary: '初稿已完成',
+      tags: ['doc'],
+      title: '初稿',
+      withActivity: JSON.stringify({
+        associatedObjects: [{ name: '项目管理办法', type: 'document' }],
+        narrative: '完成了初稿',
+      }),
+    } as never);
+
+    expect(result.success).toBe(true);
+    expect(addActivityMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        withActivity: expect.objectContaining({
+          associatedObjects: [expect.objectContaining({ name: '项目管理办法', type: 'knowledge' })],
+          narrative: '完成了初稿',
+        }),
+      }),
+    );
+  });
 });

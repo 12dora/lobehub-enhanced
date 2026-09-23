@@ -513,6 +513,14 @@ export const userMemoryKeys = {
     taskId,
   ]),
   contexts: def('userMemory:contexts', (params: unknown) => ['userMemory:contexts', params]),
+  /**
+   * Embedding-model availability gate for the memory tool, keyed by cache scope
+   * (`${userId}:${workspaceId}`) so an account / workspace switch refetches.
+   */
+  embeddingAvailability: def('userMemory:embeddingAvailability', (scope: string) => [
+    'userMemory:embeddingAvailability',
+    scope,
+  ]),
   experiences: def('userMemory:experiences', (params: unknown) => [
     'userMemory:experiences',
     params,

@@ -21,6 +21,7 @@ import {
 import type { ConnectorToolPermission } from '@/database/schemas';
 import { isToolAvailableInCurrentEnv } from '@/helpers/toolAvailability';
 import { patchManifestWithPermissions } from '@/libs/mcp/patchManifestPermissions';
+import { getCacheScope } from '@/libs/swr/useCacheScope';
 import { getAgentStoreState } from '@/store/agent';
 import { agentChatConfigSelectors, agentSelectors } from '@/store/agent/selectors';
 import { getServerConfigStoreState } from '@/store/serverConfig';
@@ -33,6 +34,7 @@ import {
 import { connectorSelectors } from '@/store/tool/slices/connector';
 import { useUserStore } from '@/store/user';
 import { settingsSelectors } from '@/store/user/selectors';
+import { getUserMemoryStoreState, userMemorySelectors } from '@/store/userMemory';
 
 import { getSearchConfig } from '../getSearchConfig';
 import { isCanUseFC } from '../isCanUseFC';
@@ -241,15 +243,25 @@ export const createAgentToolsEngine = (
   // `alwaysOnToolIds` are deliberately omitted in chat mode so the activator
   // can't smuggle additional tools in.
   const kbEnabled = agentSelectors.hasEnabledKnowledgeBases(agentState);
+  // Embedding availability is fetched once per cache scope at app init and read
+  // synchronously here — only the *current* scope's entry, so another account /
+  // workspace's result never applies. Only a confirmed `false` gates the tool;
+  // `undefined` (not loaded for this scope yet / fetch failed) keeps the
+  // toggle-only behavior. Mirrors the server `memoryEmbeddingAvailable` gate in
+  // Mecha/AgentToolsEngine.
+  const memoryEmbeddingAvailable =
+    userMemorySelectors.memoryEmbeddingAvailable(getCacheScope())(getUserMemoryStoreState());
   const memoryEnabled =
-    agentChatConfigSelectors.currentChatConfig(agentState).memory?.enabled ??
-    settingsSelectors.memoryEnabled(useUserStore.getState());
+    (agentChatConfigSelectors.currentChatConfig(agentState).memory?.enabled ??
+      settingsSelectors.memoryEnabled(useUserStore.getState())) &&
+    memoryEmbeddingAvailable !== false;
   const webBrowsingEnabled = searchConfig.useApplicationBuiltinSearchTool;
   const { dingtalkApproval, dingtalkWorkspace, enterpriseLookup } = readEnterpriseToolFlags();
   // Native search and the platform browsing tool must not stack. Drop the
   // web-browsing manifest from the pool so `allowExplicitActivation` cannot
   // re-enable it after lobe-activator. DingTalk / enterprise-lookup are
-  // dropped the same way when their capability flag is off or unknown.
+  // dropped the same way when their capability flag is off or unknown, and
+  // user-memory when no embedding model is configured (every call would fail).
   const disabledIds = [
     ...(webBrowsingEnabled
       ? disabledPluginIds
@@ -257,6 +269,7 @@ export const createAgentToolsEngine = (
     ...(!dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
     ...(!dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
     ...(!enterpriseLookup ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
+    ...(memoryEmbeddingAvailable === false ? [MemoryManifest.identifier] : []),
   ];
 
   const chatModeRules = {

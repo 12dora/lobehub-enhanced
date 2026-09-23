@@ -100,6 +100,7 @@ import {
   resolvePlatformAiRuntimeState,
 } from '@/server/modules/ModelRuntime/platformAiRuntimeBridge';
 import { S3 } from '@/server/modules/S3';
+import { resolveMemoryServiceAgent } from '@/server/services/memory/userMemory/resolveEmbedding';
 import { readExtendParamsFromRuntimeState } from '@/server/services/systemAgent/effort';
 import {
   AsyncTaskError,
@@ -947,27 +948,7 @@ export class MemoryExtractionExecutor {
     >,
     fallback: MemoryAgentConfig,
   ): MemoryAgentConfig {
-    const override = systemAgent?.[key];
-    const provider = override?.provider || fallback.provider;
-    const shouldInheritCredentials =
-      !override?.provider ||
-      normalizeProvider(override.provider) === normalizeProvider(fallback.provider || 'openai');
-    const contextLimit =
-      typeof override?.contextLimit === 'number' &&
-      Number.isFinite(override.contextLimit) &&
-      override.contextLimit > 0
-        ? Math.floor(override.contextLimit)
-        : fallback.contextLimit;
-
-    return {
-      apiKey: shouldInheritCredentials ? fallback.apiKey : undefined,
-      baseURL: shouldInheritCredentials ? fallback.baseURL : undefined,
-      contextLimit,
-      language: fallback.language,
-      model: override?.model || fallback.model,
-      provider,
-      reasoningEffort: override?.reasoningEffort,
-    };
+    return resolveMemoryServiceAgent(systemAgent?.[key], fallback);
   }
 
   private buildGenerateObjectParamsByModel(

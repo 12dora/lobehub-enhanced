@@ -1,13 +1,14 @@
-import { BRANDING_PROVIDER, ENABLE_BUSINESS_FEATURES } from '@lobechat/business-const';
 import {
-  DEFAULT_SEARCH_USER_MEMORY_TOP_K,
-  DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM,
-  MEMORY_SEARCH_TOP_K_LIMITS,
-} from '@lobechat/const';
+  describeMemoryFailure,
+  formatMemorySaveError,
+  memoryUnavailableReason,
+} from '@lobechat/builtin-tool-memory';
+import { DEFAULT_SEARCH_USER_MEMORY_TOP_K, MEMORY_SEARCH_TOP_K_LIMITS } from '@lobechat/const';
 import { type LobeChatDatabase } from '@lobechat/database';
 import {
   ActivityMemoryItemSchema,
   AddIdentityActionSchema,
+  coerceActivityMemoryInput,
   ContextMemoryItemSchema,
   ExperienceMemoryItemSchema,
   PreferenceMemoryItemSchema,
@@ -16,6 +17,7 @@ import {
 } from '@lobechat/memory-user-memory';
 import type { QueryTaxonomyOptionsResult, SearchMemoryResult } from '@lobechat/types';
 import { LayersEnum, queryTaxonomyOptionsSchema, searchMemorySchema } from '@lobechat/types';
+import debug from 'debug';
 import { type SQL } from 'drizzle-orm';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import pMap from 'p-map';
@@ -43,12 +45,15 @@ import {
 } from '@/database/schemas';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { noteRuntimeError } from '@/server/enterprise/services/platformSystem/noteRuntimeError';
 import { getEffectiveMemorySettings } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
-import { getServerDefaultFilesConfig } from '@/server/globalConfig';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import type { UserMemoryEmbeddingRuntime } from '@/server/services/memory/userMemory/embedding';
 import { embedUserMemoryTexts } from '@/server/services/memory/userMemory/embedding';
+import { getMemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 import { normalizeSearchMemoryParams } from '@/server/services/memory/userMemory/searchParams';
+
+const log = debug('lobe-server:user-memories');
 
 const EMPTY_SEARCH_RESULT: SearchMemoryResult = {
   activities: [],
@@ -85,6 +90,7 @@ type MemorySearchContext = {
   memoryEffort: MemoryEffort;
   serverDB: LobeChatDatabase;
   userId: string;
+  workspaceId?: string | null;
 };
 
 type MemoryEffort = 'high' | 'low' | 'medium';
@@ -119,11 +125,30 @@ const applySearchLimitsByEffort = (
 const searchUserMemories = async (
   ctx: MemorySearchContext,
   input: z.infer<typeof searchMemorySchema>,
-): Promise<SearchMemoryResult> => {
+): Promise<SearchMemoryResult & { reason?: string }> => {
   const normalizedInput = normalizeSearchMemoryParams(input);
-  const { provider, model: embeddingModel } =
-    getServerDefaultFilesConfig().embeddingModel || DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM;
-  const modelRuntime = await initModelRuntimeFromDB(ctx.serverDB, ctx.userId, provider);
+  const availability = await getMemoryEmbeddingAvailability({
+    db: ctx.serverDB,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId ?? undefined,
+  });
+  if (!availability.available || !availability.model || !availability.provider) {
+    log('[user-memory] skip memory search %O', {
+      model: availability.model,
+      provider: availability.provider,
+      reason: availability.reason,
+      userId: ctx.userId,
+    });
+    return skippedSearchResult(availability.reason);
+  }
+  const embeddingModel = availability.model;
+  const provider = availability.provider;
+  const modelRuntime = await initModelRuntimeFromDB(
+    ctx.serverDB,
+    ctx.userId,
+    provider,
+    ctx.workspaceId ?? undefined,
+  );
   const normalizedQueries = [
     ...new Set((normalizedInput.queries ?? []).map((query) => query.trim()).filter(Boolean)),
   ];
@@ -158,20 +183,61 @@ const searchUserMemories = async (
   return ctx.memoryModel.searchMemory(
     { ...normalizedInput, queries: normalizedQueries, topK: effortConstrainedLimits },
     queryEmbeddings,
-  ) as Promise<SearchMemoryResult>;
+  ) as Promise<SearchMemoryResult & { reason?: string }>;
 };
 
-const getEmbeddingRuntime = async (serverDB: LobeChatDatabase, userId: string) => {
-  const { provider, model: embeddingModel } =
-    getServerDefaultFilesConfig().embeddingModel || DEFAULT_USER_MEMORY_EMBEDDING_MODEL_ITEM;
-  // Read user's provider config from database
+const getEmbeddingRuntime = async (
+  serverDB: LobeChatDatabase,
+  userId: string,
+  workspaceId?: string,
+) => {
+  const availability = await getMemoryEmbeddingAvailability({
+    db: serverDB,
+    userId,
+    workspaceId,
+  });
+  if (!availability.available || !availability.provider || !availability.model) {
+    const error = new Error(
+      availability.reason === 'not_configured'
+        ? 'Memory embedding is not configured'
+        : 'Memory embedding provider has no usable credentials',
+    ) as Error & { errorType?: string };
+    error.errorType =
+      availability.reason === 'missing_credentials'
+        ? 'InvalidProviderAPIKey'
+        : 'EmbeddingNotConfigured';
+    throw error;
+  }
+
   const agentRuntime = await initModelRuntimeFromDB(
     serverDB,
     userId,
-    ENABLE_BUSINESS_FEATURES ? BRANDING_PROVIDER : provider,
+    availability.provider,
+    workspaceId,
   );
 
-  return { agentRuntime, embeddingModel };
+  return { agentRuntime, embeddingModel: availability.model, provider: availability.provider };
+};
+
+const skippedSearchResult = (reason: string | undefined) => ({
+  ...EMPTY_SEARCH_RESULT,
+  reason: memoryUnavailableReason(reason),
+});
+
+/**
+ * "Embedding not configured" is a capability state (the status page already
+ * reports it). A provider failure, a missing key, or a search exception is an
+ * error and should count.
+ */
+const isEmbeddingNotConfiguredFailure = (error: unknown): boolean => {
+  const failure = describeMemoryFailure(error);
+  if (failure.errorType === 'EmbeddingNotConfigured') return true;
+  return /embedding is not configured/i.test(failure.detail);
+};
+
+const noteMemorySearchFailure = (operation: string, error: unknown): void => {
+  if (isEmbeddingNotConfiguredFailure(error)) return;
+  noteRuntimeError('memory', error, { operation });
 };
 
 const createEmbedder = (
@@ -256,6 +322,24 @@ const memoryProcedure = authedProcedure.use(serverDatabase).use(async (opts) => 
 const memoryWriteProcedure = memoryProcedure.use(withScopedPermission('message:create'));
 
 export const userMemoriesRouter = router({
+  /**
+   * Whether this user's memory tools can embed. Config and credential presence
+   * only — `getMemoryEmbeddingAvailability` does not call the embedding provider.
+   * One read per request; the browser tool builder uses it to hide lobe-user-memory.
+   */
+  getEmbeddingAvailability: memoryProcedure.query(async ({ ctx }) => {
+    const availability = await getMemoryEmbeddingAvailability({
+      db: ctx.serverDB,
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId ?? undefined,
+    });
+
+    return {
+      available: availability.available,
+      reason: availability.reason,
+    };
+  }),
+
   getMemoryDetail: memoryProcedure
     .input(z.object({ id: z.string(), layer: z.nativeEnum(LayersEnum) }))
     .query(async ({ ctx, input }) => {
@@ -460,6 +544,7 @@ export const userMemoriesRouter = router({
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const concurrency = options.concurrency ?? 10;
         const shouldProcess = (key: ReEmbedTableKey) =>
@@ -909,7 +994,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to re-embed memories:', error);
         return {
-          message: `Failed to re-embed memories: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to re-embed memories', error),
           success: false,
         };
       }
@@ -927,6 +1012,21 @@ export const userMemoriesRouter = router({
       // router-runtime output. Only honored in non-production builds.
       if (process.env.NODE_ENV !== 'production' && process.env.DEV_DISABLE_AUTO_MEMORY === '1') {
         console.info('[dev] skip retrieveMemoryForTopic (DEV_DISABLE_AUTO_MEMORY=1)');
+        return EMPTY_SEARCH_RESULT;
+      }
+
+      const availability = await getMemoryEmbeddingAvailability({
+        db: ctx.serverDB,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId ?? undefined,
+      });
+      if (!availability.available) {
+        log('[user-memory] skip retrieveMemoryForTopic %O', {
+          model: availability.model,
+          provider: availability.provider,
+          reason: availability.reason,
+          userId: ctx.userId,
+        });
         return EMPTY_SEARCH_RESULT;
       }
 
@@ -953,7 +1053,11 @@ export const userMemoriesRouter = router({
         const result = await searchUserMemories(ctx, searchParams);
         return result;
       } catch (error) {
-        console.error('Failed to retrieve memory for topic:', error);
+        log('[user-memory] skip retrieveMemoryForTopic %O', {
+          detail: describeMemoryFailure(error).detail,
+          userId: ctx.userId,
+        });
+        noteMemorySearchFailure('retrieveMemoryForTopic', error);
         return EMPTY_SEARCH_RESULT;
       }
     }),
@@ -963,17 +1067,19 @@ export const userMemoriesRouter = router({
       return await searchUserMemories(ctx, input);
     } catch (error) {
       console.error('Failed to retrieve memories:', error);
+      noteMemorySearchFailure('searchMemory', error);
       return EMPTY_SEARCH_RESULT;
     }
   }),
 
   toolAddActivityMemory: memoryWriteProcedure
-    .input(ActivityMemoryItemSchema)
+    .input(z.preprocess(coerceActivityMemoryInput, ActivityMemoryItemSchema))
     .mutation(async ({ input, ctx }) => {
       try {
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const embed = createEmbedder(agentRuntime, embeddingModel, ctx.userId);
 
@@ -1023,7 +1129,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to save memory:', error);
         return {
-          message: `Failed to save memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to save memory', error),
           success: false,
         };
       }
@@ -1036,6 +1142,7 @@ export const userMemoriesRouter = router({
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const embed = createEmbedder(agentRuntime, embeddingModel, ctx.userId);
 
@@ -1078,7 +1185,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to save memory:', error);
         return {
-          message: `Failed to save memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to save memory', error),
           success: false,
         };
       }
@@ -1091,6 +1198,7 @@ export const userMemoriesRouter = router({
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const embed = createEmbedder(agentRuntime, embeddingModel, ctx.userId);
 
@@ -1134,7 +1242,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to save memory:', error);
         return {
-          message: `Failed to save memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to save memory', error),
           success: false,
         };
       }
@@ -1147,6 +1255,7 @@ export const userMemoriesRouter = router({
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const embed = createEmbedder(agentRuntime, embeddingModel, ctx.userId);
 
@@ -1202,7 +1311,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to save identity memory:', error);
         return {
-          message: `Failed to save identity memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to save identity memory', error),
           success: false,
         };
       }
@@ -1215,6 +1324,7 @@ export const userMemoriesRouter = router({
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const embed = createEmbedder(agentRuntime, embeddingModel, ctx.userId);
 
@@ -1262,7 +1372,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to save memory:', error);
         return {
-          message: `Failed to save memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to save memory', error),
           success: false,
         };
       }
@@ -1290,15 +1400,22 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to remove identity memory:', error);
         return {
-          message: `Failed to remove identity memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to remove identity memory', error),
           success: false,
         };
       }
     }),
 
   toolSearchMemory: memoryProcedure.input(searchMemorySchema).query(async ({ input, ctx }) => {
-    const result = await searchUserMemories(ctx, input);
-    return result;
+    try {
+      return await searchUserMemories(ctx, input);
+    } catch (error) {
+      const failure = describeMemoryFailure(error);
+      noteMemorySearchFailure('toolSearchMemory', error);
+      return skippedSearchResult(
+        failure.stopRetry ? failure.errorType || failure.detail : failure.detail,
+      );
+    }
   }),
 
   toolUpdateIdentityMemory: memoryWriteProcedure
@@ -1308,6 +1425,7 @@ export const userMemoriesRouter = router({
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
           ctx.serverDB,
           ctx.userId,
+          ctx.workspaceId ?? undefined,
         );
         const embed = createEmbedder(agentRuntime, embeddingModel, ctx.userId);
 
@@ -1408,7 +1526,7 @@ export const userMemoriesRouter = router({
       } catch (error) {
         console.error('Failed to update identity memory:', error);
         return {
-          message: `Failed to update identity memory: ${(error as Error).message}`,
+          message: formatMemorySaveError('Failed to update identity memory', error),
           success: false,
         };
       }

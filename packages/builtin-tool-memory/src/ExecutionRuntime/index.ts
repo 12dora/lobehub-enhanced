@@ -1,6 +1,7 @@
 import {
   ActivityMemoryItemSchema,
   AddIdentityActionSchema,
+  coerceActivityMemoryInput,
   ContextMemoryItemSchema,
   ExperienceMemoryItemSchema,
   PreferenceMemoryItemSchema,
@@ -23,6 +24,8 @@ import type {
   UpdateIdentityMemoryResult,
 } from '@lobechat/types';
 import type { z } from 'zod';
+
+import { formatMemoryToolError } from '../serializeError';
 
 export interface MemoryRuntimeService {
   addActivityMemory: (
@@ -81,6 +84,15 @@ export class MemoryExecutionRuntime {
       const formattedQuery = params.queries?.join(' | ') || 'facet-only search';
 
       const { meta: _meta, ...safeResult } = result;
+      const rawReason = (result as { reason?: unknown }).reason;
+      const reason = typeof rawReason === 'string' ? rawReason : undefined;
+      if (reason) {
+        return {
+          content: reason,
+          state: safeResult,
+          success: false,
+        };
+      }
 
       return {
         content: formatMemorySearchResults({ query: formattedQuery, results: result }),
@@ -89,7 +101,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `searchUserMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('searchUserMemory', e),
         success: false,
       };
     }
@@ -108,7 +120,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `queryTaxonomyOptions with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('queryTaxonomyOptions', e),
         success: false,
       };
     }
@@ -133,7 +145,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `addContextMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('addContextMemory', e),
         success: false,
       };
     }
@@ -144,7 +156,7 @@ export class MemoryExecutionRuntime {
   ): Promise<BuiltinServerRuntimeOutput> {
     if (this.isReadOnly) return READ_ONLY_RESULT;
     try {
-      const input = ActivityMemoryItemSchema.parse(params);
+      const input = ActivityMemoryItemSchema.parse(coerceActivityMemoryInput(params));
       const result = await this.service.addActivityMemory(input);
 
       if (!result.success) {
@@ -158,7 +170,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `addActivityMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('addActivityMemory', e),
         success: false,
       };
     }
@@ -183,7 +195,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `addExperienceMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('addExperienceMemory', e),
         success: false,
       };
     }
@@ -208,7 +220,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `addIdentityMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('addIdentityMemory', e),
         success: false,
       };
     }
@@ -233,7 +245,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `addPreferenceMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('addPreferenceMemory', e),
         success: false,
       };
     }
@@ -258,7 +270,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `updateIdentityMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('updateIdentityMemory', e),
         success: false,
       };
     }
@@ -283,7 +295,7 @@ export class MemoryExecutionRuntime {
       };
     } catch (e) {
       return {
-        content: `removeIdentityMemory with error detail: ${(e as Error).message}`,
+        content: formatMemoryToolError('removeIdentityMemory', e),
         success: false,
       };
     }

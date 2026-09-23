@@ -49,6 +49,26 @@ describe('Token tool utils', () => {
         }),
       ).not.toBe(chatModeKey);
     });
+
+    it('changes when the memory embedding check confirms the model is missing', () => {
+      const unknownKey = getToolContextRefreshKey({ agentId: 'agent-1', memoryEnabled: true });
+
+      expect(
+        getToolContextRefreshKey({
+          agentId: 'agent-1',
+          memoryEmbeddingAvailable: false,
+          memoryEnabled: true,
+        }),
+      ).not.toBe(unknownKey);
+      // Unknown and available build the same tool set, so they share a key.
+      expect(
+        getToolContextRefreshKey({
+          agentId: 'agent-1',
+          memoryEmbeddingAvailable: true,
+          memoryEnabled: true,
+        }),
+      ).toBe(unknownKey);
+    });
   });
 
   describe('getToolExcludeDefaultToolIds', () => {

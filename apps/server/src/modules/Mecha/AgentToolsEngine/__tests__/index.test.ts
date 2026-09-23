@@ -718,6 +718,25 @@ describe('createServerAgentToolsEngine', () => {
 
       expect(result.enabledToolIds).toContain(MemoryManifest.identifier);
     });
+
+    it('drops Memory when embedding is unavailable, even if global memory is on', () => {
+      const context = createMockContext();
+      const engine = createServerAgentToolsEngine(context, {
+        agentConfig: { plugins: [MemoryManifest.identifier] },
+        globalMemoryEnabled: true,
+        memoryEmbeddingAvailable: false,
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      const result = engine.generateToolsDetailed({
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds: [MemoryManifest.identifier],
+      });
+
+      expect(result.enabledToolIds).not.toContain(MemoryManifest.identifier);
+    });
   });
 
   describe('LocalSystem tool enable rules', () => {

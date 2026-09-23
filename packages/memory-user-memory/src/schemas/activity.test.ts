@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ActivityMemoryItemSchema } from './activity';
+import { ActivityMemoryItemSchema, coerceActivityMemoryInput } from './activity';
 
 describe('ActivityMemoryItemSchema', () => {
   it('accepts nullable activity metadata from generated schema output', () => {
@@ -29,5 +29,28 @@ describe('ActivityMemoryItemSchema', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it('parses a stringified withActivity and maps document objects to knowledge', () => {
+    const coerced = coerceActivityMemoryInput({
+      details: '初稿已完成',
+      memoryCategory: 'work',
+      memoryType: 'activity',
+      summary: '初稿已完成',
+      tags: ['doc'],
+      title: '初稿',
+      withActivity: JSON.stringify({
+        associatedObjects: [{ extra: null, name: '项目管理办法', type: 'document' }],
+        narrative: '完成了初稿',
+      }),
+    });
+
+    const result = ActivityMemoryItemSchema.safeParse(coerced);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.withActivity.associatedObjects).toEqual([
+      { extra: null, name: '项目管理办法', type: 'knowledge' },
+    ]);
   });
 });

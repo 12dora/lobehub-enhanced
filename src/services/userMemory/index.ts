@@ -32,6 +32,23 @@ import { type z } from 'zod';
 
 import { lambdaClient } from '@/libs/trpc/client';
 
+type EmbeddingAvailabilityOutput = Awaited<
+  ReturnType<typeof lambdaClient.userMemories.getEmbeddingAvailability.query>
+>;
+
+/**
+ * Whether memory embeddings are configured for the current user / workspace.
+ * Presence check only — the server never calls the embedding provider for it.
+ *
+ * `reason` is derived from the router output so a new server-side reason can't
+ * drift from the client type. It is informational only: callers gate solely on
+ * `available === false`, and an unknown / missing result fails open.
+ */
+export interface MemoryEmbeddingAvailability {
+  available: EmbeddingAvailabilityOutput['available'];
+  reason?: EmbeddingAvailabilityOutput['reason'];
+}
+
 class UserMemoryService {
   addActivityMemory = async (
     params: z.infer<typeof ActivityMemoryItemSchema>,
@@ -67,6 +84,10 @@ class UserMemoryService {
     params: z.infer<typeof RemoveIdentityActionSchema>,
   ): Promise<RemoveIdentityMemoryResult> => {
     return lambdaClient.userMemories.toolRemoveIdentityMemory.mutate(params);
+  };
+
+  getEmbeddingAvailability = async (): Promise<MemoryEmbeddingAvailability> => {
+    return lambdaClient.userMemories.getEmbeddingAvailability.query();
   };
 
   getMemoryDetail = async (params: { id: string; layer: LayersEnum }) => {
