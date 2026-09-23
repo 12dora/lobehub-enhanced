@@ -11,3 +11,11 @@ audit
 docs
 **/node_modules
 **/.next
+
+# 本地构建产物 / 缓存:不应进入 build context
+.pnpm-store
+*.tsbuildinfo
+.turbo
+test-results
+playwright-report
+.DS_Store
