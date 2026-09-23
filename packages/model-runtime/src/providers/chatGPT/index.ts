@@ -8,15 +8,21 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import debug from 'debug';
 import type { ChatModelCard } from 'model-bank';
 import { ModelProvider } from 'model-bank';
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 
 import { createOpenAICompatibleRuntime } from '../../core/openaiCompatibleFactory';
+import type { GenerateObjectOptions, GenerateObjectPayload } from '../../types';
 import type { EffortControlKey } from '../../utils/effortControlRegistry';
 import { EFFORT_CONTROL_REGISTRY, isEffortControlKey } from '../../utils/effortControlRegistry';
 import type { ProcessableModelCard } from '../../utils/modelParse';
 import { MODEL_LIST_CONFIGS, processModelList } from '../../utils/modelParse';
 import { params as openAIParams } from '../openai';
 import { resolveCodexClientVersion } from './clientVersion';
+import {
+  ChatGPTCodexOpenAI,
+  describeChatGPTUpstreamError,
+  generateChatGPTObject,
+} from './codexRequest';
 import { createChatGPTImage } from './createImage';
 
 const CHATGPT_CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
@@ -392,7 +398,65 @@ const attachUpstreamAbilityProvenance = (
   });
 };
 
-export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>({
+const prepareChatGPTResponsesRequest = async (
+  // Chat payloads and generateObject payloads share this hook; the factory type
+  // is wider than ResponseCreateParams (prompt cache key, safety identifier).
+  payload: any,
+  _options: unknown,
+  client: OpenAI,
+) => {
+  const { safety_identifier: _safetyIdentifier, ...withoutSafety } = payload;
+  // Codex rejects the OpenAI default `store: true` ("Store must be set to false").
+  const subscriptionPayload = { ...withoutSafety, store: false as const };
+
+  if (!(await isResponsesLiteModel(client, payload.model))) {
+    return { payload: subscriptionPayload };
+  }
+
+  // Catalog-selected models use Responses Lite: tools move into the input
+  // sequence, reasoning spans all turns, and the protocol header is required.
+  const {
+    input,
+    instructions,
+    parallel_tool_calls: _parallelToolCalls,
+    reasoning,
+    tool_choice: toolChoice,
+    tools,
+    ...rest
+  } = subscriptionPayload;
+  const additionalTools: ChatGPTAdditionalToolsInput = {
+    role: 'developer',
+    tools: tools || [],
+    type: 'additional_tools',
+  };
+  const developerInstructions =
+    instructions && typeof instructions === 'string'
+      ? [
+          {
+            content: [{ text: instructions, type: 'input_text' as const }],
+            role: 'developer' as const,
+            type: 'message' as const,
+          },
+        ]
+      : [];
+
+  return {
+    headers: { [CHATGPT_RESPONSES_LITE_HEADER]: 'true' },
+    payload: {
+      ...rest,
+      input: [
+        additionalTools as OpenAI.Responses.ResponseInputItem,
+        ...developerInstructions,
+        ...(Array.isArray(input) ? input : []),
+      ],
+      parallel_tool_calls: false,
+      reasoning: { ...reasoning, context: 'all_turns' },
+      tool_choice: toolChoice || 'auto',
+    },
+  };
+};
+
+const LobeChatGPTAIBase = createOpenAICompatibleRuntime<ChatGPTClientOptions>({
   baseURL: CHATGPT_CODEX_BASE_URL,
   chatCompletion: {
     forceFileBase64: true,
@@ -407,7 +471,7 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
   createImage: createChatGPTImage,
   customClient: {
     createClient: ({ chatgptAccountId, ownOrigins: _ownOrigins, ...options }) => {
-      const client = new OpenAI({
+      const client = new ChatGPTCodexOpenAI({
         ...options,
         defaultHeaders: {
           ...options.defaultHeaders,
@@ -509,54 +573,21 @@ export const LobeChatGPTAI = createOpenAICompatibleRuntime<ChatGPTClientOptions>
         ...(verbosity && !rest.text ? { text: { verbosity } } : {}),
       };
     },
-    prepareRequest: async (payload, _options, client) => {
-      const { safety_identifier: _safetyIdentifier, ...subscriptionPayload } = payload;
-
-      if (!(await isResponsesLiteModel(client, payload.model))) {
-        return { payload: subscriptionPayload };
-      }
-
-      // Catalog-selected models use Responses Lite: tools move into the input
-      // sequence, reasoning spans all turns, and the protocol header is required.
-      const {
-        input,
-        instructions,
-        parallel_tool_calls: _parallelToolCalls,
-        reasoning,
-        tool_choice: toolChoice,
-        tools,
-        ...rest
-      } = subscriptionPayload;
-      const additionalTools: ChatGPTAdditionalToolsInput = {
-        role: 'developer',
-        tools: tools || [],
-        type: 'additional_tools',
-      };
-      const developerInstructions =
-        instructions && typeof instructions === 'string'
-          ? [
-              {
-                content: [{ text: instructions, type: 'input_text' as const }],
-                role: 'developer' as const,
-                type: 'message' as const,
-              },
-            ]
-          : [];
-
-      return {
-        headers: { [CHATGPT_RESPONSES_LITE_HEADER]: 'true' },
-        payload: {
-          ...rest,
-          input: [
-            additionalTools as OpenAI.Responses.ResponseInputItem,
-            ...developerInstructions,
-            ...(Array.isArray(input) ? input : []),
-          ],
-          parallel_tool_calls: false,
-          reasoning: { ...reasoning, context: 'all_turns' },
-          tool_choice: toolChoice || 'auto',
-        },
-      };
-    },
+    prepareRequest: prepareChatGPTResponsesRequest,
   },
 });
+
+export class LobeChatGPTAI extends LobeChatGPTAIBase {
+  override async generateObject(payload: GenerateObjectPayload, options?: GenerateObjectOptions) {
+    try {
+      return await generateChatGPTObject({
+        client: this.client,
+        options,
+        payload,
+        prepare: prepareChatGPTResponsesRequest,
+      });
+    } catch (error) {
+      throw describeChatGPTUpstreamError(error, payload.model);
+    }
+  }
+}

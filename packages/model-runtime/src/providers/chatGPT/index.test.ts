@@ -416,16 +416,21 @@ describe('LobeChatGPTAI', () => {
 
     expect(result).toEqual({ city: 'Hangzhou' });
     expect(request).toMatchObject({
+      include: ['reasoning.encrypted_content'],
       input: [
         { role: 'developer', tools: [], type: 'additional_tools' },
         { content: 'Extract the city', role: 'user' },
       ],
       model: 'gpt-5.6-sol',
-      reasoning: { context: 'all_turns' },
+      prompt_cache_key: 'lobe:user-id:gpt-5.6-sol',
+      reasoning: { context: 'all_turns', summary: 'auto' },
+      store: false,
+      stream: true,
       text: {
         format: {
           name: 'location',
           schema: {
+            additionalProperties: false,
             properties: { city: { type: 'string' } },
             required: ['city'],
             type: 'object',
@@ -436,6 +441,9 @@ describe('LobeChatGPTAI', () => {
       },
       tool_choice: 'auto',
     });
+    expect(request).not.toHaveProperty('temperature');
+    expect(request).not.toHaveProperty('safety_identifier');
+    expect(request.max_output_tokens).toBeUndefined();
     expect(request.safety_identifier).toBeUndefined();
     expect(requestOptions.headers).toMatchObject({
       'x-openai-internal-codex-responses-lite': 'true',
@@ -497,8 +505,11 @@ describe('LobeChatGPTAI', () => {
         },
         { content: 'Extract the city', role: 'user' },
       ],
+      include: ['reasoning.encrypted_content'],
       parallel_tool_calls: false,
-      reasoning: { context: 'all_turns' },
+      reasoning: { context: 'all_turns', summary: 'auto' },
+      store: false,
+      stream: true,
       tool_choice: 'required',
     });
     expect(request.safety_identifier).toBeUndefined();
@@ -506,6 +517,124 @@ describe('LobeChatGPTAI', () => {
     expect(requestOptions.headers).toMatchObject({
       'x-openai-internal-codex-responses-lite': 'true',
     });
+  });
+
+  it('uses the chat Codex contract for non-lite structured output', async () => {
+    (instance['client'].responses.create as Mock).mockResolvedValue({
+      output_text: '{"title":"木质素检测"}',
+    });
+
+    const result = await instance.generateObject({
+      messages: [
+        { content: 'Name the topic', role: 'system' },
+        { content: '钉钉 · 请写一份检测规程', role: 'user' },
+      ],
+      model: 'gpt-5.4-mini',
+      schema: {
+        name: 'topic_title',
+        schema: {
+          properties: {
+            title: { type: 'string' },
+            note: { type: 'string' },
+          },
+          required: ['title'],
+          type: 'object',
+        },
+      },
+      temperature: 0,
+    } as any);
+
+    const [request, requestOptions] = (instance['client'].responses.create as Mock).mock.calls[0];
+
+    expect(result).toEqual({ title: '木质素检测' });
+    expect(request).toMatchObject({
+      include: ['reasoning.encrypted_content'],
+      input: [
+        { content: 'Name the topic', role: 'developer' },
+        { content: '钉钉 · 请写一份检测规程', role: 'user' },
+      ],
+      model: 'gpt-5.4-mini',
+      reasoning: { summary: 'auto' },
+      store: false,
+      stream: true,
+      text: {
+        format: {
+          schema: {
+            additionalProperties: false,
+            properties: {
+              title: { type: 'string' },
+              note: { type: ['string', 'null'] },
+            },
+            required: ['title', 'note'],
+            type: 'object',
+          },
+          strict: true,
+          type: 'json_schema',
+        },
+      },
+    });
+    expect(request.tools).toBeUndefined();
+    expect(request.tool_choice).toBeUndefined();
+    expect(request.temperature).toBeUndefined();
+    expect(requestOptions?.headers?.['x-openai-internal-codex-responses-lite']).toBeUndefined();
+  });
+
+  it('collects streamed json_schema output the way chat streams Codex', async () => {
+    async function* events() {
+      yield { delta: '{"title":', type: 'response.output_text.delta' };
+      yield { delta: '"检测"}', type: 'response.output_text.delta' };
+      yield {
+        response: { output_text: '{"title":"检测"}' },
+        type: 'response.completed',
+      };
+    }
+    (instance['client'].responses.create as Mock).mockResolvedValue(events());
+
+    await expect(
+      instance.generateObject({
+        messages: [{ content: 'title', role: 'user' }],
+        model: 'gpt-5.6-luna',
+        schema: {
+          name: 'topic_title',
+          schema: { properties: { title: { type: 'string' } }, type: 'object' },
+        },
+      }),
+    ).resolves.toEqual({ title: '检测' });
+
+    const [request, requestOptions] = (instance['client'].responses.create as Mock).mock.calls[0];
+    expect(request).toMatchObject({
+      model: 'gpt-5.6-luna',
+      store: false,
+      stream: true,
+    });
+    expect(requestOptions.headers).toMatchObject({
+      'x-openai-internal-codex-responses-lite': 'true',
+    });
+  });
+
+  it('includes the Codex detail body, provider, and model when structured output returns 400', async () => {
+    const apiError = (
+      instance['client'] as unknown as {
+        makeStatusError: (
+          status: number,
+          error: object,
+          message: string | undefined,
+          headers: Headers,
+        ) => Error;
+      }
+    ).makeStatusError(400, { detail: 'Stream must be set to true' }, undefined, new Headers());
+    (instance['client'].responses.create as Mock).mockRejectedValue(apiError);
+
+    await expect(
+      instance.generateObject({
+        messages: [{ content: 'title', role: 'user' }],
+        model: 'gpt-5.4-mini',
+        schema: {
+          name: 'topic_title',
+          schema: { properties: { title: { type: 'string' } }, type: 'object' },
+        },
+      }),
+    ).rejects.toThrow('[chatgpt/gpt-5.4-mini] 400: {"detail":"Stream must be set to true"}');
   });
 
   it('reuses OpenAI Responses payload handling for reasoning and web search', async () => {

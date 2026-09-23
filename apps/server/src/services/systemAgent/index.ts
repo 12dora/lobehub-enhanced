@@ -22,6 +22,7 @@ import debug from 'debug';
 import { UserModel } from '@/database/models/user';
 import { AiInfraRepos } from '@/database/repositories/aiInfra';
 import type { LobeChatDatabase } from '@/database/type';
+import { noteRuntimeError } from '@/server/enterprise/services/platformSystem/noteRuntimeError';
 import {
   getEffectiveSystemAgentConfig,
   isSettingsPolicyEnabled,
@@ -31,7 +32,12 @@ import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 
 import type { RuntimeStateForEffort } from './effort';
 import { resolveServiceModelEffortParams } from './effort';
+import { fallbackTopicTitle } from './fallbackTopicTitle';
 import { resolveSystemAgentModelConfig } from './modelConfig';
+import {
+  isStructuredOutputBackedOff,
+  noteStructuredOutputHttp400,
+} from './structuredOutputBackoff';
 
 const log = debug('lobe-server:system-agent-service');
 
@@ -79,9 +85,20 @@ export class SystemAgentService {
     userPrompt: string;
   }): Promise<string | null> {
     const { userPrompt, lastAssistantContent } = params;
+    let provider = 'unknown';
+    let model = 'unknown';
 
     try {
-      const { model, provider, ...effortParams } = await this.getTaskModelConfig('topic');
+      const taskConfig = await this.getTaskModelConfig('topic');
+      const { model: taskModel, provider: taskProvider, ...effortParams } = taskConfig;
+      provider = taskProvider;
+      model = taskModel;
+
+      if (isStructuredOutputBackedOff(provider, model, 'topic')) {
+        log('generateTopicTitle: skip %s/%s for 10m after HTTP 400', provider, model);
+        return fallbackTopicTitle(userPrompt);
+      }
+
       const locale = await this.getUserLocale();
 
       log('generateTopicTitle: locale=%s, model=%s, provider=%s', locale, model, provider);
@@ -112,14 +129,20 @@ export class SystemAgentService {
       const title = (result as { title?: string })?.title?.trim();
       if (!title) {
         log('generateTopicTitle: LLM returned empty title');
-        return null;
+        return fallbackTopicTitle(userPrompt);
       }
 
       log('generateTopicTitle: generated title="%s"', title);
       return title;
     } catch (error) {
-      console.error('SystemAgentService.generateTopicTitle failed:', error);
-      return null;
+      console.error(`SystemAgentService.generateTopicTitle failed [${provider}/${model}]:`, error);
+      noteRuntimeError('system_agent', error, {
+        model,
+        operation: 'generateTopicTitle',
+        provider,
+      });
+      noteStructuredOutputHttp400(provider, model, 'topic', error);
+      return fallbackTopicTitle(userPrompt);
     }
   }
 
@@ -140,8 +163,16 @@ export class SystemAgentService {
     const { agentId, content } = params;
     if (!content.trim()) return null;
 
+    let provider = 'unknown';
+    let model = 'unknown';
     try {
-      const { model, provider, ...effortParams } = await this.getTaskModelConfig('agentMeta');
+      const {
+        model: taskModel,
+        provider: taskProvider,
+        ...effortParams
+      } = await this.getTaskModelConfig('agentMeta');
+      provider = taskProvider;
+      model = taskModel;
       const locale = await this.getUserLocale();
 
       log('generateSkillMeta: locale=%s, model=%s, provider=%s', locale, model, provider);
@@ -188,6 +219,11 @@ export class SystemAgentService {
       return { description, name, title, tracingId };
     } catch (error) {
       console.error('SystemAgentService.generateSkillMeta failed:', error);
+      noteRuntimeError('system_agent', error, {
+        model,
+        operation: 'generateSkillMeta',
+        provider,
+      });
       return null;
     }
   }
