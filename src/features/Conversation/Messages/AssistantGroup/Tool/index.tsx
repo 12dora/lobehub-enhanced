@@ -1,7 +1,13 @@
 import { getBuiltinRender } from '@lobechat/builtin-tools/renders';
 import { getBuiltinStreaming } from '@lobechat/builtin-tools/streamings';
 import { LOADING_FLAT } from '@lobechat/const';
-import { AccordionItem, Flexbox, Skeleton } from '@lobehub/ui';
+// base-ui's AccordionItem is a headless Base UI part (button trigger, needs its own
+// AccordionRoot) with no controlled `expand` / `hideIndicator` / `action` item and no
+// inheritance from the parent root <Accordion> in WorkflowCollapse / ProcessFold, so it
+// is not a drop-in here; no file in the repo has migrated this item yet.
+// eslint-disable-next-line no-restricted-imports -- keep root AccordionItem until an equivalent exists
+import { AccordionItem, Flexbox } from '@lobehub/ui';
+import { Skeleton } from '@lobehub/ui/base-ui';
 import { Divider } from 'antd';
 import isEqual from 'fast-deep-equal';
 import { memo, useCallback, useEffect, useState } from 'react';
@@ -18,12 +24,12 @@ import Actions from './Actions';
 import Inspectors from './Inspector';
 
 const Debug = dynamic(() => import('./Debug'), {
-  loading: () => <Skeleton.Block active height={300} width={'100%'} />,
+  loading: () => <Skeleton height={300} width={'100%'} />,
   ssr: false,
 });
 
 const Detail = dynamic(() => import('./Detail'), {
-  loading: () => <Skeleton.Block active height={120} width={'100%'} />,
+  loading: () => <Skeleton height={120} width={'100%'} />,
   ssr: false,
 });
 
@@ -63,7 +69,9 @@ const Tool = memo<GroupToolProps>(({ assistantMessageId, disableEditing, id }) =
   const isReject = intervention?.status === 'rejected';
   const isAbort = intervention?.status === 'aborted';
   const hasError = !!result?.error;
-  const needExpand = renderDisplayControl !== 'collapsed' || isPending || hasError;
+  // A rejected / cancelled call has no other visible outcome, so open its
+  // detail to show that it was not executed.
+  const needExpand = renderDisplayControl !== 'collapsed' || isPending || isReject || hasError;
   const isAlwaysExpand = renderDisplayControl === 'alwaysExpand';
 
   let isArgumentsStreaming = false;

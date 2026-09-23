@@ -7,6 +7,7 @@ import { memo, useCallback } from 'react';
 
 import { MESSAGE_ACTION_BAR_PORTAL_ATTRIBUTES } from '@/const/messageActionPortal';
 import { ChatItem } from '@/features/Conversation/ChatItem';
+import { isEmptyAssistantPlaceholder } from '@/store/chat/slices/agentRun/actions/lifecycle/emptyAssistantPlaceholder';
 import { useUserStore } from '@/store/user';
 import { userGeneralSettingsSelectors } from '@/store/user/selectors';
 
@@ -92,6 +93,18 @@ const AssistantMessage = memo<AssistantMessageProps>(
       (message === LOADING_FLAT || !message || String(message).trim() === ''),
     );
 
+    // A run that ended before writing anything leaves only the loading
+    // placeholder. A stopped one is shown as interrupted — live via the
+    // cancelled op, after reload via the persisted `finishType: 'abort'` — with
+    // no ellipsis. Any other ended placeholder (failed / stalled client run, or
+    // a server-persisted "...") is not a reply, so it renders no bubble.
+    const isIdleEmptyPlaceholder =
+      !generating && !isCreating && !editing && !errorContent && isEmptyAssistantPlaceholder(item);
+    const isStoppedEmptyPlaceholder =
+      isIdleEmptyPlaceholder && (interrupted || metadata?.finishType === 'abort');
+
+    if (isIdleEmptyPlaceholder && !isStoppedEmptyPlaceholder) return null;
+
     return (
       <ChatItem
         showTitle
@@ -124,7 +137,7 @@ const AssistantMessage = memo<AssistantMessageProps>(
         }
         messageExtra={
           <>
-            {interrupted && <InterruptedHint />}
+            {(interrupted || isStoppedEmptyPlaceholder) && <InterruptedHint />}
             <TruncationNotice finishReason={metadata?.finishReason} />
             <AssistantMessageExtra
               content={content}

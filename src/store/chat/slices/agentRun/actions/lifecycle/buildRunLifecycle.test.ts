@@ -34,6 +34,17 @@ vi.mock('@/services/messenger', () => ({
   messengerService: messengerServiceMock,
 }));
 
+// completeRun must never delete messages (an ended empty placeholder stays in
+// place and is hidden by the renderer); the mock only exists to assert that.
+const messageServiceMock = vi.hoisted(() => ({
+  removeMessage: vi.fn().mockResolvedValue({ success: true }),
+  removeMessages: vi.fn().mockResolvedValue({ success: true }),
+}));
+
+vi.mock('@/services/message', () => ({
+  messageService: messageServiceMock,
+}));
+
 // Force the desktop branch of afterRunComplete on (isDesktop is false in the
 // test env). Only afterRunComplete reads isDesktop, and it early-returns for
 // sub_agent runs before the check, so this is inert for every other test.
@@ -734,5 +745,48 @@ describe('buildRunLifecycle.completeRun — DingTalk web-turn mirror gating', ()
       userMessage: 'orig q',
       userMessageId: 'u1',
     });
+  });
+});
+
+describe('buildRunLifecycle.completeRun — leaves an unfilled placeholder in place', () => {
+  const KEY = messageMapKey(CONTEXT);
+
+  beforeEach(() => {
+    messageServiceMock.removeMessage.mockClear();
+    messageServiceMock.removeMessages.mockClear();
+  });
+
+  it.each<[AgentRuntimeType, Partial<RunCompleteEvent>]>([
+    ['client', { runtimeStatus: 'done' }],
+    ['client', { runtimeStatus: 'error' }],
+    ['client', { runtimeStatus: 'interrupted' }],
+    ['gateway', { status: 'completed' }],
+    ['gateway', { status: 'cancelled' }],
+    ['hetero', { status: 'failed' }],
+  ])('%s %o removes no message from the store or the database', async (runtimeType, fields) => {
+    const { get, store } = makeStore();
+    const rows = [
+      { content: 'q', id: 'u1', role: 'user' },
+      { content: '...', id: 'asst-1', parentId: 'u1', role: 'assistant' },
+    ];
+    const seeded = store as typeof store & Record<string, unknown>;
+    seeded.dbMessagesMap = { [KEY]: rows };
+    seeded.operationsByMessage = { 'asst-1': [OP] };
+    const dispatch = vi.fn();
+    seeded.internal_dispatchMessage = dispatch;
+    const deleteMessage = vi.fn();
+    seeded.deleteMessage = deleteMessage;
+    seeded.optimisticDeleteMessage = deleteMessage;
+    seeded.optimisticDeleteMessages = deleteMessage;
+
+    await lifecycle(runtimeType, get).completeRun(completeEvent(runtimeType, fields));
+
+    // The row stays so the parent chain remains linear (no sibling branch on
+    // the next send); rendering alone hides / marks it.
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(messageServiceMock.removeMessage).not.toHaveBeenCalled();
+    expect(messageServiceMock.removeMessages).not.toHaveBeenCalled();
+    expect((seeded.dbMessagesMap as Record<string, unknown[]>)[KEY]).toEqual(rows);
   });
 });
