@@ -393,6 +393,30 @@ const terminalFailure = (
   failure: { detail: string; status?: number },
 ): ChatGPTUpstreamError => new ChatGPTUpstreamError(model, failure.status, failure.detail);
 
+/**
+ * SDK Response objects expose `output_text`. Raw `response.completed` payloads
+ * do not: the text is on `output[]` message items (`content[].type === 'output_text'`).
+ * An empty `output_text` string falls through to those items.
+ */
+const readOutputText = (response: Record<string, unknown> | undefined): string => {
+  if (typeof response?.output_text === 'string' && response.output_text) {
+    return response.output_text;
+  }
+  if (!response || !Array.isArray(response.output)) return '';
+
+  const parts: string[] = [];
+  for (const item of response.output) {
+    if (!isRecord(item) || item.type !== 'message' || !Array.isArray(item.content)) continue;
+    for (const entry of item.content) {
+      if (!isRecord(entry) || entry.type !== 'output_text' || typeof entry.text !== 'string') {
+        continue;
+      }
+      parts.push(entry.text);
+    }
+  }
+  return parts.join('');
+};
+
 const readCompletedPayload = (
   response: Record<string, unknown> | undefined,
 ): Pick<CollectedResponse, 'functionCalls' | 'outputText' | 'usage'> => {
@@ -404,11 +428,70 @@ const readCompletedPayload = (
     : [];
   return {
     functionCalls,
-    outputText: typeof response?.output_text === 'string' ? response.output_text : '',
+    outputText: readOutputText(response),
     usage:
       response?.usage && typeof response.usage === 'object'
         ? (response.usage as OpenAI.Responses.ResponseUsage)
         : undefined,
+  };
+};
+
+interface StreamedTextSlot {
+  contentIndex: number;
+  outputIndex: number;
+  /** Set once this part has text, so deltas and `output_text.done` are not both kept. */
+  source?: 'delta' | 'done';
+  text: string;
+}
+
+const streamedPartIndex = (
+  event: Record<string, unknown>,
+  key: 'content_index' | 'output_index',
+): number => {
+  const value = event[key];
+  return typeof value === 'number' ? value : 0;
+};
+
+/**
+ * `response.output_text.done` repeats the full part. Keep it only when that
+ * part streamed no deltas, otherwise the JSON would be duplicated.
+ */
+const createStreamedOutputText = () => {
+  const slots: StreamedTextSlot[] = [];
+
+  const slotFor = (event: Record<string, unknown>): StreamedTextSlot => {
+    const outputIndex = streamedPartIndex(event, 'output_index');
+    const contentIndex = streamedPartIndex(event, 'content_index');
+    const existing = slots.find(
+      (slot) => slot.outputIndex === outputIndex && slot.contentIndex === contentIndex,
+    );
+    if (existing) return existing;
+    const created: StreamedTextSlot = { contentIndex, outputIndex, text: '' };
+    slots.push(created);
+    return created;
+  };
+
+  return {
+    delta(event: Record<string, unknown>, delta: string) {
+      if (!delta) return;
+      const slot = slotFor(event);
+      if (slot.source === 'done') return;
+      slot.source = 'delta';
+      slot.text += delta;
+    },
+    done(event: Record<string, unknown>, text: string) {
+      if (!text) return;
+      const slot = slotFor(event);
+      if (slot.source === 'delta') return;
+      slot.source = 'done';
+      slot.text = text;
+    },
+    text() {
+      return [...slots]
+        .sort((a, b) => a.outputIndex - b.outputIndex || a.contentIndex - b.contentIndex)
+        .map((slot) => slot.text)
+        .join('');
+    },
   };
 };
 
@@ -425,9 +508,18 @@ const collectCodexResponse = async (result: unknown, model: string): Promise<Col
     let usage: OpenAI.Responses.ResponseUsage | undefined;
     let completed = false;
     let failure: { detail: string; status?: number } | undefined;
+    const streamed = createStreamedOutputText();
 
     for await (const event of result) {
       if (!isRecord(event)) continue;
+      if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+        streamed.delta(event, event.delta);
+        continue;
+      }
+      if (event.type === 'response.output_text.done' && typeof event.text === 'string') {
+        streamed.done(event, event.text);
+        continue;
+      }
       if (event.type === 'response.failed') {
         failure = failedDetail(event);
         continue;
@@ -448,7 +540,8 @@ const collectCodexResponse = async (result: unknown, model: string): Promise<Col
     if (!completed) {
       throw new ChatGPTUpstreamError(model, undefined, 'stream ended without response.completed');
     }
-    return { functionCalls, outputText: completedText, usage };
+    // Completed message text wins. Deltas and output_text.done cover an empty output.
+    return { functionCalls, outputText: completedText || streamed.text(), usage };
   }
 
   const response = isRecord(result) ? result : {};

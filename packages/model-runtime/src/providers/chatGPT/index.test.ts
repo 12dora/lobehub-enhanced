@@ -584,7 +584,16 @@ describe('LobeChatGPTAI', () => {
       yield { delta: '{"title":', type: 'response.output_text.delta' };
       yield { delta: '"检测"}', type: 'response.output_text.delta' };
       yield {
-        response: { output_text: '{"title":"检测"}' },
+        response: {
+          output: [
+            {
+              content: [{ annotations: [], text: '{"title":"检测"}', type: 'output_text' }],
+              role: 'assistant',
+              type: 'message',
+            },
+          ],
+          status: 'completed',
+        },
         type: 'response.completed',
       };
     }

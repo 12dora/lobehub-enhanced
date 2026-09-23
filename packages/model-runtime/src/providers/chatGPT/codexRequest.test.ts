@@ -203,14 +203,35 @@ const rejection = async (result: Promise<unknown>): Promise<ChatGPTUpstreamError
   throw new Error('expected generateChatGPTObject to throw');
 };
 
-describe('generateChatGPTObject terminal events', () => {
-  it('returns parsed JSON only after response.completed and omits a null optional note', async () => {
-    const { create, result } = generateFromEvents([
-      { delta: '{"title":"Hi","note":null}', type: 'response.output_text.delta' },
+/** Raw completed event: no SDK `output_text`. Text lives on the message item. */
+const completedMessage = (text: string) => ({
+  response: {
+    output: [
+      { id: 'rs_1', summary: [], type: 'reasoning' },
       {
-        response: { output_text: '{"title":"Hi","note":null}' },
-        type: 'response.completed',
+        content: [{ annotations: [], text, type: 'output_text' }],
+        id: 'msg_1',
+        role: 'assistant',
+        status: 'completed',
+        type: 'message',
       },
+    ],
+    status: 'completed',
+  },
+  type: 'response.completed',
+});
+
+describe('generateChatGPTObject terminal events', () => {
+  it('prefers completed message text over deltas and omits a null optional note', async () => {
+    const { create, result } = generateFromEvents([
+      {
+        content_index: 0,
+        delta: '{"title":"FromDelta","note":null}',
+        item_id: 'msg_1',
+        output_index: 1,
+        type: 'response.output_text.delta',
+      },
+      completedMessage('{"title":"Hi","note":null}'),
     ]);
 
     await expect(result).resolves.toEqual({ title: 'Hi' });
@@ -218,6 +239,97 @@ describe('generateChatGPTObject terminal events', () => {
     if (!sent) throw new Error('expected a responses.create call');
     expect(sent.text.format.schema.properties.note.type).toEqual(['string', 'null']);
     expect(sent.text.format.schema.required).toEqual(expect.arrayContaining(['title', 'note']));
+  });
+
+  it('parses completed message output items when the stream has no deltas', async () => {
+    const { result } = generateFromEvents([completedMessage('{"title":"FromOutput","note":null}')]);
+
+    await expect(result).resolves.toEqual({ title: 'FromOutput' });
+  });
+
+  it('parses output_text deltas when the completed response output is empty', async () => {
+    const { result } = generateFromEvents([
+      {
+        content_index: 0,
+        delta: '{"title":',
+        item_id: 'msg_1',
+        output_index: 0,
+        type: 'response.output_text.delta',
+      },
+      {
+        content_index: 0,
+        delta: '"FromDelta","note":null}',
+        item_id: 'msg_1',
+        output_index: 0,
+        type: 'response.output_text.delta',
+      },
+      { response: { output: [], status: 'completed' }, type: 'response.completed' },
+    ]);
+
+    await expect(result).resolves.toEqual({ title: 'FromDelta' });
+  });
+
+  it('parses response.output_text.done when that item streamed no deltas', async () => {
+    const { result } = generateFromEvents([
+      {
+        content_index: 0,
+        item_id: 'msg_1',
+        output_index: 0,
+        text: '{"title":"FromDone","note":null}',
+        type: 'response.output_text.done',
+      },
+      { response: { output: [], status: 'completed' }, type: 'response.completed' },
+    ]);
+
+    await expect(result).resolves.toEqual({ title: 'FromDone' });
+  });
+
+  it('does not append response.output_text.done onto deltas for the same item', async () => {
+    const text = '{"title":"Hi","note":null}';
+    const { result } = generateFromEvents([
+      {
+        content_index: 0,
+        delta: text,
+        item_id: 'msg_1',
+        output_index: 0,
+        type: 'response.output_text.delta',
+      },
+      {
+        content_index: 0,
+        item_id: 'msg_1',
+        output_index: 0,
+        text,
+        type: 'response.output_text.done',
+      },
+      { response: { output: [], status: 'completed' }, type: 'response.completed' },
+    ]);
+
+    await expect(result).resolves.toEqual({ title: 'Hi' });
+  });
+
+  it('reads message output items from a non-stream body that has no output_text', async () => {
+    const create = vi.fn(async () => ({
+      output: [
+        {
+          content: [{ text: '{"title":"Hi","note":null}', type: 'output_text' }],
+          role: 'assistant',
+          type: 'message',
+        },
+      ],
+      status: 'completed',
+    }));
+
+    await expect(
+      generateChatGPTObject({
+        client: { responses: { create } } as never,
+        payload: {
+          messages: [{ content: 'hello', role: 'user' }],
+          model: 'gpt-5.6-luna',
+          schema: schemaWithOptionalNote,
+        },
+        prepare: async (payload) => ({ payload }),
+      }),
+    ).resolves.toEqual({ title: 'Hi' });
   });
 
   it('throws on response.failed and keeps a non-400 status off the 400 backoff path', async () => {
