@@ -313,6 +313,7 @@ const fullPagesClause = (
 const buildReadyNotice = (input: {
   attachedPages: readonly number[];
   contactSheetCount: number;
+  fileId: string;
   name: string;
   pageCount: number;
   render: FileRenderMetadata;
@@ -328,7 +329,7 @@ const buildReadyNotice = (input: {
     ? 'for other pages call viewDocumentPages or name the page numbers'
     : 'for other pages name the page numbers in your next message';
 
-  let notice = `[Document "${input.name}": ${input.pageCount} pages, text layer: ${textLayer}; attached ${attachedBits.join(' and ')}; ${otherPages}]`;
+  let notice = `[Document "${input.name}": ${input.pageCount} pages, text layer: ${textLayer}; fileId: ${input.fileId}; attached ${attachedBits.join(' and ')}; ${otherPages}]`;
 
   const unattached = visualUnattachedPages(input.render, new Set(input.attachedPages));
   if (unattached.length > 0) {
@@ -470,6 +471,7 @@ export const selectDocumentFeed = async (
       buildReadyNotice({
         attachedPages,
         contactSheetCount: attachedSheets.length,
+        fileId: file.fileId,
         name: file.name,
         pageCount,
         render,

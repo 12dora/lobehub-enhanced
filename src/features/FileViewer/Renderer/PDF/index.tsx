@@ -14,7 +14,10 @@ import HighlightLayer from './HighlightLayer';
 import { styles } from './style';
 import useResizeObserver from './useResizeObserver';
 
+// Packed (.bcmap) CMaps are what the pdfjs-dist cmaps folder ships; Chinese CID
+// fonts need them to map glyphs, so say so explicitly instead of relying on the default.
 const options = {
+  cMapPacked: true,
   cMapUrl: `https://registry.npmmirror.com/pdfjs-dist/${pdfjs.version}/files/cmaps/`,
   standardFontDataUrl: `https://registry.npmmirror.com/pdfjs-dist/${pdfjs.version}/files/standard_fonts/`,
 };
@@ -32,7 +35,6 @@ const PDFViewer = memo<PDFViewerProps>(({ url, fileId }) => {
   const [containerWidth, setContainerWidth] = useState<number>();
   const [isLoaded, setIsLoaded] = useState(false);
 
-   
   const onResize = useCallback<ResizeObserverCallback>((entries) => {
     const [entry] = entries;
 

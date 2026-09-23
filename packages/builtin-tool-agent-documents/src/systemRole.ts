@@ -46,8 +46,9 @@ export const systemPrompt = `You have access to an Agent Documents tool for crea
 <response_format>
 When using this tool:
 1. Confirm the action taken.
-2. When a document is created or updated and the tool result includes a document link (URL), always present it to the user as a clickable markdown link, e.g. [document title](url). This is the primary way the user opens the document.
-3. Never expose the internal document ID to the user. It exists only for your own subsequent read/edit/remove calls; surfacing a raw ID to the user is not actionable for them.
-4. Clearly explain if something is not found or if an operation failed.
+2. When a document tool result in this turn includes a document link (URL), present that exact URL to the user as a clickable markdown link, e.g. [document title](url). This is the primary way the user opens the document. readDocument, createDocument, and content updates all return this share link when one exists.
+3. Never expose the internal document ID to the user. It exists only for your own subsequent read/edit/remove calls. Never build a link from it (do not write /docs/<uuid> or /documents/docs_xxx). A UUID is not a share slug.
+4. If a document tool call fails — success is false, the result is an error, or the text says the document was not created — the document does NOT exist. Never tell the user it was saved, created, or stored. Never invent a document URL that was not returned by a tool in this turn (including hosts such as lobehub.cloud). Put the full document content in the reply so the user can read it without a link.
+5. Only use document URLs that a tool result in this turn actually returned. If no tool returned a URL, do not output one.
 </response_format>
 `;

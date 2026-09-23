@@ -47,6 +47,14 @@ const OFFICE_OR_PDF_EXT = new Set(['docx', 'pdf', 'pptx', 'xlsx']);
 
 const MAX_PAGES_PER_CALL = 4;
 
+/** `files.id` from `idGenerator('files')`: `file_` plus 12 nanoid characters. */
+export const AGENT_FILE_ID_RE = /^file_[0-9A-Za-z]{12}$/;
+
+export const INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE =
+  'fileId 格式不对，应为 file_ 开头的 id（见文档就绪提示）';
+
+export const isAgentFileId = (fileId: string): boolean => AGENT_FILE_ID_RE.test(fileId);
+
 export const isOfficeOrPdfFile = (fileType: string, name: string): boolean => {
   const mime = fileType.split(';')[0]?.trim().toLowerCase() ?? '';
   if (OFFICE_OR_PDF_MIME.has(mime)) return true;
@@ -121,6 +129,10 @@ export class DocumentPagesExecutionRuntime {
 
     const zoom = args.zoom === 'tiles' ? 'tiles' : 'page';
 
+    if (!isAgentFileId(fileId)) {
+      return finalize(fail(INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE));
+    }
+
     const { callBudget, callBudgetKey } = this.services;
     if (callBudget && callBudgetKey) {
       const { allowed, used } = callBudget.consume(callBudgetKey);
@@ -137,7 +149,15 @@ export class DocumentPagesExecutionRuntime {
       }
     }
 
-    const file = await this.services.findAccessibleFile(fileId);
+    let file: Awaited<ReturnType<DocumentPagesRuntimeServices['findAccessibleFile']>>;
+    try {
+      file = await this.services.findAccessibleFile(fileId);
+    } catch (error) {
+      if (error instanceof Error && error.message === INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE) {
+        return finalize(fail(INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE));
+      }
+      throw error;
+    }
     if (!file) return finalize(fail(`File not found or not accessible: ${fileId}`));
 
     const render = readFileRenderMetadata(file.metadata);

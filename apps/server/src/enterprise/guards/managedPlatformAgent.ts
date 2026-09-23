@@ -348,12 +348,60 @@ const resolvePickerKind = (pick: ManagedLocalAgentIdPicker): ManagedLocalAgentPi
   return kind ?? 'custom';
 };
 
+/**
+ * Whether an inbox / task-agent document write is the member's own page rather than
+ * managed agent config or a skill-namespace write.
+ *
+ * - `createsOrdinaryDocument`: `createDocument` / `createForTopic`. `hintIsSkill` is
+ *   metadata on that page, not a mounted skill definition.
+ * - `ordinaryOwnedDocument`: an existing row or VFS path that is not a managed skill.
+ * - `skillNamespaceWrite` always stays locked, even when the other flags are set.
+ *
+ * Materialized platform agents are a separate check and stay rejected either way.
+ */
+export const memberDocumentContentSkipsPlatformAgentLock = (input: {
+  createsOrdinaryDocument?: boolean;
+  ordinaryOwnedDocument?: boolean;
+  skillNamespaceWrite?: boolean;
+}): boolean => {
+  if (input.skillNamespaceWrite) return false;
+  if (input.createsOrdinaryDocument) return true;
+  return input.ordinaryOwnedDocument === true;
+};
+
+export const resolveSkipManagedSystemSlugs = async (params: {
+  allowUserContentOnManagedSystemAgent?: (
+    input: unknown,
+    ctx: unknown,
+  ) => boolean | Promise<boolean>;
+  ctx: unknown;
+  input: unknown;
+  skipManagedSystemSlugs?: boolean;
+}): Promise<boolean> => {
+  if (params.skipManagedSystemSlugs) return true;
+  if (!params.allowUserContentOnManagedSystemAgent) return false;
+  return Boolean(await params.allowUserContentOnManagedSystemAgent(params.input, params.ctx));
+};
+
 export interface ManagedLocalAgentGuardOptions {
+  /**
+   * Member documents in a platform-managed inbox or task agent are user content, not the
+   * published agent config. When this returns true, skip the inbox / task-agent slug
+   * rejection. Materialized platform agents are still rejected. Skill-namespace writes
+   * must return false so that lock stays.
+   */
+  allowUserContentOnManagedSystemAgent?: (
+    input: unknown,
+    ctx: unknown,
+  ) => boolean | Promise<boolean>;
   /**
    * Skip the blanket default-inbox / task-agent rejection. Pair with
    * {@link assertInboxManagedFieldsNotEdited} so per-user prefs remain writable while
    * admin-owned overlay fields stay locked. `updateAgentConfig` relies on that field-level
    * guard for both slug `inbox` and slug `task-agent`.
+   *
+   * Also set from {@link allowUserContentOnManagedSystemAgent} when the mutation is the
+   * member's own document content.
    */
   skipManagedSystemSlugs?: boolean;
 }
@@ -382,14 +430,21 @@ export const withManagedLocalAgentGuard = (
     // Auth middleware already guarantees a userId on these procedures; without one we can't
     // owner-scope the lookup, so defer to the auth layer rather than fail open on a global lookup.
     if (typeof userId !== 'string' || userId.length === 0) return next();
-    const agentIds = pick(await getRawInput()).filter(
+    const rawInput = await getRawInput();
+    const agentIds = pick(rawInput).filter(
       (id): id is string => typeof id === 'string' && id.length > 0,
     );
     const workspaceId = (ctx as { workspaceId?: string }).workspaceId;
+    const skipManagedSystemSlugs = await resolveSkipManagedSystemSlugs({
+      allowUserContentOnManagedSystemAgent: options?.allowUserContentOnManagedSystemAgent,
+      ctx,
+      input: rawInput,
+      skipManagedSystemSlugs: options?.skipManagedSystemSlugs,
+    });
     await assertAgentsNotPlatformManaged({
       agentIds,
       db,
-      skipManagedSystemSlugs: options?.skipManagedSystemSlugs,
+      skipManagedSystemSlugs,
       userId,
       workspaceId,
     });

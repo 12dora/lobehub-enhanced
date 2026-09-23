@@ -1,7 +1,13 @@
 // @vitest-environment node
+import { existsSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
-import { renderPdfPagesToPng, withPdfRenderSemaphore } from './pdfPageImages';
+import {
+  renderPdfPagesToPng,
+  resolvePdfJsFontDataOptions,
+  withPdfRenderSemaphore,
+} from './pdfPageImages';
 
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
 
@@ -32,6 +38,19 @@ const makeOnePagePdf = (): Uint8Array => {
 
   return new TextEncoder().encode(header + objects.join('') + xref + trailer);
 };
+
+describe('resolvePdfJsFontDataOptions', () => {
+  it('points pdf.js at packed cmaps and standard fonts inside pdfjs-dist', () => {
+    const options = resolvePdfJsFontDataOptions();
+
+    expect(options.cMapPacked).toBe(true);
+    expect(options.cMapUrl.endsWith('/cmaps/')).toBe(true);
+    expect(options.standardFontDataUrl.endsWith('/standard_fonts/')).toBe(true);
+    expect(existsSync(options.cMapUrl)).toBe(true);
+    expect(existsSync(options.standardFontDataUrl)).toBe(true);
+    expect(existsSync(`${options.cMapUrl}UniGB-UCS2-H.bcmap`)).toBe(true);
+  });
+});
 
 describe('renderPdfPagesToPng', () => {
   it('renders a one-page PDF to a PNG with plausible dimensions', async () => {

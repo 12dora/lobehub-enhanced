@@ -12,6 +12,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MANAGED_ERROR_CODES } from '@/const/platform/errorCodes';
 import { getTestDB } from '@/database/core/getTestDB';
 import { PlatformAgentCatalogRepository } from '@/database/repositories/platformAgentCatalog';
 import { agents } from '@/database/schemas/agent';
@@ -24,6 +25,7 @@ import { users } from '@/database/schemas/user';
 import type { LobeChatDatabase } from '@/database/type';
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
+import { PlatformDefaultInboxService } from '@/server/enterprise/services/agentCatalog/defaultInbox';
 
 let db: LobeChatDatabase;
 vi.mock('@/database/core/db-adaptor', () => ({ getServerDB: vi.fn(async () => db) }));
@@ -179,10 +181,40 @@ describe('RR2-4 — managed local Agent mutations reject with zero write', () =>
       name: 'home.updateAgentSessionGroupId',
       run: () => home.updateAgentSessionGroupId({ agentId: 'agt_mat', sessionGroupId: null }),
     },
-    // agentDocument — shared write procedure (covers all doc writes)
+    // agentDocument — materialized agents stay rejected, including member-content paths
     {
       name: 'agentDocument.upsertDocument',
       run: () => doc.upsertDocument({ agentId: 'agt_mat', content: 'c', filename: 'a.md' }),
+    },
+    {
+      name: 'agentDocument.writeDocumentByPath',
+      run: () => doc.writeDocumentByPath({ agentId: 'agt_mat', content: 'c', path: './notes.md' }),
+    },
+    {
+      name: 'agentDocument.mkdirDocumentByPath',
+      run: () => doc.mkdirDocumentByPath({ agentId: 'agt_mat', path: './notes' }),
+    },
+    {
+      name: 'agentDocument.renameDocumentByPath',
+      run: () =>
+        doc.renameDocumentByPath({
+          agentId: 'agt_mat',
+          fromPath: './notes.md',
+          toPath: './renamed.md',
+        }),
+    },
+    {
+      name: 'agentDocument.copyDocumentByPath',
+      run: () =>
+        doc.copyDocumentByPath({
+          agentId: 'agt_mat',
+          fromPath: './notes.md',
+          toPath: './copy.md',
+        }),
+    },
+    {
+      name: 'agentDocument.restoreDocumentFromTrashByPath',
+      run: () => doc.restoreDocumentFromTrashByPath({ agentId: 'agt_mat', path: './notes.md' }),
     },
   ];
 
@@ -227,5 +259,103 @@ describe('RR2-4 — managed local Agent mutations reject with zero write', () =>
     await agent.updateAgentPinned({ id: 'agt_ord', pinned: true });
     const [row] = await db.select().from(agents).where(eq(agents.id, 'agt_ord'));
     expect(row.pinned).toBe(true);
+  });
+});
+
+const SKILL_PATH = './lobe/skills/agent/skills/blocked/SKILL.md';
+
+const isPlatformAgentLock = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { code?: string; message?: string };
+  return e.code === 'FORBIDDEN' && e.message === MANAGED_ERROR_CODES.MANAGED_RESOURCE_BY_PLATFORM;
+};
+
+const settle = async (run: () => Promise<unknown>) => {
+  try {
+    await run();
+    return null;
+  } catch (error) {
+    return error;
+  }
+};
+
+describe('inbox member document paths skip the platform slug lock', () => {
+  const withManagedInbox = async () => {
+    await db.insert(agents).values({
+      id: 'agt_inbox',
+      slug: 'inbox',
+      title: 'Inbox',
+      userId: USER,
+    });
+    const capture = vi
+      .spyOn(PlatformDefaultInboxService.prototype, 'capture')
+      .mockResolvedValue({} as never);
+    const { doc } = await buildCallers();
+    return { capture, doc };
+  };
+
+  it('lets ordinary non-skill path mutations through a platform-managed inbox', async () => {
+    const { doc } = await withManagedInbox();
+    const calls = [
+      () => doc.upsertDocument({ agentId: 'agt_inbox', content: 'c', filename: 'notes.md' }),
+      () => doc.writeDocumentByPath({ agentId: 'agt_inbox', content: 'c', path: './notes.md' }),
+      () => doc.mkdirDocumentByPath({ agentId: 'agt_inbox', path: './notes' }),
+      () =>
+        doc.renameDocumentByPath({
+          agentId: 'agt_inbox',
+          fromPath: './notes.md',
+          toPath: './renamed.md',
+        }),
+      () =>
+        doc.copyDocumentByPath({
+          agentId: 'agt_inbox',
+          fromPath: './notes.md',
+          toPath: './copy.md',
+        }),
+      () => doc.restoreDocumentFromTrashByPath({ agentId: 'agt_inbox', path: './notes.md' }),
+    ];
+
+    for (const run of calls) {
+      expect(isPlatformAgentLock(await settle(run))).toBe(false);
+    }
+  });
+
+  it('keeps skill-namespace paths locked on the inbox', async () => {
+    const { doc } = await withManagedInbox();
+    const calls = [
+      () => doc.writeDocumentByPath({ agentId: 'agt_inbox', content: 'c', path: SKILL_PATH }),
+      () => doc.mkdirDocumentByPath({ agentId: 'agt_inbox', path: './lobe/skills/agent/skills' }),
+      () =>
+        doc.renameDocumentByPath({
+          agentId: 'agt_inbox',
+          fromPath: './notes.md',
+          toPath: SKILL_PATH,
+        }),
+      () =>
+        doc.copyDocumentByPath({
+          agentId: 'agt_inbox',
+          fromPath: SKILL_PATH,
+          toPath: './notes.md',
+        }),
+      () => doc.restoreDocumentFromTrashByPath({ agentId: 'agt_inbox', path: SKILL_PATH }),
+    ];
+
+    for (const run of calls) {
+      expect(isPlatformAgentLock(await settle(run))).toBe(true);
+    }
+  });
+
+  it('keeps aggregate document mutations locked on the inbox', async () => {
+    const { doc } = await withManagedInbox();
+    const calls = [
+      () => doc.deleteAllDocuments({ agentId: 'agt_inbox' }),
+      () => doc.cloneDocuments({ sourceAgentId: 'agt_inbox', targetAgentId: 'agt_ord' }),
+      () => doc.initializeFromTemplate({ agentId: 'agt_inbox', templateSet: 'custom' }),
+      () => doc.associateDocument({ agentId: 'agt_inbox', documentId: 'doc-1' }),
+    ];
+
+    for (const run of calls) {
+      expect(isPlatformAgentLock(await settle(run))).toBe(true);
+    }
   });
 });

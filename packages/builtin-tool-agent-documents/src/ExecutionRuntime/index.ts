@@ -9,6 +9,10 @@ import {
 } from '@lobechat/prompts';
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 
+import {
+  isManagedPlatformDocumentToolFailure,
+  mapManagedPlatformDocumentToolError,
+} from '../managedPlatformError';
 import type {
   CopyDocumentArgs,
   CreateDocumentArgs,
@@ -206,6 +210,22 @@ export class AgentDocumentsExecutionRuntime {
     return this.options.getDocumentUrl?.({ agentId, documentId });
   }
 
+  /**
+   * Platform-lock failures must come back as a failed tool result. A thrown
+   * code string is what the model previously treated as "the document was saved".
+   */
+  private async invokeDocumentService<T>(
+    operation: () => Promise<T>,
+  ): Promise<T | BuiltinServerRuntimeOutput> {
+    try {
+      return await operation();
+    } catch (error) {
+      const blocked = mapManagedPlatformDocumentToolError(error);
+      if (blocked) return blocked;
+      throw error;
+    }
+  }
+
   private getCurrentDocumentId(context?: AgentDocumentOperationContext) {
     if (context?.scope !== 'page') return;
     return context.currentDocumentId ?? undefined;
@@ -329,16 +349,18 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const docs =
+    const docs = await this.invokeDocumentService(() =>
       scope === 'currentTopic'
-        ? await this.service.listTopicDocuments({
+        ? this.service.listTopicDocuments({
             agentId,
             parentId,
             scope,
             sourceType,
             topicId: topicId!,
           })
-        : await this.service.listDocuments({ agentId, parentId, scope, sourceType });
+        : this.service.listDocuments({ agentId, parentId, scope, sourceType }),
+    );
+    if (isManagedPlatformDocumentToolFailure(docs)) return docs;
     const list = await Promise.all(
       docs.map(async (d) => {
         const url = await this.buildDocumentUrl(agentId, d.documentId);
@@ -383,15 +405,17 @@ export class AgentDocumentsExecutionRuntime {
     }
 
     const toolTriggerInput = this.buildToolTriggerInput(context);
-    const created =
+    const created = await this.invokeDocumentService(() =>
       scope === 'currentTopic'
-        ? await this.service.createTopicDocument({
+        ? this.service.createTopicDocument({
             ...args,
             ...toolTriggerInput,
             agentId,
             topicId: topicId!,
           })
-        : await this.service.createDocument({ ...args, ...toolTriggerInput, agentId });
+        : this.service.createDocument({ ...args, ...toolTriggerInput, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(created)) return created;
     if (!created) return { content: 'Failed to create agent document.', success: false };
 
     const title = created.title || args.title;
@@ -419,14 +443,32 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const doc = await this.service.readDocument({ ...args, agentId });
+    const doc = await this.invokeDocumentService(() =>
+      this.service.readDocument({ ...args, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(doc)) return doc;
     if (!doc) return { content: `Document not found: ${args.id}`, success: false };
 
     const format = args.format ?? 'xml';
+    const body = this.formatDocumentReadContent(doc, format);
+    // Same share link create/modify already return. The route key is the
+    // documents slug (`docs_` stripped), never the agent_documents UUID.
+    const url = await this.buildDocumentUrl(agentId, doc.documentId);
+    const content = url
+      ? `Share this link with the user as a clickable markdown link: ${url}. ` +
+        `(Internal id ${doc.id} — for your own further edit/read/remove calls only; never show it to the user.)\n\n${body}`
+      : body;
 
     return {
-      content: this.formatDocumentReadContent(doc, format),
-      state: { content: doc.content, id: doc.id, title: doc.title, xml: doc.litexml },
+      content,
+      state: {
+        content: doc.content,
+        ...(doc.documentId ? { documentId: doc.documentId } : {}),
+        id: doc.id,
+        title: doc.title,
+        ...(url ? { url } : {}),
+        xml: doc.litexml,
+      },
       success: true,
     };
   }
@@ -443,14 +485,20 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const existing = await this.service.readDocument({ agentId, id: args.id });
+    const existing = await this.invokeDocumentService(() =>
+      this.service.readDocument({ agentId, id: args.id }),
+    );
+    if (isManagedPlatformDocumentToolFailure(existing)) return existing;
     if (!existing) return { content: `Document not found: ${args.id}`, success: false };
 
     if (this.isCurrentPageDocument(existing, context)) {
       return this.buildCurrentPageDocumentWriteBlockedResult('replaceDocumentContent');
     }
 
-    const doc = await this.service.replaceDocumentContent({ ...args, agentId });
+    const doc = await this.invokeDocumentService(() =>
+      this.service.replaceDocumentContent({ ...args, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(doc)) return doc;
     if (!doc) return { content: `Failed to update document ${args.id}.`, success: false };
 
     const url = await this.buildDocumentUrl(agentId, doc.documentId ?? existing.documentId);
@@ -478,7 +526,10 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const existing = await this.service.readDocument({ agentId, id: args.id });
+    const existing = await this.invokeDocumentService(() =>
+      this.service.readDocument({ agentId, id: args.id }),
+    );
+    if (isManagedPlatformDocumentToolFailure(existing)) return existing;
     if (!existing) return { content: `Document not found: ${args.id}`, success: false };
 
     if (this.isCurrentPageDocument(existing, context)) {
@@ -490,7 +541,10 @@ export class AgentDocumentsExecutionRuntime {
       return { content: 'No operations provided.', success: false };
     }
 
-    const updated = await this.service.modifyNodes({ agentId, id: args.id, operations });
+    const updated = await this.invokeDocumentService(() =>
+      this.service.modifyNodes({ agentId, id: args.id, operations }),
+    );
+    if (isManagedPlatformDocumentToolFailure(updated)) return updated;
     if (!updated) return { content: `Failed to modify document ${args.id}.`, success: false };
 
     const results = operations.map((operation) => ({
@@ -529,7 +583,10 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const deleted = await this.service.removeDocument({ ...args, agentId });
+    const deleted = await this.invokeDocumentService(() =>
+      this.service.removeDocument({ ...args, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(deleted)) return deleted;
     if (!deleted) return { content: `Document not found: ${args.id}`, success: false };
 
     return {
@@ -551,14 +608,20 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const existing = await this.service.readDocument({ agentId, id: args.id });
+    const existing = await this.invokeDocumentService(() =>
+      this.service.readDocument({ agentId, id: args.id }),
+    );
+    if (isManagedPlatformDocumentToolFailure(existing)) return existing;
     if (!existing) return { content: `Document not found: ${args.id}`, success: false };
 
     if (this.isCurrentPageDocument(existing, context)) {
       return this.buildCurrentPageDocumentWriteBlockedResult('renameDocument');
     }
 
-    const doc = await this.service.renameDocument({ ...args, agentId });
+    const doc = await this.invokeDocumentService(() =>
+      this.service.renameDocument({ ...args, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(doc)) return doc;
     if (!doc) return { content: `Failed to rename document ${args.id}.`, success: false };
 
     const url = await this.buildDocumentUrl(agentId, doc.documentId ?? existing.documentId);
@@ -582,7 +645,10 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const copied = await this.service.copyDocument({ ...args, agentId });
+    const copied = await this.invokeDocumentService(() =>
+      this.service.copyDocument({ ...args, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(copied)) return copied;
     if (!copied) return { content: `Document not found: ${args.id}`, success: false };
 
     const url = await this.buildDocumentUrl(agentId, copied.documentId);
@@ -611,7 +677,10 @@ export class AgentDocumentsExecutionRuntime {
       };
     }
 
-    const updated = await this.service.updateLoadRule({ ...args, agentId });
+    const updated = await this.invokeDocumentService(() =>
+      this.service.updateLoadRule({ ...args, agentId }),
+    );
+    if (isManagedPlatformDocumentToolFailure(updated)) return updated;
     if (!updated) return { content: `Document not found: ${args.id}`, success: false };
 
     const url = await this.buildDocumentUrl(agentId, updated.documentId);

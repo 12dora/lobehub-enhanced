@@ -54,6 +54,28 @@ const EXPLICITLY_UNGUARDED_MUTATIONS = Object.freeze([
   'agentDocument.getOrCreateChatTopic',
 ] as const);
 
+/**
+ * Inbox / task-agent document writes that skip the blanket slug lock when the
+ * target is ordinary member content. Skill-namespace paths stay locked inside
+ * the predicate. Behavioral proof lives in managedLocalAgentMutation.guard.test.
+ */
+const MEMBER_CONTENT_DOCUMENT_MUTATIONS = Object.freeze([
+  'agentDocument.copyDocumentByPath',
+  'agentDocument.mkdirDocumentByPath',
+  'agentDocument.renameDocumentByPath',
+  'agentDocument.restoreDocumentFromTrashByPath',
+  'agentDocument.upsertDocument',
+  'agentDocument.writeDocumentByPath',
+] as const);
+
+/** Stay on the blanket write procedure even for ordinary member content. */
+const BLANKET_LOCKED_DOCUMENT_MUTATIONS = Object.freeze([
+  'agentDocument.associateDocument',
+  'agentDocument.cloneDocuments',
+  'agentDocument.deleteAllDocuments',
+  'agentDocument.initializeFromTemplate',
+] as const);
+
 const MANAGED_LOCAL_AGENT_ROUTER_PREFIXES = [
   'agent',
   'agentGroup',
@@ -163,6 +185,21 @@ describe('managed local agent guard registry', () => {
       staleUnguarded: [],
       unclassified: [],
     });
+  });
+
+  it('keeps member-content document writes guarded and aggregate writes blanket-locked', () => {
+    const live = new Set(collectLiveMutationPaths(productionRouters()));
+
+    for (const path of MEMBER_CONTENT_DOCUMENT_MUTATIONS) {
+      expect(live.has(path), path).toBe(true);
+      expect(MANAGED_LOCAL_AGENT_GUARDED_MUTATIONS).toContain(path);
+      expect(EXPLICITLY_UNGUARDED_MUTATIONS as readonly string[]).not.toContain(path);
+    }
+    for (const path of BLANKET_LOCKED_DOCUMENT_MUTATIONS) {
+      expect(live.has(path), path).toBe(true);
+      expect(MANAGED_LOCAL_AGENT_GUARDED_MUTATIONS).toContain(path);
+      expect(MEMBER_CONTENT_DOCUMENT_MUTATIONS as readonly string[]).not.toContain(path);
+    }
   });
 
   it('attaches frozen non-enumerable metadata with the picker kind', () => {

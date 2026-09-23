@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { MANAGED_PLATFORM_DOCUMENT_TOOL_MESSAGE } from '../managedPlatformError';
 import { AgentDocumentsExecutionRuntime } from './index';
 
 const createRuntime = (overrides = {}) =>
@@ -178,6 +179,62 @@ describe('AgentDocumentsExecutionRuntime', () => {
     expect(result.state).toMatchObject({ content: hugeMarkdown, xml: hugeXml });
   });
 
+  it('maps MANAGED_RESOURCE_BY_PLATFORM from createDocument into a Chinese failure', async () => {
+    const createDocument = vi.fn().mockRejectedValue(new Error('MANAGED_RESOURCE_BY_PLATFORM'));
+    const runtime = createRuntime({ createDocument });
+
+    const result = await runtime.createDocument(
+      { content: '手册正文', title: '使用说明' },
+      { agentId: 'agent-1' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.content).toBe(MANAGED_PLATFORM_DOCUMENT_TOOL_MESSAGE);
+    expect(result.content).not.toContain('Created document');
+  });
+
+  it('includes the share URL on readDocument and tells the model not to show the internal id', async () => {
+    const readDocument = vi.fn().mockResolvedValue({
+      content: '# 办法',
+      documentId: 'docs_9zWc6ISEUdWPjmDu',
+      id: 'c1e400e5-85fb-48c7-bcf1-e95b17272602',
+      litexml: '<doc>办法</doc>',
+      title: '项目管理办法（初稿）',
+    });
+    const runtime = new AgentDocumentsExecutionRuntime(
+      {
+        copyDocument: vi.fn(),
+        createDocument: vi.fn(),
+        createTopicDocument: vi.fn(),
+        listDocuments: vi.fn(),
+        listTopicDocuments: vi.fn(),
+        modifyNodes: vi.fn(),
+        readDocument,
+        removeDocument: vi.fn(),
+        renameDocument: vi.fn(),
+        replaceDocumentContent: vi.fn(),
+        updateLoadRule: vi.fn(),
+      },
+      {
+        getDocumentUrl: ({ agentId, documentId }) =>
+          `https://chat.example.com/agent/${agentId}/docs/${documentId.replace(/^docs_/, '')}`,
+      },
+    );
+
+    const result = await runtime.readDocument(
+      { id: 'c1e400e5-85fb-48c7-bcf1-e95b17272602' },
+      { agentId: 'agt_jOQo8asIIZcw' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain(
+      'https://chat.example.com/agent/agt_jOQo8asIIZcw/docs/9zWc6ISEUdWPjmDu',
+    );
+    expect(result.content).toContain('never show it to the user');
+    expect(result.content).toContain('<doc>办法</doc>');
+    expect(result.content).not.toContain('/docs/c1e400e5-85fb-48c7-bcf1-e95b17272602');
+  });
+
   it('does not truncate a readDocument content under the cap', async () => {
     const readDocument = vi.fn().mockResolvedValue({
       content: 'short markdown',
@@ -211,8 +268,8 @@ describe('AgentDocumentsExecutionRuntime', () => {
     // No lone high/low surrogate survives in the LLM-facing content.
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
     expect(result.content).not.toMatch(loneSurrogate);
-    // JSON serialization (the actual failure surface) stays well-formed.
-    expect(() => JSON.parse(JSON.stringify(result.content))).not.toThrow();
+    // Lone surrogates throw in structuredClone; a well-formed slice must not.
+    expect(() => structuredClone(result.content)).not.toThrow();
     expect(result.content).toContain('document truncated to fit the context window');
   });
 });

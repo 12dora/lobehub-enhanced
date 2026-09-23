@@ -65,12 +65,12 @@ describe('documentPagesRuntime', () => {
     });
 
     const runtime = documentPagesRuntime.factory(context());
-    const result = await runtime.viewDocumentPages({ fileId: 'file-1', pages: [2] });
+    const result = await runtime.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [2] });
 
     expect(result.success).toBe(true);
     expect(result.content).toContain('Requested page images for "deck.pdf": pages 2.');
     expect(result.content).toContain(
-      '<document_page_image fileId="file-1" page="2" kind="page" key="files/render/file-1/pages/2.png"/>',
+      '<document_page_image fileId="file_abcdefghij12" page="2" kind="page" key="files/render/file-1/pages/2.png"/>',
     );
   });
 
@@ -83,7 +83,7 @@ describe('documentPagesRuntime', () => {
     });
 
     const runtime = documentPagesRuntime.factory(context());
-    const result = await runtime.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    const result = await runtime.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     expect(result.success).toBe(true);
     expect(result.content).toBe('Page images are still being prepared, try again later.');
@@ -100,23 +100,33 @@ describe('documentPagesRuntime', () => {
     enqueueDocumentRenderJob.mockResolvedValue({ created: true, jobId: 'job-1' });
 
     const runtime = documentPagesRuntime.factory(context({ workspaceId: 'ws-1' }));
-    const result = await runtime.viewDocumentPages({ fileId: 'file-1', pages: [1, 2] });
+    const result = await runtime.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1, 2] });
 
     expect(result.content).toBe('Page images are processing, please retry later.');
     expect(enqueueDocumentRenderJob).toHaveBeenCalledWith(expect.anything(), {
-      fileId: 'file-1',
+      fileId: 'file_abcdefghij12',
       force: true,
     });
   });
 
-  it('returns not found when the scoped lookup misses', async () => {
+  it('returns not found when a real file id misses the scoped lookup', async () => {
     findById.mockResolvedValue(undefined);
 
     const runtime = documentPagesRuntime.factory(context());
-    const result = await runtime.viewDocumentPages({ fileId: 'missing', pages: [1] });
+    const result = await runtime.viewDocumentPages({ fileId: 'file_notfound0001', pages: [1] });
 
+    expect(findById).toHaveBeenCalledWith('file_notfound0001');
     expect(result.success).toBe(false);
-    expect(result.content).toBe('File not found or not accessible: missing');
+    expect(result.content).toBe('File not found or not accessible: file_notfound0001');
+  });
+
+  it('rejects an id that is not a file_ id before lookup', async () => {
+    const runtime = documentPagesRuntime.factory(context());
+    const result = await runtime.viewDocumentPages({ fileId: '4gyxG', pages: [4, 5] });
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.content).toBe('fileId 格式不对，应为 file_ 开头的 id（见文档就绪提示）');
   });
 
   it('emits tile markers when zoom is tiles and a single page has tiles', async () => {
@@ -141,7 +151,7 @@ describe('documentPagesRuntime', () => {
 
     const runtime = documentPagesRuntime.factory(context());
     const result = await runtime.viewDocumentPages({
-      fileId: 'file-1',
+      fileId: 'file_abcdefghij12',
       pages: [1],
       zoom: 'tiles',
     });
@@ -172,7 +182,7 @@ describe('documentPagesRuntime', () => {
 
     const runtime = documentPagesRuntime.factory(context());
     const result = await runtime.viewDocumentPages({
-      fileId: 'file-1',
+      fileId: 'file_abcdefghij12',
       pages: [9],
       zoom: 'tiles',
     });
@@ -181,7 +191,7 @@ describe('documentPagesRuntime', () => {
     expect(result.content).toBeTruthy();
     expect(result.content).toContain('<document_page_image');
     expect(result.content).toContain(
-      '<document_page_image fileId="file-1" page="9" kind="page" key="files/render/file-1/pages/9.png"/>',
+      '<document_page_image fileId="file_abcdefghij12" page="9" kind="page" key="files/render/file-1/pages/9.png"/>',
     );
   });
 
@@ -200,13 +210,13 @@ describe('documentPagesRuntime', () => {
 
     const turnContext = context({ assistantMessageId: 'asst-turn-1' });
     const first = documentPagesRuntime.factory(turnContext);
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     // Production constructs a new runtime per tool call; the budget lives on globalThis.
     const fourth = documentPagesRuntime.factory(turnContext);
-    const result = await fourth.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    const result = await fourth.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     expect(result.success).toBe(true);
     expect(result.content).toBe(DOCUMENT_PAGES_TURN_LIMIT_MESSAGE);
@@ -228,14 +238,14 @@ describe('documentPagesRuntime', () => {
     const first = documentPagesRuntime.factory(
       context({ assistantMessageId: 'asst-1', operationId: 'op-shared' }),
     );
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     const second = documentPagesRuntime.factory(
       context({ assistantMessageId: 'asst-2', operationId: 'op-shared' }),
     );
-    const result = await second.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    const result = await second.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     expect(result.success).toBe(true);
     expect(result.content).toBe(DOCUMENT_PAGES_TURN_LIMIT_MESSAGE);
@@ -257,14 +267,14 @@ describe('documentPagesRuntime', () => {
     const first = documentPagesRuntime.factory(
       context({ assistantMessageId: 'asst-a', operationId: 'op-a' }),
     );
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
-    await first.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
+    await first.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     const second = documentPagesRuntime.factory(
       context({ assistantMessageId: 'asst-b', operationId: 'op-b' }),
     );
-    const result = await second.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+    const result = await second.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
     expect(result.success).toBe(true);
     expect(result.content).toContain('Requested page images');

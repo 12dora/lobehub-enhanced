@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module';
+import path from 'node:path';
+
 import type { Canvas, SKRSContext2D } from '@napi-rs/canvas';
 import debug from 'debug';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
@@ -6,6 +9,39 @@ import type { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { DOCUMENT_RENDER_TEXT_EXCERPT_CHARS } from '@/types/files';
 
 const log = debug('lobe-server:pdf-page-images');
+
+const requirePdfjs = createRequire(import.meta.url);
+
+export interface PdfJsFontDataOptions {
+  cMapPacked: true;
+  cMapUrl: string;
+  standardFontDataUrl: string;
+}
+
+/**
+ * pdf.js reads these with `fs.readFile` (Node CMap reader), so they must be
+ * filesystem directories with a trailing slash — not `file://` URLs.
+ * `cmaps/` and `standard_fonts/` live next to the package entry and are not
+ * imported as modules; the Docker image only has them when output tracing
+ * includes those directories.
+ */
+const pdfjsAssetDirectory = (directoryName: 'cmaps' | 'standard_fonts'): string => {
+  const entry = requirePdfjs.resolve('pdfjs-dist/legacy/build/pdf.mjs');
+  const packageRoot = path.resolve(path.dirname(entry), '..', '..');
+  const directory = path.join(packageRoot, directoryName).replaceAll('\\', '/');
+  return directory.endsWith('/') ? directory : `${directory}/`;
+};
+
+let pdfJsFontDataOptions: PdfJsFontDataOptions | undefined;
+
+export const resolvePdfJsFontDataOptions = (): PdfJsFontDataOptions => {
+  pdfJsFontDataOptions ??= {
+    cMapPacked: true,
+    cMapUrl: pdfjsAssetDirectory('cmaps'),
+    standardFontDataUrl: pdfjsAssetDirectory('standard_fonts'),
+  };
+  return pdfJsFontDataOptions;
+};
 
 const DEFAULT_MAX_LONG_EDGE_PX = 1800;
 const RETRY_SCALE = 0.7;
@@ -230,6 +266,7 @@ export const inspectPdfPages = async (bytes: Uint8Array): Promise<PdfPageInspect
 
     const loadingTask = getDocument({
       CanvasFactory: NapiCanvasFactory,
+      ...resolvePdfJsFontDataOptions(),
       data,
       useSystemFonts: true,
     });
@@ -485,6 +522,7 @@ const renderPdfPagesToPngUncapped = async (
 
     const loadingTask = getDocument({
       CanvasFactory: NapiCanvasFactory,
+      ...resolvePdfJsFontDataOptions(),
       data,
       useSystemFonts: true,
     });

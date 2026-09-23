@@ -3,6 +3,8 @@ import {
   DOCUMENT_PAGES_CALL_BUDGET_TTL_MS,
   DOCUMENT_PAGES_CALL_LIMIT,
   DocumentPagesExecutionRuntime,
+  INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE,
+  isAgentFileId,
 } from '@lobechat/builtin-tool-document-pages/executionRuntime';
 import { DocumentPagesIdentifier } from '@lobechat/builtin-tool-document-pages/manifest';
 
@@ -57,6 +59,9 @@ export const documentPagesRuntime: ServerRuntimeRegistration = {
         return enqueueDocumentRenderJob(serverDB, { fileId, force: true });
       },
       findAccessibleFile: async (fileId) => {
+        if (!isAgentFileId(fileId)) {
+          throw new Error(INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE);
+        }
         const file = await fileModel.findById(fileId);
         if (!file) return undefined;
         return {

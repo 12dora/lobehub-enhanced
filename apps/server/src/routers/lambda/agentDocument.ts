@@ -17,6 +17,7 @@ import { TopicDocumentModel } from '@/database/models/topicDocument';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import {
+  memberDocumentContentSkipsPlatformAgentLock,
   pickDocumentAgentIds,
   withManagedLocalAgentGuard,
 } from '@/server/enterprise/guards/managedPlatformAgent';
@@ -189,9 +190,31 @@ const agentDocumentProcedure = wsCompatProcedure.use(serverDatabase).use(async (
 // RR2-4: every agent-document write also runs the unified managed-local-agent guard here, once — so
 // a materialized platform Agent's document tree (by `agentId`, or `sourceAgentId`/`targetAgentId`
 // on cloneDocuments) can never be mutated through the ordinary endpoints. Flag off → no-op.
-const agentDocumentProcedureWrite = agentDocumentProcedure
-  .use(withScopedPermission('document:update'))
-  .use(withManagedLocalAgentGuard(pickDocumentAgentIds));
+//
+// Member pages in the platform-managed inbox / task agent are user content, not the published
+// agent config. Those mutations use `agentDocumentProcedureMemberContent`, which still rejects
+// materialized platform agents. Skill-namespace paths stay locked inside that predicate.
+// Aggregate writes (delete all / clone / template init / associate) and skill-definition
+// writes stay on `agentDocumentProcedureWrite`.
+const agentDocumentProcedureAuthedWrite = agentDocumentProcedure.use(
+  withScopedPermission('document:update'),
+);
+
+const agentDocumentProcedureWrite = agentDocumentProcedureAuthedWrite.use(
+  withManagedLocalAgentGuard(pickDocumentAgentIds),
+);
+
+const agentDocumentProcedureMemberContent = (
+  allowUserContentOnManagedSystemAgent: (
+    input: unknown,
+    ctx: unknown,
+  ) => boolean | Promise<boolean>,
+) =>
+  agentDocumentProcedureAuthedWrite.use(
+    withManagedLocalAgentGuard(pickDocumentAgentIds, {
+      allowUserContentOnManagedSystemAgent,
+    }),
+  );
 
 const agentDocumentIdGuardSchema = z.object({ agentId: z.string(), id: z.string() }).passthrough();
 const agentDocumentFilenameGuardSchema = z
@@ -225,6 +248,32 @@ const isOrdinaryAgentDocumentFilenameInput = async (
   const document = await service.getDocument(parsed.data.agentId, parsed.data.filename);
   return !document || !isManagedSkillDocument(document);
 };
+
+const allowOrdinaryDocumentCreate = (): boolean =>
+  memberDocumentContentSkipsPlatformAgentLock({ createsOrdinaryDocument: true });
+
+const allowOrdinaryOwnedDocumentById = async (input: unknown, ctx: unknown): Promise<boolean> =>
+  memberDocumentContentSkipsPlatformAgentLock({
+    ordinaryOwnedDocument: await isOrdinaryAgentDocumentIdInput(input, ctx),
+  });
+
+const allowOrdinaryOwnedDocumentByFilename = async (
+  input: unknown,
+  ctx: unknown,
+): Promise<boolean> =>
+  memberDocumentContentSkipsPlatformAgentLock({
+    ordinaryOwnedDocument: await isOrdinaryAgentDocumentFilenameInput(input, ctx),
+  });
+
+const allowOrdinaryOwnedDocumentByPath = (input: unknown): boolean =>
+  memberDocumentContentSkipsPlatformAgentLock({
+    ordinaryOwnedDocument: isOrdinaryAgentDocumentPathInput(input),
+  });
+
+const allowOrdinaryOwnedDocumentByPathPair = (input: unknown): boolean =>
+  memberDocumentContentSkipsPlatformAgentLock({
+    ordinaryOwnedDocument: isOrdinaryAgentDocumentPathPairInput(input),
+  });
 
 const hasOnlyOrdinaryAgentDocuments = async (input: unknown, ctx: unknown): Promise<boolean> => {
   const parsed = agentDocumentAggregateGuardSchema.safeParse(input);
@@ -441,7 +490,7 @@ export const agentDocumentRouter = router({
   /**
    * Create or update a document
    */
-  upsertDocument: agentDocumentProcedureWrite
+  upsertDocument: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByFilename)
     .use(
       withManagedResourceGuard('agentDocument.upsertDocument', {
         isExemptInput: isOrdinaryAgentDocumentFilenameInput,
@@ -471,7 +520,7 @@ export const agentDocumentRouter = router({
   /**
    * Delete a specific document
    */
-  deleteDocument: agentDocumentProcedureWrite
+  deleteDocument: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByFilename)
     .use(
       withManagedResourceGuard('agentDocument.deleteDocument', {
         isExemptInput: isOrdinaryAgentDocumentFilenameInput,
@@ -707,7 +756,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: write document by VFS path
    */
-  writeDocumentByPath: agentDocumentProcedureWrite
+  writeDocumentByPath: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByPath)
     .use(
       withManagedResourceGuard('agentDocument.writeDocumentByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathInput,
@@ -859,7 +908,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: create a VFS directory
    */
-  mkdirDocumentByPath: agentDocumentProcedureWrite
+  mkdirDocumentByPath: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByPath)
     .use(
       withManagedResourceGuard('agentDocument.mkdirDocumentByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathInput,
@@ -891,7 +940,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: rename or move a VFS path
    */
-  renameDocumentByPath: agentDocumentProcedureWrite
+  renameDocumentByPath: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByPathPair)
     .use(
       withManagedResourceGuard('agentDocument.renameDocumentByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathPairInput,
@@ -925,7 +974,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: copy a VFS path
    */
-  copyDocumentByPath: agentDocumentProcedureWrite
+  copyDocumentByPath: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByPathPair)
     .use(
       withManagedResourceGuard('agentDocument.copyDocumentByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathPairInput,
@@ -959,7 +1008,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: soft-delete a VFS path
    */
-  deleteDocumentByPath: agentDocumentProcedureWrite
+  deleteDocumentByPath: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentByPath)
     .use(
       withManagedResourceGuard('agentDocument.deleteDocumentByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathInput,
@@ -1017,7 +1066,9 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: restore a trash entry
    */
-  restoreDocumentFromTrashByPath: agentDocumentProcedureWrite
+  restoreDocumentFromTrashByPath: agentDocumentProcedureMemberContent(
+    allowOrdinaryOwnedDocumentByPath,
+  )
     .use(
       withManagedResourceGuard('agentDocument.restoreDocumentFromTrashByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathInput,
@@ -1044,7 +1095,9 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: permanently remove a trash entry
    */
-  deleteDocumentPermanentlyByPath: agentDocumentProcedureWrite
+  deleteDocumentPermanentlyByPath: agentDocumentProcedureMemberContent(
+    allowOrdinaryOwnedDocumentByPath,
+  )
     .use(
       withManagedResourceGuard('agentDocument.deleteDocumentPermanentlyByPath', {
         isExemptInput: isOrdinaryAgentDocumentPathInput,
@@ -1088,7 +1141,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: create document
    */
-  createDocument: agentDocumentProcedureWrite
+  createDocument: agentDocumentProcedureMemberContent(allowOrdinaryDocumentCreate)
     .use(withManagedResourceGuard('agentDocument.createDocument'))
     .input(
       z
@@ -1145,7 +1198,7 @@ export const agentDocumentRouter = router({
    * Create an agent document and associate it with a topic in one call.
    * Used by the topic → page flow to create an agent document.
    */
-  createForTopic: agentDocumentProcedureWrite
+  createForTopic: agentDocumentProcedureMemberContent(allowOrdinaryDocumentCreate)
     .use(withManagedResourceGuard('agentDocument.createForTopic'))
     .input(
       z
@@ -1222,7 +1275,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: modify document nodes by id through LiteXML.
    */
-  modifyNodes: agentDocumentProcedureWrite
+  modifyNodes: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentById)
     .use(
       withManagedResourceGuard('agentDocument.modifyNodes', {
         isExemptInput: isOrdinaryAgentDocumentIdInput,
@@ -1246,7 +1299,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: replace document content by id
    */
-  replaceDocumentContent: agentDocumentProcedureWrite
+  replaceDocumentContent: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentById)
     .use(
       withManagedResourceGuard('agentDocument.replaceDocumentContent', {
         isExemptInput: isOrdinaryAgentDocumentIdInput,
@@ -1270,7 +1323,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: remove document by id
    */
-  removeDocument: agentDocumentProcedureWrite
+  removeDocument: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentById)
     .use(
       withManagedResourceGuard('agentDocument.removeDocument', {
         isExemptInput: isOrdinaryAgentDocumentIdInput,
@@ -1290,7 +1343,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: copy document by id
    */
-  copyDocument: agentDocumentProcedureWrite
+  copyDocument: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentById)
     .use(
       withManagedResourceGuard('agentDocument.copyDocument', {
         isExemptInput: isOrdinaryAgentDocumentIdInput,
@@ -1318,7 +1371,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: rename document by id
    */
-  renameDocument: agentDocumentProcedureWrite
+  renameDocument: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentById)
     .use(
       withManagedResourceGuard('agentDocument.renameDocument', {
         isExemptInput: isOrdinaryAgentDocumentIdInput,
@@ -1346,7 +1399,7 @@ export const agentDocumentRouter = router({
   /**
    * Tool-oriented: update document load rule by id
    */
-  updateLoadRule: agentDocumentProcedureWrite
+  updateLoadRule: agentDocumentProcedureMemberContent(allowOrdinaryOwnedDocumentById)
     .use(
       withManagedResourceGuard('agentDocument.updateLoadRule', {
         isExemptInput: isOrdinaryAgentDocumentIdInput,

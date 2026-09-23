@@ -99,6 +99,7 @@ describe('selectDocumentFeed', () => {
     ]);
     expect(result.images.at(-1)).toMatchObject({ detail: 'high', kind: 'page', page: 3 });
     expect(result.notices[0]).toContain('Document "deck.pptx": 6 pages, text layer: yes');
+    expect(result.notices[0]).toContain('fileId: f1');
     expect(result.notices[0]).toContain('2 contact sheets');
     expect(result.notices[0]).toContain('full page 3');
     expect(result.notices[0]).toContain('call viewDocumentPages or name the page numbers');

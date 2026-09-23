@@ -5,10 +5,22 @@ import {
   createDocumentPagesCallBudget,
   DOCUMENT_PAGES_TURN_LIMIT_MESSAGE,
   DocumentPagesExecutionRuntime,
+  INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE,
   resetDocumentPagesCallBudgetForTest,
 } from './index';
 
 describe('DocumentPagesExecutionRuntime', () => {
+  it('rejects a non-file id instead of saying the file was not found', async () => {
+    const findAccessibleFile = vi.fn();
+    const runtime = new DocumentPagesExecutionRuntime({ findAccessibleFile });
+
+    const result = await runtime.viewDocumentPages({ fileId: '4gyxG', pages: [4, 5] });
+
+    expect(findAccessibleFile).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.content).toBe(INVALID_DOCUMENT_PAGE_FILE_ID_MESSAGE);
+  });
+
   const enqueueRender = vi.fn();
   const findAccessibleFile = vi.fn();
 
@@ -35,10 +47,13 @@ describe('DocumentPagesExecutionRuntime', () => {
       });
       enqueueRender.mockResolvedValue({ created: false, jobId: 'job-1' });
 
-      const result = await runtime.viewDocumentPages({ fileId: 'file-1', pages: [1, 2] });
+      const result = await runtime.viewDocumentPages({
+        fileId: 'file_abcdefghij12',
+        pages: [1, 2],
+      });
 
       expect(enqueueRender).toHaveBeenCalledTimes(1);
-      expect(enqueueRender).toHaveBeenCalledWith('file-1', { force: true });
+      expect(enqueueRender).toHaveBeenCalledWith('file_abcdefghij12', { force: true });
       expect(result.success).toBe(true);
       expect(result.content).toContain('are being prepared');
       expect(result.state).toMatchObject({ pages: [1, 2], status: 'processing' });
@@ -57,7 +72,7 @@ describe('DocumentPagesExecutionRuntime', () => {
         name: 'deck.pdf',
       });
 
-      const result = await runtime.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+      const result = await runtime.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
 
       expect(enqueueRender).not.toHaveBeenCalled();
       expect(result.content).toContain('Requested page images');
@@ -87,7 +102,7 @@ describe('DocumentPagesExecutionRuntime', () => {
       });
 
       const result = await runtime.viewDocumentPages({
-        fileId: 'file-1',
+        fileId: 'file_abcdefghij12',
         pages: [9],
         zoom: 'tiles',
       });
@@ -96,7 +111,7 @@ describe('DocumentPagesExecutionRuntime', () => {
       expect(result.content).toBeTruthy();
       expect(result.content).toContain('<document_page_image');
       expect(result.content).toContain(
-        '<document_page_image fileId="file-1" page="9" kind="page" key="files/render/file-1/pages/9.png"/>',
+        '<document_page_image fileId="file_abcdefghij12" page="9" kind="page" key="files/render/file-1/pages/9.png"/>',
       );
       expect(result.content).not.toContain('kind="tile"');
       expect(result.state).toMatchObject({ markerCount: 1, pages: [9], zoom: 'tiles' });
@@ -123,7 +138,7 @@ describe('DocumentPagesExecutionRuntime', () => {
       });
 
       const result = await runtime.viewDocumentPages({
-        fileId: 'file-1',
+        fileId: 'file_abcdefghij12',
         pages: [9],
         zoom: 'tiles',
       });
@@ -155,7 +170,7 @@ describe('DocumentPagesExecutionRuntime', () => {
 
       const results = [];
       for (let i = 0; i < 4; i += 1) {
-        results.push(await runtime.viewDocumentPages({ fileId: 'file-1', pages: [1] }));
+        results.push(await runtime.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] }));
       }
 
       expect(
@@ -182,7 +197,7 @@ describe('DocumentPagesExecutionRuntime', () => {
       const runtime = new DocumentPagesExecutionRuntime({ enqueueRender, findAccessibleFile });
 
       for (let i = 0; i < 4; i += 1) {
-        const result = await runtime.viewDocumentPages({ fileId: 'file-1', pages: [1] });
+        const result = await runtime.viewDocumentPages({ fileId: 'file_abcdefghij12', pages: [1] });
         expect(result.content).toContain('Requested page images');
       }
     });

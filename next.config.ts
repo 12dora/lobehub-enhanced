@@ -39,8 +39,23 @@ const nextConfig = defineConfig({
   ...(isVercel ? vercelConfig : isDocker ? dockerConfig : {}),
 });
 
+// pdf.js loads CMap / standard-font files with fs.readFile. They are data
+// directories, not JS imports, so Next standalone tracing omits them unless
+// listed here. The Docker image copies `.next/standalone` and does not copy
+// node_modules/pdfjs-dist itself.
+const pdfjsFontDataTracingIncludes = [
+  'node_modules/pdfjs-dist/cmaps/**/*',
+  'node_modules/pdfjs-dist/standard_fonts/**/*',
+  'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/cmaps/**/*',
+  'node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/standard_fonts/**/*',
+];
+
 export default {
   ...nextConfig,
+  outputFileTracingIncludes: {
+    ...nextConfig.outputFileTracingIncludes,
+    '*': [...(nextConfig.outputFileTracingIncludes?.['*'] ?? []), ...pdfjsFontDataTracingIncludes],
+  },
   ...(process.env.E2E_ENTERPRISE_ADMIN_NEXT_DIST_DIR
     ? { distDir: process.env.E2E_ENTERPRISE_ADMIN_NEXT_DIST_DIR }
     : {}),

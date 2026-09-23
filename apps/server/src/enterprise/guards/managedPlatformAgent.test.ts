@@ -33,10 +33,12 @@ import {
   MANAGED_AGENT_BATCH_LIMIT_REASON,
   MANAGED_AGENT_MUTATION_FORBIDDEN,
   MAX_MANAGED_AGENT_GUARD_IDS,
+  memberDocumentContentSkipsPlatformAgentLock,
   pickAgentId,
   pickAgentIds,
   pickDocumentAgentIds,
   pickId,
+  resolveSkipManagedSystemSlugs,
 } from './managedPlatformAgent';
 
 const { isPlatformAgentTakeoverActiveMock } = vi.hoisted(() => ({
@@ -516,5 +518,63 @@ describe('assertInboxManagedFieldsNotEdited', () => {
 
     await expect(run({ model: 'gpt-5.6-sol' }, AGT_BUILTIN_TASK_AGENT)).resolves.toBeUndefined();
     expect(capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('member document content vs platform agent lock', () => {
+  it('allows creating an ordinary inbox or topic document', () => {
+    expect(memberDocumentContentSkipsPlatformAgentLock({ createsOrdinaryDocument: true })).toBe(
+      true,
+    );
+  });
+
+  it('allows editing or deleting an ordinary owned document', () => {
+    expect(memberDocumentContentSkipsPlatformAgentLock({ ordinaryOwnedDocument: true })).toBe(true);
+  });
+
+  it('keeps the lock when the target is not an ordinary owned document', () => {
+    expect(memberDocumentContentSkipsPlatformAgentLock({})).toBe(false);
+    expect(memberDocumentContentSkipsPlatformAgentLock({ ordinaryOwnedDocument: false })).toBe(
+      false,
+    );
+  });
+
+  it('keeps the lock for skill-namespace writes even when the payload looks ordinary', () => {
+    expect(
+      memberDocumentContentSkipsPlatformAgentLock({
+        createsOrdinaryDocument: true,
+        ordinaryOwnedDocument: true,
+        skillNamespaceWrite: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('resolves the inbox skip only when the content predicate allows it', async () => {
+    const ctx = { userId: 'user-a' };
+    const input = { agentId: 'inbox-agent', title: '培训手册' };
+
+    await expect(
+      resolveSkipManagedSystemSlugs({ ctx, input, skipManagedSystemSlugs: true }),
+    ).resolves.toBe(true);
+
+    await expect(resolveSkipManagedSystemSlugs({ ctx, input })).resolves.toBe(false);
+
+    const allow = vi.fn(async () => true);
+    await expect(
+      resolveSkipManagedSystemSlugs({
+        allowUserContentOnManagedSystemAgent: allow,
+        ctx,
+        input,
+      }),
+    ).resolves.toBe(true);
+    expect(allow).toHaveBeenCalledWith(input, ctx);
+
+    await expect(
+      resolveSkipManagedSystemSlugs({
+        allowUserContentOnManagedSystemAgent: async () => false,
+        ctx,
+        input,
+      }),
+    ).resolves.toBe(false);
   });
 });
