@@ -5,6 +5,12 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.9.1 (2026-09-24)
+
+#### 🐛 Fixes
+
+- 话题标题、任务交接与简报在 ChatGPT 订阅模型上生成为空而回退为首句:结构化输出改为从真实流事件中读取结果。
+
 ## 1.9.0 (2026-09-24)
 
 #### ✨ Improvements
