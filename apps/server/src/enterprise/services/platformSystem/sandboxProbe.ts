@@ -2,6 +2,7 @@ import type { AdminSystemSandboxHealth } from '@/server/enterprise/contracts/adm
 import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { getEffectiveSandboxSettings } from '@/server/enterprise/services/sandboxSettings/effective';
 import type { LocalSandboxHealth } from '@/server/services/sandbox/providers/local';
+import { sandboxImageMissingMessage } from '@/server/services/sandbox/providers/local/health';
 
 import { probeLatencyMs } from './infraProbes';
 
@@ -18,8 +19,18 @@ export const projectSandboxHealth = (
   health: LocalSandboxHealth,
   maxContainers: number,
   checkedAt: Date,
+  options?: { image?: string; pullPolicy?: 'always' | 'if-missing' | 'never' },
 ): AdminSystemSandboxHealth => {
-  const lastError = clipError(health.lastError);
+  const pullPolicy = options?.pullPolicy;
+  const image = options?.image?.trim();
+  const reported = clipError(health.lastError);
+  const lastError =
+    health.daemonReachable && !health.imagePresent
+      ? (reported ??
+        (options?.image && pullPolicy
+          ? sandboxImageMissingMessage(options.image, pullPolicy)
+          : undefined))
+      : reported;
   const base = {
     activeContainers: health.activeContainers,
     daemonReachable: health.daemonReachable,
@@ -27,6 +38,8 @@ export const projectSandboxHealth = (
     imagePresent: health.imagePresent,
     lastCheckedAt: checkedAt,
     maxContainers,
+    ...(image ? { image } : {}),
+    ...(pullPolicy ? { pullPolicy } : {}),
     ...(lastError ? { lastError } : {}),
   };
 
@@ -42,8 +55,8 @@ export const projectSandboxHealth = (
   if (!health.imagePresent) {
     return {
       ...base,
-      errorCategory: 'configuration_incomplete',
-      status: 'degraded',
+      errorCategory: 'operation_unavailable',
+      status: 'unavailable',
     };
   }
 
@@ -90,10 +103,14 @@ export const probeSandboxHealth = async (
     const health = await checkLocalSandboxHealth({
       host: settings.dockerHost,
       image: settings.image,
+      pullPolicy: settings.pullPolicy,
       socketPath: settings.dockerSocket,
     });
     return {
-      ...projectSandboxHealth(health, settings.maxContainers, now()),
+      ...projectSandboxHealth(health, settings.maxContainers, now(), {
+        image: settings.image,
+        pullPolicy: settings.pullPolicy,
+      }),
       latencyMs: probeLatencyMs(startedAt),
     };
   } catch (error) {
@@ -107,6 +124,7 @@ export const probeSandboxHealth = async (
         },
         settings.maxContainers,
         now(),
+        { image: settings.image, pullPolicy: settings.pullPolicy },
       ),
       latencyMs: probeLatencyMs(startedAt),
     };

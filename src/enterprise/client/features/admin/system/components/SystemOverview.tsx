@@ -1,6 +1,7 @@
 'use client';
 
-import { Alert, Block, Flexbox, Icon, Tag, Text } from '@lobehub/ui';
+import { Block, Flexbox, Icon } from '@lobehub/ui';
+import { Alert, Tag, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -25,6 +26,7 @@ import {
 } from '@/enterprise/client/features/admin/system/controller';
 import type { AdminSystemStatus } from '@/enterprise/client/services/adminSystem';
 
+import { formatAbsoluteTime, formatRelativeTime } from '../statusHealth';
 import { OperationalStatus } from './OperationalStatus';
 
 const styles = createStaticStyles(({ css }) => ({
@@ -67,6 +69,19 @@ const styles = createStaticStyles(({ css }) => ({
   dependencyLines: css`
     min-height: 40px;
   `,
+  /** Doubled selector so the accent wins over Block's own outlined border. */
+  dependencyToneError: css`
+    && {
+      border-color: ${cssVar.colorErrorBorder};
+      box-shadow: inset 3px 0 0 ${cssVar.colorError};
+    }
+  `,
+  dependencyToneWarning: css`
+    && {
+      border-color: ${cssVar.colorWarningBorder};
+      box-shadow: inset 3px 0 0 ${cssVar.colorWarning};
+    }
+  `,
   flagGrid: css`
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -89,55 +104,107 @@ const DEPENDENCIES = [
 
 type DependencyHealth = AdminSystemStatus['dependencies']['database'];
 
+/**
+ * `image` is read when the server reports it; older builds only name the image
+ * inside `lastError` (「沙箱镜像 … 不存在（拉取策略 never）」).
+ */
+type SandboxHealth = NonNullable<AdminSystemStatus['dependencies']['sandbox']> & {
+  image?: string;
+};
+
 const ELLIPSIS = { tooltip: true, tooltipWhenOverflow: true } as const;
 
 interface DependencyTileProps {
+  /** When the probe last ran; shown relative to the snapshot. */
+  checkedAt: Date | null;
   icon: LucideIcon;
+  /** Snapshot time the relative "checked" time is measured from. */
+  now: Date;
   /** What this dependency is — provider / engine / target, plus version when known. */
-  primary: string;
+  primary: ReactNode;
   /** How it is doing — error, latency, or the workload it is carrying. */
-  secondary: string;
+  secondary: ReactNode;
+  /** Set when line 2 is an error, so it renders in the status colour. */
+  secondaryIsError?: boolean;
   status: string;
   title: string;
 }
 
+const dependencyToneClassName = (status: string): string =>
+  status === 'unavailable'
+    ? `${styles.dependency} ${styles.dependencyToneError}`
+    : status === 'degraded'
+      ? `${styles.dependency} ${styles.dependencyToneWarning}`
+      : styles.dependency;
+
 /**
- * Every dependency renders the exact same shape: a header row and exactly two
- * single-line info rows, so the grid never gets stretched by one chatty tile.
+ * Every dependency renders the exact same shape: a header row, exactly two
+ * single-line info rows and one "checked" row, so the grid never gets stretched
+ * by one chatty tile. A failed probe keeps its tile, in red, with its error.
  */
-const DependencyTile = memo<DependencyTileProps>(({ icon, primary, secondary, status, title }) => (
-  <Block className={styles.dependency} padding={12} variant="outlined">
-    <Flexbox gap={8}>
-      <Flexbox horizontal align="center" gap={8} justify="space-between">
-        <Flexbox horizontal align="center" gap={8}>
-          <Icon icon={icon} size={16} />
-          <Text strong ellipsis={ELLIPSIS}>
-            {title}
+const DependencyTile = memo<DependencyTileProps>(
+  ({ checkedAt, icon, now, primary, secondary, secondaryIsError, status, title }) => {
+    const { t } = useTranslation('admin');
+    const checked = formatRelativeTime(checkedAt, now, t as never);
+    const secondaryType = !secondaryIsError
+      ? 'secondary'
+      : status === 'unavailable'
+        ? 'danger'
+        : status === 'degraded'
+          ? 'warning'
+          : 'secondary';
+
+    return (
+      <Block
+        className={dependencyToneClassName(status)}
+        data-status={status}
+        data-testid="dependency-tile"
+        padding={12}
+        variant="outlined"
+      >
+        <Flexbox gap={8}>
+          <Flexbox horizontal align="center" gap={8} justify="space-between">
+            <Flexbox horizontal align="center" gap={8}>
+              <Icon icon={icon} size={16} />
+              <Text strong ellipsis={ELLIPSIS}>
+                {title}
+              </Text>
+            </Flexbox>
+            <OperationalStatus status={status} />
+          </Flexbox>
+          <Flexbox className={styles.dependencyLines} gap={0}>
+            <Text
+              className={styles.dependencyLine}
+              data-testid="dependency-line"
+              ellipsis={ELLIPSIS}
+              type="secondary"
+            >
+              {primary}
+            </Text>
+            <Text
+              className={styles.dependencyLine}
+              data-testid="dependency-line"
+              ellipsis={ELLIPSIS}
+              type={secondaryType}
+            >
+              {secondary}
+            </Text>
+          </Flexbox>
+          <Text
+            className={styles.dependencyLine}
+            data-testid="dependency-checked-at"
+            title={formatAbsoluteTime(checkedAt) || undefined}
+            type="secondary"
+          >
+            {checked
+              ? t('system.dependencies.checkedAt', { time: checked })
+              : t('system.dependencies.neverChecked')}
           </Text>
         </Flexbox>
-        <OperationalStatus status={status} />
-      </Flexbox>
-      <Flexbox className={styles.dependencyLines} gap={0}>
-        <Text
-          className={styles.dependencyLine}
-          data-testid="dependency-line"
-          ellipsis={ELLIPSIS}
-          type="secondary"
-        >
-          {primary}
-        </Text>
-        <Text
-          className={styles.dependencyLine}
-          data-testid="dependency-line"
-          ellipsis={ELLIPSIS}
-          type="secondary"
-        >
-          {secondary}
-        </Text>
-      </Flexbox>
-    </Flexbox>
-  </Block>
-));
+      </Block>
+    );
+  },
+);
 
 DependencyTile.displayName = 'AdminSystemDependencyTile';
 
@@ -197,6 +264,63 @@ export const DependencyGrid = memo<{ status: AdminSystemStatus }>(({ status }) =
     return '—';
   };
 
+  /**
+   * Line 1 for the sandbox — daemon, image and pull policy. A missing image is
+   * the red part; while the daemon is unreachable the image state is unknown.
+   */
+  const describeSandbox = (value: SandboxHealth): ReactNode => {
+    const policy = value.pullPolicy
+      ? t('system.sandbox.pullPolicy', {
+          policy: t(`systemGeneral.sandbox.pullPolicy.${value.pullPolicy}` as never),
+        })
+      : null;
+    if (!value.daemonReachable) {
+      return (
+        <>
+          <Text as="span" type="danger">
+            {t('system.sandbox.daemonDown')}
+          </Text>
+          {policy ? ` · ${policy}` : null}
+        </>
+      );
+    }
+    const image = value.image
+      ? t(
+          value.imagePresent
+            ? 'system.sandbox.imageNamedReady'
+            : 'system.sandbox.imageNamedMissing',
+          {
+            image: value.image,
+          },
+        )
+      : t(value.imagePresent ? 'system.sandbox.imageReady' : 'system.sandbox.imageMissing');
+    if (value.imagePresent) {
+      return [t('system.sandbox.daemonUp'), image, policy].filter(Boolean).join(' · ');
+    }
+    return (
+      <>
+        {`${t('system.sandbox.daemonUp')} · `}
+        <Text as="span" data-testid="sandbox-image-missing" type="danger">
+          {image}
+        </Text>
+        {policy ? ` · ${policy}` : null}
+      </>
+    );
+  };
+
+  /** Healthy render sidecar can still have failed jobs; append them in amber. */
+  const withFailedRenders = (queue: string, failed24h: number | undefined): ReactNode =>
+    failed24h && failed24h > 0 ? (
+      <>
+        {`${queue} · `}
+        <Text as="span" type="warning">
+          {t('system.documentRender.failed24h', { count: failed24h })}
+        </Text>
+      </>
+    ) : (
+      queue
+    );
+
   return (
     <Flexbox gap={8}>
       <SectionTitle>{t('system.dependencies.title')}</SectionTitle>
@@ -206,10 +330,13 @@ export const DependencyGrid = memo<{ status: AdminSystemStatus }>(({ status }) =
           const title = t(`system.dependencies.${key}` as never);
           return (
             <DependencyTile
+              checkedAt={dependency.lastCheckedAt}
               icon={icon}
               key={key}
+              now={status.snapshotAt}
               primary={describe(dependency, title)}
               secondary={diagnose(dependency)}
+              secondaryIsError={Boolean(dependency.errorCategory)}
               status={dependency.status}
               title={title}
             />
@@ -217,14 +344,14 @@ export const DependencyGrid = memo<{ status: AdminSystemStatus }>(({ status }) =
         })}
         {sandbox ? (
           <DependencyTile
+            checkedAt={sandbox.lastCheckedAt}
             icon={Container}
             key="sandbox"
+            now={status.snapshotAt}
+            primary={describeSandbox(sandbox)}
+            secondaryIsError={Boolean(sandbox.lastError || sandbox.errorCategory)}
             status={sandbox.status}
             title={t('system.dependencies.sandbox')}
-            primary={[
-              t(sandbox.daemonReachable ? 'system.sandbox.daemonUp' : 'system.sandbox.daemonDown'),
-              t(sandbox.imagePresent ? 'system.sandbox.imageReady' : 'system.sandbox.imageMissing'),
-            ].join(' · ')}
             secondary={
               sandbox.lastError || sandbox.errorCategory
                 ? diagnose(sandbox, sandbox.lastError)
@@ -237,8 +364,11 @@ export const DependencyGrid = memo<{ status: AdminSystemStatus }>(({ status }) =
         ) : null}
         {documentRender ? (
           <DependencyTile
+            checkedAt={documentRender.lastCheckedAt}
             icon={FileImage}
             key="documentRender"
+            now={status.snapshotAt}
+            secondaryIsError={Boolean(documentRender.lastError || documentRender.errorCategory)}
             status={documentRender.status}
             title={t('system.dependencies.documentRender')}
             primary={
@@ -250,10 +380,13 @@ export const DependencyGrid = memo<{ status: AdminSystemStatus }>(({ status }) =
               !documentRender.lastError &&
               !documentRender.errorCategory &&
               documentRender.status === 'healthy'
-                ? t('system.documentRender.queue', {
-                    pending: documentRender.queuePending,
-                    running: documentRender.queueRunning,
-                  })
+                ? withFailedRenders(
+                    t('system.documentRender.queue', {
+                      pending: documentRender.queuePending,
+                      running: documentRender.queueRunning,
+                    }),
+                    documentRender.failed24h,
+                  )
                 : diagnose(documentRender, documentRender.lastError)
             }
           />
@@ -263,7 +396,7 @@ export const DependencyGrid = memo<{ status: AdminSystemStatus }>(({ status }) =
       status.instanceStatus.status === 'degraded' ? (
         <Alert
           showIcon
-          message={t('system.instances.partialUnavailable')}
+          title={t('system.instances.partialUnavailable')}
           type="warning"
           description={
             status.instanceStatus.errorCategory
@@ -321,11 +454,12 @@ export const JobsSummary = memo<{ status: AdminSystemStatus }>(({ status }) => {
   const jobs = status.jobs;
   return (
     <Flexbox gap={8}>
-      <SectionTitle>{t('system.jobs.summaryTitle')}</SectionTitle>
+      {/* 「后台任务」 now names the worker section; these are admin job-queue totals. */}
+      <SectionTitle>{t('system.jobs.summaryCountsTitle')}</SectionTitle>
       {jobs.status === 'unavailable' ? (
         <Alert
           showIcon
-          message={t('system.jobs.summaryUnavailable')}
+          title={t('system.jobs.summaryUnavailable')}
           type="error"
           description={
             jobs.errorCategory
@@ -365,7 +499,7 @@ export const PublishFailures = memo<{ status: AdminSystemStatus }>(({ status }) 
       {failures.status === 'unavailable' ? (
         <Alert
           showIcon
-          message={t('system.publishFailures.unavailable')}
+          title={t('system.publishFailures.unavailable')}
           type="error"
           description={
             failures.errorCategory

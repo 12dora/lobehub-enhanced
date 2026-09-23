@@ -8,6 +8,7 @@ import {
   adminSystemGetStatusOutputSchema,
   adminSystemJobKindSchema,
   adminSystemRequestRestartOutputSchema,
+  adminSystemSandboxHealthSchema,
   adminSystemTestDependencyInputSchema,
   adminSystemTestDependencyOutputSchema,
   adminSystemUpdateInfraSettingsInputSchema,
@@ -38,6 +39,7 @@ describe('admin system operational contracts', () => {
   it('accepts only the fixed status inventory and rejects extra deployment details', () => {
     const status = {
       build: { gitSha: 'abcdef1', version: '2.0.0' },
+      capabilities: [],
       dependencies: Object.fromEntries(
         ['database', 'keyManagement', 'mail', 'objectStorage', 'redis'].map((key) => [
           key,
@@ -79,6 +81,7 @@ describe('admin system operational contracts', () => {
         source: 'database',
         status: 'healthy',
       },
+      recentEvents: [],
       recentPublishFailures: {
         count: 1,
         errorCategory: null,
@@ -91,7 +94,9 @@ describe('admin system operational contracts', () => {
         ],
         status: 'healthy',
       },
+      runtimeErrors: [],
       snapshotAt: new Date('2026-07-20T00:01:00Z'),
+      workers: [],
     };
 
     expect(adminSystemGetStatusOutputSchema.parse(status)).toEqual(status);
@@ -211,6 +216,34 @@ describe('admin system operational contracts', () => {
     ).toBe(false);
     expect(
       adminSystemCancelJobInputSchema.safeParse({ ...input, expectedStatus: 'succeeded' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('admin system sandbox health', () => {
+  it('accepts the configured image and still rejects unknown fields', () => {
+    const sandbox = {
+      activeContainers: 0,
+      daemonReachable: true,
+      errorCategory: 'operation_unavailable' as const,
+      image: 'aihub-sandbox:latest',
+      imagePresent: false,
+      lastCheckedAt: new Date('2026-08-21T00:00:00.000Z'),
+      lastError: '沙箱镜像 aihub-sandbox:latest 不存在（拉取策略 never）',
+      maxContainers: 8,
+      pullPolicy: 'never' as const,
+      status: 'unavailable' as const,
+    };
+
+    expect(adminSystemSandboxHealthSchema.parse(sandbox)).toEqual(sandbox);
+    expect(adminSystemSandboxHealthSchema.safeParse({ ...sandbox, image: '  ' }).success).toBe(
+      false,
+    );
+    expect(
+      adminSystemSandboxHealthSchema.safeParse({
+        ...sandbox,
+        socketPath: '/var/run/docker.sock',
+      }).success,
     ).toBe(false);
   });
 });

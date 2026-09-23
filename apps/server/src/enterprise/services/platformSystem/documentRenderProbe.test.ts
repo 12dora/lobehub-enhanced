@@ -103,6 +103,7 @@ describe('probeDocumentRenderHealth', () => {
       errorCategory: null,
       lastCheckedAt: checkedAt,
       latencyMs: 18,
+      failed24h: 1,
       queuePending: 3,
       queueRunning: 1,
       status: 'healthy',

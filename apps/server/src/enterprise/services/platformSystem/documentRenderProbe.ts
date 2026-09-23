@@ -23,13 +23,17 @@ const clipError = (value: string | undefined): string | undefined => {
   return trimmed.length > LAST_ERROR_MAX ? trimmed.slice(0, LAST_ERROR_MAX) : trimmed;
 };
 
-const emptyQueue = { pending: 0, running: 0 };
+const emptyQueue = { failed24h: 0, pending: 0, running: 0 };
 
-const loadQueueCounts = async (): Promise<{ pending: number; running: number }> => {
+const loadQueueCounts = async (): Promise<{
+  failed24h: number;
+  pending: number;
+  running: number;
+}> => {
   try {
     const db = await getServerDB();
     const stats = await getDocumentRenderQueueStats(db);
-    return { pending: stats.pending, running: stats.running };
+    return { failed24h: stats.failed24h, pending: stats.pending, running: stats.running };
   } catch {
     return emptyQueue;
   }
@@ -59,6 +63,7 @@ export const probeDocumentRenderHealth = async (
   const lastErrorBase = {
     configured: isDocumentRenderConfigured(settings),
     detail: 'Gotenberg',
+    failed24h: queue.failed24h,
     lastCheckedAt: checkedAt,
     queuePending: queue.pending,
     queueRunning: queue.running,

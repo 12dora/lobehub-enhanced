@@ -328,14 +328,26 @@ export const createTarFileExtractStream = (options: {
 }): Transform => {
   const { basename, expectedSize } = options;
   let leftover = Buffer.alloc(0);
-  let mode: 'header' | 'emit' | 'skip' | 'done' = 'header';
+  let mode: 'header' | 'emit' | 'skip' | 'pax' | 'done' = 'header';
   let remaining = 0;
   let pad = 0;
   let emitted = 0;
+  // Docker writes a PAX `path` record (typeflag `x`) for non-ASCII names and
+  // puts only a placeholder in the following ustar header. `g` is global.
+  let paxScope: 'next' | 'global' = 'next';
+  let pendingPaxPath: string | undefined;
+  let globalPaxPath: string | undefined;
+  let paxBody = Buffer.alloc(0);
 
   const matches = (name: string) => {
     if (!basename) return true;
     return name === basename || name.endsWith(`/${basename}`);
+  };
+
+  const resolveName = (fullName: string) => {
+    const resolved = pendingPaxPath ?? globalPaxPath ?? fullName;
+    pendingPaxPath = undefined;
+    return resolved;
   };
 
   return new Transform({
@@ -364,16 +376,42 @@ export const createTarFileExtractStream = (options: {
             const fullName = prefix ? `${prefix}/${name}` : name;
             const typeflag = String.fromCodePoint(header[156] ?? 48);
             const size = readOctal(header, 124, 12);
-            const isFile = typeflag === '0' || typeflag === '\0' || typeflag === '7';
-            if (isFile && matches(fullName)) {
+            if (typeflag === 'x' || typeflag === 'g') {
+              paxScope = typeflag === 'g' ? 'global' : 'next';
+              paxBody = Buffer.alloc(0);
               remaining = size;
               pad = padToBlock(size);
-              mode = 'emit';
-            } else {
-              remaining = size;
-              pad = padToBlock(size);
-              mode = 'skip';
+              mode = 'pax';
+              continue;
             }
+            const resolvedName = resolveName(fullName);
+            const isFile = typeflag === '0' || typeflag === '\0' || typeflag === '7';
+            remaining = size;
+            pad = padToBlock(size);
+            mode = isFile && matches(resolvedName) ? 'emit' : 'skip';
+            continue;
+          }
+
+          if (mode === 'pax') {
+            if (remaining > 0) {
+              const take = Math.min(remaining, leftover.length);
+              if (take === 0) break;
+              paxBody = Buffer.concat([paxBody, leftover.subarray(0, take)]);
+              leftover = leftover.subarray(take);
+              remaining -= take;
+              if (remaining > 0) break;
+            }
+            if (pad > 0) {
+              const drop = Math.min(pad, leftover.length);
+              leftover = leftover.subarray(drop);
+              pad -= drop;
+              if (pad > 0) break;
+            }
+            const parsed = parsePaxPath(paxBody);
+            if (paxScope === 'global') globalPaxPath = parsed ?? globalPaxPath;
+            else if (parsed) pendingPaxPath = parsed;
+            paxBody = Buffer.alloc(0);
+            mode = 'header';
             continue;
           }
 

@@ -22,6 +22,12 @@ import type {
 } from '@/database/schemas/reminder';
 import { reminderRecipients } from '@/database/schemas/reminder';
 import type { LobeChatDatabase } from '@/database/type';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+import {
+  markWorkerFailed,
+  markWorkerStarted,
+  markWorkerTick,
+} from '@/server/enterprise/services/platformSystem/workerHeartbeat';
 import { RELEASE_SWEEP_LOCK_SCRIPT } from '@/server/enterprise/services/taskScheduling/lock';
 import type {
   SweepLockHandle,
@@ -757,7 +763,9 @@ export const ensureReminderWorkerStarted = (deps: ReminderSweepDeps = {}): void 
   }
 
   started = true;
+  markWorkerStarted('reminder', REMINDER_SWEEP_INTERVAL_MS);
   const tick = () => {
+    markWorkerTick('reminder', REMINDER_SWEEP_INTERVAL_MS);
     void (async () => {
       const db = await getServerDB();
       await runReminderSweep(db, deps);
@@ -765,6 +773,8 @@ export const ensureReminderWorkerStarted = (deps: ReminderSweepDeps = {}): void 
       console.error('[reminder] sweep failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',
       });
+      markWorkerFailed('reminder', error);
+      void recordRuntimeError('reminder_worker', error);
     });
   };
 

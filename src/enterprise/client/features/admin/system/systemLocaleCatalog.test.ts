@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
+  adminSystemCapabilityKeySchema,
   adminSystemInstanceRevisionSchema,
   adminSystemJobKindSchema,
+  adminSystemRecentEventSchema,
 } from '../../../../../../apps/server/src/enterprise/contracts/adminSystem';
 
 const loadAdminLocale = (locale: 'en-US' | 'zh-CN'): Record<string, string> => {
@@ -103,5 +105,58 @@ describe('admin system value locale catalog (server-emitted)', () => {
     for (const locale of [en, zh]) {
       expect(locale['system.oidc.active']).toBeUndefined();
     }
+  });
+});
+
+describe('admin system monitoring sections locale catalog', () => {
+  it('labels every capability, its fix-it hint, and every event level in both locales', () => {
+    const en = loadAdminLocale('en-US');
+    const zh = loadAdminLocale('zh-CN');
+    const keys = [
+      ...adminSystemCapabilityKeySchema.options.flatMap((key) => [
+        `system.capabilities.${key}`,
+        `system.capabilities.hint.${key}`,
+      ]),
+      ...adminSystemRecentEventSchema.shape.level.options.map(
+        (level) => `system.recentEvents.level.${level}`,
+      ),
+    ];
+
+    const missing = keys.flatMap((key) => [
+      ...(en[key]?.trim() ? [] : [`en:${key}`]),
+      ...(zh[key]?.trim() ? [] : [`zh:${key}`]),
+    ]);
+    expect(missing, `missing monitoring labels:\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps interpolation placeholders in both locales', () => {
+    const en = loadAdminLocale('en-US');
+    const zh = loadAdminLocale('zh-CN');
+    const placeholders: Record<string, string> = {
+      'system.dependencies.checkedAt': '{{time}}',
+      'system.interval.hours': '{{count}}',
+      'system.interval.minutes': '{{count}}',
+      'system.interval.seconds': '{{count}}',
+      'system.recentEvents.showAll': '{{count}}',
+      'system.relative.days': '{{count}}',
+      'system.relative.hours': '{{count}}',
+      'system.relative.minutes': '{{count}}',
+      'system.relative.seconds': '{{count}}',
+      'system.runtimeErrors.count': '{{count}}',
+      'system.runtimeErrors.lastAt': '{{time}}',
+      'system.sandbox.imageNamedMissing': '{{image}}',
+      'system.sandbox.imageNamedReady': '{{image}}',
+      'system.sandbox.pullPolicy': '{{policy}}',
+      'system.summary.more': '{{count}}',
+      'system.summary.problems': '{{count}}',
+      'system.summary.runtimeLabel': '{{name}}',
+      'system.workers.lastTick': '{{time}}',
+    };
+
+    for (const [key, placeholder] of Object.entries(placeholders)) {
+      expect(en[key], `en:${key}`).toContain(placeholder);
+      expect(zh[key], `zh:${key}`).toContain(placeholder);
+    }
+    expect(zh['system.summary.allHealthy']).toBe('全部正常');
   });
 });

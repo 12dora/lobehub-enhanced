@@ -4,6 +4,7 @@ import { FileModel } from '@/database/models/file';
 import { PlatformJobModel } from '@/database/models/platform/job';
 import type { FileItem } from '@/database/schemas';
 import type { PlatformJobDispatchHandlerContext } from '@/server/enterprise/jobs/platformJobsDispatcher';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
 
 import type { EffectiveDocumentRenderSettings } from '../documentRenderSettings';
 import { getEffectiveDocumentRenderSettings } from '../documentRenderSettings';
@@ -142,6 +143,7 @@ const handleClaimedRenderError = async (params: {
   const message = error instanceof Error ? error.message : String(error);
   log('document render failed fileId=%s: %s', fileId, message);
   console.error('document render failed', error);
+  void recordRuntimeError('document_render', error);
   const failed = await persistFailedRender({
     db: params.db,
     file: params.file,

@@ -1,6 +1,12 @@
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_LABEL, SANDBOX_LABEL_VALUE } from './constants';
 import { DockerEngineClient, isDockerNotFound, wrapDockerUnreachable } from './dockerEngineClient';
 
+/** Bound for the status-page ping and image inspect. Exec streams stay unbounded here. */
+export const SANDBOX_HEALTH_PROBE_TIMEOUT_MS = 8000;
+
+export const sandboxImageMissingMessage = (image: string, pullPolicy: string): string =>
+  `沙箱镜像 ${image} 不存在（拉取策略 ${pullPolicy}）`;
+
 export interface LocalSandboxHealth {
   activeContainers: number;
   daemonReachable: boolean;
@@ -11,6 +17,7 @@ export interface LocalSandboxHealth {
 export type LocalSandboxHealthOptions = {
   host?: string;
   image?: string;
+  pullPolicy?: 'always' | 'if-missing' | 'never';
   socketPath?: string;
 };
 
@@ -19,9 +26,10 @@ export const checkLocalSandboxHealth = async (
 ): Promise<LocalSandboxHealth> => {
   const client = new DockerEngineClient({ host: options.host, socketPath: options.socketPath });
   const image = options.image || DEFAULT_SANDBOX_IMAGE;
+  const pullPolicy = options.pullPolicy ?? 'if-missing';
 
   try {
-    await client.ping();
+    await client.ping(SANDBOX_HEALTH_PROBE_TIMEOUT_MS);
   } catch (error) {
     return {
       activeContainers: 0,
@@ -35,10 +43,12 @@ export const checkLocalSandboxHealth = async (
   let lastError: string | undefined;
 
   try {
-    await client.imageInspect(image);
+    await client.imageInspect(image, SANDBOX_HEALTH_PROBE_TIMEOUT_MS);
     imagePresent = true;
   } catch (error) {
-    if (!isDockerNotFound(error)) {
+    if (isDockerNotFound(error)) {
+      lastError = sandboxImageMissingMessage(image, pullPolicy);
+    } else {
       lastError = (error as Error).message;
     }
   }

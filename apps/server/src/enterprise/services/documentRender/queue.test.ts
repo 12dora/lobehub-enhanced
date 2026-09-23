@@ -280,17 +280,19 @@ describe('enqueueDocumentRenderGcJob', () => {
 });
 
 describe('ensureDocumentRenderWorkerStarted', () => {
-  it('registers both dispatcher lanes and starts the hourly GC scheduler once', async () => {
+  it('registers both dispatcher lanes and does not arm its own heartbeat timer', async () => {
     const { isPersistentEnterpriseWorkerRuntime } =
       await import('../../jobs/persistentWorkerRuntime');
     const { startPersistentWorkerScheduler } = await import('../../jobs/persistentWorkerScheduler');
     const { ensurePlatformJobsDispatcherStarted } =
       await import('../../jobs/platformJobsDispatcher');
     vi.mocked(isPersistentEnterpriseWorkerRuntime).mockReturnValue(true);
+    const setIntervalSpy = vi.spyOn(global, 'setInterval');
 
     try {
       ensureDocumentRenderWorkerStarted();
       ensureDocumentRenderWorkerStarted();
+      expect(setIntervalSpy).not.toHaveBeenCalled();
 
       expect(ensurePlatformJobsDispatcherStarted).toHaveBeenCalledWith({
         extraWorkerName: 'documentRender',
@@ -306,6 +308,7 @@ describe('ensureDocumentRenderWorkerStarted', () => {
         }),
       );
     } finally {
+      setIntervalSpy.mockRestore();
       vi.mocked(isPersistentEnterpriseWorkerRuntime).mockReturnValue(false);
     }
   });

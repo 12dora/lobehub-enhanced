@@ -198,8 +198,8 @@ export class DockerEngineClient {
       : `tcp://${this.endpoint.hostname}:${this.endpoint.port}`;
   }
 
-  async ping(): Promise<void> {
-    const { status, body } = await this.request('GET', '/_ping');
+  async ping(timeoutMs?: number): Promise<void> {
+    const { status, body } = await this.request('GET', '/_ping', timeoutMs ? { timeoutMs } : {});
     if (status !== 200) {
       throw new DockerEngineError(
         body.toString('utf8') || `Docker ping failed with HTTP ${status}`,
@@ -208,8 +208,12 @@ export class DockerEngineClient {
     }
   }
 
-  async imageInspect(name: string): Promise<DockerImageInspect> {
-    return this.requestJson<DockerImageInspect>('GET', `/images/${encodeURIComponent(name)}/json`);
+  async imageInspect(name: string, timeoutMs?: number): Promise<DockerImageInspect> {
+    return this.requestJson<DockerImageInspect>(
+      'GET',
+      `/images/${encodeURIComponent(name)}/json`,
+      timeoutMs ? { timeoutMs } : {},
+    );
   }
 
   async imagePull(name: string): Promise<void> {
@@ -412,9 +416,12 @@ export class DockerEngineClient {
   private async requestJson<T>(
     method: string,
     path: string,
-    init: { json?: unknown } = {},
+    init: { json?: unknown; timeoutMs?: number } = {},
   ): Promise<T> {
-    const { status, body } = await this.request(method, path, { json: init.json });
+    const { status, body } = await this.request(method, path, {
+      json: init.json,
+      ...(init.timeoutMs ? { timeoutMs: init.timeoutMs } : {}),
+    });
     if (status >= 300) {
       throw new DockerEngineError(parseDockerError(body, status), status);
     }
@@ -443,7 +450,13 @@ export class DockerEngineClient {
   private async request(
     method: string,
     path: string,
-    init: { body?: Buffer; contentType?: string; json?: unknown; stream?: boolean } = {},
+    init: {
+      body?: Buffer;
+      contentType?: string;
+      json?: unknown;
+      stream?: boolean;
+      timeoutMs?: number;
+    } = {},
   ): Promise<{
     body: Buffer;
     headers: IncomingHttpHeaders;
@@ -482,10 +495,17 @@ export class DockerEngineClient {
 
     try {
       return await new Promise((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (settle: () => void) => {
+          if (timer) clearTimeout(timer);
+          settle();
+        };
         const req = httpRequest(opts, (res) => {
           const status = res.statusCode ?? 0;
           if (init.stream) {
-            resolve({ body: Buffer.alloc(0), headers: res.headers, req, status, stream: res });
+            finish(() =>
+              resolve({ body: Buffer.alloc(0), headers: res.headers, req, status, stream: res }),
+            );
             return;
           }
 
@@ -494,12 +514,20 @@ export class DockerEngineClient {
             chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
           });
           res.on('end', () => {
-            resolve({ body: Buffer.concat(chunks), headers: res.headers, req, status });
+            finish(() =>
+              resolve({ body: Buffer.concat(chunks), headers: res.headers, req, status }),
+            );
           });
-          res.on('error', reject);
+          res.on('error', (error) => finish(() => reject(error)));
         });
 
-        req.on('error', reject);
+        if (init.timeoutMs && init.timeoutMs > 0) {
+          timer = setTimeout(() => {
+            req.destroy(new Error(`Docker request timed out after ${init.timeoutMs}ms`));
+          }, init.timeoutMs);
+        }
+
+        req.on('error', (error) => finish(() => reject(error)));
         if (body) req.write(body);
         req.end();
       });

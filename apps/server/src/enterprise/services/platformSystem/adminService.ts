@@ -49,6 +49,7 @@ import {
   PlatformSecretRewrapConflictError,
   PlatformSecretRewrapInvalidError,
 } from '../secretRewrap/errors';
+import { fallbackCapabilities, loadCapabilities } from './capabilities';
 import { decodeCursor, encodeCursor, parseJobCursor } from './cursors';
 import { probeDocumentRenderHealth } from './documentRenderProbe';
 import {
@@ -61,6 +62,7 @@ import type { LiveInfraHealth, LiveInfraHealthProbe } from './infraHealthMemo';
 import { getLiveInfraHealth } from './infraHealthMemo';
 import { probeLatencyMs } from './infraProbes';
 import { fullJobProjection, projectJob } from './jobProjection';
+import { readRuntimeErrorSummary } from './runtimeErrors';
 import { probeSandboxHealth } from './sandboxProbe';
 import {
   defaultRedisHealthDependencies,
@@ -76,6 +78,7 @@ import {
   type PublishedSsoLookup,
   type RedisHealthDependencies,
 } from './statusProjection';
+import { loadWorkerHealth } from './workerHealth';
 
 export { JOB_KIND_BY_TYPE, jobKind } from './jobProjection';
 
@@ -445,6 +448,8 @@ export class PlatformSystemAdminService {
       publishFailureResult,
       authSnapshotResult,
       liveInfraResult,
+      workerHealthResult,
+      runtimeErrorResult,
     ] = await Promise.allSettled([
       (async () => {
         const startedAt = performance.now();
@@ -471,6 +476,8 @@ export class PlatformSystemAdminService {
           ).getAuthSnapshotStatus()
         : Promise.resolve(null),
       this.loadLiveInfraHealth(),
+      loadWorkerHealth({ env: this.env }),
+      readRuntimeErrorSummary(snapshotAt.getTime()),
     ]);
     const instance = instanceResult.status === 'fulfilled' ? instanceResult.value : null;
     const rawGitSha = this.env.VERCEL_GIT_COMMIT_SHA ?? this.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA;
@@ -493,6 +500,22 @@ export class PlatformSystemAdminService {
               status: 'unavailable' as const,
             },
           };
+    const runtimeSummary =
+      runtimeErrorResult.status === 'fulfilled'
+        ? runtimeErrorResult.value
+        : { events: [], subsystems: [] };
+    const workers = workerHealthResult.status === 'fulfilled' ? workerHealthResult.value : [];
+    let capabilities;
+    try {
+      capabilities = await loadCapabilities({
+        db: this.db,
+        env: this.env,
+        runtime: runtimeSummary.subsystems,
+        sandbox: liveInfra.sandbox ?? null,
+      });
+    } catch {
+      capabilities = fallbackCapabilities(liveInfra.sandbox ?? null);
+    }
     // Live SSO = env providers, artifact providerIds, or published live selection.
     // Always resolve published count when the artifact has no providerIds so an
     // empty healthy database snapshot stays unconfigured, while a published
@@ -515,6 +538,7 @@ export class PlatformSystemAdminService {
     }
     return {
       build: { gitSha, version: CURRENT_VERSION },
+      capabilities,
       dependencies: projectDependencies({
         checkedAt: snapshotAt,
         databaseResult,
@@ -561,6 +585,12 @@ export class PlatformSystemAdminService {
         flags,
         publishedSso,
       }),
+      recentEvents: runtimeSummary.events.slice(0, 50).map((event) => ({
+        at: new Date(event.at),
+        level: event.level,
+        message: event.message,
+        subsystem: event.subsystem,
+      })),
       recentPublishFailures:
         publishFailureResult.status === 'fulfilled'
           ? publishFailureResult.value
@@ -570,7 +600,16 @@ export class PlatformSystemAdminService {
               items: [],
               status: 'unavailable' as const,
             },
+      runtimeErrors: runtimeSummary.subsystems
+        .filter((item) => item.count24h > 0 && item.lastAt !== null)
+        .map((item) => ({
+          count24h: item.count24h,
+          lastAt: new Date(item.lastAt ?? snapshotAt),
+          lastError: item.lastError,
+          subsystem: item.subsystem,
+        })),
       snapshotAt,
+      workers,
     };
   };
 

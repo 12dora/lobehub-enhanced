@@ -5,6 +5,12 @@ import debug from 'debug';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
 import type { LobeChatDatabase } from '@/database/type';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+import {
+  markWorkerFailed,
+  markWorkerStarted,
+  markWorkerTick,
+} from '@/server/enterprise/services/platformSystem/workerHeartbeat';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import type { DingTalkDirectoryReplaceAllInput } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 import {
@@ -291,6 +297,7 @@ export const isDingTalkDirectorySyncWorkerRuntime = (
 };
 
 const tickDirectorySync = async (deps: DingTalkDirectorySyncDeps = {}): Promise<void> => {
+  markWorkerTick('directory_sync', DINGTALK_DIRECTORY_SYNC_INTERVAL_MS);
   const getNotifyApp = deps.getNotifyApp ?? resolveNotifyAppConfig;
   if (!(await getNotifyApp())) {
     log('skip: notify app not configured');
@@ -304,6 +311,8 @@ const tickDirectorySync = async (deps: DingTalkDirectorySyncDeps = {}): Promise<
     console.error('[dingtalk-directory] sync failed', {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     });
+    markWorkerFailed('directory_sync', error);
+    void recordRuntimeError('dingtalk_api', error);
   }
 };
 
@@ -378,6 +387,7 @@ export const ensureDingTalkDirectorySyncWorkerStarted = (
   }
 
   started = true;
+  markWorkerStarted('directory_sync', DINGTALK_DIRECTORY_SYNC_INTERVAL_MS);
   const run = () => {
     void tickDirectorySync(deps);
   };

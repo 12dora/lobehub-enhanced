@@ -43,18 +43,72 @@ export const adminSystemSandboxHealthSchema = adminSystemDependencyHealthSchema
   .extend({
     activeContainers: z.number().int().nonnegative(),
     daemonReachable: z.boolean(),
+    /** Configured sandbox image the probe checked, when it knows one. */
+    image: z.string().trim().min(1).max(256).optional(),
     imagePresent: z.boolean(),
     lastError: z.string().trim().max(500).optional(),
     maxContainers: z.number().int().positive(),
+    /** Effective image pull policy (`always` | `if-missing` | `never`). */
+    pullPolicy: z.enum(['always', 'if-missing', 'never']).optional(),
   })
   .strict();
 
 export const adminSystemDocumentRenderHealthSchema = adminSystemDependencyHealthSchema
   .extend({
     configured: z.boolean(),
+    /** Failed render jobs in the last 24 hours. Same count as getDocumentRenderStatus. */
+    failed24h: z.number().int().nonnegative().optional(),
     lastError: z.string().trim().max(500).optional(),
     queuePending: z.number().int().nonnegative(),
     queueRunning: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const adminSystemWorkerStatusSchema = z.enum(['degraded', 'healthy', 'unavailable']);
+
+export const adminSystemWorkerHealthSchema = z
+  .object({
+    intervalMs: z.number().int().positive(),
+    lastError: z.string().max(300).optional(),
+    lastTickAt: z.date().nullable(),
+    name: z.string().trim().min(1).max(64),
+    started: z.boolean(),
+    startedAt: z.date().nullable(),
+    status: adminSystemWorkerStatusSchema,
+  })
+  .strict();
+
+export const adminSystemRuntimeErrorSchema = z
+  .object({
+    count24h: z.number().int().nonnegative(),
+    lastAt: z.date(),
+    lastError: z.string().max(300),
+    subsystem: z.string().trim().min(1).max(64),
+  })
+  .strict();
+
+export const adminSystemCapabilityKeySchema = z.enum([
+  'dingtalk_connector',
+  'memory_embedding',
+  'sandbox',
+  'system_agent_models',
+]);
+
+export const adminSystemCapabilitySchema = z
+  .object({
+    detail: z.string().max(300).optional(),
+    key: adminSystemCapabilityKeySchema,
+    reason: z.string().max(300).optional(),
+    status: adminSystemDependencyStatusSchema,
+  })
+  .strict();
+
+export const adminSystemRecentEventSchema = z
+  .object({
+    at: z.date(),
+    level: z.enum(['error', 'info', 'warning']),
+    message: z.string().max(300),
+    subsystem: z.string().trim().min(1).max(64),
   })
   .strict();
 
@@ -80,6 +134,10 @@ export const adminSystemGetStatusOutputSchema = z
         sandbox: adminSystemSandboxHealthSchema.optional(),
       })
       .strict(),
+    capabilities: z.array(adminSystemCapabilitySchema).max(8).default([]),
+    recentEvents: z.array(adminSystemRecentEventSchema).max(50).default([]),
+    runtimeErrors: z.array(adminSystemRuntimeErrorSchema).max(16).default([]),
+    workers: z.array(adminSystemWorkerHealthSchema).max(16).default([]),
     domains: z.array(platformDomainConvergenceSchema).max(8),
     featureFlags: z
       .object({
@@ -145,3 +203,8 @@ export const adminSystemGetStatusOutputSchema = z
 
 export type AdminSystemSandboxHealth = z.infer<typeof adminSystemSandboxHealthSchema>;
 export type AdminSystemDocumentRenderHealth = z.infer<typeof adminSystemDocumentRenderHealthSchema>;
+export type AdminSystemWorkerHealth = z.infer<typeof adminSystemWorkerHealthSchema>;
+export type AdminSystemRuntimeError = z.infer<typeof adminSystemRuntimeErrorSchema>;
+export type AdminSystemCapability = z.infer<typeof adminSystemCapabilitySchema>;
+export type AdminSystemRecentEvent = z.infer<typeof adminSystemRecentEventSchema>;
+export type AdminSystemGetStatusOutput = z.infer<typeof adminSystemGetStatusOutputSchema>;

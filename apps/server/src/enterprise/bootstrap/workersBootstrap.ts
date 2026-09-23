@@ -14,6 +14,26 @@ import type { PlatformModuleId } from '@/const/platform/modules';
 
 import { parseEnterpriseFeatureFlags } from '../featureFlags';
 import { isBootModuleEnabled } from '../services/moduleSettings';
+import {
+  recordRuntimeError,
+  type RuntimeSubsystem,
+} from '../services/platformSystem/runtimeErrors';
+import {
+  markWorkerFailed,
+  type WorkerHeartbeatName,
+} from '../services/platformSystem/workerHeartbeat';
+
+const WORKER_START_FAILURE: Record<
+  string,
+  { name: WorkerHeartbeatName; subsystem: RuntimeSubsystem }
+> = {
+  dingtalkApprovalRuleWorker: { name: 'approval_worker', subsystem: 'approval_worker' },
+  dingtalkDirectorySyncWorker: { name: 'directory_sync', subsystem: 'dingtalk_api' },
+  dingtalkStreamWorker: { name: 'dingtalk_stream', subsystem: 'dingtalk_stream' },
+  documentRender: { name: 'document_render', subsystem: 'document_render' },
+  reminderWorker: { name: 'reminder', subsystem: 'reminder_worker' },
+  taskSchedulingWorker: { name: 'task_scheduler', subsystem: 'task_scheduler' },
+};
 
 export interface WorkerSpec {
   moduleId?: PlatformModuleId;
@@ -315,6 +335,16 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     name: 'dingtalkDirectorySyncWorker',
     start: startDingTalkDirectorySyncWorker,
   },
+  {
+    // Core: one replica evaluates status transitions and sends a DingTalk work
+    // notice. The 30s status poll never calls DingTalk. AIHUB_STATUS_ALERTS=0 disables it.
+    name: 'statusAlertWorker',
+    start: async () => {
+      const { ensureStatusAlertWorkerStarted } =
+        await import('../services/platformSystem/statusAlerts');
+      ensureStatusAlertWorkerStarted();
+    },
+  },
 ];
 
 let started = false;
@@ -370,6 +400,14 @@ export const stopEnterpriseWorkers = async (): Promise<void> => {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     });
   }
+  try {
+    const { stopStatusAlertWorker } = await import('../services/platformSystem/statusAlerts');
+    stopStatusAlertWorker();
+  } catch (error) {
+    console.error('[modules] failed to stop statusAlertWorker', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
 };
 
 /**
@@ -399,6 +437,11 @@ export const startEnterpriseWorkers = async (
       console.error(`[modules] worker ${spec.name} failed to start`, {
         errorClass: error instanceof Error ? error.name : 'UnknownError',
       });
+      const tracked = WORKER_START_FAILURE[spec.name];
+      if (tracked) {
+        markWorkerFailed(tracked.name, error);
+        void recordRuntimeError(tracked.subsystem, error);
+      }
     }
   }
 };

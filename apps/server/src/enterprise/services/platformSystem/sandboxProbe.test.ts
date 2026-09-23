@@ -27,18 +27,48 @@ describe('projectSandboxHealth', () => {
     });
   });
 
-  it('marks a missing image as degraded', () => {
+  it('marks a missing image as unavailable and keeps the pull policy', () => {
     expect(
       projectSandboxHealth(
-        { activeContainers: 0, daemonReachable: true, imagePresent: false },
+        {
+          activeContainers: 0,
+          daemonReachable: true,
+          imagePresent: false,
+          lastError: '沙箱镜像 aihub-sandbox:latest 不存在（拉取策略 never）',
+        },
         8,
         checkedAt,
+        { image: 'aihub-sandbox:latest', pullPolicy: 'never' },
       ),
     ).toMatchObject({
       daemonReachable: true,
-      errorCategory: 'configuration_incomplete',
+      errorCategory: 'operation_unavailable',
+      image: 'aihub-sandbox:latest',
       imagePresent: false,
-      status: 'degraded',
+      lastError: '沙箱镜像 aihub-sandbox:latest 不存在（拉取策略 never）',
+      pullPolicy: 'never',
+      status: 'unavailable',
+    });
+  });
+
+  it('keeps the configured image when the probe throws into an unreachable tile', () => {
+    expect(
+      projectSandboxHealth(
+        {
+          activeContainers: 0,
+          daemonReachable: false,
+          imagePresent: false,
+          lastError: 'unreachable',
+        },
+        4,
+        checkedAt,
+        { image: '  aihub-sandbox:latest  ', pullPolicy: 'if-missing' },
+      ),
+    ).toMatchObject({
+      image: 'aihub-sandbox:latest',
+      lastError: 'unreachable',
+      pullPolicy: 'if-missing',
+      status: 'unavailable',
     });
   });
 

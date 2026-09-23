@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 
 import debug from 'debug';
 
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+
 import {
   CONTAINER_NAME_PREFIX,
   DEFAULT_DISK_MB,
@@ -21,6 +23,7 @@ import {
 } from './constants';
 import type { DockerContainerSummary, DockerEngineClient } from './dockerEngineClient';
 import { DockerEngineError, isDockerNotFound } from './dockerEngineClient';
+import { sandboxImageMissingMessage } from './health';
 import type { LocalSandboxSession } from './sessionContext';
 
 const log = debug('lobe-server:sandbox:local:supervisor');
@@ -466,13 +469,17 @@ export class LocalSandboxSupervisor {
     if (present && pullPolicy !== 'always') return;
 
     if (!shouldPull) {
-      throw new LocalSandboxImageError(image);
+      const imageError = new LocalSandboxImageError(image);
+      void recordRuntimeError('sandbox', sandboxImageMissingMessage(image, pullPolicy));
+      throw imageError;
     }
 
     try {
       await this.client.imagePull(image);
     } catch (error) {
-      throw new LocalSandboxImageError(image, (error as Error).message);
+      const imageError = new LocalSandboxImageError(image, (error as Error).message);
+      void recordRuntimeError('sandbox', imageError);
+      throw imageError;
     }
   }
 

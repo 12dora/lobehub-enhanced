@@ -1,3 +1,5 @@
+import net from 'node:net';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { FakeDockerEngine } from './__tests__/fakeDockerEngine';
@@ -111,5 +113,27 @@ describe('DockerEngineClient', () => {
   it('wraps a missing unix socket as an unreachable daemon', async () => {
     const client = new DockerEngineClient({ socketPath: '/tmp/aihub-no-such-docker.sock' });
     await expect(client.ping()).rejects.toThrow(/Docker daemon is unreachable/);
+  });
+
+  it('aborts ping when the daemon accepts the socket but never answers', async () => {
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on('error', () => undefined);
+    });
+    server.on('error', () => undefined);
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    try {
+      const client = new DockerEngineClient({ host: `tcp://127.0.0.1:${port}` });
+      await expect(client.ping(200)).rejects.toThrow(/timed out|unreachable/);
+    } finally {
+      // server.close() waits for open connections; the silent daemon never ends its side.
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

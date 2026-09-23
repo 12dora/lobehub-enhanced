@@ -1,7 +1,7 @@
 'use client';
 
-import { Alert, Flexbox, Text } from '@lobehub/ui';
-import { Button } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Alert, Button, Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import type { ReactNode } from 'react';
 import { memo } from 'react';
@@ -19,6 +19,13 @@ import type { AdminSystemStatus } from '@/enterprise/client/services/adminSystem
 
 import { InstancesTable } from './components/InstancesTable';
 import { JobsPanel } from './components/JobsPanel';
+import {
+  CapabilityReadiness,
+  RecentEventList,
+  RuntimeErrorList,
+  StatusSummaryBadge,
+  WorkerHealthList,
+} from './components/RuntimeHealth';
 import {
   BuildSummary,
   DependencyGrid,
@@ -86,6 +93,7 @@ export const SystemPageView = memo<SystemPageViewProps>(
     return (
       <AdminPageTemplate
         description={t('system.description')}
+        notice={status.data ? <StatusSummaryBadge status={status.data} /> : undefined}
         title={t('system.title')}
         actions={
           <Button loading={isRefreshing} type="primary" onClick={onRefresh}>
@@ -96,7 +104,7 @@ export const SystemPageView = memo<SystemPageViewProps>(
         {status.error && status.data ? (
           <Alert
             showIcon
-            message={t('system.status.refreshFailed')}
+            title={t('system.status.refreshFailed')}
             type="warning"
             action={
               <Button size="small" onClick={status.retry}>
@@ -110,7 +118,7 @@ export const SystemPageView = memo<SystemPageViewProps>(
           <Alert
             showIcon
             description={t('system.status.loadFailedDescription')}
-            message={t('system.status.loadFailed')}
+            title={t('system.status.loadFailed')}
             type="error"
             action={
               <Button size="small" type="primary" onClick={status.retry}>
@@ -124,6 +132,10 @@ export const SystemPageView = memo<SystemPageViewProps>(
           <Flexbox gap={20}>
             <BuildSummary status={status.data} />
             <DependencyGrid status={status.data} />
+            <CapabilityReadiness status={status.data} />
+            <WorkerHealthList status={status.data} />
+            <RuntimeErrorList status={status.data} />
+            <RecentEventList status={status.data} />
             <OidcSummary snapshot={authSnapshot} status={status.data} />
             <JobsSummary status={status.data} />
             <PublishFailures status={status.data} />

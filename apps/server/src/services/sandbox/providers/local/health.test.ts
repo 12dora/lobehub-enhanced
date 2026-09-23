@@ -52,6 +52,23 @@ describe('checkLocalSandboxHealth', () => {
     });
   });
 
+  it('reports a missing image with the pull policy instead of dropping the error', async () => {
+    const fake = new FakeDockerEngine();
+    await fake.listen();
+    engines.push(fake);
+
+    const result = await checkLocalSandboxHealth({
+      image: 'aihub-sandbox:latest',
+      pullPolicy: 'never',
+      socketPath: fake.socketPath,
+    });
+    expect(result).toMatchObject({
+      daemonReachable: true,
+      imagePresent: false,
+      lastError: '沙箱镜像 aihub-sandbox:latest 不存在（拉取策略 never）',
+    });
+  });
+
   it('returns lastError when the daemon is unreachable', async () => {
     const result = await checkLocalSandboxHealth({
       socketPath: '/tmp/aihub-no-such-docker.sock',

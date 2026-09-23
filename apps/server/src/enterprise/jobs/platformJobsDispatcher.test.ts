@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformJobItem } from '@/database/schemas/platform';
 import type { LobeChatDatabase } from '@/database/type';
 
+import { markWorkerTick } from '../services/platformSystem/workerHeartbeat';
 import { calculatePersistentWorkerRetryDelay } from './persistentWorkerScheduler';
 import {
   ensurePlatformJobsDispatcherStarted,
@@ -12,6 +13,12 @@ import {
   resolveEnabledPlatformJobTypes,
   runPlatformJobsDispatchTick,
 } from './platformJobsDispatcher';
+
+vi.mock('../services/platformSystem/workerHeartbeat', () => ({
+  markWorkerFailed: vi.fn(),
+  markWorkerStarted: vi.fn(),
+  markWorkerTick: vi.fn(),
+}));
 
 const productionEnv = {
   DATABASE_URL: 'postgres://localhost/test',
@@ -709,6 +716,45 @@ describe('ensurePlatformJobsDispatcherStarted', () => {
     expect(attempts).toBe(5);
     await vi.advanceTimersByTimeAsync(2000);
     expect(attempts).toBe(6);
+  });
+
+  it('ticks document-render health from the dispatcher loop only while that spec is live', async () => {
+    vi.mocked(markWorkerTick).mockClear();
+    let tickedBeforeDispatchFinished = false;
+    ensurePlatformJobsDispatcherStarted({
+      enabledTypes: [spec('documentRender')],
+      env: productionEnv,
+      runTick: async () => {
+        tickedBeforeDispatchFinished = vi.mocked(markWorkerTick).mock.calls.length > 0;
+        return { didWork: false };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tickedBeforeDispatchFinished).toBe(false);
+    expect(markWorkerTick).toHaveBeenCalledTimes(1);
+    expect(markWorkerTick).toHaveBeenCalledWith('document_render', 60_000);
+
+    resetPlatformJobsDispatcherForTest();
+    vi.mocked(markWorkerTick).mockClear();
+    ensurePlatformJobsDispatcherStarted({
+      enabledTypes: [spec('auditExport')],
+      env: productionEnv,
+      runTick: async () => ({ didWork: false }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(markWorkerTick).not.toHaveBeenCalled();
+
+    resetPlatformJobsDispatcherForTest();
+    vi.mocked(markWorkerTick).mockClear();
+    ensurePlatformJobsDispatcherStarted({
+      enabledTypes: [spec('documentRender')],
+      env: productionEnv,
+      runTick: async () => {
+        throw new Error('db down');
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(markWorkerTick).toHaveBeenCalledWith('document_render', 60_000);
   });
 
   it('does not start a timer when no types are enabled', async () => {

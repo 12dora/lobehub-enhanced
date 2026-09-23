@@ -383,4 +383,32 @@ describe('infraHealthMemo', () => {
     expect(objectStorageProbe).not.toHaveBeenCalled();
     expect(keyManagementProbe).not.toHaveBeenCalled();
   });
+
+  it('renders a thrown sandbox probe as unavailable instead of omitting the tile', async () => {
+    const result = await getLiveInfraHealth({
+      getScopeEpoch: async () => 'thrown-sandbox',
+      keyManagementEnv: {},
+      objectStorageEnv: {},
+      probeKeyManagement: async () => ({
+        errorCategory: null,
+        lastCheckedAt: null,
+        status: 'disabled',
+      }),
+      probeObjectStorageHealth: async () => ({
+        errorCategory: 'configuration_incomplete',
+        lastCheckedAt: null,
+        status: 'degraded',
+      }),
+      probeSandbox: async () => {
+        throw new Error('docker socket vanished');
+      },
+    });
+
+    expect(result.sandbox).toMatchObject({
+      errorCategory: 'operation_unavailable',
+      lastError: 'docker socket vanished',
+      status: 'unavailable',
+    });
+    expect(result.sandbox).not.toBeNull();
+  });
 });

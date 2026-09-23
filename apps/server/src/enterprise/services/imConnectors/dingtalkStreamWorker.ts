@@ -13,6 +13,12 @@ import debug from 'debug';
 
 import type { MessengerDingTalkConfig } from '@/config/messenger';
 import { getMessengerDingTalkConfig } from '@/config/messenger';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+import {
+  markWorkerFailed,
+  markWorkerStarted,
+  markWorkerTick,
+} from '@/server/enterprise/services/platformSystem/workerHeartbeat';
 import {
   DINGTALK_CARD_CALLBACK_EVENT,
   DINGTALK_ROBOT_MESSAGE_EVENT,
@@ -81,10 +87,14 @@ export class DingTalkStreamWorker {
   async start(): Promise<void> {
     if (!this.stopped) return;
     this.stopped = false;
+    markWorkerStarted('dingtalk_stream', POLL_INTERVAL_MS);
     await this.tick();
     this.pollTimer = setInterval(() => {
+      markWorkerTick('dingtalk_stream', POLL_INTERVAL_MS);
       this.tick().catch((error) => {
         log('tick failed: %O', error);
+        markWorkerFailed('dingtalk_stream', error);
+        void recordRuntimeError('dingtalk_stream', error);
       });
     }, POLL_INTERVAL_MS);
   }
@@ -114,6 +124,7 @@ export class DingTalkStreamWorker {
 
   private async tick(): Promise<void> {
     if (this.stopped) return;
+    markWorkerTick('dingtalk_stream', POLL_INTERVAL_MS);
 
     const config = await getMessengerDingTalkConfig();
     const enabled = Boolean(config?.chatEnabled);
@@ -213,6 +224,8 @@ export class DingTalkStreamWorker {
         if (state === 'error') {
           this.lastError = error?.message ?? 'stream error';
           this.lastErrorAt = new Date().toISOString();
+          markWorkerFailed('dingtalk_stream', error ?? this.lastError);
+          void recordRuntimeError('dingtalk_stream', error ?? this.lastError);
         }
         void this.flushStatus();
       },
@@ -228,6 +241,8 @@ export class DingTalkStreamWorker {
       this.statusState = 'error';
       this.lastError = error instanceof Error ? error.message : String(error);
       this.lastErrorAt = new Date().toISOString();
+      markWorkerFailed('dingtalk_stream', error);
+      void recordRuntimeError('dingtalk_stream', error);
       await this.flushStatus();
       log('connect failed, will retry on the next tick: %O', error);
       this.connection?.disconnect();

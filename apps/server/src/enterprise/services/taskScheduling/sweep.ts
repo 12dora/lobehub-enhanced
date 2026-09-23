@@ -4,6 +4,8 @@ import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { TaskModel } from '@/database/models/task';
 import { tasks } from '@/database/schemas';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+import { markWorkerFailed } from '@/server/enterprise/services/platformSystem/workerHeartbeat';
 import { runHeartbeatTick } from '@/server/services/taskRunner/heartbeatTick';
 import { runScheduleTick } from '@/server/services/taskRunner/scheduleTick';
 import { hasPendingLocalTimer } from '@/server/services/taskScheduler';
@@ -186,6 +188,8 @@ export const runTaskSchedulingSweep = async (
           return 'skipped';
         } catch (error) {
           console.error('[task-scheduling] cron tick failed task=%s: %O', task.taskId, error);
+          markWorkerFailed('task_sweep', error);
+          void recordRuntimeError('task_scheduler', error);
           return 'failed';
         }
       },
@@ -245,6 +249,8 @@ export const runTaskSchedulingSweep = async (
           return 'skipped';
         } catch (error) {
           console.error('[task-scheduling] heartbeat tick failed task=%s: %O', task.id, error);
+          markWorkerFailed('task_scheduler', error);
+          void recordRuntimeError('task_scheduler', error);
           return 'failed';
         } finally {
           heartbeatInflight.delete(task.id);
@@ -267,6 +273,8 @@ export const runTaskSchedulingSweep = async (
     } catch (error) {
       counts.failed += 1;
       console.error('[task-scheduling] watchdog failed: %O', error);
+      markWorkerFailed('task_watchdog', error);
+      void recordRuntimeError('task_scheduler', error);
     }
 
     log(

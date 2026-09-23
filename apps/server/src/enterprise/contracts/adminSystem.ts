@@ -121,11 +121,22 @@ export {
   sandboxPackageManagerSchema,
 } from './adminSystem/sandbox';
 export {
+  type AdminSystemCapability,
+  adminSystemCapabilityKeySchema,
+  adminSystemCapabilitySchema,
   adminSystemDependencyErrorCategorySchema,
   adminSystemDependencyStatusSchema,
   type AdminSystemDocumentRenderHealth,
   adminSystemDocumentRenderHealthSchema,
+  type AdminSystemGetStatusOutput,
   adminSystemGetStatusOutputSchema,
+  type AdminSystemRecentEvent,
+  adminSystemRecentEventSchema,
+  type AdminSystemRuntimeError,
+  adminSystemRuntimeErrorSchema,
   type AdminSystemSandboxHealth,
   adminSystemSandboxHealthSchema,
+  type AdminSystemWorkerHealth,
+  adminSystemWorkerHealthSchema,
+  adminSystemWorkerStatusSchema,
 } from './adminSystem/status';

@@ -1,6 +1,12 @@
 import debug from 'debug';
 
 import { appEnv } from '@/envs/app';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+import {
+  markWorkerFailed,
+  markWorkerStarted,
+  markWorkerTick,
+} from '@/server/enterprise/services/platformSystem/workerHeartbeat';
 import { createTaskSchedulerModule } from '@/server/services/taskScheduler';
 
 import {
@@ -63,12 +69,22 @@ export const ensureTaskSchedulingWorkerStarted = (deps: TaskSchedulingSweepDeps 
   }
 
   markTaskSchedulingWorkerStarted();
+  markWorkerStarted('task_scheduler', TASK_SCHEDULING_SWEEP_INTERVAL_MS);
+  markWorkerStarted('task_sweep', TASK_SCHEDULING_SWEEP_INTERVAL_MS);
+  markWorkerStarted('task_watchdog', TASK_SCHEDULING_SWEEP_INTERVAL_MS);
 
   const tick = () => {
+    markWorkerTick('task_scheduler', TASK_SCHEDULING_SWEEP_INTERVAL_MS);
+    markWorkerTick('task_sweep', TASK_SCHEDULING_SWEEP_INTERVAL_MS);
+    markWorkerTick('task_watchdog', TASK_SCHEDULING_SWEEP_INTERVAL_MS);
     void recordSweep(deps).catch((error) => {
       console.error('[task-scheduling] sweep failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',
       });
+      markWorkerFailed('task_scheduler', error);
+      markWorkerFailed('task_sweep', error);
+      markWorkerFailed('task_watchdog', error);
+      void recordRuntimeError('task_scheduler', error);
     });
   };
 

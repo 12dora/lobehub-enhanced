@@ -84,6 +84,40 @@ const settledOrUnavailable = (
   };
 };
 
+const probeFailureMessage = (reason: unknown): string => {
+  const raw = reason instanceof Error ? reason.message : String(reason ?? 'probe failed');
+  const trimmed = raw.trim() || 'probe failed';
+  return trimmed.length > 500 ? trimmed.slice(0, 500) : trimmed;
+};
+
+/** A thrown optional probe must stay on the page as a red tile, not vanish. */
+const unavailableSandbox = (reason: unknown, checkedAt: Date): AdminSystemSandboxHealth => ({
+  activeContainers: 0,
+  daemonReachable: false,
+  detail: 'Docker',
+  errorCategory: 'operation_unavailable',
+  imagePresent: false,
+  lastCheckedAt: checkedAt,
+  lastError: probeFailureMessage(reason),
+  maxContainers: 1,
+  status: 'unavailable',
+});
+
+const unavailableDocumentRender = (
+  reason: unknown,
+  checkedAt: Date,
+): AdminSystemDocumentRenderHealth => ({
+  configured: false,
+  detail: 'Gotenberg',
+  errorCategory: 'operation_unavailable',
+  failed24h: 0,
+  lastCheckedAt: checkedAt,
+  lastError: probeFailureMessage(reason),
+  queuePending: 0,
+  queueRunning: 0,
+  status: 'unavailable',
+});
+
 const runLiveProbes = async (params: {
   keyManagementEnv: InfraEnvBag;
   now: () => Date;
@@ -122,10 +156,16 @@ const runLiveProbes = async (params: {
     }
   }
   return {
-    documentRender: documentRenderResult.status === 'fulfilled' ? documentRenderResult.value : null,
+    documentRender:
+      documentRenderResult.status === 'fulfilled'
+        ? documentRenderResult.value
+        : unavailableDocumentRender(documentRenderResult.reason, checkedAt),
     keyManagement: settledOrUnavailable(keyManagementResult, checkedAt),
     objectStorage: settledOrUnavailable(objectStorageResult, checkedAt),
-    sandbox: sandboxResult.status === 'fulfilled' ? sandboxResult.value : null,
+    sandbox:
+      sandboxResult.status === 'fulfilled'
+        ? sandboxResult.value
+        : unavailableSandbox(sandboxResult.reason, checkedAt),
   };
 };
 

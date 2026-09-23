@@ -8,6 +8,8 @@ import { DOCUMENT_RENDER_GC_JOB_TYPE } from '@/types/files';
 
 import { parsePlatformKeyProviderName } from '../security/secret/config';
 import { isBootModuleEnabled } from '../services/moduleSettings';
+import { WORKER_INTERVAL_MS } from '../services/platformSystem/workerHealth';
+import { markWorkerTick } from '../services/platformSystem/workerHeartbeat';
 import { isPersistentEnterpriseWorkerRuntime } from './persistentWorkerRuntime';
 import type { PersistentWorkerScheduler } from './persistentWorkerScheduler';
 import {
@@ -486,12 +488,20 @@ export const ensurePlatformJobsDispatcherStarted = (
     run: async () => {
       const live = resolveEnabled();
       if (live.length === 0) return { didWork: false };
-      const { getServerDB } = await import('@/database/core/db-adaptor');
-      return (options.runTick ?? runPlatformJobsDispatchTick)({
-        db: await getServerDB(),
-        enabledTypes: live,
-        workerId,
-      });
+      try {
+        const { getServerDB } = await import('@/database/core/db-adaptor');
+        return await (options.runTick ?? runPlatformJobsDispatchTick)({
+          db: await getServerDB(),
+          enabledTypes: live,
+          workerId,
+        });
+      } finally {
+        // Liveness is the dispatcher loop, not a side timer. A hung tick never
+        // reaches here, so document-render health goes stale with the loop.
+        if (live.some((item) => item.workerName === 'documentRender')) {
+          markWorkerTick('document_render', WORKER_INTERVAL_MS.document_render);
+        }
+      }
     },
   });
 };
