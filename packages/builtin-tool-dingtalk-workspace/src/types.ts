@@ -81,6 +81,8 @@ export interface SearchDirectoryState {
 
 export interface ListTodosParams {
   done?: boolean;
+  /** Bypass the 5-minute merged cache. Does not retry an unavailable org-todo read. */
+  refresh?: boolean;
 }
 
 export interface TodoView {

@@ -4,7 +4,7 @@ import { lambdaClient } from '@/libs/trpc/client';
 
 type EnterpriseLookupCategory = QccCategory | 'default';
 
-type CompanyProfileAspect = 'basic' | 'ipr' | 'people' | 'risk';
+type CompanyProfileAspect = 'basic' | 'people' | 'risk';
 
 /**
  * Client access to the 企业查询 (enterprise lookup) lambda router.

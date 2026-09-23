@@ -57,5 +57,8 @@ describe('enterprise lookup systemRole', () => {
     expect(systemPrompt).toContain(
       '| 企业名称 | 绍兴市越城区国泰助剂有限公司 | 企业简称 | 国泰助剂 |',
     );
+    expect(systemPrompt).toContain('网页端用表格；钉钉对话用每行一项');
+    expect(systemPrompt).toContain('**键**：值');
+    expect(systemPrompt).toContain('non-zero hit');
   });
 });

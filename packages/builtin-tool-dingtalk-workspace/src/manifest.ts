@@ -49,7 +49,7 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'List DingTalk todos created through this AIHub tool. Personal / in-app DingTalk todos are not returned. done=true lists completed items (last 180 days); omit or false for open todos. serverNow is in every result.',
+        '我的钉钉待办：待我审批 + 本助手创建的待办（钉钉客户端自建待办不可见，原因见返回说明）',
       humanIntervention: 'never',
       name: DingtalkWorkspaceApiName.listTodos,
       parameters: {
@@ -57,6 +57,11 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
         properties: {
           done: {
             description: 'When true, list completed todos; when false or omitted, list open todos.',
+            type: 'boolean',
+          },
+          refresh: {
+            description:
+              'When true, bypass the 5-minute cache and reload. Does not retry client-created todos when that read permission is unavailable.',
             type: 'boolean',
           },
         },

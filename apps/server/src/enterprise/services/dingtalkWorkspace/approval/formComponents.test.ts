@@ -104,6 +104,17 @@ describe('encodeSaveTemplateFields', () => {
     ]);
   });
 
+  it('asks for columns when a TableField has no children', () => {
+    const error = expectProblems([{ componentType: 'TableField', label: '明细' }]);
+    expect(error.problems).toEqual([
+      expect.objectContaining({
+        componentType: 'TableField',
+        issue: 'children',
+        suggestion: 'provide at least one column',
+      }),
+    ]);
+  });
+
   it('encodes TableField children and assigns stable component ids', () => {
     const { components, fields } = encodeSaveTemplateFields([
       {
@@ -189,11 +200,13 @@ describe('encodeSaveTemplateFields', () => {
     expect(error.problems).toEqual([
       expect.objectContaining({
         componentType: 'CalculateField',
-        suggestion: 'use NumberField',
+        suggestion:
+          'formulas are not available via API; use MoneyField or NumberField and set the formula in the DingTalk designer',
       }),
       expect.objectContaining({
         componentType: 'RelateField',
-        suggestion: 'use InnerContactField',
+        suggestion:
+          'not available via API; use a TextField "关联立项单号" and tell the user to switch it to 关联审批单 in the DingTalk designer',
       }),
       expect.objectContaining({
         componentType: 'RecipientAccountField',

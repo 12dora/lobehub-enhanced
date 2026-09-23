@@ -19,6 +19,38 @@ const formValueSchema = z
   })
   .strict();
 
+const saveTemplateLeafFieldSchema = z
+  .object({
+    bizAlias: z.string().optional(),
+    componentId: z.string().optional(),
+    componentType: z.string().min(1),
+    format: z.string().optional(),
+    label: z.string().min(1),
+    options: z.array(z.string()).optional(),
+    placeholder: z.string().optional(),
+    required: z.boolean().optional(),
+    unit: z.string().optional(),
+  })
+  .strict();
+
+const saveTemplateFieldSchema = saveTemplateLeafFieldSchema
+  .extend({
+    children: z.array(saveTemplateLeafFieldSchema).optional(),
+  })
+  .strict();
+
+const mapSaveTemplateLeaf = (field: z.infer<typeof saveTemplateLeafFieldSchema>) => ({
+  bizAlias: field.bizAlias,
+  componentId: field.componentId,
+  componentType: field.componentType,
+  format: field.format,
+  label: field.label,
+  options: field.options,
+  placeholder: field.placeholder,
+  required: field.required,
+  unit: field.unit,
+});
+
 const conditionsSchema = z
   .object({
     fields: z
@@ -248,7 +280,10 @@ export const dingtalkApprovalRouter = router({
   listPendingApprovals: approvalProcedure
     .input(
       z
-        .object({ limit: z.number().int().min(1).max(50).optional() })
+        .object({
+          limit: z.number().int().min(1).max(50).optional(),
+          refresh: z.boolean().optional(),
+        })
         .strict()
         .optional(),
     )
@@ -306,23 +341,7 @@ export const dingtalkApprovalRouter = router({
       z
         .object({
           description: z.string().optional(),
-          fields: z
-            .array(
-              z
-                .object({
-                  bizAlias: z.string().optional(),
-                  componentId: z.string().optional(),
-                  componentType: z.string().min(1),
-                  format: z.string().optional(),
-                  label: z.string().min(1),
-                  options: z.array(z.string()).optional(),
-                  placeholder: z.string().optional(),
-                  required: z.boolean().optional(),
-                  unit: z.string().optional(),
-                })
-                .strict(),
-            )
-            .min(1),
+          fields: z.array(saveTemplateFieldSchema).min(1),
           name: z.string().min(1),
           processCode: z.string().min(1).optional(),
         })
@@ -330,15 +349,10 @@ export const dingtalkApprovalRouter = router({
     )
     .mutation(({ ctx, input }) => {
       const fields = input.fields.map((field) => ({
-        bizAlias: field.bizAlias,
-        componentId: field.componentId,
-        componentType: field.componentType,
-        format: field.format,
-        label: field.label,
-        options: field.options,
-        placeholder: field.placeholder,
-        required: field.required,
-        unit: field.unit,
+        ...mapSaveTemplateLeaf(field),
+        ...(field.children && field.children.length > 0
+          ? { children: field.children.map(mapSaveTemplateLeaf) }
+          : {}),
       }));
       return run('saveTemplate', () =>
         ctx.approvalService.saveTemplate({

@@ -285,8 +285,12 @@ export interface ApprovalServiceContext {
 }
 
 export const TEMPLATE_CACHE_TTL_MS = 5 * 60_000;
-export const PENDING_CACHE_TTL_MS = 60_000;
-export const SWEEP_CACHE_TTL_MS = 5 * 60_000;
+/** Identical listPendingApprovals (待我审批) results stay valid for 5 minutes unless refresh is set. */
+export const PENDING_CACHE_TTL_MS = 5 * 60_000;
+/** listMyApplications (我发起的) has no refresh param; keep the previous 1 minute TTL. */
+export const INITIATED_CACHE_TTL_MS = 60_000;
+/** Shared sweep also feeds 我发起的, so its TTL stays at 1 minute. */
+export const SWEEP_CACHE_TTL_MS = 60_000;
 export const INCOMPLETE_CACHE_TTL_MS = 30_000;
 export const PENDING_INSTANCE_CAP = 300;
 export const INSTANCE_DETAIL_CONCURRENCY = 2;

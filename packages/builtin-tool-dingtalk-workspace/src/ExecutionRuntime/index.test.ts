@@ -285,6 +285,32 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
     expect(events.content).not.toContain('"timeZone"');
   });
 
+  it('keeps merged todo notes and flattens assistant cards', async () => {
+    const note =
+      '你在钉钉客户端里自己创建的待办，以及其他应用推送的待办，钉钉未向本系统开放读取（需专属钉钉的待办读权限），这里只包含：待我审批的流程、由本助手创建的待办。';
+    const listTodos = vi.fn().mockResolvedValue({
+      appTodos: [{ done: false, source: 'assistant', subject: '周报', taskId: 't1' }],
+      approvals: {
+        count: 1,
+        items: [{ source: 'approval', taskId: 'ap-1', title: '请假' }],
+        truncated: false,
+      },
+      notes: [note],
+      orgTodos: [{ done: true, source: 'org', subject: '客户端', taskId: 't2' }],
+      truncated: false,
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ listTodos }));
+
+    const todos = await runtime.listTodos({});
+
+    expect(todos.content).toContain(note);
+    expect(todos.content).toContain('"source":"assistant"');
+    expect(todos.content).toContain('"isDone":false');
+    expect(todos.content).toContain('"source":"org"');
+    expect(todos.content).toContain('"isDone":true');
+    expect(todos.content).toContain('请假');
+  });
+
   it('reads DINGTALK_AMBIGUOUS candidates from a TRPC cause payload', async () => {
     const runtime = createDingtalkWorkspaceRuntime(
       makeService({

@@ -10,6 +10,31 @@ import {
 
 export { DingtalkApprovalIdentifier } from './types';
 
+const SAVE_TEMPLATE_LEAF_TYPES = SAVE_TEMPLATE_COMPONENT_TYPES.filter(
+  (type) => type !== 'TableField',
+);
+
+const saveTemplateLeafFieldSchema = {
+  additionalProperties: false,
+  properties: {
+    bizAlias: { type: 'string' },
+    componentId: { type: 'string' },
+    componentType: {
+      description: 'Column control. TableField cannot be nested inside a table.',
+      enum: [...SAVE_TEMPLATE_LEAF_TYPES],
+      type: 'string',
+    },
+    format: { type: 'string' },
+    label: { type: 'string' },
+    options: { items: { type: 'string' }, type: 'array' },
+    placeholder: { type: 'string' },
+    required: { type: 'boolean' },
+    unit: { type: 'string' },
+  },
+  required: ['componentType', 'label'],
+  type: 'object',
+};
+
 const staffTokenDescription =
   'staff:<id> copied verbatim from searchDirectory, or a person name the server resolves. Never invent ids. Ambiguous names return DINGTALK_AMBIGUOUS.';
 
@@ -143,7 +168,7 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'List tasks currently waiting on the user (待我审批). Use this — and only this — for 「没审批的 / 待我审批」. Do not also call listMyApplications. May be truncated on the standard edition (truncated=true). Each row has processInstanceId and taskId for write APIs.',
+        'List tasks currently waiting on the user (待我审批). Use this — and only this — for 「没审批的 / 待我审批」. Do not also call listMyApplications. Identical queries are cached for about 5 minutes; pass refresh:true only when the user asks to refresh. May be truncated on the standard edition (truncated=true). Each row has processInstanceId and taskId for write APIs.',
       humanIntervention: never,
       name: DingtalkApprovalReadApiName.listPendingApprovals,
       parameters: {
@@ -154,6 +179,11 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
             maximum: 50,
             minimum: 1,
             type: 'integer',
+          },
+          refresh: {
+            description:
+              'Bypass the 5-minute cache and scan again. Use only when the user asks to refresh. Default false.',
+            type: 'boolean',
           },
         },
         required: [],
@@ -435,15 +465,21 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
           description: { type: 'string' },
           fields: {
             description:
-              'Form controls in display order. Types: AddressField address; DDAttachment files; DDDateField date (unit 天|小时); DDDateRangeField start/end (label is a JSON string of two labels; unit 天|小时); DDMultiSelectField multi-choice (≥2 options); DDPhotoField photos; DDSelectField single choice (≥2 options); DepartmentField department; IdCardField ID number; InnerContactField people; MoneyField amount; NumberField number (unit optional); PhoneField phone; StarRatingField 1–5 stars; TextareaField long text; TextField short text; TextNote static note (needs content). 流水号/编号 needs no field. Not supported: SeqNumberField, CalculateField, RelateField, RecipientAccountField, TableField.',
+              'Form controls in display order. Types: AddressField address; DDAttachment files; DDDateField date (unit 天|小时); DDDateRangeField start/end (label is a JSON string of two labels; unit 天|小时); DDMultiSelectField multi-choice (≥2 options); DDPhotoField photos; DDSelectField single choice (≥2 options); DepartmentField department; IdCardField ID number; InnerContactField people (single person; default and read-only are not supported); MoneyField amount (set unit to 元 when the amount is in 元); NumberField number (unit optional); PhoneField phone; StarRatingField 1–5 stars; TableField one detail table (children are the columns, one level, same types except TableField); TextareaField long text; TextField short text; TextNote static note (needs content). 流水号/编号 needs no field. Not available via API: SeqNumberField; CalculateField — formulas are not available via API, use MoneyField or NumberField and set the formula in the DingTalk designer; RelateField — not available via API, use a TextField "关联立项单号" and tell the user to switch it to 关联审批单 in the DingTalk designer; RecipientAccountField.',
             items: {
               additionalProperties: false,
               properties: {
                 bizAlias: { type: 'string' },
+                children: {
+                  description:
+                    'TableField columns only. One level. Same controls as the parent except TableField.',
+                  items: saveTemplateLeafFieldSchema,
+                  type: 'array',
+                },
                 componentId: { type: 'string' },
                 componentType: {
                   description:
-                    'Verified OA control. 流水号/编号 needs no field (DingTalk generates it).',
+                    'Verified OA control. 流水号/编号 needs no field (DingTalk generates it). TableField needs children.',
                   enum: [...SAVE_TEMPLATE_COMPONENT_TYPES],
                   type: 'string',
                 },

@@ -24,7 +24,7 @@ const enterpriseLookupProcedure = authedProcedure.use(serverDatabase).use(async 
 
 const providerSchema = z.enum(['qcc', 'tianyancha']);
 const categorySchema = z.union([z.enum(QCC_CATEGORIES), z.literal('default')]);
-const aspectSchema = z.enum(['basic', 'ipr', 'people', 'risk']);
+const aspectSchema = z.enum(['basic', 'people', 'risk']);
 
 const mapError = (error: unknown, procedure: string): never => {
   if (error instanceof TRPCError) throw error;

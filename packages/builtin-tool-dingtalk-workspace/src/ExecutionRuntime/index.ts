@@ -331,19 +331,34 @@ const flattenFreeBusyPerson = (value: unknown): Record<string, unknown> | unknow
   };
 };
 
+const flattenTodoList = (list: unknown[]): unknown[] =>
+  list.map((item) => {
+    const row = asRecord(item);
+    if (!row) return item;
+    if ('taskId' in row || 'done' in row || 'isDone' in row) return flattenTodo(row);
+    return item;
+  });
+
 const normalizeResult = (data: unknown): unknown => {
   const record = asRecord(data);
   if (!record) return data;
-  if (Array.isArray(record.items)) {
-    const items = record.items.map((item) => {
-      const row = asRecord(item);
-      if (!row) return item;
-      if ('taskId' in row || 'done' in row || 'isDone' in row) return flattenTodo(row);
-      if ('summary' in row || 'eventId' in row || 'id' in row) return flattenEvent(row);
-      if ('roomId' in row || 'roomName' in row) return item;
-      return item;
-    });
-    return { ...record, items };
+  const hasTodoBuckets =
+    Array.isArray(record.items) || Array.isArray(record.appTodos) || Array.isArray(record.orgTodos);
+  if (hasTodoBuckets) {
+    const next: Record<string, unknown> = { ...record };
+    if (Array.isArray(record.items)) {
+      next.items = record.items.map((item) => {
+        const row = asRecord(item);
+        if (!row) return item;
+        if ('taskId' in row || 'done' in row || 'isDone' in row) return flattenTodo(row);
+        if ('summary' in row || 'eventId' in row || 'id' in row) return flattenEvent(row);
+        if ('roomId' in row || 'roomName' in row) return item;
+        return item;
+      });
+    }
+    if (Array.isArray(record.appTodos)) next.appTodos = flattenTodoList(record.appTodos);
+    if (Array.isArray(record.orgTodos)) next.orgTodos = flattenTodoList(record.orgTodos);
+    return next;
   }
   if (Array.isArray(record.people)) {
     return { ...record, people: record.people.map(flattenFreeBusyPerson) };
@@ -353,7 +368,15 @@ const normalizeResult = (data: unknown): unknown => {
   return record;
 };
 
-const LIST_KEYS = ['items', 'people', 'users', 'departments', 'attendees'] as const;
+const LIST_KEYS = [
+  'items',
+  'appTodos',
+  'orgTodos',
+  'people',
+  'users',
+  'departments',
+  'attendees',
+] as const;
 
 const cloneRecord = (payload: Record<string, unknown>): Record<string, unknown> => {
   const next: Record<string, unknown> = { ...payload };

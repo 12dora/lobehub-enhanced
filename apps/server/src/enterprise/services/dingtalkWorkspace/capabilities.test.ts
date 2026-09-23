@@ -7,6 +7,7 @@ const mockGetServerDB = vi.hoisted(() => vi.fn());
 const mockResolveNotifyAppConfig = vi.hoisted(() => vi.fn());
 const mockReadNotifyAppFromProviderRow = vi.hoisted(() => vi.fn());
 const mockRequest = vi.hoisted(() => vi.fn());
+const mockPeekOrgTodoReadGate = vi.hoisted(() => vi.fn());
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: mockGetServerDB,
@@ -27,6 +28,11 @@ vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
 
 vi.mock('./client', () => ({
   dingtalkWorkspaceRequest: (...args: unknown[]) => mockRequest(...args),
+}));
+
+vi.mock('./todo/orgReadGate', () => ({
+  CUSTOM_TODO_READ_SCOPE: 'Custom.Todo.Read',
+  peekOrgTodoReadGate: (...args: unknown[]) => mockPeekOrgTodoReadGate(...args),
 }));
 
 const {
@@ -75,6 +81,7 @@ describe('dingtalk workspace capabilities', () => {
       appKey: 'key',
       appSecret: 'secret',
     });
+    mockPeekOrgTodoReadGate.mockResolvedValue(undefined);
   });
 
   it('is on only when the notify app is configured and the switch is on', async () => {
@@ -364,5 +371,35 @@ describe('dingtalk workspace capabilities', () => {
     const end = Date.parse((schedule?.body as { endTime: string }).endTime);
     expect(end - start).toBe(60 * 60_000);
     expect(calendar[3]?.query).toEqual({ maxResults: 1, unionId: 'union-1' });
+  });
+
+  it('reports Custom.Todo.Read as optional from the cached gate and does not call DingTalk for it', async () => {
+    mockPeekOrgTodoReadGate.mockResolvedValue('unavailable');
+    mockRequest.mockResolvedValue({});
+    const unavailable = await probeWorkspacePermissions();
+    expect(unavailable.todo).toEqual({
+      missingScopes: ['Custom.Todo.Read'],
+      ok: true,
+    });
+    expect(
+      mockRequest.mock.calls.filter((call) =>
+        String(call[0].path).includes('/organizations/tasks/query'),
+      ),
+    ).toHaveLength(0);
+
+    mockRequest.mockClear();
+    mockPeekOrgTodoReadGate.mockResolvedValue('available');
+    const available = await probeWorkspacePermissions();
+    expect(available.todo).toEqual({ ok: true });
+    expect(
+      mockRequest.mock.calls.filter((call) =>
+        String(call[0].path).includes('/organizations/tasks/query'),
+      ),
+    ).toHaveLength(0);
+
+    mockPeekOrgTodoReadGate.mockResolvedValue(undefined);
+    const unknown = await probeWorkspacePermissions();
+    expect(unknown.todo.missingScopes).toBeUndefined();
+    expect(unknown.todo.ok).toBe(true);
   });
 });

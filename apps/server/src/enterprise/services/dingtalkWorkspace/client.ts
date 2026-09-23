@@ -1,6 +1,7 @@
 import { isRecord, pickTrimmedString } from '@lobechat/utils/object';
 import debug from 'debug';
 
+import { noteRuntimeError } from '@/server/enterprise/services/platformSystem/noteRuntimeError';
 import {
   DINGTALK_API_BASE,
   DINGTALK_OAPI_BASE,
@@ -13,6 +14,9 @@ import {
 
 import { recordDingtalkHttpCall } from './apiCallStats';
 import { DingtalkWorkspaceError, type DingtalkWorkspaceErrorCode } from './errors';
+
+/** Same scope as `CUSTOM_TODO_READ_SCOPE` in `todo/orgReadGate.ts`. */
+const SILENT_TODO_READ_SCOPE = 'Custom.Todo.Read';
 
 const log = debug('lobe-server:dingtalk-workspace:client');
 
@@ -27,6 +31,12 @@ export interface DingtalkWorkspaceRequest {
   method: DingtalkWorkspaceHttpMethod;
   path: string;
   query?: Record<string, boolean | number | string | undefined>;
+  /**
+   * Set false on polls and permission probes. Failures are then not written to
+   * the runtime-error log, so an expected miss is not counted on every tick.
+   * Defaults to recording.
+   */
+  recordError?: boolean;
 }
 
 export type DingtalkWorkspaceFetch = (
@@ -322,10 +332,38 @@ const mapUpstreamToCode = (
   return 'DINGTALK_UNAVAILABLE';
 };
 
+/**
+ * A 403 whose only missing scope is Custom.Todo.Read is the org todo-read
+ * gate learning that the scope is off. That is a capability state, not an
+ * outage. Polls and probes pass `recordError: false` so they are not counted
+ * on every tick either.
+ */
+const noteDingtalkApiFailure = (
+  error: unknown,
+  context: {
+    missingScopes?: string[];
+    operation: 'network' | 'timeout' | 'token' | 'upstream';
+    recordError?: boolean;
+    upstreamCode?: string | null;
+  },
+): void => {
+  if (context.recordError === false) return;
+  const scopes = context.missingScopes;
+  if (scopes && scopes.length > 0 && scopes.every((scope) => scope === SILENT_TODO_READ_SCOPE)) {
+    return;
+  }
+  noteRuntimeError('dingtalk_api', error, {
+    operation: context.operation,
+    ...(scopes && scopes.length > 0 ? { missingScopes: scopes } : {}),
+    ...(context.upstreamCode ? { upstreamCode: context.upstreamCode } : {}),
+  });
+};
+
 const throwMapped = (
   status: number,
   upstreamCode: string | null,
   message: string | null,
+  recordError?: boolean,
 ): never => {
   const code = mapUpstreamToCode(status, upstreamCode, message);
   const missingScopes =
@@ -333,6 +371,12 @@ const throwMapped = (
   log('dingtalk request failed code=%s upstream=%s status=%s', code, upstreamCode, status);
   const mapped = new DingtalkWorkspaceError(code, upstreamCode ?? undefined, missingScopes);
   if (message) mapped.upstreamMessage = message;
+  noteDingtalkApiFailure(mapped, {
+    missingScopes,
+    operation: 'upstream',
+    recordError,
+    upstreamCode,
+  });
   throw mapped;
 };
 
@@ -385,18 +429,30 @@ const executeOnce = async (
   } catch (error) {
     if (error instanceof DingtalkWorkspaceError) throw error;
     if (error instanceof DingTalkNotifyAppError) {
-      throw new DingtalkWorkspaceError(
+      const upstreamCode =
+        error.errcode === null || error.errcode === undefined ? undefined : String(error.errcode);
+      const mapped = new DingtalkWorkspaceError(
         error.errcode === 'notify_app_not_configured'
           ? 'DINGTALK_NOT_CONFIGURED'
           : 'DINGTALK_UNAVAILABLE',
-        error.errcode === null || error.errcode === undefined ? undefined : String(error.errcode),
+        upstreamCode,
       );
+      if (error.errcode !== 'notify_app_not_configured') {
+        noteDingtalkApiFailure(mapped, {
+          operation: 'network',
+          recordError: req.recordError,
+          upstreamCode,
+        });
+      }
+      throw mapped;
     }
     if (isTimeoutError(error)) {
       log('request timeout method=%s path=%s', req.method, pathname);
+      noteDingtalkApiFailure(error, { operation: 'timeout', recordError: req.recordError });
       throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
     }
     log('network error method=%s path=%s', req.method, pathname);
+    noteDingtalkApiFailure(error, { operation: 'network', recordError: req.recordError });
     throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
   }
 
@@ -404,7 +460,11 @@ const executeOnce = async (
   return { body, ok: response.ok, status: response.status };
 };
 
-const getToken = async (api: DingtalkWorkspaceApi, skipCache = false): Promise<string> => {
+const getToken = async (
+  api: DingtalkWorkspaceApi,
+  skipCache = false,
+  recordError?: boolean,
+): Promise<string> => {
   try {
     if (api === 'v1') return await getNotifyAppNewApiToken({ skipCache });
     return await getNotifyAppToken({ skipCache });
@@ -413,11 +473,13 @@ const getToken = async (api: DingtalkWorkspaceApi, skipCache = false): Promise<s
       if (error.errcode === 'notify_app_not_configured') {
         throw new DingtalkWorkspaceError('DINGTALK_NOT_CONFIGURED');
       }
-      throw new DingtalkWorkspaceError(
-        'DINGTALK_UNAVAILABLE',
-        error.errcode === null || error.errcode === undefined ? undefined : String(error.errcode),
-      );
+      const upstreamCode =
+        error.errcode === null || error.errcode === undefined ? undefined : String(error.errcode);
+      const mapped = new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE', upstreamCode);
+      noteDingtalkApiFailure(mapped, { operation: 'token', recordError, upstreamCode });
+      throw mapped;
     }
+    noteDingtalkApiFailure(error, { operation: 'token', recordError });
     throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
   }
 };
@@ -435,7 +497,7 @@ const invalidateToken = async (api: DingtalkWorkspaceApi): Promise<void> => {
  * Throws `DingtalkWorkspaceError`. `upstreamCode` is logged, never shown.
  */
 export const dingtalkWorkspaceRequest = async <T>(req: DingtalkWorkspaceRequest): Promise<T> => {
-  let token = await getToken(req.api);
+  let token = await getToken(req.api, false, req.recordError);
   let result = await executeOnce(req, token);
   const record = isRecord(result.body) ? result.body : null;
   const upstream = upstreamFromRecord(record, result.status);
@@ -445,7 +507,7 @@ export const dingtalkWorkspaceRequest = async <T>(req: DingtalkWorkspaceRequest)
     (req.api === 'v1' && result.status === 401)
   ) {
     await invalidateToken(req.api);
-    token = await getToken(req.api, true);
+    token = await getToken(req.api, true, req.recordError);
     result = await executeOnce(req, token);
   }
 
@@ -454,13 +516,13 @@ export const dingtalkWorkspaceRequest = async <T>(req: DingtalkWorkspaceRequest)
 
   if (req.api === 'legacy') {
     if (isOapiFailure(nextRecord, result.ok)) {
-      throwMapped(result.status, nextUpstream.code, nextUpstream.message);
+      throwMapped(result.status, nextUpstream.code, nextUpstream.message, req.recordError);
     }
     return (nextRecord?.result ?? nextRecord) as T;
   }
 
   if (!result.ok || isOapiFailure(nextRecord, result.ok)) {
-    throwMapped(result.status, nextUpstream.code, nextUpstream.message);
+    throwMapped(result.status, nextUpstream.code, nextUpstream.message, req.recordError);
   }
   return (nextRecord ?? {}) as T;
 };

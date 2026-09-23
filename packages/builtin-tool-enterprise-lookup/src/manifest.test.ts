@@ -54,12 +54,10 @@ describe('EnterpriseLookupManifest', () => {
     expect(api?.humanIntervention).toBe('never');
     expect(api?.parameters.required).toEqual(['name']);
     expect(api?.parameters.additionalProperties).toBe(false);
-    expect(api?.parameters.properties.aspects.items.enum).toEqual([
-      'basic',
-      'ipr',
-      'people',
-      'risk',
-    ]);
+    expect(api?.parameters.properties.aspects.items.enum).toEqual(['basic', 'people', 'risk']);
+    expect(api?.parameters.properties.aspects.items.enum).not.toContain('ipr');
+    expect(api?.description).toContain('risk-scan');
+    expect(api?.parameters.properties.aspects.description).toContain('股东');
     expect(api?.description).toContain('unique');
     expect(api?.description).toContain('paid quota');
   });

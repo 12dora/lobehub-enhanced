@@ -399,13 +399,25 @@ const previewAppend = async (
   };
 };
 
+const templateFieldLabel = (item: unknown): string | undefined => {
+  const record = asRecord(item);
+  const label = asString(record.label);
+  if (!label) return undefined;
+  const columns = Array.isArray(record.children)
+    ? record.children
+        .map((child) => asString(asRecord(child).label))
+        .filter((value): value is string => Boolean(value))
+    : [];
+  return columns.length > 0 ? `${label}（${columns.join('、')}）` : label;
+};
+
 const previewSaveTemplate = (args: Record<string, unknown>): PreviewBody => {
   const name = asString(args.name);
   if (!name) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
   const processCode = asString(args.processCode);
   const fields = Array.isArray(args.fields) ? args.fields : [];
   const fieldLabels = fields
-    .map((item) => asString(asRecord(item).label))
+    .map((item) => templateFieldLabel(item))
     .filter((item): item is string => Boolean(item));
   return {
     danger: false,

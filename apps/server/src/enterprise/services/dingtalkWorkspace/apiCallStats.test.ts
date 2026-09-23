@@ -88,6 +88,7 @@ describe('toDingtalkApiCallKey', () => {
       ['POST', '/topapi/v2/user/get'],
       ['GET', '/v1.0/rooms/meetingRoomLists'],
       ['POST', '/v1.0/todo/users/me/org/tasks/query'],
+      ['POST', '/v1.0/todo/users/me/organizations/tasks/query'],
       ['POST', '/v1.0/todo/users/me/tasks'],
       ['GET', '/v1.0/calendar/users/me/calendars/primary/events'],
       ['GET', '/v1.0/calendar/users/me/calendars/primary/eventsview'],
@@ -105,6 +106,9 @@ describe('toDingtalkApiCallKey', () => {
     expect(toDingtalkApiCallKey('POST', `/v1.0/todo/users/${unionId}/org/tasks/query`)).toBe(
       'POST /v1.0/todo/users/:id/org/tasks/query',
     );
+    expect(
+      toDingtalkApiCallKey('POST', `/v1.0/todo/users/${unionId}/organizations/tasks/query`),
+    ).toBe('POST /v1.0/todo/users/:id/organizations/tasks/query');
     expect(toDingtalkApiCallKey('POST', `/v1.0/todo/users/${unionId}/tasks`)).toBe(
       'POST /v1.0/todo/users/:id/tasks',
     );

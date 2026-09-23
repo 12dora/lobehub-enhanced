@@ -130,7 +130,7 @@ const todoRouter = router({
     }),
 
   listTodos: workspaceProcedure
-    .input(z.object({ done: z.boolean().optional() }).strict())
+    .input(z.object({ done: z.boolean().optional(), refresh: z.boolean().optional() }).strict())
     .query(async ({ ctx, input }) => {
       try {
         return await ctx.todoService.listTodos(input);

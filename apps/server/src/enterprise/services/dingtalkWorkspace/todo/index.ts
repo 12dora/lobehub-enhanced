@@ -6,11 +6,20 @@ import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
 } from '@/server/enterprise/services/audit/auditActionCatalog';
+import { DingtalkApprovalService } from '@/server/enterprise/services/dingtalkWorkspace/approval';
+import { DEFAULT_LIST_LIMIT } from '@/server/enterprise/services/dingtalkWorkspace/approval/types';
 import { assertDingtalkFeature } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { dingtalkWorkspaceRequest } from '@/server/enterprise/services/dingtalkWorkspace/client';
+import { DingtalkWorkspaceError } from '@/server/enterprise/services/dingtalkWorkspace/errors';
 import { requireVerifiedDingtalkIdentity } from '@/server/enterprise/services/dingtalkWorkspace/identity';
 import { PlatformAuditService } from '@/server/enterprise/services/platformAudit';
 
+import {
+  CUSTOM_TODO_READ_SCOPE,
+  discoverOrgTodoReadGate,
+  peekOrgTodoReadGate,
+  rememberOrgTodoReadGate,
+} from './orgReadGate';
 import {
   actingAsFromIdentity,
   failWorkspace,
@@ -18,6 +27,9 @@ import {
   resolveStaffTokens,
 } from './staffTokens';
 import type {
+  DingtalkMergedApprovalItem,
+  DingtalkMergedApprovals,
+  DingtalkMergedTodoCard,
   DingtalkTodoCard,
   DingtalkTodoCreateInput,
   DingtalkTodoIdentity,
@@ -27,10 +39,15 @@ import type {
   DingtalkTodoUpdateInput,
   DingtalkWorkspacePreview,
 } from './types';
-import { isTodoWriteApiName } from './types';
+import { isTodoWriteApiName, ORG_TODO_UNAVAILABLE_NOTE } from './types';
 
+export { resetOrgTodoReadGateForTest } from './orgReadGate';
 export type { DingtalkStaffCandidate, DingtalkStaffRef } from './staffTokens';
 export type {
+  DingtalkMergedApprovalItem,
+  DingtalkMergedApprovals,
+  DingtalkMergedTodoCard,
+  DingtalkMergedTodoSource,
   DingtalkTodoCard,
   DingtalkTodoCreateInput,
   DingtalkTodoIdInput,
@@ -41,19 +58,75 @@ export type {
   DingtalkWorkspacePreviewLine,
   TodoWriteApiName,
 } from './types';
-export { isTodoWriteApiName, TODO_WRITE_API_NAMES } from './types';
+export { isTodoWriteApiName, ORG_TODO_UNAVAILABLE_NOTE, TODO_WRITE_API_NAMES } from './types';
 
 const MAX_CREATE_EXECUTORS = 100;
 const MAX_UPDATE_EXECUTORS = 1000;
 const MAX_LIST_PAGES = 10;
 const MAX_LIST_ITEMS = 200;
 const TODO_LIST_CACHE_MS = 60_000;
+/** Merged listTodos result. Same window as listPendingApprovals. */
+const MERGED_TODO_CACHE_MS = 5 * 60_000;
+/** One page. A merged read is billed as a single organizations/tasks/query. */
+const ORG_TODO_PAGE_SIZE = 20;
 
 type CachedTodoList = { expiresAt: number; items: DingtalkTodoCard[] };
 const todoListCache = new Map<string, CachedTodoList>();
 
+type CachedMergedList = { expiresAt: number; value: DingtalkTodoListResult };
+const mergedTodoCache = new Map<string, CachedMergedList>();
+
 export const resetTodoListCacheForTest = (): void => {
   todoListCache.clear();
+  mergedTodoCache.clear();
+};
+
+/** userId + verified staff/union id, so a rebound DingTalk identity cannot reuse the old list. */
+const mergedCacheKey = (
+  userId: string,
+  identity: { staffId: string; unionId: string },
+  done: boolean | undefined,
+): string => {
+  const doneFlag = done === true ? '1' : done === false ? '0' : '*';
+  return `${userId}:${identity.staffId}:${identity.unionId}:${doneFlag}`;
+};
+
+const readMergedCache = (key: string): DingtalkTodoListResult | undefined => {
+  const entry = mergedTodoCache.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) return undefined;
+  return entry.value;
+};
+
+const invalidateMergedCache = (userId: string): void => {
+  const prefix = `${userId}:`;
+  for (const key of mergedTodoCache.keys()) {
+    if (key.startsWith(prefix)) mergedTodoCache.delete(key);
+  }
+};
+
+const emptyApprovals = (): DingtalkMergedApprovals => ({
+  count: 0,
+  items: [],
+  truncated: false,
+});
+
+const isCustomTodoReadForbidden = (error: unknown): boolean =>
+  error instanceof DingtalkWorkspaceError &&
+  error.code === 'DINGTALK_FORBIDDEN' &&
+  (error.missingScopes ?? []).includes(CUSTOM_TODO_READ_SCOPE);
+
+const tagTodos = (
+  cards: DingtalkTodoCard[],
+  source: DingtalkMergedTodoCard['source'],
+  seen: Set<string>,
+): DingtalkMergedTodoCard[] => {
+  const items: DingtalkMergedTodoCard[] = [];
+  for (const card of cards) {
+    if (seen.has(card.taskId)) continue;
+    seen.add(card.taskId);
+    items.push({ ...card, source });
+  }
+  return items;
 };
 const PRIORITY_VALUES = new Set([10, 20, 30, 40]);
 const PRIORITY_LABEL: Record<number, string> = {
@@ -135,6 +208,16 @@ const mapTodoCard = (value: unknown): DingtalkTodoCard | null => {
     taskId,
     todoType: asString(row.todoType),
   };
+};
+
+const mapTodoCards = (value: unknown): DingtalkTodoCard[] => {
+  if (!Array.isArray(value)) return [];
+  const cards: DingtalkTodoCard[] = [];
+  for (const item of value) {
+    const mapped = mapTodoCard(item);
+    if (mapped) cards.push(mapped);
+  }
+  return cards;
 };
 
 const parseCreateInput = (args: Record<string, unknown>): DingtalkTodoCreateInput => {
@@ -230,8 +313,8 @@ export class DingtalkTodoService {
   private async requireTodo(taskId: string): Promise<DingtalkTodoCard> {
     const cached = this.findCachedTodo(taskId);
     if (cached) return cached;
-    const listed = await this.listTodos();
-    const found = listed.items.find((item) => item.taskId === taskId);
+    const listed = await this.loadWritableTodos();
+    const found = listed.find((item) => item.taskId === taskId);
     if (!found) return failWorkspace('DINGTALK_NOT_FOUND');
     return found;
   }
@@ -264,45 +347,209 @@ export class DingtalkTodoService {
     });
   }
 
-  listTodos = async (input: DingtalkTodoListInput = {}): Promise<DingtalkTodoListResult> => {
+  /** Full app-todo pages for write previews. Not used by the billed merged read. */
+  private loadWritableTodos = async (): Promise<DingtalkTodoCard[]> => {
+    const cached = this.cachedTodos();
+    if (cached) return cached;
     const identity = await this.actor();
     const items: DingtalkTodoCard[] = [];
     let nextToken: string | undefined;
-    let truncated = false;
     for (let page = 0; page < MAX_LIST_PAGES; page++) {
-      const body: Record<string, unknown> = {
-        roleTypes: [['creator'], ['executor']],
-      };
-      if (typeof input.done === 'boolean') body.isDone = input.done;
-      if (nextToken) body.nextToken = nextToken;
-      const response = await dingtalkWorkspaceRequest<Record<string, unknown>>({
-        api: 'v1',
-        body,
-        method: 'POST',
-        path: todoPath(identity.unionId, '/org/tasks/query'),
-      });
-      const cards = Array.isArray(response.todoCards) ? response.todoCards : [];
-      for (const card of cards) {
-        const mapped = mapTodoCard(card);
-        if (mapped) items.push(mapped);
-        if (items.length >= MAX_LIST_ITEMS) break;
-      }
-      const token = asString(response.nextToken);
-      if (items.length >= MAX_LIST_ITEMS) {
-        truncated = items.length > MAX_LIST_ITEMS || Boolean(token);
+      const pageResult = await this.queryAppTodoPage(identity.unionId, {}, nextToken);
+      items.push(...pageResult.cards);
+      if (items.length >= MAX_LIST_ITEMS || !pageResult.nextToken) {
         const capped = items.slice(0, MAX_LIST_ITEMS);
-        if (typeof input.done !== 'boolean') this.storeTodos(capped);
-        return { items: capped, truncated };
+        this.storeTodos(capped);
+        return capped;
       }
-      if (!token) {
-        if (typeof input.done !== 'boolean') this.storeTodos(items);
-        return { items, truncated };
-      }
-      nextToken = token;
+      nextToken = pageResult.nextToken;
     }
-    truncated = true;
-    if (typeof input.done !== 'boolean') this.storeTodos(items);
-    return { items, truncated };
+    const capped = items.slice(0, MAX_LIST_ITEMS);
+    this.storeTodos(capped);
+    return capped;
+  };
+
+  private queryAppTodoPage = async (
+    unionId: string,
+    input: DingtalkTodoListInput,
+    nextToken?: string,
+  ): Promise<{ cards: DingtalkTodoCard[]; nextToken?: string }> => {
+    const body: Record<string, unknown> = {
+      roleTypes: [['creator'], ['executor']],
+    };
+    if (typeof input.done === 'boolean') body.isDone = input.done;
+    if (nextToken) body.nextToken = nextToken;
+    const response = await dingtalkWorkspaceRequest<Record<string, unknown>>({
+      api: 'v1',
+      body,
+      method: 'POST',
+      path: todoPath(unionId, '/org/tasks/query'),
+    });
+    return {
+      cards: mapTodoCards(response.todoCards),
+      nextToken: asString(response.nextToken),
+    };
+  };
+
+  private queryOrgTodoPage = async (
+    unionId: string,
+    done: boolean | undefined,
+  ): Promise<{ cards: DingtalkTodoCard[]; nextToken?: string }> => {
+    const body: Record<string, unknown> = {
+      maxResults: ORG_TODO_PAGE_SIZE,
+      needPersonalTodo: true,
+      nextToken: '0',
+      roleTypes: [['creator'], ['executor']],
+    };
+    if (typeof done === 'boolean') body.isDone = done;
+    const response = await dingtalkWorkspaceRequest<Record<string, unknown>>({
+      api: 'v1',
+      body,
+      method: 'POST',
+      path: todoPath(unionId, '/organizations/tasks/query'),
+    });
+    return {
+      cards: mapTodoCards(response.todoCards).slice(0, ORG_TODO_PAGE_SIZE),
+      nextToken: asString(response.nextToken),
+    };
+  };
+
+  private loadApprovals = async (refresh?: boolean): Promise<DingtalkMergedApprovals> => {
+    try {
+      const pending = await new DingtalkApprovalService(this.db, this.userId).listPending({
+        limit: DEFAULT_LIST_LIMIT,
+        refresh,
+      });
+      const rows = pending.rows.slice(0, DEFAULT_LIST_LIMIT);
+      const items: DingtalkMergedApprovalItem[] = rows.map((row) => ({
+        ...(row.createdAt ? { createdAt: row.createdAt } : {}),
+        ...(row.originatorName ? { originatorName: row.originatorName } : {}),
+        processInstanceId: row.processInstanceId,
+        source: 'approval',
+        taskId: row.taskId,
+        title: row.title,
+      }));
+      return {
+        count: pending.rows.length,
+        items,
+        truncated: pending.truncated || pending.rows.length > DEFAULT_LIST_LIMIT,
+      };
+    } catch (error) {
+      if (
+        error instanceof DingtalkWorkspaceError &&
+        (error.code === 'DINGTALK_FEATURE_DISABLED' || error.code === 'DINGTALK_NOT_CONFIGURED')
+      ) {
+        return emptyApprovals();
+      }
+      throw error;
+    }
+  };
+
+  /**
+   * One organizations/tasks/query when the gate is open or still unknown.
+   * A remembered `unavailable` gate makes zero calls, including on refresh.
+   */
+  private loadOrgTodos = async (
+    unionId: string,
+    done: boolean | undefined,
+  ): Promise<
+    | { cards: DingtalkTodoCard[]; status: 'available'; truncated: boolean }
+    | { status: 'skipped' }
+    | { status: 'unavailable' }
+  > => {
+    const known = await peekOrgTodoReadGate();
+    if (known === 'unavailable') return { status: 'unavailable' };
+
+    const readPage = async () => this.queryOrgTodoPage(unionId, done);
+
+    if (known === 'available') {
+      try {
+        const page = await readPage();
+        return {
+          cards: page.cards,
+          status: 'available',
+          truncated: Boolean(page.nextToken),
+        };
+      } catch (error) {
+        if (isCustomTodoReadForbidden(error)) {
+          await rememberOrgTodoReadGate('unavailable');
+          return { status: 'unavailable' };
+        }
+        return { status: 'skipped' };
+      }
+    }
+
+    let own: { cards: DingtalkTodoCard[]; nextToken?: string } | undefined;
+    const discovered = await discoverOrgTodoReadGate(async () => {
+      try {
+        own = await readPage();
+        return 'available';
+      } catch (error) {
+        if (isCustomTodoReadForbidden(error)) return 'unavailable';
+        return undefined;
+      }
+    });
+
+    if (discovered.fromThisProbe) {
+      if (discovered.gate === 'unavailable') return { status: 'unavailable' };
+      if (own) {
+        return { cards: own.cards, status: 'available', truncated: Boolean(own.nextToken) };
+      }
+      return { status: 'skipped' };
+    }
+
+    if (discovered.gate === 'unavailable') return { status: 'unavailable' };
+    if (discovered.gate !== 'available') return { status: 'skipped' };
+
+    try {
+      const page = await readPage();
+      return { cards: page.cards, status: 'available', truncated: Boolean(page.nextToken) };
+    } catch (error) {
+      if (isCustomTodoReadForbidden(error)) {
+        await rememberOrgTodoReadGate('unavailable');
+        return { status: 'unavailable' };
+      }
+      return { status: 'skipped' };
+    }
+  };
+
+  listTodos = async (input: DingtalkTodoListInput = {}): Promise<DingtalkTodoListResult> => {
+    // Identity first. A cache hit must not skip verification, and the key includes
+    // the verified staff/union id so a changed binding is a miss.
+    const identity = await this.actor();
+    const cacheKey = mergedCacheKey(this.userId, identity, input.done);
+    if (!input.refresh) {
+      const cached = readMergedCache(cacheKey);
+      if (cached) return cached;
+    }
+
+    const appPage = await this.queryAppTodoPage(identity.unionId, input);
+    const [approvals, org] = await Promise.all([
+      this.loadApprovals(input.refresh),
+      this.loadOrgTodos(identity.unionId, input.done),
+    ]);
+
+    const seen = new Set<string>();
+    const appTodos = tagTodos(appPage.cards, 'assistant', seen);
+    const notes: string[] = [];
+    let orgTodos: DingtalkMergedTodoCard[] | undefined;
+    let orgTruncated = false;
+    if (org.status === 'unavailable') {
+      notes.push(ORG_TODO_UNAVAILABLE_NOTE);
+    } else if (org.status === 'available') {
+      orgTodos = tagTodos(org.cards, 'org', seen);
+      orgTruncated = org.truncated;
+    }
+
+    const result: DingtalkTodoListResult = {
+      approvals,
+      appTodos,
+      notes,
+      truncated: Boolean(appPage.nextToken) || orgTruncated,
+    };
+    if (orgTodos) result.orgTodos = orgTodos;
+    mergedTodoCache.set(cacheKey, { expiresAt: Date.now() + MERGED_TODO_CACHE_MS, value: result });
+    return result;
   };
 
   createTodo = async (input: DingtalkTodoCreateInput): Promise<DingtalkTodoCard> => {
@@ -334,6 +581,7 @@ export class DingtalkTodoService {
     const card = mapTodoCard(created);
     if (!card) return failWorkspace('DINGTALK_UNAVAILABLE');
     this.rememberTodo(card);
+    invalidateMergedCache(this.userId);
     await this.audit('create', card.taskId, card.subject);
     return card;
   };
@@ -373,6 +621,7 @@ export class DingtalkTodoService {
       ...(dueTime !== undefined ? { dueTime } : {}),
     });
     const subject = patched?.subject ?? input.subject ?? this.findCachedTodo(input.taskId)?.subject;
+    invalidateMergedCache(this.userId);
     await this.audit('update', input.taskId, input.subject);
     return { ok: true, subject, taskId: input.taskId };
   };
@@ -391,6 +640,7 @@ export class DingtalkTodoService {
     });
     const patched = this.patchCachedTodo(input.taskId, { done: true });
     const subject = patched?.subject ?? this.findCachedTodo(input.taskId)?.subject;
+    invalidateMergedCache(this.userId);
     await this.audit('complete', input.taskId);
     return { ok: true, subject, taskId: input.taskId };
   };
@@ -408,6 +658,7 @@ export class DingtalkTodoService {
     });
     const subject = this.findCachedTodo(input.taskId)?.subject;
     this.forgetTodo(input.taskId);
+    invalidateMergedCache(this.userId);
     await this.audit('delete', input.taskId);
     return { ok: true, subject, taskId: input.taskId };
   };

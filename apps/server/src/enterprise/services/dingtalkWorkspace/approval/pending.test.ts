@@ -39,6 +39,7 @@ const {
   invalidatePendingCaches,
   listInitiatedApprovals,
   listPendingApprovals,
+  loadVisibleTemplatesCached,
   resetApprovalListCacheForTest,
   setApprovalScanTimeBudgetForTest,
 } = await import('./pending');
@@ -133,11 +134,25 @@ describe('pending listing', () => {
     expect(result.rows[0].processName).toBe('请假');
   });
 
-  it('caches pending results for 60s', async () => {
+  it('caches pending results for 5 minutes and rescans when refresh is set', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
     mockListPremium.mockResolvedValue({ hasMore: false, list: [] });
     await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    await vi.advanceTimersByTimeAsync(60_001);
     await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
     expect(mockListPremium).toHaveBeenCalledTimes(1);
+    await listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListPremium).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListPremium).toHaveBeenCalledTimes(3);
   });
 
   it('lists initiated instances with originator filter', async () => {
@@ -483,25 +498,12 @@ describe('pending listing', () => {
     expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
   });
 
-  it('expires a complete shared sweep after 60s so a higher todo count is rescanned', async () => {
+  it('keeps an identical pending scan for 5 minutes unless refresh is set', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
     mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
     mockCountPending.mockResolvedValue(1);
     mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
-    mockGetDetail.mockResolvedValue({
-      createTime: '2026-01-01T00:00Z',
-      formComponentValues: [],
-      originatorUserId: 'other',
-      processInstanceId: 'inst-1',
-      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
-      title: 'title-inst-1',
-    });
-    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
-    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(60_001);
-    mockCountPending.mockResolvedValue(2);
-    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1', 'inst-2'], truncated: false });
     mockGetDetail.mockImplementation(async (id: string) => ({
       createTime: '2026-01-01T00:00Z',
       formComponentValues: [],
@@ -510,11 +512,25 @@ describe('pending listing', () => {
       tasks: [{ status: 'RUNNING', taskId: `t-${id}`, userId: 'me' }],
       title: `title-${id}`,
     }));
-    const result = await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_001);
+    mockCountPending.mockResolvedValue(2);
+    const cached = await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(cached.rows).toHaveLength(1);
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1', 'inst-2'], truncated: false });
+    const refreshed = await listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
     expect(mockListInstanceIds.mock.calls.length).toBeGreaterThan(1);
-    expect(result.rows).toHaveLength(2);
-    expect(result.truncated).toBe(false);
-    expect(result.incomplete).toBeUndefined();
+    expect(refreshed.rows).toHaveLength(2);
+    expect(refreshed.truncated).toBe(false);
+    expect(refreshed.incomplete).toBeUndefined();
   });
 
   it('invalidatePendingCaches drops the per-user pending result so the next list refetches', async () => {
@@ -596,5 +612,191 @@ describe('pending listing', () => {
   it('invalidatePendingCaches never throws', () => {
     expect(() => invalidatePendingCaches('')).not.toThrow();
     expect(() => invalidatePendingCaches('user-1')).not.toThrow();
+  });
+
+  it('does not reuse a pending result across DingTalk staff ids', async () => {
+    mockListPremium.mockResolvedValue({ hasMore: false, list: [] });
+    await listPendingApprovals({ db, staffId: 'staff-a', templates, userId: 'user-1' });
+    await listPendingApprovals({ db, staffId: 'staff-b', templates, userId: 'user-1' });
+    expect(mockListPremium).toHaveBeenCalledTimes(2);
+    await listPendingApprovals({ db, staffId: 'staff-a', templates, userId: 'user-1' });
+    expect(mockListPremium).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a shared sweep across DingTalk staff ids', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'staff-a',
+      processInstanceId: 'inst-1',
+      status: 'RUNNING',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'staff-a' }],
+      title: 'title-inst-1',
+    });
+    await listPendingApprovals({ db, staffId: 'staff-a', templates, userId: 'user-1' });
+    await listInitiatedApprovals({
+      db,
+      staffId: 'staff-a',
+      status: 'RUNNING',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    await listInitiatedApprovals({
+      db,
+      staffId: 'staff-b',
+      status: 'RUNNING',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps 我发起的 for 1 minute while 待我审批 stays cached for 5', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockCountPending.mockResolvedValue(1);
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'me',
+      processInstanceId: 'inst-1',
+      status: 'RUNNING',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    await listInitiatedApprovals({
+      db,
+      staffId: 'me',
+      status: 'RUNNING',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    await listInitiatedApprovals({
+      db,
+      staffId: 'me',
+      status: 'RUNNING',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys visible templates by staff id and bypasses them on refresh', async () => {
+    mockListTemplates
+      .mockResolvedValueOnce([{ name: '请假', processCode: 'A' }])
+      .mockResolvedValue([{ name: '报销', processCode: 'B' }]);
+    const first = await loadVisibleTemplatesCached('user-1', 'staff-a', 60_000);
+    const again = await loadVisibleTemplatesCached('user-1', 'staff-a', 60_000);
+    expect(again).toEqual(first);
+    expect(mockListTemplates).toHaveBeenCalledTimes(1);
+
+    const other = await loadVisibleTemplatesCached('user-1', 'staff-b', 60_000);
+    expect(other[0]?.processCode).toBe('B');
+    expect(mockListTemplates).toHaveBeenCalledTimes(2);
+
+    const refreshed = await loadVisibleTemplatesCached('user-1', 'staff-a', 60_000, true);
+    expect(refreshed[0]?.processCode).toBe('B');
+    expect(mockListTemplates).toHaveBeenCalledTimes(3);
+    expect(mockListTemplates).toHaveBeenLastCalledWith('staff-a');
+  });
+
+  it('starts a fresh sweep on refresh instead of joining one already running', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockCountPending.mockResolvedValue(1);
+    let releaseFirst: (value: { ids: string[]; truncated: boolean }) => void = () => {};
+    const firstGate = new Promise<{ ids: string[]; truncated: boolean }>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    mockListInstanceIds.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return firstGate;
+      return Promise.resolve({ ids: ['inst-2'], truncated: false });
+    });
+    mockGetDetail.mockImplementation(async (id: string) => ({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: id,
+      tasks: [{ status: 'RUNNING', taskId: `t-${id}`, userId: 'me' }],
+      title: `title-${id}`,
+    }));
+
+    const first = listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    await vi.waitFor(() => expect(mockListInstanceIds).toHaveBeenCalledTimes(1));
+    const refreshed = listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    try {
+      await vi.waitFor(() => expect(mockListInstanceIds).toHaveBeenCalledTimes(2));
+    } finally {
+      releaseFirst({ ids: ['inst-1'], truncated: false });
+    }
+
+    const [firstResult, refreshedResult] = await Promise.all([first, refreshed]);
+    expect(firstResult.rows.map((row) => row.processInstanceId)).toEqual(['inst-1']);
+    expect(refreshedResult.rows.map((row) => row.processInstanceId)).toEqual(['inst-2']);
+
+    const cached = await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(cached.rows.map((row) => row.processInstanceId)).toEqual(['inst-2']);
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('single-flights concurrent refreshes for the same user and staff', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockCountPending.mockResolvedValue(1);
+    let release: (value: { ids: string[]; truncated: boolean }) => void = () => {};
+    const gate = new Promise<{ ids: string[]; truncated: boolean }>((resolve) => {
+      release = resolve;
+    });
+    mockListInstanceIds.mockImplementation(() => gate);
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+
+    const first = listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    await vi.waitFor(() => expect(mockListInstanceIds).toHaveBeenCalledTimes(1));
+    const second = listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    release({ ids: ['inst-1'], truncated: false });
+    const [left, right] = await Promise.all([first, second]);
+    expect(left.rows).toHaveLength(1);
+    expect(right.rows).toHaveLength(1);
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
   });
 });

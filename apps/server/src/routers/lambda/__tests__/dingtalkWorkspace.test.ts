@@ -59,6 +59,17 @@ describe('dingtalkWorkspaceRouter', () => {
     expect(mockCalendar.listMeetingRooms).toHaveBeenCalled();
   });
 
+  it('forwards listTodos refresh', async () => {
+    mockTodo.listTodos.mockResolvedValueOnce({
+      appTodos: [],
+      approvals: { count: 0, items: [], truncated: false },
+      notes: [],
+      truncated: false,
+    });
+    await createCaller().todo.listTodos({ done: false, refresh: true });
+    expect(mockTodo.listTodos).toHaveBeenCalledWith({ done: false, refresh: true });
+  });
+
   it('preview dispatches todo writes to the todo service', async () => {
     mockTodo.preview.mockResolvedValueOnce({
       actingAs: { deptPath: '', name: '张三' },

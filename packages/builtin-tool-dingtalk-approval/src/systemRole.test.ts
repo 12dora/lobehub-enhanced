@@ -66,7 +66,9 @@ describe('dingtalk approval systemRole', () => {
   it('tells the model that standard-edition list scans are slow and may be incomplete', () => {
     expect(systemPrompt).toContain('Without DingTalk OA Premium');
     expect(systemPrompt).toContain('listPendingApprovals and listMyApplications');
-    expect(systemPrompt).toContain('15-25 seconds');
+    expect(systemPrompt).toContain('about 60 seconds');
+    expect(systemPrompt).toContain('about 5 minutes');
+    expect(systemPrompt).toContain('refresh:true only when the user asks to refresh');
     expect(systemPrompt).toContain('do not repeat it in the same turn');
     expect(systemPrompt).toContain('marked incomplete');
   });
@@ -91,8 +93,15 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('流水号');
     expect(systemPrompt).toContain('DingTalk generates the serial number');
     expect(systemPrompt).toContain('≥2 options');
-    expect(systemPrompt).toContain('≤ 25 fields');
-    expect(systemPrompt).toContain('more than about 12 fields');
-    expect(systemPrompt).toContain('ask the user to confirm BEFORE calling saveTemplate');
+    expect(systemPrompt).toContain('TableField');
+    expect(systemPrompt).toContain('直接创建');
+    expect(systemPrompt).toContain('confirm card is the final gate');
+    expect(systemPrompt).toContain('关联立项单号');
+    expect(systemPrompt).toContain('formulas are not available via API');
+    expect(systemPrompt).toContain('default person and read-only are not supported');
+    expect(systemPrompt).toContain('lobe-agent-browser');
+    expect(systemPrompt).toContain('发起人范围');
+    expect(systemPrompt).not.toContain('≤ 25 fields');
+    expect(systemPrompt).not.toContain('more than about 12 fields');
   });
 });

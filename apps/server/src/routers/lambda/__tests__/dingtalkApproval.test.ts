@@ -319,6 +319,45 @@ describe('dingtalkApprovalRouter', () => {
     });
   });
 
+  it('forwards saveTemplate table columns and listPending refresh', async () => {
+    mockSaveTemplate.mockResolvedValueOnce({ notes: [], processCode: 'PROC' });
+    mockListPending.mockResolvedValueOnce({ items: [], truncated: false });
+    const caller = createCaller();
+    await caller.saveTemplate({
+      fields: [
+        {
+          children: [
+            { componentType: 'TextField', label: '名称' },
+            { componentType: 'NumberField', label: '数量', required: true },
+          ],
+          componentType: 'TableField',
+          label: '明细',
+        },
+      ],
+      name: '项目结案申请',
+    });
+    await caller.listPendingApprovals({ refresh: true });
+    expect(mockSaveTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fields: [
+          expect.objectContaining({
+            children: [
+              expect.objectContaining({ componentType: 'TextField', label: '名称' }),
+              expect.objectContaining({
+                componentType: 'NumberField',
+                label: '数量',
+                required: true,
+              }),
+            ],
+            componentType: 'TableField',
+            label: '明细',
+          }),
+        ],
+      }),
+    );
+    expect(mockListPending).toHaveBeenCalledWith({ refresh: true });
+  });
+
   it('rejects listPendingApprovals limit above 50', async () => {
     await expect(createCaller().listPendingApprovals({ limit: 300 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',

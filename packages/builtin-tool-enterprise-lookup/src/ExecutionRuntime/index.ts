@@ -35,7 +35,7 @@ export const ENTERPRISE_LOOKUP_INTERNAL_TOOL_CONTENT =
  * payload so the model copies it instead of a distant system-prompt rule.
  */
 export const ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER =
-  '呈现：短字段用四列表格（| 项目 | 内容 | 项目 | 内容 |）左右配对；经营范围/地址/简介等长值（>~30字）放该节配对行之后，用两列表（| 项目 | 内容 |）或一行 **字段**:值；不要半空行（末行除外）。';
+  '呈现：网页端用表格；钉钉对话用每行一项。网页端短字段用四列表格（| 项目 | 内容 | 项目 | 内容 |）左右配对；经营范围/地址/简介等长值（>~30字）放该节配对行之后，用两列表（| 项目 | 内容 |）或一行 **字段**:值；不要半空行（末行除外）。钉钉对话没有表格，改用每行一项：**键**：值。';
 
 const KNOWN_ERROR_CODES = new Set([
   'ENTERPRISE_LOOKUP_CAPABILITY_UNKNOWN',
@@ -334,7 +334,7 @@ export class EnterpriseLookupExecutionRuntime {
       let body: string;
       if (match === 'unique') {
         body = [
-          storedProfile?.text ? '已锚定唯一主体，工商基本信息如下。' : '已锚定唯一主体。',
+          storedProfile?.text ? '已锚定唯一主体，查询结果如下。' : '已锚定唯一主体。',
           note,
           storedProfile?.text,
         ]

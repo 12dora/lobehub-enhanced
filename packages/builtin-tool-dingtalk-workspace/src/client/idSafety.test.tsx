@@ -176,6 +176,20 @@ const RENDER_CASES: readonly RenderCase[] = [
     state: { count: 1, items: [{ isDone: false, subject: TODO_ID, taskId: TODO_ID }] },
   },
   {
+    api: DingtalkWorkspaceApiName.listTodos,
+    expected: '未命名待办',
+    name: 'merged todo list whose assistant todo subject is still the DingTalk todo id',
+    render: TodoList,
+    state: {
+      appTodos: [{ done: false, isDone: false, subject: TODO_ID, taskId: TODO_ID }],
+      approvals: {
+        count: 1,
+        items: [{ originatorName: STAFF_TOKEN, taskId: TASK_ID, title: STAFF_TOKEN }],
+      },
+      notes: [],
+    },
+  },
+  {
     api: DingtalkWorkspaceApiName.listEvents,
     expected: '未命名日程',
     name: 'event list whose rows carry no summary',

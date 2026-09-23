@@ -18,6 +18,7 @@ import {
   type ApprovalScanIncompleteReason,
   DEFAULT_LIST_LIMIT,
   INCOMPLETE_CACHE_TTL_MS,
+  INITIATED_CACHE_TTL_MS,
   type InitiatedApprovalRow,
   INSTANCE_DETAIL_CONCURRENCY,
   INSTANCE_IDS_QUERY_CONCURRENCY,
@@ -29,6 +30,7 @@ import {
   type ProcessInstanceDetail,
   SCAN_TIME_BUDGET_MS,
   SUMMARY_FIELD_LIMIT,
+  SWEEP_CACHE_TTL_MS,
   type VisibleTemplate,
 } from './types';
 
@@ -50,7 +52,23 @@ const cacheSet = <T>(key: string, value: T, ttlMs: number, now: number): void =>
   cache.set(key, { expiresAt: now + ttlMs, value });
 };
 
-const sweepKeyFor = (userId: string): string => `${userId}:sweep`;
+/** AIHub user plus the verified DingTalk staff id. Identity changes must not share rows. */
+const scopeOf = (userId: string, staffId: string): string => `${userId}:${staffId}`;
+
+const scopedKey = (userId: string, staffId: string, suffix: string): string =>
+  `${scopeOf(userId, staffId)}:${suffix}`;
+
+const sweepKeyFor = (userId: string, staffId: string): string =>
+  scopedKey(userId, staffId, 'sweep');
+
+const keyBelongsToUser = (key: string, userId: string): boolean =>
+  key.startsWith(`${userId}:`) || key.includes(`:${userId}:`);
+
+const dropMapKeysForUser = <T>(map: Map<string, T>, userId: string): void => {
+  for (const key of map.keys()) {
+    if (keyBelongsToUser(key, userId)) map.delete(key);
+  }
+};
 
 type SharedSweepResult = {
   details: Array<{ detail: ProcessInstanceDetail; processCode: string }>;
@@ -62,10 +80,35 @@ type SweepSession = {
   wantInitiated: boolean;
 };
 
-const sweepInflight = new Map<string, Promise<SharedSweepResult>>();
-const sweepSessions = new Map<string, SweepSession>();
+type SweepFlight = {
+  epoch: number;
+  promise: Promise<SharedSweepResult>;
+  /** True when this flight was started by refresh. Concurrent refreshes share it. */
+  refresh: boolean;
+  session: SweepSession;
+};
+
+const sweepFlights = new Map<string, SweepFlight>();
+/** Latest sweep epoch per user+staff. An older flight must not cache over a newer one. */
+const sweepEpochs = new Map<string, number>();
+/**
+ * Pending-list write token per user+staff. refresh bumps it so an in-flight
+ * list that started earlier cannot write its rows back over the refresh.
+ */
+const pendingWriteTokens = new Map<string, number>();
 /** Bumped on invalidate so an in-flight list/sweep cannot write a stale result back. */
 const cacheGenerations = new Map<string, number>();
+
+const beginPendingWrite = (scope: string, refresh: boolean): number => {
+  const current = pendingWriteTokens.get(scope) ?? 0;
+  if (!refresh) return current;
+  const next = current + 1;
+  pendingWriteTokens.set(scope, next);
+  return next;
+};
+
+const pendingWriteIsCurrent = (scope: string, token: number): boolean =>
+  (pendingWriteTokens.get(scope) ?? 0) === token;
 
 const cacheGenerationOf = (userId: string): number => cacheGenerations.get(userId) ?? 0;
 
@@ -87,12 +130,10 @@ const cacheSetIfCurrent = <T>(
 
 const dropUserPendingCaches = (userId: string): void => {
   bumpCacheGeneration(userId);
-  const prefix = `${userId}:`;
-  for (const key of cache.keys()) {
-    if (key.startsWith(prefix) || key.includes(`:${userId}:`)) cache.delete(key);
-  }
-  sweepInflight.delete(sweepKeyFor(userId));
-  sweepSessions.delete(sweepKeyFor(userId));
+  dropMapKeysForUser(cache, userId);
+  dropMapKeysForUser(sweepFlights, userId);
+  dropMapKeysForUser(sweepEpochs, userId);
+  dropMapKeysForUser(pendingWriteTokens, userId);
 };
 
 /**
@@ -113,8 +154,9 @@ export const invalidateApprovalListCache = (userId?: string): void => {
   try {
     if (!userId?.trim()) {
       cache.clear();
-      sweepInflight.clear();
-      sweepSessions.clear();
+      sweepFlights.clear();
+      sweepEpochs.clear();
+      pendingWriteTokens.clear();
       cacheGenerations.clear();
       return;
     }
@@ -128,8 +170,9 @@ let scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
 
 export const resetApprovalListCacheForTest = (): void => {
   cache.clear();
-  sweepInflight.clear();
-  sweepSessions.clear();
+  sweepFlights.clear();
+  sweepEpochs.clear();
+  pendingWriteTokens.clear();
   cacheGenerations.clear();
   scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
 };
@@ -235,9 +278,6 @@ const sortTemplatesForScan = (templates: VisibleTemplate[]): VisibleTemplate[] =
   );
 };
 
-const cacheTtlMs = (result: ApprovalListResult<unknown>): number =>
-  result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS;
-
 const countRunningTasksFor = (
   details: Array<{ detail: ProcessInstanceDetail } | undefined>,
   staffId: string,
@@ -338,52 +378,64 @@ const runSharedSweep = async (
 
 const loadSharedSweep = async (input: {
   pendingTarget?: number;
+  refresh?: boolean;
   staffId: string;
   templates: VisibleTemplate[];
   userId: string;
   wantInitiated?: boolean;
 }): Promise<SharedSweepResult> => {
   const now = Date.now();
-  const key = sweepKeyFor(input.userId);
-  const cached = cacheGet<SharedSweepResult>(key, now);
-  if (cached) return cached;
-
-  const existing = sweepInflight.get(key);
-  const session = sweepSessions.get(key);
-  if (existing && session) {
-    if (input.pendingTarget != null) {
-      session.pendingTarget =
-        session.pendingTarget == null
-          ? input.pendingTarget
-          : Math.max(session.pendingTarget, input.pendingTarget);
-    }
-    if (input.wantInitiated) session.wantInitiated = true;
-    return existing;
+  const key = sweepKeyFor(input.userId, input.staffId);
+  if (!input.refresh) {
+    const cached = cacheGet<SharedSweepResult>(key, now);
+    if (cached) return cached;
   }
 
+  const existing = sweepFlights.get(key);
+  // Refresh starts a new flight instead of joining one that began earlier.
+  // Concurrent refreshes for the same user and staff still share one flight.
+  const joinInFlight = existing && (!input.refresh || existing.refresh);
+  if (existing && joinInFlight) {
+    if (input.pendingTarget != null) {
+      existing.session.pendingTarget =
+        existing.session.pendingTarget == null
+          ? input.pendingTarget
+          : Math.max(existing.session.pendingTarget, input.pendingTarget);
+    }
+    if (input.wantInitiated) existing.session.wantInitiated = true;
+    return existing.promise;
+  }
+
+  const epoch = (sweepEpochs.get(key) ?? 0) + 1;
+  sweepEpochs.set(key, epoch);
   const nextSession: SweepSession = {
     pendingTarget: input.pendingTarget,
     wantInitiated: input.wantInitiated === true,
   };
-  sweepSessions.set(key, nextSession);
   const generation = cacheGenerationOf(input.userId);
   const promise = runSharedSweep(input.staffId, input.templates, nextSession)
     .then((result) => {
+      if (sweepEpochs.get(key) !== epoch) return result;
       cacheSetIfCurrent(
         input.userId,
         generation,
         key,
         result,
-        result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS,
+        result.incomplete ? INCOMPLETE_CACHE_TTL_MS : SWEEP_CACHE_TTL_MS,
         Date.now(),
       );
       return result;
     })
     .finally(() => {
-      sweepInflight.delete(key);
-      sweepSessions.delete(key);
+      const current = sweepFlights.get(key);
+      if (current?.epoch === epoch) sweepFlights.delete(key);
     });
-  sweepInflight.set(key, promise);
+  sweepFlights.set(key, {
+    epoch,
+    promise,
+    refresh: input.refresh === true,
+    session: nextSession,
+  });
   return promise;
 };
 
@@ -545,9 +597,11 @@ const listPendingByScan = async (
   limit: number,
   userId: string,
   pendingTarget?: number,
+  refresh = false,
 ): Promise<ApprovalListResult<PendingApprovalRow>> => {
   const sweep = await loadSharedSweep({
     pendingTarget,
+    refresh,
     staffId,
     templates,
     userId,
@@ -607,16 +661,25 @@ const enrichPremiumRows = async (
 export const listPendingApprovals = async (input: {
   db: LobeChatDatabase;
   limit?: number;
+  refresh?: boolean;
   staffId: string;
   templates: VisibleTemplate[];
   userId: string;
 }): Promise<ApprovalListResult<PendingApprovalRow>> => {
   const limit = clampLimit(input.limit);
   const now = Date.now();
-  const cacheKey = `${input.userId}:pending:${limit}`;
-  const cached = cacheGet<ApprovalListResult<PendingApprovalRow>>(cacheKey, now);
-  if (cached) return cached;
+  const cacheKey = scopedKey(input.userId, input.staffId, `pending:${limit}`);
+  if (!input.refresh) {
+    const cached = cacheGet<ApprovalListResult<PendingApprovalRow>>(cacheKey, now);
+    if (cached) return cached;
+  }
+  const scope = scopeOf(input.userId, input.staffId);
+  const writeToken = beginPendingWrite(scope, input.refresh === true);
   const generation = cacheGenerationOf(input.userId);
+  const storePending = (value: ApprovalListResult<PendingApprovalRow>, ttlMs: number): void => {
+    if (!pendingWriteIsCurrent(scope, writeToken)) return;
+    cacheSetIfCurrent(input.userId, generation, cacheKey, value, ttlMs, Date.now());
+  };
 
   let pendingTarget: number | undefined;
   try {
@@ -626,7 +689,7 @@ export const listPendingApprovals = async (input: {
   }
   if (pendingTarget === 0) {
     const empty: ApprovalListResult<PendingApprovalRow> = { rows: [], truncated: false };
-    cacheSetIfCurrent(input.userId, generation, cacheKey, empty, PENDING_CACHE_TTL_MS, Date.now());
+    storePending(empty, PENDING_CACHE_TTL_MS);
     return empty;
   }
 
@@ -657,10 +720,11 @@ export const listPendingApprovals = async (input: {
       limit,
       input.userId,
       pendingTarget,
+      input.refresh === true,
     );
   }
 
-  cacheSetIfCurrent(input.userId, generation, cacheKey, result, cacheTtlMs(result), Date.now());
+  storePending(result, result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS);
   return result;
 };
 
@@ -757,7 +821,11 @@ export const listInitiatedApprovals = async (input: {
     q: input.q,
   });
   const now = Date.now();
-  const cacheKey = `${input.userId}:initiated:${input.status ?? 'all'}:${input.processCode ?? ''}:${input.q ?? ''}:${limit}`;
+  const cacheKey = scopedKey(
+    input.userId,
+    input.staffId,
+    `initiated:${input.status ?? 'all'}:${input.processCode ?? ''}:${input.q ?? ''}:${limit}`,
+  );
   const cached = cacheGet<ApprovalListResult<InitiatedApprovalRow>>(cacheKey, now);
   if (cached) return cached;
   const generation = cacheGenerationOf(input.userId);
@@ -797,7 +865,14 @@ export const listInitiatedApprovals = async (input: {
     });
   }
 
-  cacheSetIfCurrent(input.userId, generation, cacheKey, result, cacheTtlMs(result), Date.now());
+  cacheSetIfCurrent(
+    input.userId,
+    generation,
+    cacheKey,
+    result,
+    result.incomplete ? INCOMPLETE_CACHE_TTL_MS : INITIATED_CACHE_TTL_MS,
+    Date.now(),
+  );
   return result;
 };
 
@@ -805,11 +880,14 @@ export const loadVisibleTemplatesCached = async (
   userId: string,
   staffId: string,
   ttlMs: number,
+  refresh = false,
 ): Promise<VisibleTemplate[]> => {
   const now = Date.now();
-  const cacheKey = `${userId}:templates`;
-  const cached = cacheGet<VisibleTemplate[]>(cacheKey, now);
-  if (cached) return cached;
+  const cacheKey = scopedKey(userId, staffId, 'templates');
+  if (!refresh) {
+    const cached = cacheGet<VisibleTemplate[]>(cacheKey, now);
+    if (cached) return cached;
+  }
   const generation = cacheGenerationOf(userId);
   const templates = await listVisibleTemplates(staffId);
   cacheSetIfCurrent(userId, generation, cacheKey, templates, ttlMs, now);

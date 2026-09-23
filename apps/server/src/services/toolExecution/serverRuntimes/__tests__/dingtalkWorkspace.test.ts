@@ -119,6 +119,10 @@ describe('dingtalkWorkspaceRuntime.factory', () => {
     await runtime.createTodo({ subject: '交周报' });
     expect(mockTodoCreate).toHaveBeenCalledWith({ subject: '交周报' });
 
+    mockTodoList.mockResolvedValue({ appTodos: [], notes: [] });
+    await runtime.listTodos({ done: false, refresh: true });
+    expect(mockTodoList).toHaveBeenCalledWith({ done: false, refresh: true });
+
     await runtime.searchDirectory({ q: '陈柠' });
     expect(mockSearchDirectory).toHaveBeenCalledWith('陈柠', undefined);
 

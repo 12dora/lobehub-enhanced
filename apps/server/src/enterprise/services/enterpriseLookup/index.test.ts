@@ -54,6 +54,7 @@ const {
   pickUniqueCompanyCandidate,
   resetEnterpriseLookupHealthForTest,
   shanghaiUsageDate,
+  stripIdleRiskDrilldown,
 } = await import('./index');
 
 const qccConfig = {
@@ -132,6 +133,53 @@ describe('EnterpriseLookupService', () => {
     expect(mockCallProviderTool).not.toHaveBeenCalled();
     expect(mockReserve).toHaveBeenCalledWith('user-1', shanghaiUsageDate(), 'qcc', 50);
     expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it('strips idle drill-down text only on a risk-scan capability', async () => {
+    mockListProviderTools.mockImplementation(async (_provider: string, category: string) => {
+      if (category === 'risk') {
+        return [
+          {
+            description: 'scan',
+            inputSchema: { type: 'object' },
+            name: 'get_company_risk_scan',
+          },
+          {
+            description: 'overview',
+            inputSchema: { type: 'object' },
+            name: 'get_risk_overview',
+          },
+        ];
+      }
+      return [{ description: 'search', inputSchema: { type: 'object' }, name: 'search' }];
+    });
+    mockCallProviderTool.mockImplementation(
+      async (_provider, _category, _key, capability: string) => {
+        const text =
+          capability === 'search'
+            ? '失信 0\n被执行人 0\n请调用 get_dishonest_info 查看明细'
+            : capability === 'get_risk_overview'
+              ? '失信 0\n被执行人 0\n请调用 get_dishonest_info 查看明细'
+              : '失信 0\n司法案件 4\n请调用 get_dishonest_info 查看明细';
+        return { content: [{ text, type: 'text' }], isError: false };
+      },
+    );
+
+    const search = await service().query({ arguments: { keyword: '华为' }, capability: 'search' });
+    expect(search.content).toContain('失信 0');
+    expect(search.content).toContain('请调用');
+
+    const mixed = await service().query({
+      arguments: { searchKey: '华为' },
+      capability: 'get_company_risk_scan',
+    });
+    expect(mixed.content).toBe('失信 0\n司法案件 4\n请调用 get_dishonest_info 查看明细');
+
+    const idle = await service().query({
+      arguments: { company_name: '华为' },
+      capability: 'get_risk_overview',
+    });
+    expect(idle.content).toBe('失信 0\n被执行人 0');
   });
 
   it('query reserves usage and writes a redacted audit event only after success', async () => {
@@ -441,6 +489,35 @@ describe('parseEnterpriseLookupCompanyCandidates', () => {
   });
 });
 
+describe('stripIdleRiskDrilldown', () => {
+  it('removes only the instruction line when every reported count is zero', () => {
+    const text = stripIdleRiskDrilldown('失信 0\n被执行人 0\n请调用 get_dishonest_info 查看明细');
+    expect(text).toBe('失信 0\n被执行人 0');
+  });
+
+  it('keeps the instruction when a factor is non-zero', () => {
+    const text = '失信 2\n被执行人 0\n请调用 get_dishonest_info 查看明细';
+    expect(stripIdleRiskDrilldown(text)).toBe(text);
+  });
+
+  it('keeps the instruction when counts are mixed, including 司法案件', () => {
+    const text = '失信 0\n司法案件 4\n请调用 get_dishonest_info 查看明细';
+    expect(stripIdleRiskDrilldown(text)).toBe(text);
+  });
+
+  it('keeps the instruction when a reported count is not a number', () => {
+    const text = '失信 0\n司法案件 未知\n请调用 get_dishonest_info 查看明细';
+    expect(stripIdleRiskDrilldown(text)).toBe(text);
+    const colon = '失信：0\n司法案件：--\n请调用 get_dishonest_info';
+    expect(stripIdleRiskDrilldown(colon)).toBe(colon);
+  });
+
+  it('does not alter a data line that also mentions a detail tool', () => {
+    const text = '失信 0，请调用 get_dishonest_info 查看明细\n被执行人 0';
+    expect(stripIdleRiskDrilldown(text)).toBe(text);
+  });
+});
+
 describe('EnterpriseLookupService.companyProfile', () => {
   const service = () => new EnterpriseLookupService({} as never, 'user-1');
 
@@ -745,6 +822,195 @@ describe('EnterpriseLookupService.companyProfile', () => {
     expect(mockCallProviderTool).toHaveBeenCalledTimes(1);
     expect(mockReserve).toHaveBeenCalledTimes(2);
     expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects ipr because it is not a companyProfile aspect', async () => {
+    await expect(
+      service().companyProfile({ aspects: ['ipr' as 'basic'], name: '华为技术有限公司' }),
+    ).rejects.toMatchObject({ code: ENTERPRISE_LOOKUP_INVALID_ARGUMENTS });
+    expect(mockCallProviderTool).not.toHaveBeenCalled();
+  });
+
+  it('fetches shareholders, key personnel, and one risk scan inside companyProfile', async () => {
+    mockListProviderTools.mockImplementation(async (_provider: string, category: string) => {
+      if (category === 'risk') {
+        return [
+          {
+            description: 'scan',
+            inputSchema: { properties: { searchKey: { type: 'string' } }, type: 'object' },
+            name: 'get_company_risk_scan',
+          },
+        ];
+      }
+      return [
+        { description: 'search', inputSchema: { type: 'object' }, name: 'get_company_by_query' },
+        {
+          description: 'basic',
+          inputSchema: { type: 'object' },
+          name: 'get_company_registration_info',
+        },
+        {
+          description: 'holders',
+          inputSchema: { properties: { searchKey: { type: 'string' } }, type: 'object' },
+          name: 'get_shareholder_info',
+        },
+        {
+          description: 'people',
+          inputSchema: { properties: { searchKey: { type: 'string' } }, type: 'object' },
+          name: 'get_key_personnel',
+        },
+      ];
+    });
+    mockCallProviderTool.mockImplementation(async (_provider, _category, _key, capability) => {
+      if (capability === 'get_company_by_query') {
+        return {
+          content: [
+            {
+              text: JSON.stringify({
+                Result: {
+                  Data: [
+                    {
+                      CreditCode: '914403001922038216',
+                      Name: '华为技术有限公司',
+                      OperName: '赵明路',
+                      Status: '存续',
+                    },
+                  ],
+                },
+              }),
+              type: 'text',
+            },
+          ],
+          isError: false,
+        };
+      }
+      if (capability === 'get_shareholder_info') {
+        return { content: [{ text: '股东 赵明路 90%', type: 'text' }], isError: false };
+      }
+      if (capability === 'get_key_personnel') {
+        return { content: [{ text: '主要人员 赵明路 董事长', type: 'text' }], isError: false };
+      }
+      if (capability === 'get_company_risk_scan') {
+        return {
+          content: [
+            {
+              text: '失信 0\n被执行人 0\n请调用 get_dishonest_info 查看每条明细',
+              type: 'text',
+            },
+          ],
+          isError: false,
+        };
+      }
+      return {
+        content: [{ text: '{"Name":"华为技术有限公司"}', type: 'text' }],
+        isError: false,
+      };
+    });
+
+    const result = await service().companyProfile({
+      aspects: ['basic', 'people', 'risk'],
+      name: '华为技术有限公司',
+    });
+    expect(result.match).toBe('unique');
+    expect(result.profile).toContain('股东');
+    expect(result.profile).toContain('赵明路 90%');
+    expect(result.profile).toContain('主要人员');
+    expect(result.profile).toContain('失信 0');
+    expect(result.profile).not.toContain('请调用');
+    expect(mockCallProviderTool).toHaveBeenCalledTimes(5);
+    expect(mockReserve).toHaveBeenCalledTimes(5);
+    expect(mockCallProviderTool).toHaveBeenCalledWith(
+      'qcc',
+      'company',
+      'qk-secret',
+      'get_shareholder_info',
+      { searchKey: '914403001922038216' },
+    );
+    expect(mockCallProviderTool).toHaveBeenCalledWith(
+      'qcc',
+      'risk',
+      'qk-secret',
+      'get_company_risk_scan',
+      { searchKey: '914403001922038216' },
+    );
+  });
+
+  it('uses one Tianyancha people tool and get_risk_overview when the QCC names are absent', async () => {
+    mockListProviderTools.mockImplementation(async () => [
+      { description: 'search', inputSchema: { type: 'object' }, name: 'search_companies' },
+      {
+        description: 'basic',
+        inputSchema: { type: 'object' },
+        name: 'get_company_basic_profile',
+      },
+      {
+        description: 'people',
+        inputSchema: { properties: { company_name: { type: 'string' } }, type: 'object' },
+        name: 'get_company_people',
+      },
+      {
+        description: 'risk',
+        inputSchema: { properties: { company_name: { type: 'string' } }, type: 'object' },
+        name: 'get_risk_overview',
+      },
+    ]);
+    mockCallProviderTool.mockImplementation(async (_provider, _category, _key, capability) => {
+      if (capability === 'search_companies') {
+        return {
+          content: [
+            {
+              text: JSON.stringify({
+                items: [
+                  {
+                    creditCode: '91330600597214350R',
+                    legalPersonName: '邵国标',
+                    name: '浙江捷发科技股份有限公司',
+                    regStatus: '存续',
+                  },
+                ],
+              }),
+              type: 'text',
+            },
+          ],
+          isError: false,
+        };
+      }
+      if (capability === 'get_company_people') {
+        return { content: [{ text: '股东与高管 邵国标', type: 'text' }], isError: false };
+      }
+      if (capability === 'get_risk_overview') {
+        return {
+          content: [{ text: '失信 2\n请调用 get_dishonest_info', type: 'text' }],
+          isError: false,
+        };
+      }
+      return {
+        content: [{ text: '{"name":"浙江捷发科技股份有限公司"}', type: 'text' }],
+        isError: false,
+      };
+    });
+
+    const result = await service().companyProfile({
+      aspects: ['people', 'risk'],
+      name: '浙江捷发科技股份有限公司',
+      provider: 'tianyancha',
+    });
+    expect(result.profile).toContain('股东与主要人员');
+    expect(result.profile).toContain('请调用 get_dishonest_info');
+    expect(mockCallProviderTool).toHaveBeenCalledWith(
+      'tianyancha',
+      'default',
+      'tk-secret',
+      'get_company_people',
+      { company_name: '浙江捷发科技股份有限公司' },
+    );
+    expect(mockCallProviderTool).toHaveBeenCalledWith(
+      'tianyancha',
+      'default',
+      'tk-secret',
+      'get_risk_overview',
+      { company_name: '浙江捷发科技股份有限公司' },
+    );
   });
 
   it('still throws when the search itself hits the daily limit', async () => {

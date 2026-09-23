@@ -172,15 +172,20 @@ describe('DingtalkApprovalManifest', () => {
       'NumberField',
       'PhoneField',
       'StarRatingField',
+      'TableField',
       'TextareaField',
       'TextField',
       'TextNote',
     ]);
+    expect(componentType.enum).toContain('TableField');
     expect(componentType.enum).not.toContain('SeqNumberField');
     expect(componentType.enum).not.toContain('CalculateField');
     expect(componentType.enum).not.toContain('RelateField');
     expect(componentType.enum).not.toContain('RecipientAccountField');
-    expect(componentType.enum).not.toContain('TableField');
     expect(componentType.description).toContain('流水号');
+    const children = save?.parameters.properties.fields.items.properties.children;
+    expect(children.items.properties.componentType.enum).not.toContain('TableField');
+    expect(children.items.properties.componentType.enum).toContain('TextField');
+    expect(save?.parameters.properties.fields.description).toContain('关联立项单号');
   });
 });

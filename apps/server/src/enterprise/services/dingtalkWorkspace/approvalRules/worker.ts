@@ -13,6 +13,12 @@ import type { DingtalkApprovalRuleItem } from '@/database/schemas/dingtalkApprov
 import { dingtalkApprovalRules as approvalRulesTable } from '@/database/schemas/dingtalkApprovalRule';
 import { dingtalkUserDepartments } from '@/database/schemas/dingtalkDirectory';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
+import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
+import {
+  markWorkerFailed,
+  markWorkerStarted,
+  markWorkerTick,
+} from '@/server/enterprise/services/platformSystem/workerHeartbeat';
 
 import { AUDIT_ACTION, AUDIT_TARGET_TYPE } from '../../audit/auditActionCatalog';
 import { PlatformAuditService } from '../../platformAudit';
@@ -894,6 +900,7 @@ const tick = (deps: ApprovalRuleCycleDeps = {}): void => {
   if (!started) return;
   if (inflight) return;
   inflight = (async () => {
+    markWorkerTick('approval_worker', APPROVAL_RULE_SWEEP_INTERVAL_MS);
     const db = await getServerDB();
     return runApprovalRulesCycle(db, deps);
   })()
@@ -901,6 +908,8 @@ const tick = (deps: ApprovalRuleCycleDeps = {}): void => {
       console.error('[dingtalk-approval-rules] sweep failed', {
         errorClass: error instanceof Error ? error.name : 'UnknownError',
       });
+      markWorkerFailed('approval_worker', error);
+      void recordRuntimeError('approval_worker', error);
       return emptyResult();
     })
     .finally(() => {
@@ -921,6 +930,7 @@ export const ensureDingtalkApprovalRuleWorkerStarted = (deps: ApprovalRuleCycleD
   if (started) return;
   if (!isApprovalRuleWorkerRuntime()) return;
   started = true;
+  markWorkerStarted('approval_worker', APPROVAL_RULE_SWEEP_INTERVAL_MS);
   tick(deps);
   scheduleNext(deps);
 };

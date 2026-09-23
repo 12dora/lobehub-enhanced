@@ -19,6 +19,8 @@ export interface DingtalkTodoIdentity {
 
 export interface DingtalkTodoListInput {
   done?: boolean;
+  /** Bypass the 5-minute merged cache. Does not retry a remembered-unavailable org read. */
+  refresh?: boolean;
 }
 
 export interface DingtalkTodoCreateInput {
@@ -56,8 +58,42 @@ export interface DingtalkTodoCard {
   todoType?: string;
 }
 
+export type DingtalkMergedTodoSource = 'assistant' | 'org';
+
+export interface DingtalkMergedTodoCard extends DingtalkTodoCard {
+  source: DingtalkMergedTodoSource;
+}
+
+export interface DingtalkMergedApprovalItem {
+  /** 时间 */
+  createdAt?: string;
+  /** 发起人 */
+  originatorName?: string;
+  processInstanceId: string;
+  source: 'approval';
+  taskId: string;
+  title: string;
+}
+
+export interface DingtalkMergedApprovals {
+  count: number;
+  items: DingtalkMergedApprovalItem[];
+  truncated: boolean;
+}
+
+/**
+ * Shown to the model when organizations/tasks/query cannot be read.
+ * Relay once, in one sentence.
+ */
+export const ORG_TODO_UNAVAILABLE_NOTE =
+  '你在钉钉客户端里自己创建的待办，以及其他应用推送的待办，钉钉未向本系统开放读取（需专属钉钉的待办读权限），这里只包含：待我审批的流程、由本助手创建的待办。';
+
 export interface DingtalkTodoListResult {
-  items: DingtalkTodoCard[];
+  approvals: DingtalkMergedApprovals;
+  appTodos: DingtalkMergedTodoCard[];
+  notes: string[];
+  /** Present only when Custom.Todo.Read is available. Omitted when the gate is closed. */
+  orgTodos?: DingtalkMergedTodoCard[];
   truncated: boolean;
 }
 

@@ -171,4 +171,35 @@ describe('dingtalkApprovalRuntime.factory', () => {
       processCode: undefined,
     });
   });
+
+  it('forwards saveTemplate table columns', async () => {
+    mockSaveTemplate.mockResolvedValueOnce({ notes: [], processCode: 'PROC' });
+    const runtime = await dingtalkApprovalRuntime.factory({
+      serverDB: {},
+      userId: 'user-1',
+    } as any);
+
+    await runtime.saveTemplate({
+      fields: [
+        {
+          children: [{ componentType: 'TextField', label: '名称' }],
+          componentType: 'TableField',
+          label: '明细',
+        },
+      ],
+      name: '项目结案申请',
+    });
+
+    expect(mockSaveTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fields: [
+          expect.objectContaining({
+            children: [expect.objectContaining({ componentType: 'TextField', label: '名称' })],
+            componentType: 'TableField',
+            label: '明细',
+          }),
+        ],
+      }),
+    );
+  });
 });

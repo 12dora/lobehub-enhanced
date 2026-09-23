@@ -133,12 +133,12 @@ export interface EnterpriseLookupListCapabilitiesInput {
   provider?: EnterpriseLookupProvider;
 }
 
-export const COMPANY_PROFILE_ASPECTS = ['basic', 'ipr', 'people', 'risk'] as const;
+export const COMPANY_PROFILE_ASPECTS = ['basic', 'people', 'risk'] as const;
 
 export type CompanyProfileAspect = (typeof COMPANY_PROFILE_ASPECTS)[number];
 
 export const isCompanyProfileAspect = (value: unknown): value is CompanyProfileAspect =>
-  value === 'basic' || value === 'ipr' || value === 'people' || value === 'risk';
+  value === 'basic' || value === 'people' || value === 'risk';
 
 export interface EnterpriseLookupCompanyProfileInput {
   aspects?: CompanyProfileAspect[];
@@ -649,26 +649,119 @@ const extractCompanyKeyword = (args: Record<string, unknown>): string | undefine
   return undefined;
 };
 
-const formatToolContent = (content: unknown): string => {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) {
-    if (content == null) return '';
-    try {
-      return JSON.stringify(content);
-    } catch {
-      return '';
-    }
-  }
+const RISK_FACTOR_SOURCE =
+  '失信被执行|限制高消费|被执行人|被执行|失信|限高|严重违法|经营异常|股权冻结|行政处罚|终本案件|终本';
 
-  return content
-    .map((item) => {
-      if (!item || typeof item !== 'object') return '';
-      const block = item as { text?: unknown; type?: unknown };
-      if (block.type === 'text' && typeof block.text === 'string') return block.text;
-      return '';
+const INSTRUCTION_LINE_RE =
+  /请调用|调用对应|调用各|分别调用|后续调用建议|明细工具|详情工具|下钻|detail tool|call each/i;
+
+type ReportedCount = 'nonzero' | 'unparsable' | 'zero';
+
+const classifyReportedCount = (raw: string): ReportedCount => {
+  const value = raw.trim();
+  if (value === '无' || value === '暂无' || value === '零') return 'zero';
+  const numeric = /^(\d+)(?:\s*[条次个件笔家人])?$/u.exec(value);
+  if (!numeric) return 'unparsable';
+  return Number(numeric[1]) > 0 ? 'nonzero' : 'zero';
+};
+
+/** Every labeled count in the text, including factors outside a fixed whitelist. */
+const eachReportedCount = (text: string): ReportedCount[] => {
+  const labeled =
+    /[\u4E00-\u9FFF]{2,20}\s*[:：|｜]\s*([^\s|｜，,；;。]{1,24})|[\u4E00-\u9FFF]{2,20}\s+(无|暂无|零|未知|不详|--|—+|\d+(?:\s*[条次个件笔家人])?)/gu;
+  const counts: ReportedCount[] = [];
+  for (const match of text.matchAll(labeled)) {
+    const raw = match[1] ?? match[2];
+    if (!raw) continue;
+    counts.push(classifyReportedCount(raw));
+  }
+  return counts;
+};
+
+/**
+ * True only when at least one risk count was reported and every one of them is zero.
+ * A non-zero count, or a count that is not a number, keeps the vendor instruction.
+ */
+const riskCountsAreAllZero = (text: string): boolean => {
+  const counts = eachReportedCount(text);
+  if (counts.some((count) => count === 'nonzero' || count === 'unparsable')) return false;
+  if (counts.includes('zero')) return true;
+  if (new RegExp(`(?:${RISK_FACTOR_SOURCE})[^\\n]{0,8}(?:无|暂无|零)`).test(text)) return true;
+  if (/失信|被执行/.test(text) && /均为\s*0|全部为\s*0|均无|未发现.{0,6}风险|无风险/.test(text)) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Drop vendor "call the detail tool" lines when every reported risk count is zero.
+ * Data lines are kept as-is, even if they also mention a detail tool.
+ */
+export const stripIdleRiskDrilldown = (text: string): string => {
+  if (!text || !riskCountsAreAllZero(text)) return text;
+  return text
+    .split('\n')
+    .filter((line) => {
+      if (!INSTRUCTION_LINE_RE.test(line)) return true;
+      return eachReportedCount(line).length > 0;
     })
-    .filter(Boolean)
-    .join('\n\n');
+    .join('\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+const formatToolContent = (content: unknown): string => {
+  let text = '';
+  if (typeof content === 'string') text = content;
+  else if (!Array.isArray(content)) {
+    if (content != null) {
+      try {
+        text = JSON.stringify(content);
+      } catch {
+        text = '';
+      }
+    }
+  } else {
+    text = content
+      .map((item) => {
+        if (!item || typeof item !== 'object') return '';
+        const block = item as { text?: unknown; type?: unknown };
+        if (block.type === 'text' && typeof block.text === 'string') return block.text;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+  }
+  return text;
+};
+
+const PEOPLE_SHAREHOLDER_TOOLS = ['get_shareholder_info'] as const;
+const PEOPLE_PERSONNEL_TOOLS = ['get_key_personnel'] as const;
+const PEOPLE_COMBINED_TOOLS = ['get_company_people'] as const;
+const RISK_SCAN_TOOLS = ['get_company_risk_scan', 'get_risk_overview'] as const;
+
+const isRiskScanCapability = (capability: string): boolean =>
+  (RISK_SCAN_TOOLS as readonly string[]).includes(capability);
+
+const schemaPropertyNames = (schema: unknown): Set<string> => {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return new Set();
+  const properties = (schema as { properties?: unknown }).properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return new Set();
+  return new Set(Object.keys(properties as Record<string, unknown>));
+};
+
+const argumentsForCompanyTool = (
+  provider: EnterpriseLookupProvider,
+  schema: unknown,
+  searchKey: string,
+  companyName: string,
+): Record<string, unknown> => {
+  const names = schemaPropertyNames(schema);
+  if (names.has('searchKey')) return { searchKey };
+  if (names.has('company_name')) return { company_name: companyName };
+  if (names.has('keyword')) return { keyword: companyName };
+  if (names.has('query')) return { query: companyName };
+  return provider === 'qcc' ? { searchKey } : { company_name: companyName };
 };
 
 const assertPlainArguments = (value: unknown): Record<string, unknown> => {
@@ -908,10 +1001,12 @@ export class EnterpriseLookupService {
       reserved = false;
       await this.writeQueryAudit(provider, capability, args);
 
+      const text = formatToolContent(upstream.content);
       return {
         capability,
         category,
-        content: formatToolContent(upstream.content),
+        // Only the risk-scan summary. Other capabilities keep vendor text verbatim.
+        content: isRiskScanCapability(capability) ? stripIdleRiskDrilldown(text) : text,
         provider,
       };
     } finally {
@@ -1002,15 +1097,133 @@ export class EnterpriseLookupService {
       throw error;
     }
 
+    const sections = [basic.content];
+    const notes: string[] = [];
+    if (aspects.includes('people') || aspects.includes('risk')) {
+      const extra = await this.loadAspectSections({
+        companyName: unique.name,
+        config,
+        provider: search.provider,
+        searchKey,
+        wantPeople: aspects.includes('people'),
+        wantRisk: aspects.includes('risk'),
+      });
+      sections.push(...extra.sections);
+      notes.push(...extra.notes);
+    }
+
     return {
       aspects,
       candidates: [unique],
       match: 'unique',
-      profile: basic.content,
+      ...(notes.length > 0 ? { note: notes.join('\n') } : {}),
+      profile: sections.filter(Boolean).join('\n\n'),
       provider: basic.provider,
       queriedAt,
       query: name,
     };
+  };
+
+  private loadAspectSections = async (input: {
+    companyName: string;
+    config: EnterpriseLookupRuntimeConfig;
+    provider: EnterpriseLookupProvider;
+    searchKey: string;
+    wantPeople: boolean;
+    wantRisk: boolean;
+  }): Promise<{ notes: string[]; sections: string[] }> => {
+    const notes: string[] = [];
+    const sections: string[] = [];
+    const apiKey = providerApiKey(input.config, input.provider);
+    const categories = enabledCategories(input.config, input.provider);
+    if (!apiKey || categories.length === 0) {
+      if (input.wantPeople) notes.push('未拉取股东与主要人员：当前数据源未开放该能力。');
+      if (input.wantRisk) notes.push('未拉取风险扫描：当前数据源未开放该能力。');
+      return { notes, sections };
+    }
+
+    let halted: 'quota' | 'unavailable' | undefined;
+
+    const findTool = async (names: readonly string[]) => {
+      for (const category of categories) {
+        const tools = await listProviderTools(input.provider, category, apiKey);
+        for (const name of names) {
+          const tool = tools.find((item) => item.name === name);
+          if (tool) return { category, tool };
+        }
+      }
+      return undefined;
+    };
+
+    const callListed = async (
+      label: string,
+      listed: { category: string; tool: EnterpriseLookupToolDescriptor } | undefined,
+    ): Promise<void> => {
+      if (halted) return;
+      if (!listed) {
+        notes.push(`未拉取${label}：当前数据源未开放该能力。`);
+        return;
+      }
+      try {
+        const result = await this.query({
+          arguments: argumentsForCompanyTool(
+            input.provider,
+            listed.tool.inputSchema,
+            input.searchKey,
+            input.companyName,
+          ),
+          capability: listed.tool.name,
+          category: listed.category,
+          provider: input.provider,
+        });
+        sections.push(`${label}\n${result.content.trim() || '无记录'}`);
+      } catch (error) {
+        if (
+          error instanceof EnterpriseLookupServiceError &&
+          error.code === ENTERPRISE_LOOKUP_DAILY_LIMIT
+        ) {
+          halted = 'quota';
+          notes.push(`今日查询次数已达上限，未拉取${label}。`);
+          return;
+        }
+        if (
+          error instanceof EnterpriseLookupServiceError &&
+          error.code === ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE
+        ) {
+          halted = 'unavailable';
+          notes.push(`数据源暂不可用，未拉取${label}。`);
+          return;
+        }
+        notes.push(`未拉取${label}。`);
+      }
+    };
+
+    if (input.wantPeople) {
+      const shareholder = await findTool(PEOPLE_SHAREHOLDER_TOOLS);
+      const personnel = await findTool(PEOPLE_PERSONNEL_TOOLS);
+      if (!shareholder && !personnel) {
+        const combined = await findTool(PEOPLE_COMBINED_TOOLS);
+        await callListed('股东与主要人员', combined);
+      } else {
+        if (shareholder) await callListed('股东', shareholder);
+        else notes.push('未拉取股东：当前数据源未开放该能力。');
+        if (!halted) {
+          if (personnel) await callListed('主要人员', personnel);
+          else notes.push('未拉取主要人员：当前数据源未开放该能力。');
+        }
+      }
+    }
+
+    if (input.wantRisk) {
+      if (halted === 'quota') notes.push('今日查询次数已达上限，未拉取风险扫描。');
+      else if (halted === 'unavailable') notes.push('数据源暂不可用，未拉取风险扫描。');
+      else {
+        const risk = await findTool(RISK_SCAN_TOOLS);
+        await callListed('风险扫描', risk);
+      }
+    }
+
+    return { notes, sections };
   };
 
   private findCategoryForCapability = async (

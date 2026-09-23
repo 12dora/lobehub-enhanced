@@ -15,6 +15,7 @@ import {
 
 import { dingtalkWorkspaceRequest } from './client';
 import { DingtalkWorkspaceError } from './errors';
+import { CUSTOM_TODO_READ_SCOPE, peekOrgTodoReadGate } from './todo/orgReadGate';
 
 const log = debug('lobe-server:dingtalk-workspace:capabilities');
 
@@ -50,6 +51,7 @@ const APPROVAL_FORM_READ_SCOPES = ['Workflow.Form.Read'];
 const APPROVAL_INSTANCE_WRITE_SCOPES = ['Workflow.Instance.Write'];
 const TODO_READ_SCOPES = ['Todo.Todo.Read'];
 const TODO_WRITE_SCOPES = ['Todo.Todo.Write'];
+const CUSTOM_TODO_READ_SCOPES = [CUSTOM_TODO_READ_SCOPE];
 const CALENDAR_EVENT_READ_SCOPES = ['Calendar.Event.Read'];
 const CALENDAR_EVENT_WRITE_SCOPES = ['Calendar.Event.Write'];
 const CALENDAR_SCHEDULE_READ_SCOPES = ['Calendar.EventSchedule.Read'];
@@ -314,6 +316,7 @@ const probeApproval = async (staffId: string): Promise<DingtalkPermissionProbe> 
       required: true,
       outcome: await runSubProbe('read', APPROVAL_FORM_READ_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           method: 'GET',
           path: '/v1.0/workflow/processes/userVisibilities/templates',
@@ -325,6 +328,7 @@ const probeApproval = async (staffId: string): Promise<DingtalkPermissionProbe> 
       required: true,
       outcome: await runSubProbe('write', APPROVAL_INSTANCE_WRITE_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           body: EMPTY_WRITE_PROBE_BODY,
           method: 'POST',
@@ -336,6 +340,17 @@ const probeApproval = async (staffId: string): Promise<DingtalkPermissionProbe> 
   return mergeProbeOutcomes(outcomes);
 };
 
+/**
+ * Custom.Todo.Read is optional. The cached org-read gate is the only signal —
+ * this probe must not call organizations/tasks/query.
+ */
+const optionalOrgTodoReadOutcome = async (): Promise<SubProbeOutcome> => {
+  const gate = await peekOrgTodoReadGate();
+  if (gate === 'unavailable') return { kind: 'missing', scopes: [...CUSTOM_TODO_READ_SCOPES] };
+  if (gate === 'available') return { kind: 'ok' };
+  return { kind: 'ignore' };
+};
+
 const probeTodo = async (unionId: string): Promise<DingtalkPermissionProbe> => {
   const encoded = encodeURIComponent(unionId);
   const outcomes: Array<{ outcome: SubProbeOutcome; required: boolean }> = [
@@ -343,6 +358,7 @@ const probeTodo = async (unionId: string): Promise<DingtalkPermissionProbe> => {
       required: true,
       outcome: await runSubProbe('read', TODO_READ_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           body: { isDone: false },
           method: 'POST',
@@ -354,6 +370,7 @@ const probeTodo = async (unionId: string): Promise<DingtalkPermissionProbe> => {
       required: true,
       outcome: await runSubProbe('write', TODO_WRITE_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           body: EMPTY_WRITE_PROBE_BODY,
           method: 'POST',
@@ -361,6 +378,7 @@ const probeTodo = async (unionId: string): Promise<DingtalkPermissionProbe> => {
         }),
       ),
     },
+    { required: false, outcome: await optionalOrgTodoReadOutcome() },
   ];
   return mergeProbeOutcomes(outcomes);
 };
@@ -376,6 +394,7 @@ const probeCalendar = async (unionId: string): Promise<DingtalkPermissionProbe> 
       required: true,
       outcome: await runSubProbe('read', CALENDAR_EVENT_READ_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           method: 'GET',
           path: `/v1.0/calendar/users/${encoded}/calendars/primary/events`,
@@ -391,6 +410,7 @@ const probeCalendar = async (unionId: string): Promise<DingtalkPermissionProbe> 
       required: true,
       outcome: await runSubProbe('write', CALENDAR_EVENT_WRITE_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           body: EMPTY_WRITE_PROBE_BODY,
           method: 'POST',
@@ -402,6 +422,7 @@ const probeCalendar = async (unionId: string): Promise<DingtalkPermissionProbe> 
       required: true,
       outcome: await runSubProbe('read', CALENDAR_SCHEDULE_READ_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           body: { endTime: timeMax, startTime: timeMin, userIds: [unionId] },
           method: 'POST',
@@ -414,6 +435,7 @@ const probeCalendar = async (unionId: string): Promise<DingtalkPermissionProbe> 
       required: false,
       outcome: await runSubProbe('warning', CALENDAR_ROOMS_SCOPES, () =>
         dingtalkWorkspaceRequest({
+          recordError: false,
           api: 'v1',
           method: 'GET',
           path: '/v1.0/rooms/meetingRoomLists',

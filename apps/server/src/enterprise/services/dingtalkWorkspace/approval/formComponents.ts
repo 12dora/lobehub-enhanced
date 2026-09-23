@@ -48,9 +48,11 @@ const SERIAL_TYPES = new Set(['SeqNumberField']);
 const SERIAL_LABEL_RE = /^(?:流水号|编号|序号)$/u;
 
 const CLOSEST_SUPPORTED: Record<string, string> = {
-  CalculateField: 'use NumberField',
+  CalculateField:
+    'formulas are not available via API; use MoneyField or NumberField and set the formula in the DingTalk designer',
   RecipientAccountField: 'use TextField',
-  RelateField: 'use InnerContactField',
+  RelateField:
+    'not available via API; use a TextField "关联立项单号" and tell the user to switch it to 关联审批单 in the DingTalk designer',
   TimeAndLocationField: 'use DDDateField',
 };
 
@@ -436,8 +438,8 @@ const encodeOne = (
         index,
         componentType,
         previewLabel,
-        'unsupported',
-        'split into separate fields',
+        'children',
+        'provide at least one column',
       );
     }
   } else if (field.children && field.children.length > 0) {

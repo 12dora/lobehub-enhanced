@@ -12,9 +12,14 @@ vi.mock('debug', () => ({
 }));
 
 const recordDingtalkHttpCall = vi.hoisted(() => vi.fn());
+const noteRuntimeError = vi.hoisted(() => vi.fn());
 
 vi.mock('./apiCallStats', () => ({
   recordDingtalkHttpCall,
+}));
+
+vi.mock('@/server/enterprise/services/platformSystem/noteRuntimeError', () => ({
+  noteRuntimeError,
 }));
 
 vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
@@ -435,5 +440,120 @@ describe('dingtalkWorkspaceRequest', () => {
     });
 
     await expect(requestOnce()).rejects.toMatchObject({ code: 'DINGTALK_UNAVAILABLE' });
+    expect(noteRuntimeError).toHaveBeenCalledWith(
+      'dingtalk_api',
+      expect.objectContaining({ name: 'AbortError' }),
+      { operation: 'timeout' },
+    );
+  });
+
+  it('records upstream code and missing scopes, but not the Custom.Todo.Read gate', async () => {
+    setDingtalkWorkspaceFetchForTest(async () => ({
+      json: async () => ({
+        code: 'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+        message: '应用尚未开通所需的权限：[Calendar.Event.Write]',
+      }),
+      ok: false,
+      status: 403,
+      text: async () => '',
+    }));
+
+    await expect(
+      dingtalkWorkspaceRequest({
+        api: 'v1',
+        body: {},
+        method: 'POST',
+        path: '/v1.0/calendar/users/union-1/calendars/primary/events',
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_FORBIDDEN' });
+    expect(noteRuntimeError).toHaveBeenCalledWith(
+      'dingtalk_api',
+      expect.objectContaining({ code: 'DINGTALK_FORBIDDEN' }),
+      {
+        missingScopes: ['Calendar.Event.Write'],
+        operation: 'upstream',
+        upstreamCode: 'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+      },
+    );
+
+    noteRuntimeError.mockClear();
+    setDingtalkWorkspaceFetchForTest(async () => ({
+      json: async () => ({
+        code: 'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+        message: '应用尚未开通所需的权限：[Custom.Todo.Read]',
+      }),
+      ok: false,
+      status: 403,
+      text: async () => '',
+    }));
+
+    await expect(
+      dingtalkWorkspaceRequest({
+        api: 'v1',
+        body: {},
+        method: 'POST',
+        path: '/v1.0/todo/users/union-1/organizations/tasks/query',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DINGTALK_FORBIDDEN',
+      missingScopes: ['Custom.Todo.Read'],
+    });
+    expect(noteRuntimeError).not.toHaveBeenCalled();
+  });
+
+  it('does not record a poll or probe that opted out, and records token failures', async () => {
+    setDingtalkWorkspaceFetchForTest(async () => ({
+      json: async () => ({ code: 'ServiceUnavailable', message: 'down' }),
+      ok: false,
+      status: 503,
+      text: async () => '',
+    }));
+
+    await expect(
+      dingtalkWorkspaceRequest({
+        api: 'v1',
+        method: 'GET',
+        path: '/v1.0/workflow/processInstances',
+        recordError: false,
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_UNAVAILABLE' });
+    expect(noteRuntimeError).not.toHaveBeenCalled();
+
+    const { DingTalkNotifyAppError } =
+      await import('@/server/services/messenger/platforms/dingtalk/notifyApp');
+    getNotifyAppNewApiToken.mockRejectedValueOnce(
+      new DingTalkNotifyAppError('token down', '40001'),
+    );
+
+    await expect(requestOnce()).rejects.toMatchObject({
+      code: 'DINGTALK_UNAVAILABLE',
+      upstreamCode: '40001',
+    });
+    expect(noteRuntimeError).toHaveBeenCalledWith(
+      'dingtalk_api',
+      expect.objectContaining({ code: 'DINGTALK_UNAVAILABLE', upstreamCode: '40001' }),
+      { operation: 'token', upstreamCode: '40001' },
+    );
+  });
+
+  it('does not record a missing notify-app as an API error', async () => {
+    const { DingTalkNotifyAppError } =
+      await import('@/server/services/messenger/platforms/dingtalk/notifyApp');
+    getNotifyAppNewApiToken.mockRejectedValueOnce(
+      new DingTalkNotifyAppError('not configured', 'notify_app_not_configured'),
+    );
+
+    await expect(requestOnce()).rejects.toMatchObject({ code: 'DINGTALK_NOT_CONFIGURED' });
+    expect(noteRuntimeError).not.toHaveBeenCalled();
+  });
+
+  it('records a network failure that is not a timeout', async () => {
+    const error = new TypeError('fetch failed');
+    setDingtalkWorkspaceFetchForTest(async () => {
+      throw error;
+    });
+
+    await expect(requestOnce()).rejects.toMatchObject({ code: 'DINGTALK_UNAVAILABLE' });
+    expect(noteRuntimeError).toHaveBeenCalledWith('dingtalk_api', error, { operation: 'network' });
   });
 });

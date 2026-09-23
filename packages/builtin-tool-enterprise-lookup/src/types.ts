@@ -86,12 +86,12 @@ export interface QueryEnterpriseState {
 export const isEnterpriseLookupProvider = (value: unknown): value is EnterpriseLookupProvider =>
   value === 'qcc' || value === 'tianyancha';
 
-export const COMPANY_PROFILE_ASPECTS = ['basic', 'ipr', 'people', 'risk'] as const;
+export const COMPANY_PROFILE_ASPECTS = ['basic', 'people', 'risk'] as const;
 
 export type CompanyProfileAspect = (typeof COMPANY_PROFILE_ASPECTS)[number];
 
 export const isCompanyProfileAspect = (value: unknown): value is CompanyProfileAspect =>
-  value === 'basic' || value === 'ipr' || value === 'people' || value === 'risk';
+  value === 'basic' || value === 'people' || value === 'risk';
 
 export interface CompanyProfileParams {
   aspects?: CompanyProfileAspect[];

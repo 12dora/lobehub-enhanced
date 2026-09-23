@@ -57,6 +57,11 @@ describe('dingtalkWorkspaceExecutor', () => {
     });
   });
 
+  it('forwards listTodos done and refresh', async () => {
+    await dingtalkWorkspaceExecutor.listTodos({ done: false, refresh: true });
+    expect(listTodos).toHaveBeenCalledWith({ done: false, refresh: true });
+  });
+
   it('passes { q, kind } to dingtalkWorkspaceService.searchDirectory', async () => {
     await dingtalkWorkspaceExecutor.searchDirectory({ kind: 'user', q: '安环' });
     expect(searchDirectory).toHaveBeenCalledWith({ kind: 'user', q: '安环' });

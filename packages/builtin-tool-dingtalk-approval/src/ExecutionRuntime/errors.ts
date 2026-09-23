@@ -133,6 +133,13 @@ const PROBLEM_ISSUE_ZH: Record<string, string> = {
   unsupported: '不支持该控件',
 };
 
+const issueZh = (problem: SaveTemplateFieldProblem): string => {
+  if (problem.issue === 'children' && problem.suggestion.startsWith('provide')) {
+    return '明细表至少需要一列';
+  }
+  return PROBLEM_ISSUE_ZH[problem.issue] ?? problem.issue;
+};
+
 const suggestionZh = (problem: SaveTemplateFieldProblem): string => {
   if (problem.suggestion.startsWith('remove:')) return '请删除该控件，钉钉会自动生成流水号';
   if (problem.suggestion.startsWith('use ')) return `请改用 ${problem.suggestion.slice(4)}`;
@@ -144,14 +151,31 @@ const suggestionZh = (problem: SaveTemplateFieldProblem): string => {
   if (problem.issue === 'unit') return 'unit 只能是「天」或「小时」';
   if (problem.issue === 'content') return '请填写 content';
   if (problem.issue === 'label') return '请填写标签';
-  if (problem.issue === 'children') return '请去掉 children';
+  if (problem.issue === 'children') {
+    if (problem.suggestion.startsWith('omit')) return '请去掉 children';
+    if (problem.suggestion.startsWith('remove nested')) return '明细表不能再嵌套明细表';
+    if (problem.suggestion.startsWith('provide')) return '为明细表添加至少一个子控件';
+    return problem.suggestion || '请去掉 children';
+  }
+  if (
+    problem.componentType === 'CalculateField' ||
+    problem.suggestion.startsWith('formulas are not available')
+  ) {
+    return '公式无法通过接口设置，请改用 MoneyField 或 NumberField，并在钉钉设计器中设置公式';
+  }
+  if (
+    problem.componentType === 'RelateField' ||
+    problem.suggestion.startsWith('not available via API')
+  ) {
+    return '关联审批单无法通过接口创建，请改用 TextField「关联立项单号」，并告诉用户在钉钉设计器中切换为关联审批单';
+  }
   return problem.suggestion;
 };
 
 export const formatFormProblemLine = (problem: SaveTemplateFieldProblem): string => {
   const title = problem.label || problem.componentType || `字段${problem.index}`;
   const type = problem.componentType ? `（${problem.componentType}）` : '';
-  const issue = PROBLEM_ISSUE_ZH[problem.issue] ?? problem.issue;
+  const issue = issueZh(problem);
   const suggestion = suggestionZh(problem);
   return `[${problem.index}] ${title}${type}：${issue}；${suggestion}`;
 };

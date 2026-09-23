@@ -102,6 +102,7 @@ export const SAVE_TEMPLATE_COMPONENT_TYPES = [
   'NumberField',
   'PhoneField',
   'StarRatingField',
+  'TableField',
   'TextareaField',
   'TextField',
   'TextNote',
@@ -119,6 +120,8 @@ export interface SaveTemplateFieldProblem {
 
 export interface SaveTemplateFieldInput {
   bizAlias?: string;
+  /** TableField columns only. One level; nested TableField is rejected. */
+  children?: Array<Omit<SaveTemplateFieldInput, 'children'>>;
   componentId?: string;
   componentType: string;
   format?: string;
@@ -198,6 +201,8 @@ export interface GetTemplateSchemaState {
 
 export interface ListPendingApprovalsParams {
   limit?: number;
+  /** Bypass the 5-minute identical-query cache. Only when the user asks to refresh. */
+  refresh?: boolean;
 }
 
 export interface ApprovalListRow {

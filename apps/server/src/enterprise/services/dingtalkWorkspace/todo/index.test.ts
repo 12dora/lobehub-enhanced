@@ -6,6 +6,25 @@ const mockRequireIdentity = vi.fn();
 const mockRequest = vi.fn();
 const mockResolveStaff = vi.fn();
 const mockAppend = vi.fn();
+const mockListPending = vi.fn();
+
+const redisState = vi.hoisted(() => {
+  const store = new Map<string, string>();
+  const sets: Array<{ extra: unknown[]; key: string; value: string }> = [];
+  return {
+    client: {
+      get: async (key: string) => store.get(key) ?? null,
+      set: async (key: string, value: string, ...extra: unknown[]) => {
+        sets.push({ extra, key, value });
+        if (extra.includes('NX') && store.has(key)) return null;
+        store.set(key, value);
+        return 'OK';
+      },
+    },
+    sets,
+    store,
+  };
+});
 
 vi.mock('@/envs/app', () => ({
   appEnv: { APP_URL: 'https://aihub.example.com/' },
@@ -31,7 +50,28 @@ vi.mock('@/server/enterprise/services/platformAudit', () => ({
   PlatformAuditService: vi.fn(() => ({ append: mockAppend })),
 }));
 
-const { DingtalkTodoService, resetTodoListCacheForTest } = await import('./index');
+vi.mock('@/server/enterprise/services/dingtalkWorkspace/approval', () => ({
+  DingtalkApprovalService: vi.fn(() => ({
+    listPending: (...args: unknown[]) => mockListPending(...args),
+  })),
+}));
+
+vi.mock('@/server/modules/AgentRuntime/redis', () => ({
+  getAgentRuntimeRedisClient: () => redisState.client,
+}));
+
+const {
+  DingtalkTodoService,
+  ORG_TODO_UNAVAILABLE_NOTE,
+  resetOrgTodoReadGateForTest,
+  resetTodoListCacheForTest,
+} = await import('./index');
+const {
+  ORG_TODO_READ_DISCOVER_CLAIM_KEY,
+  ORG_TODO_READ_DISCOVER_CLAIM_TTL_SECONDS,
+  ORG_TODO_READ_GATE_REDIS_KEY,
+  ORG_TODO_READ_GATE_TTL_SECONDS,
+} = await import('./orgReadGate');
 const { DingtalkWorkspaceError } = await import('../errors');
 
 const identity = { name: '张三', staffId: 'staff-me', unionId: 'union-me' };
@@ -42,6 +82,10 @@ describe('DingtalkTodoService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetTodoListCacheForTest();
+    resetOrgTodoReadGateForTest();
+    redisState.store.clear();
+    redisState.sets.length = 0;
+    mockListPending.mockResolvedValue({ rows: [], truncated: false });
     mockAssertFeature.mockResolvedValue(undefined);
     mockRequireIdentity.mockResolvedValue(identity);
     mockAppend.mockResolvedValue({});
@@ -54,11 +98,13 @@ describe('DingtalkTodoService', () => {
   });
 
   it('listTodos queries org tasks as creator or executor', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
     mockRequest.mockResolvedValueOnce({
       todoCards: [{ isDone: false, subject: '写周报', taskId: 't1' }],
     });
     const result = await service.listTodos({ done: false });
     expect(mockAssertFeature).toHaveBeenCalledWith('todo');
+    expect(mockRequest).toHaveBeenCalledTimes(1);
     expect(mockRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         api: 'v1',
@@ -67,9 +113,278 @@ describe('DingtalkTodoService', () => {
         path: '/v1.0/todo/users/union-me/org/tasks/query',
       }),
     );
-    expect(result.items).toEqual([
-      expect.objectContaining({ done: false, subject: '写周报', taskId: 't1' }),
+    expect(result.appTodos).toEqual([
+      expect.objectContaining({
+        done: false,
+        source: 'assistant',
+        subject: '写周报',
+        taskId: 't1',
+      }),
     ]);
+    expect(result.orgTodos).toBeUndefined();
+    expect(result.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+  });
+
+  it('merges approvals with assistant todos and dedups org cards by taskId', async () => {
+    mockListPending.mockResolvedValue({
+      rows: [
+        {
+          createdAt: '2026-09-21 10:00',
+          originatorName: '李四',
+          processInstanceId: 'pi-1',
+          summary: [],
+          taskId: 'ap-1',
+          title: '请假',
+        },
+      ],
+      truncated: false,
+    });
+    mockRequest.mockImplementation(
+      async (req: { body?: Record<string, unknown>; path?: string }) => {
+        const path = String(req.path);
+        if (path.includes('/organizations/tasks/query')) {
+          expect(req.body).toMatchObject({
+            isDone: false,
+            maxResults: 20,
+            needPersonalTodo: true,
+            roleTypes: [['creator'], ['executor']],
+          });
+          return {
+            todoCards: [
+              { isDone: false, subject: '助手重复', taskId: 't1' },
+              { isDone: false, subject: '客户端待办', taskId: 't2' },
+              { isDone: false, subject: '与审批同号', taskId: 'ap-1' },
+            ],
+          };
+        }
+        return {
+          todoCards: [
+            { isDone: false, subject: '助手重复', taskId: 't1' },
+            { isDone: false, subject: '助手重复', taskId: 't1' },
+          ],
+        };
+      },
+    );
+
+    const result = await service.listTodos({ done: false });
+
+    expect(result.appTodos).toEqual([
+      expect.objectContaining({ source: 'assistant', subject: '助手重复', taskId: 't1' }),
+    ]);
+    expect(result.orgTodos).toEqual([
+      expect.objectContaining({ source: 'org', subject: '客户端待办', taskId: 't2' }),
+      expect.objectContaining({ source: 'org', subject: '与审批同号', taskId: 'ap-1' }),
+    ]);
+    expect(result.approvals).toEqual({
+      count: 1,
+      items: [
+        {
+          createdAt: '2026-09-21 10:00',
+          originatorName: '李四',
+          processInstanceId: 'pi-1',
+          source: 'approval',
+          taskId: 'ap-1',
+          title: '请假',
+        },
+      ],
+      truncated: false,
+    });
+    expect(result.notes).toEqual([]);
+    expect(
+      mockRequest.mock.calls.filter((call) =>
+        String(call[0].path).includes('/organizations/tasks/query'),
+      ),
+    ).toHaveLength(1);
+    expect(redisState.store.get(ORG_TODO_READ_GATE_REDIS_KEY)).toBe('available');
+    expect(mockListPending).toHaveBeenCalledWith({ limit: 20, refresh: undefined });
+  });
+
+  it('remembers a Custom.Todo.Read 403 for 24h and does not call again', async () => {
+    let orgCalls = 0;
+    mockRequest.mockImplementation(async (req: { path?: string }) => {
+      const path = String(req.path);
+      if (path.includes('/organizations/tasks/query')) {
+        orgCalls += 1;
+        throw new DingtalkWorkspaceError(
+          'DINGTALK_FORBIDDEN',
+          'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+          ['Custom.Todo.Read'],
+        );
+      }
+      return { todoCards: [{ isDone: false, subject: '写周报', taskId: 't1' }] };
+    });
+
+    const first = await service.listTodos();
+    expect(first.orgTodos).toBeUndefined();
+    expect(first.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+    expect(first.appTodos.map((item) => item.source)).toEqual(['assistant']);
+    expect(orgCalls).toBe(1);
+    expect(redisState.sets).toEqual([
+      expect.objectContaining({
+        extra: ['EX', ORG_TODO_READ_DISCOVER_CLAIM_TTL_SECONDS, 'NX'],
+        key: ORG_TODO_READ_DISCOVER_CLAIM_KEY,
+        value: '1',
+      }),
+      expect.objectContaining({
+        extra: ['EX', ORG_TODO_READ_GATE_TTL_SECONDS],
+        key: ORG_TODO_READ_GATE_REDIS_KEY,
+        value: 'unavailable',
+      }),
+    ]);
+
+    resetOrgTodoReadGateForTest();
+    const second = await service.listTodos({ refresh: true });
+    expect(second.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+    expect(orgCalls).toBe(1);
+    expect(mockListPending).toHaveBeenLastCalledWith({ limit: 20, refresh: true });
+    expect(
+      mockRequest.mock.calls.filter((call) =>
+        String(call[0].path).includes('/organizations/tasks/query'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('single-flights the org read probe so concurrent listTodos share one 403', async () => {
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let orgCalls = 0;
+    mockRequest.mockImplementation(async (req: { path?: string }) => {
+      if (String(req.path).includes('/organizations/tasks/query')) {
+        orgCalls += 1;
+        await hold;
+        throw new DingtalkWorkspaceError('DINGTALK_FORBIDDEN', 'Forbidden', ['Custom.Todo.Read']);
+      }
+      return { todoCards: [] };
+    });
+
+    const pending = Promise.all([
+      service.listTodos({ refresh: true }),
+      service.listTodos({ refresh: true }),
+    ]);
+    await vi.waitFor(() => expect(orgCalls).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(orgCalls).toBe(1);
+    release();
+    const [left, right] = await pending;
+    expect(orgCalls).toBe(1);
+    expect(left.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+    expect(right.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+    expect(right.orgTodos).toBeUndefined();
+  });
+
+  it('misses the merged cache when the verified DingTalk identity changes', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '张三的待办', taskId: 't-zhang' }] });
+    const first = await service.listTodos({ done: false });
+    expect(first.appTodos[0]?.taskId).toBe('t-zhang');
+    expect(mockRequireIdentity).toHaveBeenCalledTimes(1);
+
+    mockRequest.mockClear();
+    mockListPending.mockClear();
+    const cached = await service.listTodos({ done: false });
+    expect(mockRequireIdentity).toHaveBeenCalledTimes(2);
+    expect(mockRequest).not.toHaveBeenCalled();
+    expect(mockListPending).not.toHaveBeenCalled();
+    expect(cached.appTodos[0]?.taskId).toBe('t-zhang');
+
+    mockRequireIdentity.mockResolvedValue({
+      name: '李四',
+      staffId: 'staff-li',
+      unionId: 'union-li',
+    });
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '李四的待办', taskId: 't-li' }] });
+    const rebound = await service.listTodos({ done: false });
+    expect(mockRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/v1.0/todo/users/union-li/org/tasks/query' }),
+    );
+    expect(rebound.appTodos.map((item) => item.taskId)).toEqual(['t-li']);
+    expect(rebound.appTodos.some((item) => item.taskId === 't-zhang')).toBe(false);
+  });
+
+  it('does not serve a merged cache when DingTalk identity verification fails', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    await service.listTodos();
+    mockRequireIdentity.mockRejectedValue(
+      new DingtalkWorkspaceError('DINGTALK_IDENTITY_UNVERIFIED'),
+    );
+    mockRequest.mockClear();
+    await expect(service.listTodos()).rejects.toMatchObject({
+      code: 'DINGTALK_IDENTITY_UNVERIFIED',
+    });
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it('skips the org probe when another replica holds the discovery claim', async () => {
+    redisState.store.set(ORG_TODO_READ_DISCOVER_CLAIM_KEY, '1');
+    mockRequest.mockImplementation(async (req: { path?: string }) => {
+      if (String(req.path).includes('/organizations/tasks/query')) {
+        throw new Error('org call');
+      }
+      return { todoCards: [{ subject: '写周报', taskId: 't1' }] };
+    });
+
+    const result = await service.listTodos();
+
+    expect(result.appTodos.map((item) => item.taskId)).toEqual(['t1']);
+    expect(result.orgTodos).toBeUndefined();
+    expect(result.notes).toEqual([]);
+    expect(
+      mockRequest.mock.calls.filter((call) =>
+        String(call[0].path).includes('/organizations/tasks/query'),
+      ),
+    ).toHaveLength(0);
+    expect(redisState.sets).toEqual([
+      expect.objectContaining({
+        extra: ['EX', ORG_TODO_READ_DISCOVER_CLAIM_TTL_SECONDS, 'NX'],
+        key: ORG_TODO_READ_DISCOVER_CLAIM_KEY,
+      }),
+    ]);
+  });
+
+  it('makes no DingTalk calls on a merged cache hit', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    await service.listTodos();
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockListPending).toHaveBeenCalledTimes(1);
+
+    mockRequest.mockClear();
+    mockListPending.mockClear();
+    const cached = await service.listTodos();
+    expect(mockRequest).not.toHaveBeenCalled();
+    expect(mockListPending).not.toHaveBeenCalled();
+    expect(cached.appTodos[0]?.taskId).toBe('t1');
+    expect(cached.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+  });
+
+  it('drops the merged cache after a todo is created', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest
+      .mockResolvedValueOnce({ todoCards: [{ subject: '旧', taskId: 't0' }] })
+      .mockResolvedValueOnce({ id: 't-new', subject: '新待办' })
+      .mockResolvedValueOnce({ todoCards: [{ subject: '新待办', taskId: 't-new' }] });
+
+    await service.listTodos();
+    await service.createTodo({ subject: '新待办' });
+    const again = await service.listTodos();
+
+    expect(again.appTodos.map((item) => item.taskId)).toEqual(['t-new']);
+    expect(
+      mockRequest.mock.calls.filter((call) => String(call[0].path).includes('/org/tasks/query')),
+    ).toHaveLength(2);
+  });
+
+  it('keeps assistant todos when the approval feature is off', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockListPending.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_FEATURE_DISABLED'));
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    const result = await service.listTodos();
+    expect(result.appTodos).toHaveLength(1);
+    expect(result.approvals).toEqual({ count: 0, items: [], truncated: false });
+    expect(result.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
   });
 
   it('createTodo sends APP_URL detailUrl, caller as creator, and unique sourceId', async () => {

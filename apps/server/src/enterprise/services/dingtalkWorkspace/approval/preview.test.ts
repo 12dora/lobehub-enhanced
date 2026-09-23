@@ -301,6 +301,26 @@ describe('buildApprovalPreview', () => {
     ).rejects.toMatchObject({ code: 'DINGTALK_INVALID' });
   });
 
+  it('lists a detail table by name and column labels', async () => {
+    const preview = await buildApprovalPreview(ctx, 'saveTemplate', {
+      fields: [
+        { componentType: 'TextField', label: '项目名称' },
+        {
+          children: [
+            { componentType: 'TextField', label: '交付物' },
+            { componentType: 'TextField', label: '接收人' },
+          ],
+          componentType: 'TableField',
+          label: '交付物及移交清单',
+        },
+      ],
+      name: '项目结案申请',
+    });
+    const controls = preview.lines.find((line) => line.label === '控件');
+    expect(controls?.value).toContain('项目名称');
+    expect(controls?.value).toContain('交付物及移交清单（交付物、接收人）');
+  });
+
   it('forbids comment preview when the caller cannot view the instance', async () => {
     mockGetDetail.mockResolvedValueOnce({
       ccUserIds: [],

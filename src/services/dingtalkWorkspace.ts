@@ -19,7 +19,7 @@ class DingtalkWorkspaceService {
     return lambdaClient.dingtalkWorkspace.searchDirectory.query(params);
   };
 
-  listTodos = async (params: { done?: boolean } = {}) => {
+  listTodos = async (params: { done?: boolean; refresh?: boolean } = {}) => {
     return lambdaClient.dingtalkWorkspace.todo.listTodos.query(params);
   };
 

@@ -127,6 +127,18 @@ describe('DingtalkApprovalService', () => {
     expect(mockRequireIdentity).toHaveBeenCalled();
   });
 
+  it('bypasses the visible-template cache when listPending is refreshed', async () => {
+    mockListPending.mockResolvedValue({ rows: [], truncated: false });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await service.listPending({ limit: 10 });
+    expect(mockLoadTemplates).toHaveBeenCalledWith('user-1', 'me', 5 * 60_000, false);
+    await service.listPending({ refresh: true });
+    expect(mockLoadTemplates).toHaveBeenLastCalledWith('user-1', 'me', 5 * 60_000, true);
+    expect(mockListPending).toHaveBeenLastCalledWith(
+      expect.objectContaining({ refresh: true, staffId: 'me', userId: 'user-1' }),
+    );
+  });
+
   it('refuses executeTask when the caller is not the running handler', async () => {
     mockGetDetail.mockResolvedValueOnce({
       ...runningDetail,

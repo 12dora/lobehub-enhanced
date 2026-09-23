@@ -134,8 +134,8 @@ export class DingtalkApprovalService {
     return identity;
   };
 
-  private templates = async (staffId: string): Promise<VisibleTemplate[]> =>
-    loadVisibleTemplatesCached(this.userId, staffId, TEMPLATE_CACHE_TTL_MS);
+  private templates = async (staffId: string, refresh = false): Promise<VisibleTemplate[]> =>
+    loadVisibleTemplatesCached(this.userId, staffId, TEMPLATE_CACHE_TTL_MS, refresh);
 
   private requireApprovalAdmin = async (staffId: string): Promise<void> => {
     const isAdmin = await isDingtalkApprovalAdmin(staffId);
@@ -170,12 +170,14 @@ export class DingtalkApprovalService {
 
   listPending = async (input?: {
     limit?: number;
+    refresh?: boolean;
   }): Promise<ApprovalListResult<PendingApprovalRow>> => {
     const identity = await this.prepare();
-    const templates = await this.templates(identity.staffId);
+    const templates = await this.templates(identity.staffId, input?.refresh === true);
     return listPendingApprovals({
       db: this.db,
       limit: input?.limit,
+      refresh: input?.refresh,
       staffId: identity.staffId,
       templates,
       userId: this.userId,

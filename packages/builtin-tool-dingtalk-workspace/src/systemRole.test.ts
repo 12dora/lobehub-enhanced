@@ -23,8 +23,20 @@ describe('dingtalk workspace systemRole', () => {
     expect(systemPrompt).toContain('Never guess');
   });
 
-  it('says only AIHub-created todos are listable and that writes confirm once', () => {
-    expect(systemPrompt).toContain('only todos created through this AIHub tool');
+  it('lists 我的待办 once, relays the visibility note, and confirms writes once', () => {
+    expect(systemPrompt).toContain('我的待办');
+    expect(systemPrompt).toContain('还有哪些待办');
+    expect(systemPrompt).toContain('本助手创建的钉钉待办');
+    expect(systemPrompt).toContain('call listTodos once');
+    expect(systemPrompt).toContain('relay that note');
+    expect(systemPrompt).toContain('do not also call lobe-dingtalk-approval listPendingApprovals');
+    expect(systemPrompt).toContain('do not use tables');
+    expect(systemPrompt).toContain('refresh=true');
+    const listTodos = DingtalkWorkspaceManifest.api.find((api) => api.name === 'listTodos');
+    expect(listTodos?.description).toBe(
+      '我的钉钉待办：待我审批 + 本助手创建的待办（钉钉客户端自建待办不可见，原因见返回说明）',
+    );
+    expect(listTodos?.parameters.properties).toHaveProperty('refresh');
     expect(systemPrompt).toContain('confirm card');
     expect(systemPrompt).toContain('never parallelize');
     expect(systemPrompt).toContain('successful write result is authoritative');

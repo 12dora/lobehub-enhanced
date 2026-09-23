@@ -50,7 +50,7 @@ export const dingtalkApprovalRuntime: ServerRuntimeRegistration = {
       refuseTask: (params) => approval.executeTask({ ...params, result: 'refuse' }),
       returnTask: (params) => approval.revertTask(params),
       saveTemplate: (params) => {
-        const fields = params.fields.map((field) => ({
+        const mapLeaf = (field: (typeof params.fields)[number]) => ({
           bizAlias: field.bizAlias,
           componentId: field.componentId,
           componentType: field.componentType,
@@ -60,6 +60,12 @@ export const dingtalkApprovalRuntime: ServerRuntimeRegistration = {
           placeholder: field.placeholder,
           required: field.required,
           unit: field.unit,
+        });
+        const fields = params.fields.map((field) => ({
+          ...mapLeaf(field),
+          ...(field.children && field.children.length > 0
+            ? { children: field.children.map(mapLeaf) }
+            : {}),
         }));
         return approval.saveTemplate({
           description: params.description,

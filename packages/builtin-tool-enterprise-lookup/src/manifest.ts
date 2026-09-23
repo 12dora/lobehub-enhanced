@@ -29,7 +29,7 @@ export const EnterpriseLookupManifest: BuiltinToolManifest = {
   api: [
     {
       description:
-        'Search a company by name and, when the match is unique (or the registered name equals the input), fetch 工商基本信息 in the same call. Use this first. If several companies match, the result lists candidates (name · 统一社会信用代码 · 法定代表人 · 状态) and fetches nothing else — ask the user, then retry with the exact name. Do not follow with listCapabilities or queryEnterprise to verify. Each upstream call consumes paid quota.',
+        'Search a company by name and, when the match is unique (or the registered name equals the input), fetch 工商基本信息 in the same call. aspects people also fetches 股东 and 主要人员; aspects risk fetches one risk-scan summary. ipr is not an aspect — use queryEnterprise. If several companies match, the result lists candidates (name · 统一社会信用代码 · 法定代表人 · 状态) and fetches nothing else — ask the user, then retry with the exact name. Do not follow with listCapabilities or queryEnterprise to verify. Each upstream call consumes paid quota.',
       humanIntervention: 'never',
       name: EnterpriseLookupApiName.companyProfile,
       parameters: {
@@ -37,7 +37,7 @@ export const EnterpriseLookupManifest: BuiltinToolManifest = {
         properties: {
           aspects: {
             description:
-              'Dimensions of interest: basic (工商), people (股东/高管), risk, ipr. companyProfile always fetches 工商 when unique; extra dimensions still need listCapabilities + queryEnterprise.',
+              'basic (工商, always fetched when the match is unique), people (股东 + 主要人员, fetched in this call), risk (one risk-scan summary, fetched in this call). ipr is not accepted — use queryEnterprise.',
             items: { enum: [...COMPANY_PROFILE_ASPECTS], type: 'string' },
             type: 'array',
           },
