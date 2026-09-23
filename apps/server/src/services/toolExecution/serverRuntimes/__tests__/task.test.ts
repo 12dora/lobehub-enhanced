@@ -21,6 +21,12 @@ vi.mock('@/server/services/task', () => ({
   TaskService: vi.fn(),
 }));
 
+// createTaskRuntime's module imports the runner for the production factory.
+// Unit tests inject runTaskDirect and must not load that graph.
+vi.mock('@/server/services/taskRunner', () => ({
+  TaskRunnerService: vi.fn(),
+}));
+
 describe('createTaskRuntime', () => {
   describe('task comments', () => {
     it('adds a comment to the current task with agent attribution', async () => {
@@ -591,6 +597,8 @@ describe('createTaskRuntime', () => {
         continueTopicId: 'tpc_existing',
         id: 'T-1',
         prompt: 'extra',
+        requestedByAgent: true,
+        runNow: false,
       });
       expect(result.content).toContain('Task T-1 started');
       expect(result.content).toContain('Topic: tpc_1');
@@ -646,9 +654,125 @@ describe('createTaskRuntime', () => {
       const result = await runtime.runTasks({ identifiers: ['T-A', 'T-B', 'T-C'] });
 
       expect(taskCaller.run).toHaveBeenCalledTimes(3);
+      expect(taskCaller.run).toHaveBeenNthCalledWith(1, {
+        id: 'T-A',
+        requestedByAgent: true,
+        runNow: false,
+      });
       expect(result.success).toBe(false);
       expect(result.content).toContain('Started 2/3 tasks (1 failed)');
       expect(result.content).toContain('T-B — failed: Task already has a running topic');
+    });
+
+    it('passes runNow only when the agent sets runNow or force', async () => {
+      const runTaskDirect = vi.fn().mockResolvedValue({ operationId: 'op', topicId: 'tpc' });
+      const runtime = createTaskRuntime({
+        agentModel: { existsById: vi.fn() } as any,
+        runTaskDirect,
+        taskCaller: { run: vi.fn() } as any,
+        taskModel: {} as any,
+        taskService: {} as any,
+      });
+
+      await runtime.runTask({ identifier: 'T-1' });
+      await runtime.runTask({ force: true, identifier: 'T-2' });
+
+      expect(runTaskDirect).toHaveBeenNthCalledWith(1, {
+        continueTopicId: undefined,
+        extraPrompt: undefined,
+        requestedByAgent: true,
+        runNow: false,
+        taskId: 'T-1',
+        trigger: 'manual',
+      });
+      expect(runTaskDirect).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ requestedByAgent: true, runNow: true, taskId: 'T-2' }),
+      );
+    });
+
+    it('passes batch runNow to every task', async () => {
+      const runTaskDirect = vi.fn().mockResolvedValue({ topicId: 'tpc' });
+      const runtime = createTaskRuntime({
+        agentModel: { existsById: vi.fn() } as any,
+        runTaskDirect,
+        taskCaller: { run: vi.fn() } as any,
+        taskModel: {} as any,
+        taskService: {} as any,
+      });
+
+      await runtime.runTasks({ identifiers: ['T-1', 'T-2'] });
+      await runtime.runTasks({ identifiers: ['T-3'], runNow: true });
+
+      expect(runTaskDirect).toHaveBeenNthCalledWith(1, {
+        requestedByAgent: true,
+        runNow: false,
+        taskId: 'T-1',
+        trigger: 'manual',
+      });
+      expect(runTaskDirect).toHaveBeenNthCalledWith(2, {
+        requestedByAgent: true,
+        runNow: false,
+        taskId: 'T-2',
+        trigger: 'manual',
+      });
+      expect(runTaskDirect).toHaveBeenNthCalledWith(3, {
+        requestedByAgent: true,
+        runNow: true,
+        taskId: 'T-3',
+        trigger: 'manual',
+      });
+    });
+
+    it('returns the schedule deferral message without a failure prefix', async () => {
+      const message = '已按计划在 2026-09-16 09:00 执行，无需立即运行';
+      const runtime = createTaskRuntime({
+        agentModel: { existsById: vi.fn() } as any,
+        runTaskDirect: vi.fn().mockRejectedValue(new Error(message)),
+        taskCaller: { run: vi.fn() } as any,
+        taskModel: {} as any,
+        taskService: {} as any,
+      });
+
+      const result = await runtime.runTask({ identifier: 'T-6' });
+
+      expect(result).toEqual({ content: message, success: false });
+    });
+  });
+
+  describe('updateTaskStatus', () => {
+    it('passes the live operation so a self-completion can be recorded', async () => {
+      const taskService = {
+        updateStatus: vi.fn().mockResolvedValue({
+          completionDeferred: true,
+          paused: [],
+          task: { identifier: 'T-6' },
+          unlocked: [],
+        }),
+      };
+      const runtime = createTaskRuntime({
+        agentModel: {} as any,
+        operationId: 'op-live',
+        taskCaller: {} as any,
+        taskId: 'task-1',
+        taskModel: {} as any,
+        taskService: taskService as any,
+        topicId: 'topic-live',
+      });
+
+      const result = await runtime.updateTaskStatus({ status: 'completed' });
+
+      expect(taskService.updateStatus).toHaveBeenCalledWith({
+        error: undefined,
+        id: 'task-1',
+        sourceOperationId: 'op-live',
+        sourceTaskId: 'task-1',
+        sourceTopicId: 'topic-live',
+        status: 'completed',
+      });
+      expect(result.success).toBe(true);
+      expect(result.content).toContain('completion recorded');
+      expect(result.content).toContain('T-6');
     });
   });
 });

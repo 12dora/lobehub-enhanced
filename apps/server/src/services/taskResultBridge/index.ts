@@ -7,6 +7,11 @@ import { TaskTopicModel } from '@/database/models/taskTopic';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { AiAgentService } from '../aiAgent';
+import {
+  completionRequestMatches,
+  readCompletionRequest,
+  recordedCompletionApplies,
+} from '../task/completionRequest';
 
 const log = debug('lobe-server:taskResultBridge');
 
@@ -104,6 +109,11 @@ export class TaskResultBridgeService {
     const { taskId, taskIdentifier, topicId } = params;
 
     const taskModel = new TaskModel(this.db, this.userId, this.workspaceId);
+    // Apply a completion the executing run recorded, before the terminal check
+    // below. onTopicComplete calls this bridge after its own status write and
+    // before heartbeat re-arm, so a task the agent marked completed becomes
+    // terminal in time for both the callback and the re-arm skip.
+    await this.applyRecordedCompletion(await taskModel.findById(taskId), params);
     const task = await taskModel.findById(taskId);
     const origin = (task?.context as TaskContext | undefined)?.origin;
 
@@ -190,5 +200,36 @@ export class TaskResultBridgeService {
     });
 
     log('bridged task %s result into topic %s (%s)', taskIdentifier, origin.topicId, reason);
+  }
+
+  /**
+   * Honor `context.completionRequest` from the run that just finished.
+   * Dynamic import avoids a load cycle: TaskService → TaskRunner →
+   * TaskLifecycle → this bridge.
+   */
+  private async applyRecordedCompletion(
+    task: { context?: unknown; status?: string } | null,
+    params: DeliverTaskResultParams,
+  ): Promise<void> {
+    const request = readCompletionRequest(task?.context);
+    if (!request || !completionRequestMatches(request, params)) return;
+
+    const { TaskService } = await import('../task');
+    const service = new TaskService(this.db, this.userId, this.workspaceId);
+
+    // Only while this operation is still the running one. A leftover request
+    // must not flip paused, scheduled, or canceled back to completed, and an
+    // interrupted or failed run must not apply it either.
+    if (normalizeReason(params.reason) === 'done' && recordedCompletionApplies(task, params)) {
+      await service.updateStatus({
+        id: params.taskId,
+        skipRunningInterrupt: true,
+        status: 'completed',
+        suppressCompletionNotify: true,
+      });
+      return;
+    }
+
+    await service.clearCompletionRequest(params.taskId);
   }
 }

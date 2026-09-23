@@ -21,6 +21,7 @@ import {
   isInterruptedSandboxResult,
   normalizeSandboxCommandResult,
 } from '@/server/services/sandbox';
+import { preprocessLhCommand } from '@/server/services/toolExecution/preprocessLhCommand';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const log = debug('lobe-server:managed-skill-runtime');
@@ -115,7 +116,25 @@ export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
         success: false,
       };
     }
-    const response = await this.sandboxService().callTool('runCommand', { command });
+    // The sandbox image ships Node (and therefore npx) but not the `lh` binary.
+    // Rewrite `lh …` to `npx -y @lobehub/cli` the same way the unmanaged runtime does.
+    const lhResult = await preprocessLhCommand(
+      command,
+      this.options.userId,
+      this.options.workspaceId,
+    );
+    if (lhResult.error) {
+      return {
+        executionEnv: 'sandbox',
+        exitCode: 1,
+        output: '',
+        stderr: lhResult.error,
+        success: false,
+      };
+    }
+    const response = await this.sandboxService().callTool('runCommand', {
+      command: lhResult.command,
+    });
     if (!response.success && !isInterruptedSandboxResult(response)) {
       return {
         executionEnv: 'sandbox',

@@ -121,6 +121,19 @@ describe('notifyAfterTopicComplete', () => {
     );
   });
 
+  it('does not send task_run_completed when the re-read task is canceled', async () => {
+    mockFindById.mockResolvedValue({
+      assigneeAgentId: 'agt-1',
+      instruction: 'write the digest',
+      name: 'Daily report',
+      status: 'canceled',
+    });
+
+    await notifyAfterTopicComplete({ ...base, reason: 'done' });
+
+    expect(notifySpy).not.toHaveBeenCalled();
+  });
+
   it('(c) successful run that paused for review → also task_waiting_for_user', async () => {
     mockFindById.mockResolvedValue({
       assigneeAgentId: 'agt-1',
@@ -149,7 +162,56 @@ describe('notifyAfterTopicComplete', () => {
 
     expect(notifySpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: 'write the digest',
+        content: 'final assistant output',
+        type: 'task_completed',
+      }),
+    );
+  });
+
+  it('task_completed falls back to the task title, not the raw instruction', async () => {
+    mockFindById.mockResolvedValue({
+      assigneeAgentId: 'agt-1',
+      instruction: '今天是 2026-09-16。请立刻提醒邵军军',
+      name: '催交邵军军',
+      status: 'completed',
+    });
+
+    await notifyAfterTopicComplete({
+      ...base,
+      lastAssistantContent: '   ',
+      reason: 'done',
+    });
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '催交邵军军',
+        type: 'task_completed',
+      }),
+    );
+    expect(notifySpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('请立刻提醒'),
+      }),
+    );
+  });
+
+  it('task_completed strips markdown from the last assistant message', async () => {
+    mockFindById.mockResolvedValue({
+      assigneeAgentId: 'agt-1',
+      instruction: 'raw instruction',
+      name: '催交',
+      status: 'completed',
+    });
+
+    await notifyAfterTopicComplete({
+      ...base,
+      lastAssistantContent: '## 已完成\n\n**催交**已发给[邵军军](https://example.com)。',
+      reason: 'done',
+    });
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '已完成\n\n催交已发给邵军军。',
         type: 'task_completed',
       }),
     );

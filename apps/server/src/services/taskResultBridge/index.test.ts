@@ -10,10 +10,20 @@ import { TaskResultBridgeService } from './index';
 // `MessageModel.create` is a class-field arrow (instance prop, not on the
 // prototype) and `AiAgentService`'s constructor builds many sub-services — mock
 // both modules so we observe the calls without standing up the real graph.
-const { createMsg, execAgent, getLastLeaf } = vi.hoisted(() => ({
+const {
+  createMsg,
+  execAgent,
+  getLastLeaf,
+  mockClearCompletion,
+  mockUpdateStatus,
+  TaskServiceMock,
+} = vi.hoisted(() => ({
   createMsg: vi.fn(),
   execAgent: vi.fn(),
   getLastLeaf: vi.fn(),
+  mockClearCompletion: vi.fn().mockResolvedValue(undefined),
+  mockUpdateStatus: vi.fn().mockResolvedValue({ paused: [], task: {}, unlocked: [] }),
+  TaskServiceMock: vi.fn(),
 }));
 
 vi.mock('@/database/models/message', () => ({
@@ -22,6 +32,10 @@ vi.mock('@/database/models/message', () => ({
 
 vi.mock('../aiAgent', () => ({
   AiAgentService: vi.fn(() => ({ execAgent })),
+}));
+
+vi.mock('../task', () => ({
+  TaskService: TaskServiceMock,
 }));
 
 const TEST_USER = 'user-1';
@@ -50,6 +64,15 @@ describe('TaskResultBridgeService.deliver', () => {
   let findByTopicId: any;
 
   beforeEach(() => {
+    // afterEach restoreAllMocks wipes vi.fn() implementations, including this
+    // module mock. Re-seed it or `new TaskService()` returns {} and the
+    // completion calls throw.
+    mockUpdateStatus.mockReset().mockResolvedValue({ paused: [], task: {}, unlocked: [] });
+    mockClearCompletion.mockReset().mockResolvedValue(undefined);
+    TaskServiceMock.mockReset().mockImplementation(() => ({
+      clearCompletionRequest: mockClearCompletion,
+      updateStatus: mockUpdateStatus,
+    }));
     createMsg.mockReset().mockResolvedValue({ id: 'task-cb-task-1-topic-done' } as any);
     // The creator topic's current leaf at delivery time — the live tail of the
     // conversation, NOT origin.messageId (the stale create-task message).
@@ -186,5 +209,61 @@ describe('TaskResultBridgeService.deliver', () => {
 
     const [params] = createMsg.mock.calls[0] as [any, string];
     expect(params.content).toContain('Raw final output from the run');
+  });
+
+  it('applies a recorded self-completion before the terminal check', async () => {
+    findById
+      .mockResolvedValueOnce({
+        context: { completionRequest: { operationId: 'op-task' }, origin: ORIGIN },
+        status: 'running',
+      } as any)
+      .mockResolvedValueOnce({
+        automationMode: 'schedule',
+        context: { origin: ORIGIN },
+        status: 'completed',
+      } as any);
+
+    await new TaskResultBridgeService(db, TEST_USER).deliver(baseParams);
+
+    expect(mockUpdateStatus).toHaveBeenCalledWith({
+      id: 'task-1',
+      skipRunningInterrupt: true,
+      status: 'completed',
+      suppressCompletionNotify: true,
+    });
+    expect(mockClearCompletion).not.toHaveBeenCalled();
+    expect(createMsg).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a stale recorded completion instead of completing a stopped task', async () => {
+    for (const status of ['paused', 'scheduled', 'canceled'] as const) {
+      mockUpdateStatus.mockClear();
+      mockClearCompletion.mockClear();
+      findById.mockResolvedValue({
+        automationMode: status === 'scheduled' ? 'schedule' : null,
+        context: { completionRequest: { operationId: 'op-task' }, origin: ORIGIN },
+        status,
+      } as any);
+
+      await new TaskResultBridgeService(db, TEST_USER).deliver(baseParams);
+
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockClearCompletion).toHaveBeenCalledWith('task-1');
+    }
+  });
+
+  it('clears a recorded completion when the run did not finish', async () => {
+    findById.mockResolvedValue({
+      context: { completionRequest: { operationId: 'op-task' }, origin: ORIGIN },
+      status: 'running',
+    } as any);
+
+    await new TaskResultBridgeService(db, TEST_USER).deliver({
+      ...baseParams,
+      reason: 'interrupted',
+    });
+
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockClearCompletion).toHaveBeenCalledWith('task-1');
   });
 });

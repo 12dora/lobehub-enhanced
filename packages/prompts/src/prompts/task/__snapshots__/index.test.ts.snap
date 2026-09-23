@@ -8,6 +8,16 @@ Status: ● running     Priority: -
 Instruction: 帮我写一本 AI Agent 技术书籍
 
 Review: (not configured)
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -20,6 +30,16 @@ Instruction: 帮我写一本 AI Agent 技术书籍，目标 8 章
 Description: 面向开发者的技术书籍
 
 Review: (not configured)
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -31,6 +51,16 @@ Status: ● running     Priority: -
 Instruction: 写书
 
 Review: (not configured)
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -58,6 +88,16 @@ Activities:
   📋 18h ago Brief [decision] 大纲完成 ✅ approve  brief_001
   💭 3h ago 👤 user 第5章后移，增加评测章节
   💭 2h ago 🤖 agent 已调整大纲
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -76,6 +116,16 @@ Activities:
   📋 18h ago Brief [decision] 大纲完成 [urgent] ✅ approve  brief_abc123
   💬 18h ago Topic #2 修订大纲 ✓ completed  tpc_bbb
   📋 18h ago Brief [decision] 建议拆分第4章 [normal]  brief_def456
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -95,6 +145,16 @@ Review: (not configured)
 Activities:
   💭 3h ago 🤖 agent 大纲已完成，请确认
   💭 2h ago 👤 user 确认，开始写
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -115,6 +175,16 @@ Review: (not configured)
     TASK-4 ● running 第2章 核心架构 ← blocks: TASK-2 ◀ current
     TASK-6 ○ backlog 第3章 手写 Agent ← blocks: TASK-4
 </parentTask>
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -130,6 +200,16 @@ Subtasks:
   TASK-3 ○ backlog 第2章 快速上手 ← blocks: TASK-2
 
 Review: (not configured)
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -146,6 +226,16 @@ Subtasks:
   TASK-4 ○ backlog 第3章 手写 Agent
 
 Review: (not configured)
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -165,6 +255,16 @@ Review: (not configured)
 Activities:
   💭 2h ago 👤 user 用户反馈
   💭 1h ago 🤖 agent Agent 回复
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -187,6 +287,16 @@ Review: (not configured)
 
 Activities:
   💭 1h ago 👤 user 用户反馈
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -207,6 +317,16 @@ Review: (not configured)
 Activities:
   💭 2h ago 👤 user 第2章改为先上手再讲原理
   💭 1h ago 👤 user 增加评测章节
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -221,6 +341,16 @@ Review: (not configured)
 
 Activities:
   ✅ 19h ago Brief [result] 第2章完成 ✏️ 第2章需要更多实例
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;
 
@@ -239,5 +369,15 @@ Review: (not configured)
 
 Activities:
   💭 1h ago 👤 user AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...
+<run_rules>
+This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.
+If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".
+If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.
+If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.
+Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.
+Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.
+The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.
+To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.
+</run_rules>
 </task>"
 `;

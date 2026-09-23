@@ -119,6 +119,15 @@ describe('TaskService', () => {
       });
     });
 
+    it('run should pass the agent run flags through', async () => {
+      await taskService.run('T-1', { requestedByAgent: true, runNow: false });
+      expect(lambdaClient.task.run.mutate).toHaveBeenCalledWith({
+        id: 'T-1',
+        requestedByAgent: true,
+        runNow: false,
+      });
+    });
+
     it('addComment should pass all params', async () => {
       await taskService.addComment('T-1', 'Great work', {
         authorAgentId: 'agt_1',

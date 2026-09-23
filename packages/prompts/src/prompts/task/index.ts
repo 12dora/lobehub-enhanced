@@ -594,10 +594,7 @@ export const buildTaskRunPrompt = (input: TaskRunPromptInput, now?: Date): strin
       }
     }
     taskLines.push(
-      '  Use the `verify` skill to capture each artifact, then submit it with `lh verify',
-    );
-    taskLines.push(
-      '  submit` (the skill resolves your verify run id and check item ids at runtime).',
+      '  For in-app delivery acceptance, use lobe-delivery-checker. Do not call the verify skill or "lh verify submit".',
     );
   }
 
@@ -702,6 +699,18 @@ export const buildTaskRunPrompt = (input: TaskRunPromptInput, now?: Date): strin
     taskLines.push('</parentTask>');
   }
 
+  taskLines.push(
+    '<run_rules>',
+    'This message was started by the schedule or task runner. Do not ask the user to confirm the schedule, and do not say the schedule is not configured.',
+    'If required input data is missing, call addTaskComment stating exactly what is missing, then stop. Do not invent a status such as "schedule not confirmed".',
+    'If Status is completed and this run has no high_priority_instruction and no user_feedback, reply with one line that the task is already complete, then stop. Do not invent missing fields.',
+    'If the workspace already contains the requested deliverable, call updateTaskStatus to mark it completed, or state in one line what is still missing.',
+    'Do not use the verify skill or "lh verify submit". For delivery acceptance on this run, use lobe-delivery-checker.',
+    'Do not use the lh CLI via runCommand for task operations. Use lobe-task tools: viewTask, editTask, addTaskComment, updateTaskStatus, setTaskSchedule, runTask.',
+    'The instruction is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction explicitly needs them.',
+    'To reach colleagues on this deployment, use lobe-reminder (DingTalk work notifications, directory staff: ids). Do not use Messenger bots, 飞书, 微信, or email.',
+    '</run_rules>',
+  );
   taskLines.push('</task>');
   sections.push(taskLines.join('\n'));
 

@@ -178,9 +178,13 @@ export interface EditTaskState {
 export interface RunTaskParams {
   /** Optional existing topic to continue (rather than creating a new topic). */
   continueTopicId?: string;
+  /** Alias of runNow. Set only when the user explicitly asked to run now. */
+  force?: boolean;
   identifier: string;
   /** Optional extra prompt prepended to the task instruction for this run. */
   prompt?: string;
+  /** Run a schedule-mode task immediately. Set only when the user asked to run now. */
+  runNow?: boolean;
 }
 
 export interface RunTaskState {
@@ -193,6 +197,8 @@ export interface RunTaskState {
 export interface RunTasksParams {
   /** Identifiers of tasks to run, in execution order. */
   identifiers: string[];
+  /** Only when the user explicitly asked to run now. */
+  runNow?: boolean;
 }
 
 export interface RunTasksItemResult {

@@ -21,19 +21,31 @@ import {
 } from '@/server/services/taskNotification';
 
 import { buildTaskPrompt } from './buildTaskPrompt';
+import { agentFutureScheduleRefusal } from './nextScheduleFire';
 
 const log = debug('task-runner');
 
 export interface RunTaskParams {
   continueTopicId?: string;
   extraPrompt?: string;
-  taskId: string;
   /**
    * What triggered this run. Defaults to `'manual'` — the ad-hoc "run now"
    * path (TRPC `task.run`, agent `runTask` tool). The scheduler ticks pass
    * `'schedule'` / `'heartbeat'` so the lifecycle can tell an ad-hoc run apart
    * from an automation tick (LOBE-11388/11391).
    */
+  /**
+   * Set by the agent `runTask` tool. Schedule-mode tasks whose next fire is
+   * still in the future are refused unless `runNow` is set. UI and scheduler
+   * callers leave this unset.
+   */
+  requestedByAgent?: boolean;
+  /**
+   * The user explicitly asked to run a scheduled task now. The tool sets this
+   * only in that case (`runNow` / `force`).
+   */
+  runNow?: boolean;
+  taskId: string;
   trigger?: TaskRunTrigger;
 }
 
@@ -86,6 +98,11 @@ export class TaskRunnerService {
     const task = await this.taskModel.resolve(idOrIdentifier);
     if (!task) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
+    }
+
+    const scheduleRefusal = agentFutureScheduleRefusal(task, { ...params, trigger }, new Date());
+    if (scheduleRefusal) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: scheduleRefusal });
     }
 
     if (isReminderTaskConfig(task.config)) {

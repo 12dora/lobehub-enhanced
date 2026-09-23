@@ -9,7 +9,7 @@ export const systemPrompt = `You have access to Task management tools. Use them 
 - **setTaskSchedule**: Configure (or clear) the recurring schedule of a task. Use this to turn a task into a periodically running one, switch automation modes, or disable automation. See "Schedule fields" below for the supported params
 - **setTaskVerify**: Configure (or clear) a task's delivery-acceptance (verify) gate. Use this to define how a task's result is checked when it completes, so the executing agent's "done" is verified by a separate reviewer rather than blindly trusted. See "Verify fields" below
 - **runTask**: Actually START a task — kicks off the assigned agent in a new (or continued) topic. Use this to launch execution; do NOT use updateTaskStatus(running) to start a task, that only flips a flag without executing. The task must have an assigneeAgentId
-- **runTasks**: Start multiple tasks in one call. Prefer this when launching a batch of related subtasks (e.g. all subtasks you just created); cuts down on tool calls and makes the start atomic from the user's perspective
+- **runTasks**: Start multiple tasks in one call. Prefer this when launching a batch of related subtasks (e.g. all subtasks you just created); cuts down on tool calls and makes the start atomic from the user's perspective. Pass runNow=true only when the user explicitly asked to run now; otherwise omit it so schedule-mode tasks keep their next fire
 - **updateTaskStatus**: Change a task's status. If you mark a task as failed, include an error message explaining why. Use this to mark tasks completed/cancelled/paused/failed — NOT to start them (use runTask for that). Omitting identifier only works when there is a current task context
 - **deleteTask**: Delete a task. Subtasks become top-level (not cascaded); dependencies/topics/comments cascade-delete; irreversible
 
@@ -27,10 +27,14 @@ Verify fields (setTaskVerify):
 - **verifierAgentId**: agent that runs the verification; omit to use the built-in verify agent
 - **maxIterations**: cap on verify repair / re-run iterations (1-10)
 
-When you dispatch an executable task to another agent (you set assigneeAgentId, then runTask), do NOT trust its self-reported "done" blindly — set a verify gate so the result is independently checked. Right after creating such a task, call setTaskVerify(identifier, enabled=true, requirement="<one sentence acceptance criteria>") before runTask. Skip verify only for trivial or non-deliverable tasks (e.g. pure status bookkeeping).
+When you dispatch an executable task to another agent (you set assigneeAgentId, then runTask), do NOT trust its self-reported "done" blindly — set a verify gate so the result is independently checked. Right after creating such a task, call setTaskVerify(identifier, enabled=true, requirement="<one sentence acceptance criteria>") before deciding whether to run it. Skip verify only for trivial or non-deliverable tasks (e.g. pure status bookkeeping).
+
+Do not call runTask or runTasks on a schedule-mode task whose next fire is still in the future. The schedule starts it. Call them only when the user explicitly asked to run now, and pass runNow=true (force=true is the same switch on runTask). If the tool replies "已按计划在 <time> 执行，无需立即运行", stop and tell the user that time. Do not retry runTask or runTasks.
+
+When you are executing a task and you call updateTaskStatus(completed) on that same task, the completion is recorded and this run keeps going until it finishes. That is not an interrupt. Do not start a replacement run.
 
 When planning work:
 1. Create tasks for each major piece of work (use parentIdentifier to organize as subtasks)
 2. Use editTask with addDependencies to control execution order
 3. For executable tasks dispatched to an agent, use setTaskVerify to attach acceptance criteria before running them
-4. Use updateTaskStatus to mark the current task as completed when you finish all work`;
+4. Use updateTaskStatus to mark a task completed when its work is finished. On the task you are currently executing, that records completion and lets the run finish. For a recurring schedule or heartbeat task, do not mark it completed just because this occurrence finished — the runner schedules the next fire. Mark it completed only when the task itself should stop.`;

@@ -687,7 +687,14 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
   };
 
   runTask = async (
-    params: { continueTopicId?: string; identifier?: string; prompt?: string },
+    params: {
+      continueTopicId?: string;
+      /** Alias of `runNow`. */
+      force?: boolean;
+      identifier?: string;
+      prompt?: string;
+      runNow?: boolean;
+    },
     ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     const identifier = params.identifier?.trim() || ctx?.taskId || undefined;
@@ -701,9 +708,13 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
     try {
       log('[TaskExecutor] runTask - identifier:', identifier);
+      // Agent-initiated: the server defers a schedule-mode task whose next fire is
+      // still in the future unless the user explicitly asked to run it now.
       const result = await taskService.run(identifier, {
         continueTopicId: params.continueTopicId,
         prompt: params.prompt,
+        requestedByAgent: true,
+        runNow: params.runNow === true || params.force === true,
       });
 
       const topicId = (result as { topicId?: string } | undefined)?.topicId;
@@ -733,7 +744,11 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
   };
 
   runTasks = async (
-    params: { identifiers: string[] },
+    params: {
+      identifiers: string[];
+      /** Run schedule-mode tasks immediately. Set only when the user asked to run now. */
+      runNow?: boolean;
+    },
     _ctx?: BuiltinToolContext,
   ): Promise<BuiltinToolResult> => {
     const identifiers = Array.isArray(params.identifiers)
@@ -755,7 +770,12 @@ class TaskExecutor extends BaseExecutor<typeof TaskApiName> {
 
     for (const [index, identifier] of identifiers.entries()) {
       try {
-        const result = await taskService.run(identifier);
+        // Same agent-initiated guard as runTask: one batch-level runNow applies to
+        // every item, and only an explicit `true` bypasses the schedule deferral.
+        const result = await taskService.run(identifier, {
+          requestedByAgent: true,
+          runNow: params.runNow === true,
+        });
         const topicId = (result as { topicId?: string } | undefined)?.topicId;
         const operationId = (result as { operationId?: string } | undefined)?.operationId;
         results.push({ identifier, operationId, success: true, topicId });

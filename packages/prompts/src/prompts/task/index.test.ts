@@ -398,7 +398,35 @@ describe('buildTaskRunPrompt', () => {
     expect(result).toContain('login page renders (required)');
     expect(result).toContain('· evidence: screenshot — full page');
     expect(result).toContain('console is clean');
-    expect(result).toContain('lh verify');
+    expect(result).toContain('lobe-delivery-checker');
+    expect(result).toContain('Do not call the verify skill');
+    expect(result).not.toContain('skill resolves your verify run');
+  });
+
+  it('tells a scheduled run not to confirm the cron, sweep, or use lh', () => {
+    const result = buildTaskRunPrompt(
+      {
+        task: {
+          id: 'task_root',
+          identifier: 'T-1',
+          instruction: '每天 10:00，请根据我提供的前一日产线数据汇总日报',
+          name: '生产日报',
+          status: 'backlog',
+        },
+      },
+      NOW,
+    );
+
+    expect(result).toContain('started by the schedule or task runner');
+    expect(result).toContain('addTaskComment');
+    expect(result).toContain('schedule not confirmed');
+    expect(result).toContain('already complete');
+    expect(result).toContain('updateTaskStatus');
+    expect(result).toContain('lobe-delivery-checker');
+    expect(result).toContain('lobe-task tools');
+    expect(result).toContain('lobe-reminder');
+    expect(result).toContain('staff:');
+    expect(result).not.toContain('skill resolves your verify run');
   });
 
   it('should omit the verify section when verify is disabled', () => {

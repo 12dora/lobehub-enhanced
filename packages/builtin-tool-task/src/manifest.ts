@@ -259,7 +259,7 @@ export const TaskManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Trigger an actual run of a task — this kicks off the assigned agent in a new (or continued) topic. Use this to START tasks; do NOT use updateTaskStatus(running) to start a task, that only flips the status flag without actually executing anything. The task must already have an assigneeAgentId; if not, edit the task to assign one first. Will fail with a CONFLICT-style error if the task already has a running topic (cancel it first or pass continueTopicId).',
+        'Trigger an actual run of a task — this kicks off the assigned agent in a new (or continued) topic. Use this to START tasks; do NOT use updateTaskStatus(running) to start a task, that only flips the status flag without actually executing anything. The task must already have an assigneeAgentId; if not, edit the task to assign one first. Will fail with a CONFLICT-style error if the task already has a running topic (cancel it first or pass continueTopicId). For a schedule-mode task whose next fire is still in the future, this refuses unless runNow (or force) is true — set that only when the user explicitly asked to run immediately. Otherwise leave the cron to start it.',
       name: TaskApiName.runTask,
       parameters: {
         properties: {
@@ -267,6 +267,11 @@ export const TaskManifest: BuiltinToolManifest = {
             description:
               'Optional id of an existing topic to continue. When omitted, a new topic is created.',
             type: 'string',
+          },
+          force: {
+            description:
+              'Alias of runNow. Set true only when the user explicitly asked to run this scheduled task immediately. Omit when the next fire is still in the future.',
+            type: 'boolean',
           },
           identifier: {
             description: 'The task identifier to run (e.g. "TASK-1").',
@@ -276,6 +281,11 @@ export const TaskManifest: BuiltinToolManifest = {
             description:
               'Optional extra prompt prepended to the task instruction for this run only.',
             type: 'string',
+          },
+          runNow: {
+            description:
+              'Set true only when the user explicitly asked to run this scheduled task immediately. Omit for a schedule-mode task whose next fire is still in the future.',
+            type: 'boolean',
           },
         },
         required: ['identifier'],
@@ -293,6 +303,11 @@ export const TaskManifest: BuiltinToolManifest = {
               'Identifiers of tasks to run, in execution order (e.g. ["TASK-1", "TASK-2"]).',
             items: { type: 'string' },
             type: 'array',
+          },
+          runNow: {
+            description:
+              'Only when the user explicitly asked to run now. Omit so a schedule-mode task waits for its next fire.',
+            type: 'boolean',
           },
         },
         required: ['identifiers'],

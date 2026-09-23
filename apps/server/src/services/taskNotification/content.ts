@@ -43,6 +43,83 @@ const truncate = (text: string, maxChars: number): string =>
   text.length > maxChars ? text.slice(0, maxChars) : text;
 
 /**
+ * One ``` fence, same spans as `/```[^\n]*\n?([\s\S]*?)```/`.
+ * A closer after the info-line newline wins; otherwise the rightmost ``` on
+ * that line closes it and the body is empty. Null means no closer remains.
+ */
+const takeCodeFence = (raw: string, open: number): { capture: string; next: number } | null => {
+  const after = open + 3;
+  const newline = raw.indexOf('\n', after);
+  const lineEnd = newline === -1 ? raw.length : newline;
+  if (newline !== -1) {
+    const close = raw.indexOf('```', newline + 1);
+    if (close !== -1) return { capture: raw.slice(newline + 1, close), next: close + 3 };
+  }
+  const rel = raw.slice(after, lineEnd).lastIndexOf('```');
+  if (rel === -1) return null;
+  return { capture: '', next: after + rel + 3 };
+};
+
+/**
+ * Same replacements as the old fence regex, without its super-linear backtracking.
+ * The info string is dropped. The body (group 1) is kept.
+ */
+const stripCodeFences = (raw: string): string => {
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const open = raw.indexOf('```', cursor);
+    if (open === -1) {
+      parts.push(raw.slice(cursor));
+      break;
+    }
+    const matched = takeCodeFence(raw, open);
+    if (!matched) {
+      parts.push(raw.slice(cursor));
+      break;
+    }
+    parts.push(raw.slice(cursor, open), matched.capture);
+    cursor = matched.next;
+  }
+  return parts.join('');
+};
+
+/**
+ * Turn markdown into DingTalk-friendly plain lines: drop fences, headings,
+ * emphasis, and link targets, and keep the readable text and line breaks.
+ * Images and HTML are removed afterwards by `sanitizeNotificationContent`.
+ */
+export const stripMarkdownToPlainLines = (raw: string): string => {
+  let text = raw.replaceAll('\r\n', '\n');
+  text = stripCodeFences(text);
+  text = text.replaceAll(/`([^`\n]+)`/g, '$1');
+  text = text.replaceAll(/!\[[^\]]*\]\([^)]*\)/g, '');
+  text = text.replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  text = text.replaceAll(/^#{1,6}\s+/gm, '');
+  text = text.replaceAll(/(\*\*|__)([\s\S]*?)\1/g, '$2');
+  text = text.replaceAll(/(^|\s)[*_]([^*\n_]+)[*_](?=\s|$)/g, '$1$2');
+  text = text.replaceAll(/^\s*>\s?/gm, '');
+  text = text.replaceAll(/^\s*[-*+]\s+/gm, '');
+  text = text.replaceAll(/^\s*\d+\.\s+/gm, '');
+  text = text.replaceAll(/[ \t]+\n/g, '\n');
+  text = text.replaceAll(/\n{3,}/g, '\n\n');
+  return text.trim();
+};
+
+/**
+ * Body for a `task_completed` push: the run's last assistant message when we
+ * have one, otherwise the task title. Never the raw instruction.
+ */
+export const taskCompletedNotifyBody = (input: {
+  fallbackTitle?: string | null;
+  lastAssistant?: string | null;
+}): string => {
+  const plain = stripMarkdownToPlainLines(input.lastAssistant ?? '');
+  if (plain) return plain;
+  return (input.fallbackTitle ?? '').trim();
+};
+
+/**
  * Plain-text notification body: strip markdown images and HTML tags, keep
  * line breaks, then truncate.
  */

@@ -7,7 +7,9 @@ import {
   formatShanghaiTimestamp,
   INBOX_CONTENT_MAX_CHARS,
   sanitizeNotificationContent,
+  stripMarkdownToPlainLines,
   TASK_NOTIFICATION_ZH_LABELS,
+  taskCompletedNotifyBody,
 } from './content';
 
 describe('sanitizeNotificationContent', () => {
@@ -33,6 +35,52 @@ describe('sanitizeNotificationContent', () => {
   it('returns empty string for blank input', () => {
     expect(sanitizeNotificationContent(undefined)).toBe('');
     expect(sanitizeNotificationContent('   ')).toBe('');
+  });
+});
+
+describe('stripMarkdownToPlainLines', () => {
+  it('turns headings, emphasis, and links into plain lines', () => {
+    expect(
+      stripMarkdownToPlainLines('## 已完成\n\n**催交**已发给[邵军军](https://example.com)。'),
+    ).toBe('已完成\n\n催交已发给邵军军。');
+  });
+
+  it('drops fenced code markers and keeps the body', () => {
+    expect(stripMarkdownToPlainLines('```text\nline one\n```')).toBe('line one');
+  });
+
+  it('drops a same-line fence and keeps a closer that follows the info-line newline', () => {
+    expect(stripMarkdownToPlainLines('before ```hidden``` after')).toBe('before  after');
+    expect(stripMarkdownToPlainLines('```abc```\nkept\n```')).toBe('kept');
+    expect(stripMarkdownToPlainLines('```a`b\nline\n```')).toBe('line');
+    expect(stripMarkdownToPlainLines('See\n```js\nconst a = 1\n```\nDone')).toBe(
+      'See\nconst a = 1\n\nDone',
+    );
+    expect(stripMarkdownToPlainLines('```\nprice $1\n```')).toBe('price $1');
+  });
+
+  it('leaves an unclosed fence in place', () => {
+    const unclosed = `\`\`\`${'a'.repeat(2000)}`;
+    expect(stripMarkdownToPlainLines('```not closed')).toBe('```not closed');
+    expect(stripMarkdownToPlainLines(unclosed)).toBe(unclosed);
+    expect(stripMarkdownToPlainLines('````')).toBe('````');
+  });
+});
+
+describe('taskCompletedNotifyBody', () => {
+  it('prefers the assistant message over the title', () => {
+    expect(
+      taskCompletedNotifyBody({
+        fallbackTitle: '催交邵军军',
+        lastAssistant: '已发给邵军军',
+      }),
+    ).toBe('已发给邵军军');
+  });
+
+  it('falls back to the title when the assistant message is empty', () => {
+    expect(taskCompletedNotifyBody({ fallbackTitle: '催交邵军军', lastAssistant: '  ' })).toBe(
+      '催交邵军军',
+    );
   });
 });
 

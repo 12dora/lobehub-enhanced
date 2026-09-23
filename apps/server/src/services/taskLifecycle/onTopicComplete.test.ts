@@ -20,6 +20,11 @@ vi.mock('@/database/models/verifyRun', () => ({
   VerifyRunModel: vi.fn(() => ({ findByOperation: verifyFindByOperation })),
 }));
 
+const taskServiceUpdateStatus = vi.hoisted(() => vi.fn());
+vi.mock('../task', () => ({
+  TaskService: vi.fn(() => ({ updateStatus: taskServiceUpdateStatus })),
+}));
+
 const baseTask = (overrides: Partial<TaskItem> = {}): TaskItem =>
   ({
     automationMode: 'heartbeat',
@@ -59,6 +64,7 @@ describe('TaskLifecycleService.onTopicComplete', () => {
     createBrief = vi.fn().mockResolvedValue(undefined);
     getReviewConfig = vi.fn().mockReturnValue(undefined);
     verifyFindByOperation.mockReset().mockResolvedValue(undefined);
+    taskServiceUpdateStatus.mockReset().mockResolvedValue({ paused: [], unlocked: [] });
 
     const taskModel = (service as any).taskModel;
     taskModel.updateStatus = updateStatus;
@@ -310,6 +316,164 @@ describe('TaskLifecycleService.onTopicComplete', () => {
       expect(updateStatus).not.toHaveBeenCalledWith('task-1', 'paused', expect.anything());
       // The creator callback is DEFERRED to the verify settle path, not fired here.
       expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('matching completion request completes the task instead of parking, including verify-bound runs', async () => {
+      const task = baseTask({
+        automationMode: 'schedule',
+        context: {
+          completionRequest: { operationId: 'op-1', topicId: 'topic-1' },
+        } as any,
+      });
+      findById.mockResolvedValue(task);
+      verifyFindByOperation.mockResolvedValue({ planConfirmedAt: new Date() });
+      const bridge = vi.spyOn(service as any, 'bridgeResultToCreator').mockResolvedValue(undefined);
+
+      await service.onTopicComplete({
+        operationId: 'op-1',
+        reason: 'done',
+        taskId: 'task-1',
+        taskIdentifier: 'TASK-1',
+        topicId: 'topic-1',
+      });
+
+      expect(taskServiceUpdateStatus).toHaveBeenCalledWith({
+        id: 'task-1',
+        skipRunningInterrupt: true,
+        status: 'completed',
+        suppressCompletionNotify: true,
+      });
+      expect(updateStatus).not.toHaveBeenCalledWith('task-1', 'scheduled', expect.anything());
+      expect(updateStatus).not.toHaveBeenCalledWith('task-1', 'paused', expect.anything());
+      expect(updateStatus).not.toHaveBeenCalledWith('task-1', 'completed', expect.anything());
+      // Verify still owns the creator callback.
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('matches a completion request by topicId and skips the legacy pause', async () => {
+      const task = baseTask({
+        automationMode: null,
+        context: { completionRequest: { topicId: 'topic-1' } } as any,
+      });
+      findById.mockResolvedValue(task);
+      vi.spyOn(service as any, 'bridgeResultToCreator').mockResolvedValue(undefined);
+
+      await service.onTopicComplete({
+        operationId: 'op-other',
+        reason: 'done',
+        taskId: 'task-1',
+        taskIdentifier: 'TASK-1',
+        topicId: 'topic-1',
+      });
+
+      expect(taskServiceUpdateStatus).toHaveBeenCalledWith({
+        id: 'task-1',
+        skipRunningInterrupt: true,
+        status: 'completed',
+        suppressCompletionNotify: true,
+      });
+      expect(updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('ignores a completion request for a different operation and topic', async () => {
+      const task = baseTask({
+        automationMode: 'schedule',
+        context: {
+          completionRequest: { operationId: 'op-other', topicId: 'topic-other' },
+        } as any,
+      });
+      findById.mockResolvedValue(task);
+
+      await service.onTopicComplete({
+        operationId: 'op-1',
+        reason: 'done',
+        taskId: 'task-1',
+        taskIdentifier: 'TASK-1',
+        topicId: 'topic-1',
+      });
+
+      expect(taskServiceUpdateStatus).not.toHaveBeenCalled();
+      expect(updateStatus).toHaveBeenCalledWith('task-1', 'scheduled', { error: null });
+    });
+
+    it('keeps a user-canceled task canceled when the done hook runs after a recorded completion', async () => {
+      const running = baseTask({
+        automationMode: 'schedule',
+        context: {
+          completionRequest: { operationId: 'op-1', topicId: 'topic-1' },
+        } as any,
+        status: 'running',
+      });
+      // Cancel lands after the hook's first read (handoff can be slow) and
+      // before the status write. The request is still on the row.
+      const canceled = baseTask({
+        automationMode: 'schedule',
+        context: {
+          completionRequest: { operationId: 'op-1', topicId: 'topic-1' },
+        } as any,
+        status: 'canceled',
+      });
+      findById.mockResolvedValueOnce(running).mockResolvedValue(canceled);
+      vi.spyOn(service as any, 'bridgeResultToCreator').mockResolvedValue(undefined);
+
+      await service.onTopicComplete({
+        operationId: 'op-1',
+        reason: 'done',
+        taskId: 'task-1',
+        taskIdentifier: 'TASK-1',
+        topicId: 'topic-1',
+      });
+
+      expect(taskServiceUpdateStatus).not.toHaveBeenCalled();
+      expect(updateStatus).not.toHaveBeenCalled();
+      expect(updateStatus).not.toHaveBeenCalledWith('task-1', 'completed', expect.anything());
+      expect(updateStatus).not.toHaveBeenCalledWith('task-1', 'scheduled', expect.anything());
+    });
+
+    it('does not apply a recorded completion over an external pause or complete', async () => {
+      for (const status of ['paused', 'completed'] as const) {
+        taskServiceUpdateStatus.mockClear();
+        updateStatus.mockClear();
+        const task = baseTask({
+          automationMode: 'heartbeat',
+          context: {
+            completionRequest: { operationId: 'op-1', topicId: 'topic-1' },
+          } as any,
+          status,
+        });
+        findById.mockResolvedValue(task);
+
+        await service.onTopicComplete({
+          operationId: 'op-1',
+          reason: 'done',
+          taskId: 'task-1',
+          taskIdentifier: 'TASK-1',
+          topicId: 'topic-1',
+        });
+
+        expect(taskServiceUpdateStatus).not.toHaveBeenCalled();
+        expect(updateStatus).not.toHaveBeenCalled();
+      }
+    });
+
+    it('does not apply a completion request when the run failed', async () => {
+      const task = baseTask({
+        automationMode: null,
+        context: { completionRequest: { operationId: 'op-1', topicId: 'topic-1' } } as any,
+      });
+      findById.mockResolvedValue(task);
+
+      await service.onTopicComplete({
+        errorMessage: 'boom',
+        operationId: 'op-1',
+        reason: 'error',
+        taskId: 'task-1',
+        taskIdentifier: 'TASK-1',
+        topicId: 'topic-1',
+      });
+
+      expect(taskServiceUpdateStatus).not.toHaveBeenCalled();
+      expect(updateStatus).toHaveBeenCalledWith('task-1', 'paused', { error: 'boom' });
     });
 
     it('non-verify-bound task → fires the creator callback at onTopicComplete', async () => {

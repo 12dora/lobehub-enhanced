@@ -1,5 +1,7 @@
 # lh task - Complete Command Reference
 
+In-app task runs must use lobe-task tools (`viewTask`, `editTask`, `addTaskComment`, `updateTaskStatus`, `setTaskSchedule`, `runTask`). Do not run `lh` via `runCommand` — the sandbox has no `lh` CLI. The commands below are for the external CLI only.
+
 ## Core Commands
 
 - `lh task list [--status <status>] [--root] [--parent <id>] [--agent <id>] [-L <limit>] [--tree]` - List tasks

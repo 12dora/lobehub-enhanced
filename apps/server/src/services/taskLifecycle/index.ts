@@ -33,8 +33,14 @@ import { TaskTopicModel } from '@/database/models/taskTopic';
 import { TopicModel } from '@/database/models/topic';
 import { VerifyRunModel } from '@/database/models/verifyRun';
 import type { LobeChatDatabase } from '@/database/type';
+import { noteRuntimeError } from '@/server/enterprise/services/platformSystem/noteRuntimeError';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 import { SystemAgentService } from '@/server/services/systemAgent';
+import {
+  isStructuredOutputBackedOff,
+  noteStructuredOutputHttp400,
+} from '@/server/services/systemAgent/structuredOutputBackoff';
+import { recordedCompletionApplies } from '@/server/services/task/completionRequest';
 import { TaskResultBridgeService } from '@/server/services/taskResultBridge';
 import { createTaskSchedulerModule } from '@/server/services/taskScheduler';
 
@@ -212,22 +218,47 @@ export class TaskLifecycleService {
       }
 
       if (currentTask) {
-        if (
-          currentTask.automationMode === 'schedule' &&
-          (await this.scheduleCapReached(currentTask))
-        ) {
-          log('cap reached for task=%s — marking completed post-tick', taskIdentifier);
-          await this.taskModel.updateStatus(taskId, 'completed', { completedAt: new Date() });
-        } else if (currentTask.automationMode) {
-          // A successful tick parks the automation task back at its resting
-          // 'scheduled' state and clears the live error column. Before clearing
-          // it, stamp a durable recovery marker + reset the failure fuse so the
-          // recovery is auditable and a later query can still tell the task once
-          // failed — the live `error` alone would silently self-heal (LOBE-11390).
-          await this.recordAutomationRecovery(currentTask);
-          await this.taskModel.updateStatus(taskId, 'scheduled', { error: null });
-        } else if (!verifyBound && this.taskModel.shouldPauseOnTopicComplete(currentTask)) {
-          await this.taskModel.updateStatus(taskId, 'paused', { error: null });
+        // Re-read immediately before the status write. Handoff/brief above can
+        // outlive a user cancel, and the snapshot from the start of this hook
+        // would otherwise complete a task that is no longer running.
+        const freshTask = await this.taskModel.findById(taskId);
+        // An executing run records completion on `context.completionRequest`
+        // and leaves the row running so this hook can finish the topic first.
+        // Apply it only if that same operation is still the running one.
+        // Verify-bound runs skip the result bridge — without this branch the
+        // request is dropped and the task is parked at scheduled/paused.
+        if (freshTask?.status === 'running') {
+          if (
+            recordedCompletionApplies(freshTask, {
+              operationId: params.operationId,
+              topicId,
+            })
+          ) {
+            // Dynamic import: TaskService → TaskRunner → this module.
+            const { TaskService } = await import('../task');
+            await new TaskService(this.db, this.userId, this.workspaceId).updateStatus({
+              id: taskId,
+              skipRunningInterrupt: true,
+              status: 'completed',
+              suppressCompletionNotify: true,
+            });
+          } else if (
+            freshTask.automationMode === 'schedule' &&
+            (await this.scheduleCapReached(freshTask))
+          ) {
+            log('cap reached for task=%s — marking completed post-tick', taskIdentifier);
+            await this.taskModel.updateStatus(taskId, 'completed', { completedAt: new Date() });
+          } else if (freshTask.automationMode) {
+            // A successful tick parks the automation task back at its resting
+            // 'scheduled' state and clears the live error column. Before clearing
+            // it, stamp a durable recovery marker + reset the failure fuse so the
+            // recovery is auditable and a later query can still tell the task once
+            // failed — the live `error` alone would silently self-heal (LOBE-11390).
+            await this.recordAutomationRecovery(freshTask);
+            await this.taskModel.updateStatus(taskId, 'scheduled', { error: null });
+          } else if (!verifyBound && this.taskModel.shouldPauseOnTopicComplete(freshTask)) {
+            await this.taskModel.updateStatus(taskId, 'paused', { error: null });
+          }
         }
       }
     } else if (reason === 'error') {
@@ -538,12 +569,26 @@ export class TaskLifecycleService {
     lastAssistantContent: string,
     currentTask: any,
   ): Promise<void> {
+    let provider = 'unknown';
+    let model = 'unknown';
     try {
       const [topicConfig, responseLanguage] = await Promise.all([
         this.systemAgentService.getTaskModelConfig('topic'),
         this.systemAgentService.getUserLocale(),
       ]);
-      const { model, provider, ...effortParams } = topicConfig;
+      const { model: taskModel, provider: taskProvider, ...effortParams } = topicConfig;
+      provider = taskProvider;
+      model = taskModel;
+
+      if (isStructuredOutputBackedOff(provider, model, 'handoff')) {
+        log(
+          'handoff skipped for topic %s; %s/%s backed off after HTTP 400',
+          topicId,
+          provider,
+          model,
+        );
+        return;
+      }
 
       const payload = chainTaskTopicHandoff({
         lastAssistantContent,
@@ -594,7 +639,9 @@ export class TaskLifecycleService {
 
       log('handoff generated for topic %s: title=%s', topicId, handoff.title);
     } catch (e) {
-      console.warn('[TaskLifecycle] handoff generation failed:', e);
+      console.warn(`[TaskLifecycle] handoff generation failed [${provider}/${model}]:`, e);
+      noteRuntimeError('system_agent', e, { model, operation: 'handoff', provider });
+      noteStructuredOutputHttp400(provider, model, 'handoff', e);
     }
   }
 
@@ -627,6 +674,9 @@ export class TaskLifecycleService {
     reason: string,
     currentTask: TaskItem,
   ): Promise<void> {
+    let provider = 'unknown';
+    let model = 'unknown';
+    let failedTask = 'brief';
     try {
       const reviewConfig = this.taskModel.getReviewConfig(currentTask);
       const decisionInput = {
@@ -654,10 +704,23 @@ export class TaskLifecycleService {
         this.systemAgentService.getTaskModelConfig('topic'),
         this.systemAgentService.getUserLocale(),
       ]);
-      const { model, provider, ...effortParams } = topicConfig;
+      const { model: taskModel, provider: taskProvider, ...effortParams } = topicConfig;
+      provider = taskProvider;
+      model = taskModel;
 
       let decision: BriefDecision;
       if (ruleVerdict.emit === 'unknown') {
+        if (isStructuredOutputBackedOff(provider, model, 'briefJudge')) {
+          log(
+            'synthesize: judge skipped task=%s topic=%s; %s/%s backed off after HTTP 400',
+            taskIdentifier,
+            topicId,
+            provider,
+            model,
+          );
+          return;
+        }
+        failedTask = 'briefJudge';
         // Rule can't decide — ask the LLM judge. Title/summary are NOT
         // produced here; they come from chainGenerateBrief if emit=true.
         const judgePayload = chainJudgeBriefEmit({
@@ -691,6 +754,7 @@ export class TaskLifecycleService {
           },
         )) as { emit?: boolean; reason?: string };
 
+        failedTask = 'brief';
         decision = {
           decidedAt: new Date().toISOString(),
           emit: judgeResult.emit === true,
@@ -733,6 +797,17 @@ export class TaskLifecycleService {
         taskInstruction: currentTask.instruction || '',
         taskName: currentTask.name || taskIdentifier,
       });
+
+      if (isStructuredOutputBackedOff(provider, model, 'brief')) {
+        log(
+          'synthesize: brief skipped task=%s topic=%s; %s/%s backed off after HTTP 400',
+          taskIdentifier,
+          topicId,
+          provider,
+          model,
+        );
+        return;
+      }
 
       const modelRuntime = await initModelRuntimeFromDB(
         this.db,
@@ -786,7 +861,9 @@ export class TaskLifecycleService {
 
       log('synthesize: brief created task=%s topic=%s type=%s', taskIdentifier, topicId, briefType);
     } catch (e) {
-      console.warn('[TaskLifecycle] brief synthesis failed:', e);
+      console.warn(`[TaskLifecycle] brief synthesis failed [${provider}/${model}]:`, e);
+      noteRuntimeError('system_agent', e, { model, operation: failedTask, provider });
+      noteStructuredOutputHttp400(provider, model, failedTask, e);
     }
   }
 }

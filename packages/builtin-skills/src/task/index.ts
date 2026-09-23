@@ -9,7 +9,8 @@ export const TaskIdentifier = 'task';
 export const TaskSkill: BuiltinSkill = {
   avatar: '📋',
   content,
-  description: 'Task management and execution — create, track, review, and complete tasks via CLI.',
+  description:
+    'Task management and execution — create, track, review, and complete tasks with lobe-task tools.',
   identifier: TaskIdentifier,
   name: 'task',
   resources: toResourceMeta({

@@ -17,6 +17,7 @@ import {
   localizeTaskNotifyContent,
   sanitizeNotificationContent,
   TASK_NOTIFY_UNKNOWN_ERROR_ZH,
+  taskCompletedNotifyBody,
 } from './content';
 import { isChannelEnabledForType, mergeNotificationSettings } from './prefs';
 
@@ -210,6 +211,7 @@ export class TaskNotificationService {
  * One run yields at most one row per type via `dedupeKey`.
  *
  * - `done` → `task_run_completed` (content = last assistant text, else handoff summary)
+ * - `done` + task canceled → no run-completed notice (cancel won the race)
  * - `done` + task paused (checkpoint / review) → also `task_waiting_for_user`
  * - `done` + task completed (e.g. schedule cap) → also `task_completed`
  * - `error` → `task_run_failed`
@@ -256,6 +258,10 @@ export const notifyAfterTopicComplete = async (input: TopicCompleteNotifyInput):
 
     if (reason !== 'done') return;
 
+    // This read is after the run settles. A cancel that landed first must
+    // not be announced as a completed run.
+    if (task?.status === 'canceled') return;
+
     await service.notify({
       ...base,
       content: runContent,
@@ -273,7 +279,10 @@ export const notifyAfterTopicComplete = async (input: TopicCompleteNotifyInput):
     if (task?.status === 'completed') {
       await service.notify({
         ...base,
-        content: task.instruction?.trim() || runContent,
+        content: taskCompletedNotifyBody({
+          fallbackTitle: task.name || taskIdentifier,
+          lastAssistant: runContent,
+        }),
         type: 'task_completed',
       });
     }

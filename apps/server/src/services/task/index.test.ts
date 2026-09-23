@@ -36,7 +36,7 @@ vi.mock('@/database/models/user', () => ({
 // the running-status branch in updateStatus doesn't drag them in.
 vi.mock('@/server/services/aiAgent', () => ({
   AiAgentService: vi.fn().mockImplementation(() => ({
-    interruptTask: vi.fn(),
+    interruptTask: mockInterruptTask,
   })),
 }));
 
@@ -46,7 +46,8 @@ vi.mock('@/server/services/file/resolveAttachments', () => ({
   resolveAttachmentMetadata: vi.fn().mockResolvedValue([]),
 }));
 
-const { mockNotify } = vi.hoisted(() => ({
+const { mockInterruptTask, mockNotify } = vi.hoisted(() => ({
+  mockInterruptTask: vi.fn().mockResolvedValue(undefined),
   mockNotify: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -102,10 +103,12 @@ describe('TaskService', () => {
   const mockTaskTopicModel = {
     cancelIfRunning: vi.fn(),
     findByTaskId: vi.fn(),
+    findByTopicId: vi.fn(),
     findRunningByTaskIds: vi.fn().mockResolvedValue([]),
     findWithHandoff: vi.fn(),
     findWithHandoffByTaskIds: vi.fn().mockResolvedValue([]),
     timeoutRunning: vi.fn(),
+    updateStatus: vi.fn(),
   };
 
   const mockBriefModel = {
@@ -115,6 +118,7 @@ describe('TaskService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockNotify.mockResolvedValue(undefined);
+    mockInterruptTask.mockResolvedValue(undefined);
     mockTaskTopicModel.findByTaskId.mockResolvedValue([]);
     mockTaskTopicModel.findRunningByTaskIds.mockResolvedValue([]);
     (AgentModel as any).mockImplementation(() => mockAgentModel);
@@ -1661,6 +1665,50 @@ describe('TaskService', () => {
       expect(mockNotify.mock.calls[0][0].userId).not.toBe('member-2');
     });
 
+    it('uses the latest run output instead of the raw instruction', async () => {
+      const prev = completedTask({
+        assigneeAgentId: 'agt-1',
+        instruction: '今天是 2026-09-16。请立刻提醒邵军军',
+        name: '催交邵军军',
+      });
+      mockTaskModel.resolve.mockResolvedValue(prev);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...prev, status: 'completed' });
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([
+        { handoff: { content: '**已发给邵军军**\n\n请于今日提交 SOP。' } },
+      ]);
+
+      const service = new TaskService(db, 'owner-1');
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: '已发给邵军军\n\n请于今日提交 SOP。',
+          type: 'task_completed',
+        }),
+      );
+    });
+
+    it('falls back to the task title when the run has no assistant text', async () => {
+      const prev = completedTask({
+        assigneeAgentId: 'agt-1',
+        instruction: '今天是 2026-09-16。请立刻提醒邵军军',
+        name: '催交邵军军',
+      });
+      mockTaskModel.resolve.mockResolvedValue(prev);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...prev, status: 'completed' });
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([]);
+
+      const service = new TaskService(db, 'owner-1');
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: '催交邵军军',
+          type: 'task_completed',
+        }),
+      );
+    });
+
     it('does not notify on unassigned UI complete', async () => {
       const prev = completedTask({
         assigneeAgentId: null,
@@ -1673,6 +1721,180 @@ describe('TaskService', () => {
       await service.updateStatus({ id: 'task-1', status: 'completed' as any });
 
       expect(mockNotify).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateStatus / self-completion', () => {
+    const runningTask = {
+      assigneeAgentId: 'agt-1',
+      context: { origin: { topicId: 'origin-topic' } },
+      createdByUserId: 'owner-1',
+      id: 'task-1',
+      identifier: 'T-6',
+      instruction: '请立刻提醒邵军军',
+      name: '催交',
+      status: 'running',
+    };
+
+    it('records completion from the executing run and does not interrupt it', async () => {
+      mockTaskModel.resolve.mockResolvedValue(runningTask);
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([]);
+
+      const service = new TaskService(db, userId);
+      const result = await service.updateStatus({
+        id: 'task-1',
+        sourceOperationId: 'op-live',
+        sourceTaskId: 'task-1',
+        sourceTopicId: 'topic-live',
+        status: 'completed',
+      } as any);
+
+      expect(result.completionDeferred).toBe(true);
+      expect(result.task.status).toBe('running');
+      expect(mockInterruptTask).not.toHaveBeenCalled();
+      expect(mockTaskTopicModel.cancelIfRunning).not.toHaveBeenCalled();
+      expect(mockTaskModel.updateStatus).not.toHaveBeenCalled();
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockTaskModel.updateContext).toHaveBeenCalledWith('task-1', {
+        completionRequest: {
+          operationId: 'op-live',
+          requestedAt: expect.any(String),
+          topicId: 'topic-live',
+        },
+      });
+      expect(mockTaskModel.update).not.toHaveBeenCalled();
+    });
+
+    it('clears a recorded completion when the user cancels, and does not notify', async () => {
+      const pending = {
+        ...runningTask,
+        context: {
+          completionRequest: {
+            operationId: 'op-live',
+            requestedAt: '2026-09-23T00:00:00.000Z',
+            topicId: 'topic-live',
+          },
+          origin: { topicId: 'origin-topic' },
+        },
+      };
+      mockTaskModel.resolve.mockResolvedValue(pending);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...pending, status: 'canceled' });
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([
+        { operationId: 'op-live', status: 'running', topicId: 'topic-live' },
+      ]);
+
+      const service = new TaskService(db, userId);
+      const result = await service.updateStatus({ id: 'task-1', status: 'canceled' as any });
+
+      expect(result.task.status).toBe('canceled');
+      expect(mockInterruptTask).toHaveBeenCalledWith({ operationId: 'op-live' });
+      expect(mockTaskModel.updateStatus).toHaveBeenCalledWith(
+        'task-1',
+        'canceled',
+        expect.objectContaining({ completedAt: expect.any(Date) }),
+      );
+      expect(mockTaskModel.updateStatus).not.toHaveBeenCalledWith(
+        'task-1',
+        'completed',
+        expect.anything(),
+      );
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockTaskModel.update).toHaveBeenCalledWith('task-1', {
+        context: { origin: { topicId: 'origin-topic' } },
+      });
+    });
+
+    it('clears a recorded completion when the user pauses or an admin completes', async () => {
+      const pending = {
+        ...runningTask,
+        context: {
+          completionRequest: { operationId: 'op-live', topicId: 'topic-live' },
+          origin: { topicId: 'origin-topic' },
+        },
+      };
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([
+        { operationId: 'op-live', status: 'running', topicId: 'topic-live' },
+      ]);
+
+      const service = new TaskService(db, userId);
+      mockTaskModel.resolve.mockResolvedValue(pending);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...pending, status: 'paused' });
+      await service.updateStatus({ id: 'task-1', status: 'paused' as any });
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockTaskModel.update).toHaveBeenCalledWith('task-1', {
+        context: { origin: { topicId: 'origin-topic' } },
+      });
+
+      mockNotify.mockClear();
+      mockTaskModel.update.mockClear();
+      mockTaskModel.resolve.mockResolvedValue(pending);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...pending, status: 'completed' });
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+      expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: 'task_completed' }));
+      expect(mockTaskModel.update).toHaveBeenCalledWith('task-1', {
+        context: { origin: { topicId: 'origin-topic' } },
+      });
+    });
+
+    it('clears a recorded completion when the user cancels the running topic', async () => {
+      mockTaskTopicModel.findByTopicId.mockResolvedValue({
+        operationId: 'op-live',
+        status: 'running',
+        taskId: 'task-1',
+        topicId: 'topic-live',
+      });
+      mockTaskModel.resolve.mockResolvedValue({
+        context: {
+          completionRequest: { operationId: 'op-live', topicId: 'topic-live' },
+          origin: { topicId: 'origin-topic' },
+        },
+        id: 'task-1',
+      });
+
+      const service = new TaskService(db, userId);
+      await service.cancelTopic('topic-live');
+
+      expect(mockInterruptTask).toHaveBeenCalledWith({ operationId: 'op-live' });
+      expect(mockTaskModel.updateStatus).toHaveBeenCalledWith('task-1', 'paused');
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockTaskModel.update).toHaveBeenCalledWith('task-1', {
+        context: { origin: { topicId: 'origin-topic' } },
+      });
+    });
+
+    it('still interrupts when a different run completes the live task', async () => {
+      mockTaskModel.resolve.mockResolvedValue(runningTask);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...runningTask, status: 'completed' });
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([
+        { operationId: 'op-live', status: 'running', topicId: 'topic-live' },
+      ]);
+
+      const service = new TaskService(db, userId);
+      await service.updateStatus({
+        id: 'task-1',
+        sourceOperationId: 'op-other',
+        sourceTaskId: 'task-other',
+        sourceTopicId: 'topic-other',
+        status: 'completed',
+      } as any);
+
+      expect(mockInterruptTask).toHaveBeenCalledWith({ operationId: 'op-live' });
+      expect(mockTaskTopicModel.cancelIfRunning).toHaveBeenCalledWith('task-1', 'topic-live');
+      expect(mockTaskModel.updateStatus).toHaveBeenCalled();
+    });
+
+    it('still interrupts a user/admin completion that has no source operation', async () => {
+      mockTaskModel.resolve.mockResolvedValue(runningTask);
+      mockTaskModel.updateStatus.mockResolvedValue({ ...runningTask, status: 'completed' });
+      mockTaskTopicModel.findByTaskId.mockResolvedValue([
+        { operationId: 'op-live', status: 'running', topicId: 'topic-live' },
+      ]);
+
+      const service = new TaskService(db, userId);
+      await service.updateStatus({ id: 'task-1', status: 'completed' as any });
+
+      expect(mockInterruptTask).toHaveBeenCalledWith({ operationId: 'op-live' });
+      expect(mockTaskModel.updateContext).not.toHaveBeenCalled();
     });
   });
 

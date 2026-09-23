@@ -103,8 +103,20 @@ class TaskService {
   updateStatus = async (id: string, status: TaskStatus, error?: string) =>
     lambdaClient.task.updateStatus.mutate({ error, id, status });
 
-  run = async (id: string, params?: { continueTopicId?: string; prompt?: string }) =>
-    lambdaClient.task.run.mutate({ id, ...params });
+  /**
+   * `requestedByAgent` marks an agent tool call: the server then refuses a
+   * schedule-mode task whose next fire is still in the future unless `runNow`
+   * is set. The UI run button omits both, so a manual click always runs.
+   */
+  run = async (
+    id: string,
+    params?: {
+      continueTopicId?: string;
+      prompt?: string;
+      requestedByAgent?: boolean;
+      runNow?: boolean;
+    },
+  ) => lambdaClient.task.run.mutate({ id, ...params });
 
   previewSubtaskLayers = async (id: string) => lambdaClient.task.previewSubtaskLayers.query({ id });
 

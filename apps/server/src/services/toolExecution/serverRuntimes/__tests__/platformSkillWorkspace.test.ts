@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { PreprocessResult } from '@/server/services/toolExecution/preprocessLhCommand';
+
 import { ManagedSkillServerRuntimeService } from '../platformSkillWorkspace';
 
 const mocks = vi.hoisted(() => ({
@@ -7,6 +9,11 @@ const mocks = vi.hoisted(() => ({
   cleanupInlineSkillWorkspace: vi.fn(),
   executeToolCall: vi.fn(),
   prepareInlineSkillWorkspace: vi.fn(),
+  preprocessLhCommand: vi.fn(async (command: string): Promise<PreprocessResult> => ({
+    command,
+    isLhCommand: false,
+    skipSkillLookup: false,
+  })),
   resolvePinnedForExecution: vi.fn(),
 }));
 
@@ -38,6 +45,9 @@ vi.mock('@/server/services/deviceGateway', () => ({
 }));
 
 vi.mock('@/server/services/market', () => ({ MarketService: vi.fn() }));
+vi.mock('@/server/services/toolExecution/preprocessLhCommand', () => ({
+  preprocessLhCommand: mocks.preprocessLhCommand,
+}));
 vi.mock('@/server/services/sandbox', async () => {
   const actual = await vi.importActual('@/server/services/sandbox');
   return {
@@ -82,6 +92,53 @@ const createRuntime = (activeDeviceId?: string) =>
     topicId: 'topic-1',
     userId: 'user-1',
   });
+
+describe('ManagedSkillServerRuntimeService runCommand', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.preprocessLhCommand.mockImplementation(async (command: string) => ({
+      command,
+      isLhCommand: false,
+      skipSkillLookup: false,
+    }));
+    mocks.callTool.mockResolvedValue({
+      result: { exitCode: 0, output: 'ok', success: true },
+      success: true,
+    });
+  });
+
+  it('rewrites lh to npx before the sandbox runs it', async () => {
+    const rewritten = 'LOBEHUB_JWT=jwt npx -y @lobehub/cli task view T-1';
+    mocks.preprocessLhCommand.mockResolvedValueOnce({
+      command: rewritten,
+      isLhCommand: true,
+      skipSkillLookup: true,
+    });
+
+    await createRuntime().runCommand({ command: 'lh task view T-1' });
+
+    expect(mocks.preprocessLhCommand).toHaveBeenCalledWith('lh task view T-1', 'user-1', undefined);
+    expect(mocks.callTool).toHaveBeenCalledWith('runCommand', { command: rewritten });
+  });
+
+  it('does not run the sandbox command when lh preprocessing fails', async () => {
+    mocks.preprocessLhCommand.mockResolvedValueOnce({
+      command: 'lh task view T-1',
+      error: 'Failed to authenticate for CLI execution',
+      isLhCommand: true,
+      skipSkillLookup: true,
+    });
+
+    await expect(
+      createRuntime().runCommand({ command: 'lh task view T-1' }),
+    ).resolves.toMatchObject({
+      executionEnv: 'sandbox',
+      stderr: 'Failed to authenticate for CLI execution',
+      success: false,
+    });
+    expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+});
 
 describe('ManagedSkillServerRuntimeService workspace lifecycle', () => {
   beforeEach(() => {

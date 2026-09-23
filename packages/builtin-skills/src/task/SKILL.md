@@ -1,53 +1,34 @@
-\<task_skill_guides>
-You are executing a task within the LobeHub task system. Use the `lh task` CLI via `runCommand` to manage your task and related resources.
+\<task\_skill\_guides>
+You are executing a task within the LobeHub task system. For in-app runs, manage the task with lobe-task tools. Do not call `lh` via `runCommand` — the sandbox has no `lh` binary.
 
-# Task Lifecycle
+# Task lifecycle (lobe-task)
 
-| Command                         | Description                                           |
-| ------------------------------- | ----------------------------------------------------- |
-| `lh task view <id>`             | View task details, instruction, workspace, activities |
-| `lh task edit <id>`             | Update task name, instruction, status, priority       |
-| `lh task complete <id>`         | Mark task as completed                                |
-| `lh task comment <id> -m "..."` | Add a progress comment                                |
-| `lh task tree <id>`             | View subtask tree with dependencies                   |
+| Tool               | Use                                                                                                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `viewTask`         | Read the instruction, status, workspace, and comments. The run prompt already includes the task; call this only when you need a refresh.                              |
+| `editTask`         | Change name, instruction, priority, parent, or dependencies.                                                                                                          |
+| `addTaskComment`   | Record a progress note or say which required input is missing.                                                                                                        |
+| `updateTaskStatus` | Mark completed, paused, canceled, or failed. Completing the task you are currently executing records completion and lets this run finish.                             |
+| `setTaskSchedule`  | Set or clear a cron (`schedule`) or interval (`heartbeat`).                                                                                                           |
+| `runTask`          | Start a task. On a schedule-mode task whose next fire is still in the future, do not call this unless the user explicitly asked to run now — then pass `runNow=true`. |
 
-# Working with Subtasks
+# Working with subtasks
 
-| Command                                   | Description       |
-| ----------------------------------------- | ----------------- |
-| `lh task create -i "..." --parent <id>`   | Create a subtask  |
-| `lh task list --parent <id>`              | List subtasks     |
-| `lh task sort <parentId> <id1> <id2> ...` | Reorder subtasks  |
-| `lh task dep add <id> <dependsOnId>`      | Add dependency    |
-| `lh task dep rm <id> <dependsOnId>`       | Remove dependency |
+- `createTask` / `createTasks` with `parentIdentifier` to add subtasks
+- `listTasks` with a parent filter to list them
+- `editTask` `addDependencies` / `removeDependencies` for ordering
 
-# Task Workspace (Documents)
+# Workspace and colleagues
 
-| Command                                           | Description               |
-| ------------------------------------------------- | ------------------------- |
-| `lh task doc create <id> -t "title" -b "content"` | Create and pin a document |
-| `lh task doc pin <id> <docId>`                    | Pin existing document     |
-| `lh task doc unpin <id> <docId>`                  | Unpin document            |
+- Store deliverables as task documents with the document tools, not `lh task doc`.
+- Delivery acceptance on this deployment is `lobe-delivery-checker`. Do not use the `verify` skill or `lh verify submit`.
+- To reach colleagues, use `lobe-reminder` (DingTalk work notifications, directory `staff:` ids). Do not use Messenger bots, 飞书，微信，or email.
 
-# Task Topics (Conversations)
+# Usage
 
-| Command                             | Description              |
-| ----------------------------------- | ------------------------ |
-| `lh task topic list <id>`           | List conversation topics |
-| `lh task topic view <id> <topicId>` | View topic messages      |
-
-# Usage Pattern
-
-1. Read the reference file for detailed command options: `readReference('references/commands')`
-2. Run commands via `runCommand` — the `lh` prefix is automatically handled
-3. Use `--json` flag on any command for structured output
-4. Use `lh task <subcommand> --help` for full command-line help
-
-# Task Execution Guidelines
-
-- **Check your task first**: Use `lh task view` to understand the full instruction and context
-- **Use workspace documents**: Store outputs and deliverables as task documents
-- **Report progress**: Use `lh task comment` to log key milestones
-- **Respect dependencies**: Check `lh task tree` to understand task ordering
-- **Complete when done**: Use `lh task complete` when all deliverables are ready
-  \</task_skill_guides>
+1. The instruction in the run prompt is complete. Do not sweep memory, the skill market, the knowledge base, or local-system unless the instruction needs them.
+2. Do not run `lh …` via `runCommand`. `references/commands` is the external CLI reference only.
+3. If required input is missing, `addTaskComment` what is missing and stop. Do not guess that the schedule was not configured.
+4. If the workspace already has the deliverable, `updateTaskStatus` to completed or state what is still missing.
+5. If the task is already completed and this run has no new user instruction, reply with one line and stop.
+   \</task\_skill\_guides>

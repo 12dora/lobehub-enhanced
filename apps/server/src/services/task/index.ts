@@ -27,8 +27,10 @@ import { extractFileIdsFromEditorData } from '../file/extractFileIdsFromEditorDa
 import { resolveAttachmentMetadata } from '../file/resolveAttachments';
 import { type SubtaskGraphPlan, TaskGraphService } from '../taskGraph';
 import { TASK_NOTIFY_HEARTBEAT_TIMEOUT_ZH, TaskNotificationService } from '../taskNotification';
+import { taskCompletedNotifyBody } from '../taskNotification/content';
 import { type ReviewResult, TaskReviewService } from '../taskReview';
 import { TaskRunnerService } from '../taskRunner';
+import { isSelfCompletingRun, readCompletionRequest } from './completionRequest';
 
 const emptyWorkspace: WorkspaceData = { nodeMap: {}, tree: [] };
 const UNTITLED_TOPIC_TITLE = 'Untitled';
@@ -75,6 +77,11 @@ export interface CreateTaskInput {
 export interface UpdateStatusResult {
   allSubtasksDone?: boolean;
   checkpointTriggered?: boolean;
+  /**
+   * The executing run asked to complete its own task. Status stays `running`
+   * and the live operation is not interrupted; onTopicComplete applies it.
+   */
+  completionDeferred?: boolean;
   parentTaskId?: string | null;
   paused: string[];
   task: TaskItem;
@@ -232,6 +239,9 @@ export class TaskService {
 
     await this.taskTopicModel.updateStatus(target.taskId, topicId, 'canceled');
     await this.taskModel.updateStatus(target.taskId, 'paused');
+    // The run may already have recorded self-completion. Leaving that pocket
+    // lets the queued done hook (or the result bridge) complete a paused task.
+    await this.clearCompletionRequest(target.taskId);
   }
 
   /**
@@ -319,7 +329,24 @@ export class TaskService {
   async updateStatus(input: {
     error?: string;
     id: string;
+    /**
+     * The run already finished (onTopicComplete is applying a recorded
+     * completion). Do not interrupt the operation that just ended.
+     */
+    skipRunningInterrupt?: boolean;
+    /** Operation id of the tool call, when the caller is an agent run. */
+    sourceOperationId?: string;
+    /** Task id that operation is executing. Unset for user/admin calls. */
+    sourceTaskId?: string;
+    /** Topic id of the tool call. */
+    sourceTopicId?: string;
     status: TaskStatus;
+    /**
+     * Skip the inline task_completed push. The topic-complete hook sends it
+     * with the run's last assistant message, which does not exist yet when
+     * the executing agent records completion.
+     */
+    suppressCompletionNotify?: boolean;
   }): Promise<UpdateStatusResult> {
     const { id, status, error: errorMsg } = input;
 
@@ -332,8 +359,31 @@ export class TaskService {
 
     const resolved = await this.resolveOrThrow(id);
 
-    if (resolved.status === 'running' && status !== 'running') {
+    if (!input.skipRunningInterrupt && resolved.status === 'running' && status !== 'running') {
       const topics = await this.taskTopicModel.findByTaskId(resolved.id);
+
+      // The executing run completing itself must not be cancelled. Record the
+      // request and let onTopicComplete apply `completed` after the final
+      // message is written. Any other caller (user, admin, a different run)
+      // still interrupts.
+      if (
+        status === 'completed' &&
+        isSelfCompletingRun(resolved.id, topics, {
+          operationId: input.sourceOperationId,
+          taskId: input.sourceTaskId,
+          topicId: input.sourceTopicId,
+        })
+      ) {
+        await this.taskModel.updateContext(resolved.id, {
+          completionRequest: {
+            ...(input.sourceOperationId ? { operationId: input.sourceOperationId } : {}),
+            requestedAt: new Date().toISOString(),
+            ...(input.sourceTopicId ? { topicId: input.sourceTopicId } : {}),
+          },
+        });
+        return { completionDeferred: true, paused: [], task: resolved, unlocked: [] };
+      }
+
       const aiAgentService = new AiAgentService(this.db, this.userId, {
         workspaceId: this.workspaceId,
       });
@@ -368,6 +418,19 @@ export class TaskService {
 
     const task = await this.taskModel.updateStatus(resolved.id, status, extra);
     if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
+
+    // User/admin cancel, complete, pause, or failure wins over a recorded
+    // self-completion. Drop the pocket before the done hook or result bridge
+    // can apply it. The executing run's own record returns earlier and is kept.
+    if (
+      (status === 'canceled' ||
+        status === 'completed' ||
+        status === 'failed' ||
+        status === 'paused') &&
+      readCompletionRequest(resolved.context)
+    ) {
+      await this.clearCompletionRequest(task.id);
+    }
 
     if (isReminderTaskConfig(task.config) && (status === 'canceled' || status === 'completed')) {
       const reminderModel = new ReminderModel(this.db, this.userId);
@@ -405,11 +468,19 @@ export class TaskService {
       // Agent-caused completion (createdByAgentId / assigneeAgentId path).
       // UI complete of an unassigned task does not notify. Notify before
       // cascade so a downstream kickoff failure cannot swallow the event.
-      if (resolved.createdByAgentId || resolved.assigneeAgentId) {
+      // A recorded self-completion suppresses this push: the topic-complete
+      // hook sends task_completed with the run's last assistant message.
+      if (
+        !input.suppressCompletionNotify &&
+        (resolved.createdByAgentId || resolved.assigneeAgentId)
+      ) {
         const lastOutput = await this.readLatestRunOutput(task.id);
         await new TaskNotificationService().notify({
           agentId: resolved.assigneeAgentId ?? resolved.createdByAgentId ?? undefined,
-          content: task.instruction?.trim() || lastOutput || task.identifier,
+          content: taskCompletedNotifyBody({
+            fallbackTitle: task.name || task.identifier,
+            lastAssistant: lastOutput,
+          }),
           db: this.db,
           taskId: task.id,
           taskIdentifier: task.identifier,
@@ -522,7 +593,19 @@ export class TaskService {
     return task;
   }
 
-  /** Latest topic handoff text — used as `task_completed` content fallback. */
+  /**
+   * Drop `context.completionRequest` without merging it away — updateContext
+   * deep-merges, which would keep the old operation id.
+   */
+  async clearCompletionRequest(idOrIdentifier: string): Promise<void> {
+    const task = await this.taskModel.resolve(idOrIdentifier);
+    if (!task || !readCompletionRequest(task.context)) return;
+    const current = { ...(task.context as Record<string, unknown>) };
+    delete current.completionRequest;
+    await this.taskModel.update(task.id, { context: current });
+  }
+
+  /** Latest topic handoff text — used as `task_completed` content when present. */
   private async readLatestRunOutput(taskId: string): Promise<string> {
     try {
       const topics = await this.taskTopicModel.findByTaskId(taskId);

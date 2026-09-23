@@ -682,6 +682,8 @@ export const taskRouter = router({
         z.object({
           continueTopicId: z.string().optional(),
           prompt: z.string().optional(),
+          requestedByAgent: z.boolean().optional(),
+          runNow: z.boolean().optional(),
         }),
       ),
     )
@@ -695,6 +697,8 @@ export const taskRouter = router({
         return await runner.runTask({
           continueTopicId: input.continueTopicId,
           extraPrompt: input.prompt,
+          requestedByAgent: input.requestedByAgent,
+          runNow: input.runNow,
           taskId: input.id,
         });
       } catch (error) {

@@ -23,6 +23,11 @@ import { tasks } from '@/database/schemas';
 import { appEnv } from '@/envs/app';
 import type { taskRouter } from '@/server/routers/lambda/task';
 import { TaskService } from '@/server/services/task';
+import {
+  type RunTaskParams as RunnerRunTaskParams,
+  TaskRunnerService,
+} from '@/server/services/taskRunner';
+import { isScheduledRunDeferredMessage } from '@/server/services/taskRunner/nextScheduleFire';
 
 import { type ServerRuntimeRegistration } from './types';
 
@@ -61,6 +66,12 @@ export interface TaskRuntimeDeps {
   // resolved workspaceId); when absent (unit tests) links fall back to the bare
   // app origin.
   resolveLinkBaseUrl?: () => Promise<string>;
+  /**
+   * Agent runTask entry. When set, schedule-mode tasks whose next fire is in
+   * the future are refused unless `runNow` is true. Tests omit it and keep
+   * using the tRPC caller.
+   */
+  runTaskDirect?: (params: RunnerRunTaskParams) => Promise<unknown>;
   scope?: string | null;
   taskCaller: TaskCaller;
   taskId?: string;
@@ -558,7 +569,13 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       return { content: formatTaskEdited(task.identifier, changes), success: true };
     },
 
-    runTask: async (args: { continueTopicId?: string; identifier?: string; prompt?: string }) => {
+    runTask: async (args: {
+      continueTopicId?: string;
+      force?: boolean;
+      identifier?: string;
+      prompt?: string;
+      runNow?: boolean;
+    }) => {
       const id = args.identifier?.trim() || taskId;
       if (!id) {
         return {
@@ -567,27 +584,43 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
         };
       }
 
-      try {
-        const result = await taskCaller().run({
-          continueTopicId: args.continueTopicId,
-          id,
-          prompt: args.prompt,
-        });
+      const runNow = args.runNow === true || args.force === true;
 
-        const topicId = (result as { topicId?: string } | undefined)?.topicId;
-        const operationId = (result as { operationId?: string } | undefined)?.operationId;
+      try {
+        const result = deps.runTaskDirect
+          ? await deps.runTaskDirect({
+              continueTopicId: args.continueTopicId,
+              extraPrompt: args.prompt,
+              requestedByAgent: true,
+              runNow,
+              taskId: id,
+              trigger: 'manual',
+            })
+          : await taskCaller().run({
+              continueTopicId: args.continueTopicId,
+              id,
+              prompt: args.prompt,
+              requestedByAgent: true,
+              runNow,
+            });
+
+        const startedTopicId = (result as { topicId?: string } | undefined)?.topicId;
+        const startedOperationId = (result as { operationId?: string } | undefined)?.operationId;
         const lines = [`Task ${id} started.`];
-        if (topicId) lines.push(`  Topic: ${topicId}`);
-        if (operationId) lines.push(`  Operation: ${operationId}`);
+        if (startedTopicId) lines.push(`  Topic: ${startedTopicId}`);
+        if (startedOperationId) lines.push(`  Operation: ${startedOperationId}`);
 
         return { content: lines.join('\n'), success: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to run task';
+        if (isScheduledRunDeferredMessage(message)) {
+          return { content: message, success: false };
+        }
         return { content: `Failed to run task ${id}: ${message}`, success: false };
       }
     },
 
-    runTasks: async (args: { identifiers: string[] }) => {
+    runTasks: async (args: { identifiers: string[]; runNow?: boolean }) => {
       const identifiers = Array.isArray(args.identifiers)
         ? args.identifiers.map((value) => value?.trim()).filter((value): value is string => !!value)
         : [];
@@ -596,13 +629,25 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
         return { content: 'No task identifiers provided.', success: false };
       }
 
+      const runNow = args.runNow === true;
       const lines: string[] = [];
       let succeeded = 0;
       let failed = 0;
 
       for (const [index, identifier] of identifiers.entries()) {
         try {
-          const result = await taskCaller().run({ id: identifier });
+          const result = deps.runTaskDirect
+            ? await deps.runTaskDirect({
+                requestedByAgent: true,
+                runNow,
+                taskId: identifier,
+                trigger: 'manual',
+              })
+            : await taskCaller().run({
+                id: identifier,
+                requestedByAgent: true,
+                runNow,
+              });
           const topicId = (result as { topicId?: string } | undefined)?.topicId;
           succeeded += 1;
           lines.push(
@@ -650,17 +695,27 @@ export const createTaskRuntime = (deps: TaskRuntimeDeps) => {
       }
 
       try {
-        const result = await taskCaller().updateStatus({
+        const result = await taskService().updateStatus({
           error: args.error,
           id,
+          sourceOperationId: operationId,
+          sourceTaskId: taskId,
+          sourceTopicId: topicId,
           status: args.status,
         });
+
+        if (result.completionDeferred) {
+          return {
+            content: `Task ${result.task.identifier} completion recorded. This run continues and will be marked completed when it finishes.`,
+            success: true,
+          };
+        }
 
         return {
           content:
             args.status === 'failed' && args.error
-              ? `Task ${result.data.identifier} status updated to failed. Error: ${args.error}`
-              : `Task ${result.data.identifier} status updated to ${args.status}.`,
+              ? `Task ${result.task.identifier} status updated to failed. Error: ${args.error}`
+              : `Task ${result.task.identifier} status updated to ${args.status}.`,
           success: true,
         };
       } catch (error) {
@@ -738,6 +793,7 @@ export const taskRuntime: ServerRuntimeRegistration = {
       // Initial personal-mode models cover the no-task-context case. Replaced
       // before the first call when `taskId` is set.
       agentModel: new AgentModel(db, userId),
+      runTaskDirect: (params) => new TaskRunnerService(db, userId, workspaceId).runTask(params),
       taskModel: new TaskModel(db, userId),
       taskService: new TaskService(db, userId),
       taskCaller: taskRouter.createCaller({ userId }),
