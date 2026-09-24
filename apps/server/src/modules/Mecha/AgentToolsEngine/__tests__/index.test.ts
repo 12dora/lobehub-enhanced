@@ -1685,4 +1685,43 @@ describe('createServerAgentToolsEngine', () => {
 
     expect(onResult.enabledToolIds).toContain(identifier);
   });
+
+  it('offers lobe-dingtalk-docs only when personal data and a docs switch are both on', () => {
+    const identifier = 'lobe-dingtalk-docs';
+    const manifest = {
+      api: [{ description: 'search', name: 'searchDocs', parameters: { type: 'object' } }],
+      identifier,
+      meta: { title: '钉钉文档与表格' },
+      type: 'builtin',
+    } as LobeToolManifest;
+    const engineFor = (flags: { dingtalkDocs?: boolean; dingtalkPersonal?: boolean }) =>
+      createServerAgentToolsEngine(createMockContext(), {
+        additionalManifests: [manifest],
+        agentConfig: { plugins: [] },
+        ...flags,
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+    const on = engineFor({ dingtalkDocs: true, dingtalkPersonal: true }).generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [],
+    });
+    expect(on.enabledToolIds).toContain(identifier);
+
+    const personalOnly = engineFor({ dingtalkPersonal: true }).generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [],
+    });
+    expect(personalOnly.enabledToolIds).not.toContain(identifier);
+
+    const docsWithoutPersonal = engineFor({ dingtalkDocs: true }).generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+    expect(docsWithoutPersonal.enabledToolIds).not.toContain(identifier);
+  });
 });

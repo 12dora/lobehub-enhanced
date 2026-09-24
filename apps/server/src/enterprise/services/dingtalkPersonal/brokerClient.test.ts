@@ -153,6 +153,34 @@ describe('dingtalk personal broker client', () => {
       expect(secretBlob(error)).toContain('https://dingtalk.example/p');
     }
 
+    fetchMock.mockResolvedValueOnce(
+      json({
+        error: {
+          code: 'VALIDATION',
+          message: `该节点是在线表格或在线文档，不能直接下载。在线表格请用 readSheet，在线文档请用 readDoc。 token=${TOKEN}${'长'.repeat(200)}`,
+        },
+        ok: false,
+      }),
+    );
+    try {
+      await execDingtalkPersonal({ args: {}, op: 'drive.download', profile: 'dingcorp:staff1' });
+      throw new Error('expected validation');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'DINGTALK_PERSONAL_INVALID_ARGS',
+        details: { message: expect.stringContaining('readSheet') },
+      });
+      const message = (error as { details?: { message?: string } }).details?.message ?? '';
+      expect(message.length).toBeLessThanOrEqual(200);
+      expect(message).toContain('readDoc');
+      expect(secretBlob(error)).not.toContain(TOKEN);
+    }
+
+    fetchMock.mockResolvedValueOnce(json({ error: { code: 'VALIDATION' }, ok: false }));
+    await expect(
+      execDingtalkPersonal({ args: {}, op: 'chat.downloadFile', profile: 'dingcorp:staff1' }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_PERSONAL_INVALID_ARGS', details: undefined });
+
     fetchMock.mockRejectedValueOnce(new TypeError(`connect ${TOKEN}`));
     try {
       await execDingtalkPersonal({ args: {}, op: 'todo.list', profile: 'dingcorp:staff1' });

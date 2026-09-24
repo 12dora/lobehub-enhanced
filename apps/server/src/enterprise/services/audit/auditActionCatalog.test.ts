@@ -8,13 +8,18 @@ import {
 } from './auditActionCatalog';
 
 describe('dingtalk personal audit catalog', () => {
-  it('catalogues the five personal actions and the target type', () => {
+  it('catalogues the personal actions and the target type', () => {
     const actions = [
       'dingtalk.personal.authorize',
       'dingtalk.personal.revoke',
       'dingtalk.personal.todo.update',
       'dingtalk.personal.todo.complete',
       'dingtalk.personal.report.submit',
+      'dingtalk.personal.doc.append',
+      'dingtalk.personal.doc.create',
+      'dingtalk.personal.sheet.append',
+      'dingtalk.personal.aitable.records.create',
+      'dingtalk.personal.aitable.records.update',
     ] as const;
 
     for (const action of actions) {
@@ -26,6 +31,15 @@ describe('dingtalk personal audit catalog', () => {
     expect(AUDIT_ACTION.DINGTALK_PERSONAL_TODO_UPDATE).toBe('dingtalk.personal.todo.update');
     expect(AUDIT_ACTION.DINGTALK_PERSONAL_TODO_COMPLETE).toBe('dingtalk.personal.todo.complete');
     expect(AUDIT_ACTION.DINGTALK_PERSONAL_REPORT_SUBMIT).toBe('dingtalk.personal.report.submit');
+    expect(AUDIT_ACTION.DINGTALK_PERSONAL_DOC_APPEND).toBe('dingtalk.personal.doc.append');
+    expect(AUDIT_ACTION.DINGTALK_PERSONAL_DOC_CREATE).toBe('dingtalk.personal.doc.create');
+    expect(AUDIT_ACTION.DINGTALK_PERSONAL_SHEET_APPEND).toBe('dingtalk.personal.sheet.append');
+    expect(AUDIT_ACTION.DINGTALK_PERSONAL_AITABLE_RECORDS_CREATE).toBe(
+      'dingtalk.personal.aitable.records.create',
+    );
+    expect(AUDIT_ACTION.DINGTALK_PERSONAL_AITABLE_RECORDS_UPDATE).toBe(
+      'dingtalk.personal.aitable.records.update',
+    );
     expect(AUDIT_TARGET_TYPES).toContain('dingtalk_personal');
     expect(new Set(AUDIT_TARGET_TYPES).size).toBe(AUDIT_TARGET_TYPES.length);
     expect(AUDIT_TARGET_TYPE.DINGTALK_PERSONAL).toBe('dingtalk_personal');

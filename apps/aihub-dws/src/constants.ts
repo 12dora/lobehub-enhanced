@@ -4,6 +4,10 @@
  * Tests assert these numbers.
  */
 export const BROKER_TOKEN_MIN = 32;
+/**
+ * HTTP JSON body cap. Document and table writers must reject their own JSON
+ * above ~56 KB so the op / profile envelope still fits under this cap.
+ */
 export const MAX_BODY_BYTES = 64 * 1024;
 export const STDOUT_CAP_BYTES = 1024 * 1024;
 export const STDERR_CAP_BYTES = 64 * 1024;
@@ -43,6 +47,33 @@ export const RETENTION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const MESSAGE_MAX = 300;
 export const CURSOR_MAX = 4096;
+
+/** Contract E.1 broker ceilings. Tests assert these numbers. */
+export const DOC_QUERY_MAX = 200;
+export const DOC_TITLE_MAX = 100;
+export const DOC_MARKDOWN_MAX = 20_000;
+export const DOC_SEARCH_LIMIT_MAX = 10;
+export const DOC_SEARCH_LIMIT_DEFAULT = 5;
+export const WIKI_SPACE_LIMIT = 20;
+export const WIKI_NODE_LIMIT_MAX = 30;
+export const WIKI_NODE_LIMIT_DEFAULT = 20;
+export const DRIVE_LIST_LIMIT = 20;
+export const DRIVE_SEARCH_LIMIT_MAX = 10;
+export const DRIVE_SEARCH_LIMIT_DEFAULT = 5;
+export const SHEET_APPEND_ROWS_MAX = 50;
+export const SHEET_APPEND_COLS_MAX = 30;
+export const SHEET_READ_ROWS_MAX = 200;
+export const SHEET_READ_COLS_MAX = 30;
+export const SHEET_CELL_MAX = 500;
+export const AITABLE_BASE_QUERY_MIN = 2;
+export const AITABLE_BASE_QUERY_MAX = 100;
+export const AITABLE_BASE_LIST_LIMIT = 10;
+export const AITABLE_RECORD_QUERY_MAX = 50;
+export const AITABLE_RECORD_QUERY_DEFAULT = 20;
+export const AITABLE_RECORDS_MAX = 20;
+export const AITABLE_FIELDS_MAX = 50;
+export const AITABLE_CELL_MAX = 2000;
+export const AITABLE_RECORD_QUERY_TEXT_MAX = 200;
 
 export const DEFAULT_DWS_BIN = '/usr/local/bin/dws';
 export const DEFAULT_CONFIG_DIR = '/var/lib/dws/config';

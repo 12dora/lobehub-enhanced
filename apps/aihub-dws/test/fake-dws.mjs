@@ -233,15 +233,62 @@ async function doExec(control) {
   finish(0, `${JSON.stringify({ data: { echo: true }, ok: true, outcome: 'success' })}\n`);
 }
 
-function doDownload(control) {
+function downloadBody(shape, relativePath, size) {
+  if (shape === 'savedPath') {
+    return {
+      data: { nodeId: 'node1', savedPath: relativePath, sizeBytes: size, success: true },
+      ok: true,
+      outcome: 'success',
+    };
+  }
+  return {
+    localPath: relativePath,
+    messageVerified: true,
+    resourceType: 'fileId',
+    sizeBytes: size,
+  };
+}
+
+function doDownload(control, shape = 'localPath') {
   const download = control.download ?? {};
   const action = download.action ?? 'ok';
+  if (action === 'axls' || action === 'alidoc') {
+    const extension = action === 'axls' ? 'axls' : 'alidoc';
+    const kind = action === 'axls' ? '钉钉表格' : '钉钉文档';
+    finish(
+      1,
+      JSON.stringify({
+        error: {
+          exit_code: 1,
+          message: `nodeId 指向的节点是${kind}（extension=${extension}），在线${action === 'axls' ? '表格' : '文档'}不支持直接下载。请使用 getRange 工具获取表格数据。`,
+          subtype: 'business_error',
+          type: 'api',
+          upstream_code: 'invalidRequest.inputArgs.invalid',
+        },
+        ok: false,
+        outcome: 'failure',
+      }),
+    );
+    return;
+  }
+  if (action === 'fail') {
+    finish(1, '', '下载失败\n');
+    return;
+  }
+  if (action === 'nopath') {
+    finish(0, JSON.stringify({ data: { sizeBytes: 1 }, ok: true, outcome: 'success' }));
+    return;
+  }
   if (action === 'escape') {
-    finish(0, JSON.stringify({ localPath: '../secret.txt', sizeBytes: 1 }));
+    finish(0, JSON.stringify(downloadBody(shape, '../secret.txt', 1)));
+    return;
+  }
+  if (action === 'absolute') {
+    finish(0, JSON.stringify(downloadBody(shape, '/etc/passwd', 1)));
     return;
   }
   if (action === 'missing') {
-    finish(0, JSON.stringify({ localPath: 'files/missing.bin', sizeBytes: 1 }));
+    finish(0, JSON.stringify(downloadBody(shape, 'files/missing.bin', 1)));
     return;
   }
   const name = download.name ?? '报表.xlsx';
@@ -251,15 +298,7 @@ function doDownload(control) {
   const bytes = download.bytes ?? Buffer.byteLength('hello-dws');
   fs.writeFileSync(file, download.bytes === undefined ? 'hello-dws' : Buffer.alloc(bytes, 0x61));
   const size = fs.statSync(file).size;
-  finish(
-    0,
-    JSON.stringify({
-      localPath: `files/${name}`,
-      messageVerified: true,
-      resourceType: 'fileId',
-      sizeBytes: size,
-    }),
-  );
+  finish(0, JSON.stringify(downloadBody(shape, `files/${name}`, size)));
 }
 
 const args = process.argv.slice(2);
@@ -360,7 +399,9 @@ if (args[0] === 'version') {
 } else if (args[0] === 'auth' && args[1] === 'login') {
   await doLogin(control);
 } else if (args.includes('+messages-resource-download')) {
-  doDownload(control);
+  doDownload(control, 'localPath');
+} else if (args.includes('drive') && args.includes('+download')) {
+  doDownload(control, 'savedPath');
 } else {
   await doExec(control);
 }

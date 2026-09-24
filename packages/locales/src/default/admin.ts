@@ -2222,6 +2222,7 @@ export default {
   'system.workers.empty': 'No background workers are expected on this instance.',
   'system.workers.lastTick': 'Last tick {{time}}',
   'system.workers.noTick': 'No tick yet',
+  'system.workers.global_file_orphan_gc': 'Orphan file cleanup',
   'system.sandbox.containersInUse': 'Containers in use: {{active}} / {{max}}',
   'system.sandbox.daemonDown': 'Docker daemon unreachable',
   'system.sandbox.daemonUp': 'Docker daemon reachable',
@@ -2508,14 +2509,16 @@ export default {
   // 钉钉个人数据 — employee-authorized reads of their own to-dos, group chats and reports.
   'systemGeneral.imConnectors.personal.title': 'DingTalk personal data (employee authorization)',
   'systemGeneral.imConnectors.personal.description':
-    'After an employee authorizes it, the AI assistant can read that employee\'s own DingTalk to-dos, group messages, and work reports. Deploy the aihub-dws service first, and in <cli>DingTalk developer console → Basic information → CLI settings</cli> turn on "Allow members to access personal data through the CLI".',
+    'After an employee authorizes it, the AI assistant can read that employee\'s own DingTalk to-dos, group messages, work reports, docs, Drive files, knowledge bases, sheets and AI tables. Deploy the aihub-dws service first, and in <cli>DingTalk developer console → Basic information → CLI settings</cli> turn on "Allow members to access personal data through the CLI".',
   'systemGeneral.imConnectors.personal.fields.enabled': 'Enable DingTalk personal data',
   'systemGeneral.imConnectors.personal.fields.todo': 'To-dos',
   'systemGeneral.imConnectors.personal.fields.chat': 'Group messages',
   'systemGeneral.imConnectors.personal.fields.report': 'Work reports',
   'systemGeneral.imConnectors.personal.fields.write': 'Allow write actions',
+  'systemGeneral.imConnectors.personal.fields.docs': 'Docs / Drive / Knowledge bases',
+  'systemGeneral.imConnectors.personal.fields.sheets': 'Sheets / AI tables',
   'systemGeneral.imConnectors.personal.hints.write':
-    "Update a to-do, complete a to-do, or submit a report. Each action needs the employee's approval on a confirmation card.",
+    "Update or complete a to-do, submit a report, append to or create a doc, append sheet rows, and add or update AI-table records. Each action needs the employee's approval on a confirmation card.",
   'systemGeneral.imConnectors.personal.brokerMissing':
     'aihub-dws was not detected (DINGTALK_PERSONAL_BROKER_URL / DINGTALK_PERSONAL_BROKER_TOKEN). Turning this on has no effect until the service is configured.',
   'systemGeneral.imConnectors.personal.authorizedCount': '{{count}} employees authorized',
@@ -3238,6 +3241,11 @@ export default {
   'audit.logs.action.dingtalk.personal.revoke': 'Revoke DingTalk personal data access',
   'audit.logs.action.dingtalk.personal.todo.complete': 'Complete DingTalk personal to-do',
   'audit.logs.action.dingtalk.personal.todo.update': 'Update DingTalk personal to-do',
+  'audit.logs.action.dingtalk.personal.doc.append': 'Append DingTalk document content',
+  'audit.logs.action.dingtalk.personal.doc.create': 'Create DingTalk document',
+  'audit.logs.action.dingtalk.personal.sheet.append': 'Append DingTalk sheet rows',
+  'audit.logs.action.dingtalk.personal.aitable.records.create': 'Create DingTalk AI table records',
+  'audit.logs.action.dingtalk.personal.aitable.records.update': 'Update DingTalk AI table records',
   'audit.logs.action.dingtalk.todo.complete': 'Complete DingTalk to-do',
   'audit.logs.action.dingtalk.todo.create': 'Create DingTalk to-do',
   'audit.logs.action.dingtalk.todo.delete': 'Delete DingTalk to-do',

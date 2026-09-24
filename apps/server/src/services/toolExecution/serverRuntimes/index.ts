@@ -25,6 +25,7 @@ import { CalculatorIdentifier } from '@lobechat/builtin-tool-calculator/manifest
 import { CloudSandboxIdentifier } from '@lobechat/builtin-tool-cloud-sandbox/manifest';
 import { CredsIdentifier } from '@lobechat/builtin-tool-creds/manifest';
 import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DingtalkDocsIdentifier } from '@lobechat/builtin-tool-dingtalk-docs/manifest';
 import { DingtalkPersonalIdentifier } from '@lobechat/builtin-tool-dingtalk-personal/manifest';
 import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
 import { DocumentPagesIdentifier } from '@lobechat/builtin-tool-document-pages/manifest';
@@ -140,6 +141,10 @@ const SERVER_RUNTIME_REGISTRATIONS: ServerRuntimeRegistration[] = [
   lazyRuntime(
     DingtalkPersonalIdentifier,
     async () => (await import('./dingtalkPersonal')).dingtalkPersonalRuntime,
+  ),
+  lazyRuntime(
+    DingtalkDocsIdentifier,
+    async () => (await import('./dingtalkDocs')).dingtalkDocsRuntime,
   ),
   lazyRuntime(
     DingtalkApprovalIdentifier,

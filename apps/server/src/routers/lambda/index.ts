@@ -97,6 +97,7 @@ export const lambdaRouter = router({
   dingtalkPersonal: lazyRouter(() =>
     import('./dingtalkPersonal').then((m) => m.dingtalkPersonalRouter),
   ),
+  dingtalkDocs: lazyRouter(() => import('./dingtalkDocsTool').then((m) => m.dingtalkDocsRouter)),
   reminder: lazyRouter(() => import('./reminder').then((m) => m.reminderRouter)),
   search: lazyRouter(() => import('./search').then((m) => m.searchRouter)),
   session: lazyRouter(() => import('./session').then((m) => m.sessionRouter)),

@@ -1332,6 +1332,22 @@ export default {
   'tool.intervention.viewParameters': 'View parameters ({{count}})',
   'tool.intervention.toolAbort': 'You canceled this Skill call',
   'tool.intervention.toolRejected': 'This Skill call was rejected',
+  'tool.intervention.batch.pendingCount_one': '{{count}} action to confirm',
+  'tool.intervention.batch.pendingCount_other': '{{count}} actions to confirm',
+  'tool.intervention.batch.approveAll': 'Approve all',
+  'tool.intervention.batch.rejectAll': 'Reject all',
+  'tool.intervention.batch.approving': 'Approving {{current}}/{{total}}',
+  'tool.intervention.batch.rejecting': 'Rejecting {{current}}/{{total}}',
+  'tool.intervention.batch.stop': 'Stop',
+  'tool.intervention.batch.stoppedOnFailure':
+    'An action did not go through, so batch approval stopped. Review the rest one by one.',
+  'tool.intervention.batch.stoppedManual': 'Batch approval stopped. Review the rest one by one.',
+  'tool.intervention.batch.rejectIncomplete':
+    'Some actions could not be rejected. Review the rest one by one.',
+  'tool.intervention.batch.checkRefused':
+    'An action did not pass its pre-approval check, so batch approval stopped. Review that action.',
+  'tool.intervention.batch.previewTimeout':
+    'The preview did not finish loading. Review the remaining actions one by one.',
   'toolAuth.authorize': 'Authorize',
   'toolAuth.authorizing': 'Authorizing...',
   'toolAuth.hint':

@@ -65,7 +65,8 @@ const resolveTag = (
 
 /**
  * 钉钉个人数据 — the member's own, one-time authorization for the assistant to read their DingTalk
- * to-dos, group messages and work reports (through the `aihub-dws` sidecar, device-code login).
+ * to-dos, group messages and work reports, and — when the admin enables them — their documents,
+ * 钉盘, knowledge bases and sheets (through the `aihub-dws` sidecar, device-code login).
  *
  * Renders nothing while the deployment has the capability off (`disabled`).
  */

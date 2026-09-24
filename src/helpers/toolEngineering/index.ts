@@ -2,6 +2,7 @@
  * Tools Engineering - Unified tools processing using ToolsEngine
  */
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
+import { DingtalkDocsIdentifier } from '@lobechat/builtin-tool-dingtalk-docs';
 import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
@@ -54,6 +55,9 @@ const readEnterpriseToolFlags = () => {
   const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
   return {
     dingtalkApproval: !!caps?.dingtalkApproval,
+    // Runs on the member's own 钉钉个人数据 authorization, so it can never be on without personal
+    // data (the server flag already implies it; AND again so a stale config fails closed).
+    dingtalkDocs: !!caps?.dingtalkPersonal && !!caps?.dingtalkDocs,
     dingtalkPersonal: !!caps?.dingtalkPersonal,
     dingtalkWorkspace: !!(caps?.dingtalkTodo || caps?.dingtalkCalendar),
     enterpriseLookup: !!caps?.enterpriseLookup,
@@ -258,7 +262,7 @@ export const createAgentToolsEngine = (
       settingsSelectors.memoryEnabled(useUserStore.getState())) &&
     memoryEmbeddingAvailable !== false;
   const webBrowsingEnabled = searchConfig.useApplicationBuiltinSearchTool;
-  const { dingtalkApproval, dingtalkPersonal, dingtalkWorkspace, enterpriseLookup } =
+  const { dingtalkApproval, dingtalkDocs, dingtalkPersonal, dingtalkWorkspace, enterpriseLookup } =
     readEnterpriseToolFlags();
   // Native search and the platform browsing tool must not stack. Drop the
   // web-browsing manifest from the pool so `allowExplicitActivation` cannot
@@ -272,6 +276,7 @@ export const createAgentToolsEngine = (
     ...(!dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
     ...(!dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
     ...(!dingtalkPersonal ? [DINGTALK_PERSONAL_TOOL_IDENTIFIER] : []),
+    ...(!dingtalkDocs ? [DingtalkDocsIdentifier] : []),
     ...(!enterpriseLookup ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
     ...(memoryEmbeddingAvailable === false ? [MemoryManifest.identifier] : []),
   ];
@@ -304,6 +309,7 @@ export const createAgentToolsEngine = (
     [DINGTALK_APPROVAL_TOOL_IDENTIFIER]: dingtalkApproval,
     [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: dingtalkWorkspace,
     [DINGTALK_PERSONAL_TOOL_IDENTIFIER]: dingtalkPersonal,
+    [DingtalkDocsIdentifier]: dingtalkDocs,
   };
 
   return createToolsEngine({
@@ -319,6 +325,7 @@ export const createAgentToolsEngine = (
           ...(dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
           ...(dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
           ...(dingtalkPersonal ? [DINGTALK_PERSONAL_TOOL_IDENTIFIER] : []),
+          ...(dingtalkDocs ? [DingtalkDocsIdentifier] : []),
         ],
     disabledPluginIds: disabledIds,
     manifestContext,

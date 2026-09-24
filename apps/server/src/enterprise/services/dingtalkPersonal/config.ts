@@ -10,7 +10,7 @@ const log = debug('lobe-server:dingtalk-personal:config');
 
 export const DINGTALK_PERSONAL_CONFIG_CACHE_MS = 30_000;
 
-export type DingtalkPersonalFeature = 'todo' | 'chat' | 'report' | 'write';
+export type DingtalkPersonalFeature = 'todo' | 'chat' | 'report' | 'write' | 'docs' | 'sheets';
 
 export interface DingtalkPersonalConfig {
   /** URL and token env vars are both present. */
@@ -36,9 +36,35 @@ export type DingtalkPersonalOp =
   | 'report.templates'
   | 'report.template'
   | 'report.submit'
-  | 'contact.self';
+  | 'contact.self'
+  | 'doc.search'
+  | 'doc.info'
+  | 'doc.read'
+  | 'doc.append'
+  | 'doc.create'
+  | 'wiki.spaces'
+  | 'wiki.nodes'
+  | 'drive.search'
+  | 'drive.list'
+  | 'drive.download'
+  | 'sheet.list'
+  | 'sheet.info'
+  | 'sheet.read'
+  | 'sheet.append'
+  | 'aitable.bases'
+  | 'aitable.tables'
+  | 'aitable.schema'
+  | 'aitable.records.query'
+  | 'aitable.records.create'
+  | 'aitable.records.update';
 
 export const DINGTALK_PERSONAL_OP_FEATURE = {
+  'aitable.bases': 'sheets',
+  'aitable.records.create': 'sheets',
+  'aitable.records.query': 'sheets',
+  'aitable.records.update': 'sheets',
+  'aitable.schema': 'sheets',
+  'aitable.tables': 'sheets',
   'chat.downloadFile': 'chat',
   'chat.messages': 'chat',
   'chat.myGroups': 'chat',
@@ -53,19 +79,40 @@ export const DINGTALK_PERSONAL_OP_FEATURE = {
   'report.templates': 'report',
   'todo.complete': 'todo',
   'todo.get': 'todo',
+  'doc.append': 'docs',
+  'doc.create': 'docs',
+  'doc.info': 'docs',
+  'doc.read': 'docs',
+  'doc.search': 'docs',
+  'drive.download': 'docs',
+  'drive.list': 'docs',
+  'drive.search': 'docs',
+  'sheet.append': 'sheets',
+  'sheet.info': 'sheets',
+  'sheet.list': 'sheets',
+  'sheet.read': 'sheets',
   'todo.list': 'todo',
   'todo.update': 'todo',
+  'wiki.nodes': 'docs',
+  'wiki.spaces': 'docs',
 } as const satisfies Record<DingtalkPersonalOp, DingtalkPersonalFeature | null>;
 
 export const DINGTALK_PERSONAL_WRITE_OPS = [
   'todo.update',
   'todo.complete',
   'report.submit',
+  'doc.append',
+  'doc.create',
+  'sheet.append',
+  'aitable.records.create',
+  'aitable.records.update',
 ] as const satisfies readonly DingtalkPersonalOp[];
 
 const FEATURES_OFF: Record<DingtalkPersonalFeature, boolean> = {
   chat: false,
+  docs: false,
   report: false,
+  sheets: false,
   todo: false,
   write: false,
 };
@@ -97,7 +144,9 @@ const readBrokerConfigured = (): boolean =>
 const readSwitches = (raw: Record<string, unknown> | undefined) => ({
   chat: raw?.personalChatEnabled === true,
   data: raw?.personalDataEnabled === true,
+  docs: raw?.personalDocsEnabled === true,
   report: raw?.personalReportEnabled === true,
+  sheets: raw?.personalSheetsEnabled === true,
   todo: raw?.personalTodoEnabled === true,
   write: raw?.personalWriteEnabled === true,
 });
@@ -125,7 +174,9 @@ const loadSnapshot = async (): Promise<ConfigSnapshot> => {
       enabled,
       features: {
         chat: enabled && switches.chat,
+        docs: enabled && switches.docs,
         report: enabled && switches.report,
+        sheets: enabled && switches.sheets,
         todo: enabled && switches.todo,
         write: enabled && switches.write,
       },

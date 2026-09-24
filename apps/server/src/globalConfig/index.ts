@@ -129,6 +129,7 @@ export const getServerGlobalConfig = async () => {
   }
   let dingtalkApproval = false;
   let dingtalkCalendar = false;
+  let dingtalkDocs = false;
   let dingtalkPersonal = false;
   let dingtalkTodo = false;
   try {
@@ -144,9 +145,14 @@ export const getServerGlobalConfig = async () => {
   try {
     const { getDingtalkPersonalConfig } =
       await import('@/server/enterprise/services/dingtalkPersonal');
-    dingtalkPersonal = (await getDingtalkPersonalConfig()).enabled === true;
+    const personalConfig = await getDingtalkPersonalConfig();
+    dingtalkPersonal = personalConfig.enabled === true;
+    // Same offer rule as the tools engine: personal data, plus docs or sheets.
+    dingtalkDocs =
+      dingtalkPersonal &&
+      (personalConfig.features?.docs === true || personalConfig.features?.sheets === true);
   } catch {
-    // Fail closed: the personal-data capability flag stays false.
+    // Fail closed: the personal-data and docs capability flags stay false.
   }
 
   const config: GlobalServerConfig = {
@@ -164,6 +170,7 @@ export const getServerGlobalConfig = async () => {
       capabilities: {
         dingtalkApproval,
         dingtalkCalendar,
+        dingtalkDocs,
         dingtalkPersonal,
         dingtalkTodo,
         enterpriseLookup: enterpriseLookupConfigured,

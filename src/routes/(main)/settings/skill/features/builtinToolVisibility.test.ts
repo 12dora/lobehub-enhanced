@@ -11,6 +11,7 @@ describe('isPlatformManagedBuiltinTool', () => {
   // ignores `uninstalledBuiltinTools`, so no per-user control may be offered.
   it.each([
     'lobe-dingtalk-approval',
+    'lobe-dingtalk-docs',
     'lobe-dingtalk-personal',
     'lobe-dingtalk-workspace',
     'lobe-enterprise-lookup',
@@ -28,6 +29,7 @@ describe('isPlatformManagedBuiltinTool', () => {
   it('covers exactly the tools the capability gate knows about', () => {
     const gated = [
       'lobe-dingtalk-approval',
+      'lobe-dingtalk-docs',
       'lobe-dingtalk-personal',
       'lobe-dingtalk-workspace',
       'lobe-enterprise-lookup',
@@ -35,6 +37,7 @@ describe('isPlatformManagedBuiltinTool', () => {
     const allOn: EnterpriseToolCapabilities = {
       dingtalkApproval: true,
       dingtalkCalendar: true,
+      dingtalkDocs: true,
       dingtalkPersonal: true,
       dingtalkTodo: true,
       enterpriseLookup: true,
@@ -56,6 +59,7 @@ describe('isBuiltinToolAvailableInDeployment', () => {
 
   it.each([
     ['lobe-dingtalk-approval', { dingtalkApproval: true }],
+    ['lobe-dingtalk-docs', { dingtalkDocs: true, dingtalkPersonal: true }],
     ['lobe-dingtalk-personal', { dingtalkPersonal: true }],
     ['lobe-dingtalk-workspace', { dingtalkTodo: true }],
     ['lobe-dingtalk-workspace', { dingtalkCalendar: true }],
@@ -71,6 +75,7 @@ describe('isBuiltinToolAvailableInDeployment', () => {
   // advertise one whose backend is switched off.
   it.each([
     'lobe-dingtalk-approval',
+    'lobe-dingtalk-docs',
     'lobe-dingtalk-personal',
     'lobe-dingtalk-workspace',
     'lobe-enterprise-lookup',
@@ -81,11 +86,37 @@ describe('isBuiltinToolAvailableInDeployment', () => {
       isBuiltinToolAvailableInDeployment(identifier, {
         dingtalkApproval: false,
         dingtalkCalendar: false,
+        dingtalkDocs: false,
         dingtalkPersonal: false,
         dingtalkTodo: false,
         enterpriseLookup: false,
       }),
     ).toBe(false);
+  });
+
+  it('shows the docs tool only when personal data and the docs flag are both on', () => {
+    expect(
+      isBuiltinToolAvailableInDeployment('lobe-dingtalk-docs', {
+        dingtalkDocs: false,
+        dingtalkPersonal: true,
+      }),
+    ).toBe(false);
+    expect(
+      isBuiltinToolAvailableInDeployment('lobe-dingtalk-docs', {
+        dingtalkDocs: true,
+        dingtalkPersonal: false,
+      }),
+    ).toBe(false);
+    // The docs flag does not switch the personal tool on, nor the other way round.
+    expect(
+      isBuiltinToolAvailableInDeployment('lobe-dingtalk-personal', { dingtalkDocs: true }),
+    ).toBe(false);
+    expect(
+      isBuiltinToolAvailableInDeployment('lobe-dingtalk-personal', {
+        dingtalkDocs: false,
+        dingtalkPersonal: true,
+      }),
+    ).toBe(true);
   });
 
   it('keeps personal data and the workspace tool on separate flags', () => {

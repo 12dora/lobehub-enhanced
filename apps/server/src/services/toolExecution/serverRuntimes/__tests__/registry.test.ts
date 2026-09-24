@@ -14,6 +14,7 @@ import { CalculatorIdentifier } from '@lobechat/builtin-tool-calculator/manifest
 import { CloudSandboxIdentifier } from '@lobechat/builtin-tool-cloud-sandbox/manifest';
 import { CredsIdentifier } from '@lobechat/builtin-tool-creds/manifest';
 import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DingtalkDocsIdentifier } from '@lobechat/builtin-tool-dingtalk-docs/manifest';
 import { DingtalkPersonalIdentifier } from '@lobechat/builtin-tool-dingtalk-personal/manifest';
 import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
 import { DocumentPagesIdentifier } from '@lobechat/builtin-tool-document-pages/manifest';
@@ -121,6 +122,9 @@ vi.mock('../dingtalkWorkspace', () =>
 vi.mock('../dingtalkPersonal', () =>
   mockRuntime('dingtalkPersonalRuntime', 'lobe-dingtalk-personal', { id: 'dingtalkPersonal' }),
 );
+vi.mock('../dingtalkDocs', () =>
+  mockRuntime('dingtalkDocsRuntime', 'lobe-dingtalk-docs', { id: 'dingtalkDocs' }),
+);
 vi.mock('../dingtalkApproval', () =>
   mockRuntime('dingtalkApprovalRuntime', 'lobe-dingtalk-approval', { id: 'dingtalkApproval' }),
 );
@@ -205,6 +209,7 @@ const STATIC_IDENTIFIERS = [
   ReminderIdentifier,
   DingtalkWorkspaceIdentifier,
   DingtalkPersonalIdentifier,
+  DingtalkDocsIdentifier,
   DingtalkApprovalIdentifier,
   EnterpriseLookupIdentifier,
   TopicReferenceIdentifier,

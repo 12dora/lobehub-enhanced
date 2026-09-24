@@ -3210,8 +3210,13 @@ export class AiAgentService {
       const dingtalkCapabilities = await getDingtalkWorkspaceCapabilities();
       // Fail closed: a missing broker config or a thrown read must not advertise the tool.
       let dingtalkPersonal = false;
+      let dingtalkDocs = false;
       try {
-        dingtalkPersonal = (await getDingtalkPersonalConfig()).enabled === true;
+        const personalConfig = await getDingtalkPersonalConfig();
+        dingtalkPersonal = personalConfig.enabled === true;
+        dingtalkDocs =
+          dingtalkPersonal &&
+          (personalConfig.features.docs === true || personalConfig.features.sheets === true);
       } catch (error) {
         log('execAgent: dingtalk personal config read failed, failing closed: %O', error);
       }
@@ -3264,6 +3269,7 @@ export class AiAgentService {
           return false;
         }),
         dingtalkApprovalEnabled: dingtalkCapabilities.approval,
+        dingtalkDocs,
         dingtalkPersonal,
         dingtalkWorkspaceEnabled: dingtalkCapabilities.todo || dingtalkCapabilities.calendar,
         // Context-aware builtin manifests: inside a sub-agent (or group) run,

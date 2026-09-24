@@ -12,6 +12,7 @@ import { calculatorExecutor } from '@lobechat/builtin-tool-calculator/executor';
 import { cloudSandboxExecutor } from '@lobechat/builtin-tool-cloud-sandbox/executor';
 import { credsExecutor } from '@lobechat/builtin-tool-creds/executor';
 import { dingtalkApprovalExecutor } from '@lobechat/builtin-tool-dingtalk-approval/client/executor';
+import { dingtalkDocsExecutor } from '@lobechat/builtin-tool-dingtalk-docs/client/executor';
 import { dingtalkPersonalExecutor } from '@lobechat/builtin-tool-dingtalk-personal/client/executor';
 import { dingtalkWorkspaceExecutor } from '@lobechat/builtin-tool-dingtalk-workspace/client/executor';
 import { enterpriseLookupExecutor } from '@lobechat/builtin-tool-enterprise-lookup/client/executor';
@@ -166,6 +167,7 @@ export const registerBuiltinToolExecutors = (): void => {
     reminderExecutor,
     dingtalkWorkspaceExecutor,
     dingtalkPersonalExecutor,
+    dingtalkDocsExecutor,
     dingtalkApprovalExecutor,
     enterpriseLookupExecutor,
     taskExecutor,

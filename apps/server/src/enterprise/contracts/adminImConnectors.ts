@@ -86,12 +86,17 @@ export const dingTalkConnectorSettingsSchema = z
     personalChatEnabled: z.boolean().default(false),
     /** Master switch for `lobe-dingtalk-personal` (员工授权的钉钉个人数据). Default off. */
     personalDataEnabled: z.boolean().default(false),
+    /** Document, wiki, and drive reads of `lobe-dingtalk-docs`. Requires `personalDataEnabled`. */
+    personalDocsEnabled: z.boolean().default(false),
     /** Work-report reads of `lobe-dingtalk-personal`. Requires `personalDataEnabled`. */
     personalReportEnabled: z.boolean().default(false),
+    /** Sheet and AI-table reads of `lobe-dingtalk-docs`. Requires `personalDataEnabled`. */
+    personalSheetsEnabled: z.boolean().default(false),
     /** Todo reads of `lobe-dingtalk-personal`. Requires `personalDataEnabled`. */
     personalTodoEnabled: z.boolean().default(false),
     /**
-     * Writes of `lobe-dingtalk-personal` (update/complete todo, submit report).
+     * Writes of `lobe-dingtalk-personal` and `lobe-dingtalk-docs`
+     * (todo, report, document, sheet, and AI-table writes).
      * Requires `personalDataEnabled`. Each write still asks the employee to confirm.
      */
     personalWriteEnabled: z.boolean().default(false),
@@ -188,8 +193,12 @@ export const adminImConnectorViewSchema = z
     personalChatEnabled: z.boolean(),
     /** Master switch for `lobe-dingtalk-personal`. */
     personalDataEnabled: z.boolean(),
+    /** Document, wiki, and drive reads of `lobe-dingtalk-docs`. */
+    personalDocsEnabled: z.boolean(),
     /** Work-report reads of `lobe-dingtalk-personal`. */
     personalReportEnabled: z.boolean(),
+    /** Sheet and AI-table reads of `lobe-dingtalk-docs`. */
+    personalSheetsEnabled: z.boolean(),
     /** Todo reads of `lobe-dingtalk-personal`. */
     personalTodoEnabled: z.boolean(),
     /** Writes of `lobe-dingtalk-personal`. */
@@ -273,7 +282,9 @@ export const adminImConnectorUpsertInputSchema = z
     selectCardTemplateId: z.string().trim().max(200).nullable(),
     personalChatEnabled: z.boolean().optional().default(false),
     personalDataEnabled: z.boolean().optional().default(false),
+    personalDocsEnabled: z.boolean().optional().default(false),
     personalReportEnabled: z.boolean().optional().default(false),
+    personalSheetsEnabled: z.boolean().optional().default(false),
     personalTodoEnabled: z.boolean().optional().default(false),
     personalWriteEnabled: z.boolean().optional().default(false),
     workspaceApprovalEnabled: z.boolean().optional().default(false),

@@ -159,7 +159,14 @@ const mockGlobalConfigDependencies = (
     getDingtalkPersonalConfig: async () => ({
       brokerConfigured: false,
       enabled: false,
-      features: { chat: false, report: false, todo: false, write: false },
+      features: {
+        chat: false,
+        docs: false,
+        report: false,
+        sheets: false,
+        todo: false,
+        write: false,
+      },
     }),
     invalidateDingtalkPersonalConfig: () => undefined,
   }));
@@ -279,6 +286,7 @@ describe('getServerGlobalConfig', () => {
   it('defaults enterprise.capabilities.dingtalkPersonal to false', async () => {
     const config = await loadServerConfig(false);
     expect(config.enterprise?.capabilities?.dingtalkPersonal).toBe(false);
+    expect(config.enterprise?.capabilities?.dingtalkDocs).toBe(false);
   });
 
   it('exposes enterprise.capabilities.dingtalkPersonal when personal data is enabled', async () => {
@@ -289,13 +297,56 @@ describe('getServerGlobalConfig', () => {
       getDingtalkPersonalConfig: async () => ({
         brokerConfigured: true,
         enabled: true,
-        features: { chat: true, report: false, todo: true, write: false },
+        features: {
+          chat: true,
+          docs: false,
+          report: false,
+          sheets: false,
+          todo: true,
+          write: false,
+        },
       }),
       invalidateDingtalkPersonalConfig: () => undefined,
     }));
     const { getServerGlobalConfig } = await import('./index');
     const config = await getServerGlobalConfig();
     expect(config.enterprise?.capabilities?.dingtalkPersonal).toBe(true);
+    expect(config.enterprise?.capabilities?.dingtalkDocs).toBe(false);
+  });
+
+  it('exposes dingtalkDocs only when personal data and a docs or sheets switch are on', async () => {
+    const load = async (config: { docs?: boolean; enabled: boolean; sheets?: boolean }) => {
+      vi.resetModules();
+      mocks.genServerAiProvidersConfig.mockClear();
+      mockGlobalConfigDependencies(false);
+      vi.doMock('@/server/enterprise/services/dingtalkPersonal', () => ({
+        getDingtalkPersonalConfig: async () => ({
+          brokerConfigured: true,
+          enabled: config.enabled,
+          features: {
+            chat: false,
+            docs: config.docs === true,
+            report: false,
+            sheets: config.sheets === true,
+            todo: false,
+            write: false,
+          },
+        }),
+      }));
+      const { getServerGlobalConfig } = await import('./index');
+      return getServerGlobalConfig();
+    };
+
+    const docsOn = await load({ docs: true, enabled: true });
+    expect(docsOn.enterprise?.capabilities?.dingtalkDocs).toBe(true);
+    expect(docsOn.enterprise?.capabilities?.dingtalkPersonal).toBe(true);
+
+    const sheetsOn = await load({ enabled: true, sheets: true });
+    expect(sheetsOn.enterprise?.capabilities?.dingtalkDocs).toBe(true);
+
+    const personalOff = await load({ docs: true, enabled: false, sheets: true });
+    expect(personalOff.enterprise?.capabilities?.dingtalkDocs).toBe(false);
+    expect(personalOff.enterprise?.capabilities?.dingtalkPersonal).toBe(false);
   });
 
   it('fails closed when the personal-data config cannot be read', async () => {
@@ -310,6 +361,7 @@ describe('getServerGlobalConfig', () => {
     const { getServerGlobalConfig } = await import('./index');
     const config = await getServerGlobalConfig();
     expect(config.enterprise?.capabilities?.dingtalkPersonal).toBe(false);
+    expect(config.enterprise?.capabilities?.dingtalkDocs).toBe(false);
   });
 
   it('exposes enterprise.capabilities.enterpriseLookup from runtime config', async () => {

@@ -91,7 +91,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   personal: { authorizedCount: 0, brokerConfigured: true },
   personalChatEnabled: false,
   personalDataEnabled: false,
+  personalDocsEnabled: false,
   personalReportEnabled: false,
+  personalSheetsEnabled: false,
   personalTodoEnabled: false,
   personalWriteEnabled: false,
   platform: 'dingtalk',
@@ -131,7 +133,7 @@ const renderSection = ({
 const switchOf = (field: string) =>
   screen.getByLabelText(`systemGeneral.imConnectors.personal.fields.${field}`) as HTMLButtonElement;
 
-const SCOPES = ['todo', 'chat', 'report', 'write'] as const;
+const SCOPES = ['todo', 'chat', 'report', 'docs', 'sheets', 'write'] as const;
 
 beforeEach(() => {
   onPatch.mockReset();
@@ -157,7 +159,7 @@ describe('PersonalDataSection', () => {
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
-  it('holds the four scopes back while the master switch is off', () => {
+  it('holds the six scopes back while the master switch is off', () => {
     renderSection();
 
     expect(switchOf('enabled').disabled).toBe(false);
@@ -176,8 +178,29 @@ describe('PersonalDataSection', () => {
     expect(onPatch).toHaveBeenLastCalledWith({ personalChatEnabled: true });
     fireEvent.click(switchOf('report'));
     expect(onPatch).toHaveBeenLastCalledWith({ personalReportEnabled: true });
+    fireEvent.click(switchOf('docs'));
+    expect(onPatch).toHaveBeenLastCalledWith({ personalDocsEnabled: true });
+    fireEvent.click(switchOf('sheets'));
+    expect(onPatch).toHaveBeenLastCalledWith({ personalSheetsEnabled: true });
     fireEvent.click(switchOf('write'));
     expect(onPatch).toHaveBeenLastCalledWith({ personalWriteEnabled: true });
+  });
+
+  it('shows the docs and sheets switches as stored, off by default', () => {
+    const { unmount } = renderSection({
+      draft: toDingTalkDraft(view({ personalDataEnabled: true })),
+    });
+    expect(switchOf('docs').getAttribute('aria-checked')).toBe('false');
+    expect(switchOf('sheets').getAttribute('aria-checked')).toBe('false');
+    unmount();
+
+    renderSection({
+      draft: toDingTalkDraft(
+        view({ personalDataEnabled: true, personalDocsEnabled: true, personalSheetsEnabled: true }),
+      ),
+    });
+    expect(switchOf('docs').getAttribute('aria-checked')).toBe('true');
+    expect(switchOf('sheets').getAttribute('aria-checked')).toBe('true');
   });
 
   it('locks every switch while the card is saving or read-only', () => {

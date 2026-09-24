@@ -185,7 +185,7 @@ const authorized: DingtalkPersonalStatus = {
   authorizedAt: '2026-09-20T09:30:00.000Z',
   corpName: '示例科技',
   dingtalkUserName: '张三',
-  features: { chat: true, report: false, todo: true, write: false },
+  features: { chat: true, docs: true, report: false, sheets: false, todo: true, write: false },
   state: 'authorized',
 };
 
@@ -534,6 +534,9 @@ describe('AuthorizeCard', () => {
     expect(screen.getByText('待办')).toBeTruthy();
     expect(screen.getByText('群聊消息')).toBeTruthy();
     expect(screen.queryByText('工作日志')).toBeNull();
+    // The documents of lobe-dingtalk-docs ride on the same authorization; sheets stay off here.
+    expect(screen.getByText(dict['dingtalkPersonal.features.docs']!)).toBeTruthy();
+    expect(screen.queryByText(dict['dingtalkPersonal.features.sheets']!)).toBeNull();
     expect(screen.getByText('检查状态')).toBeTruthy();
     expect(screen.getByText('撤销授权')).toBeTruthy();
   });
@@ -541,7 +544,14 @@ describe('AuthorizeCard', () => {
   it('links the admin IM connector tab when the admin has enabled nothing yet', async () => {
     mocks.getStatus.mockResolvedValue({
       ...authorized,
-      features: { chat: false, report: false, todo: false, write: false },
+      features: {
+        chat: false,
+        docs: false,
+        report: false,
+        sheets: false,
+        todo: false,
+        write: false,
+      },
     });
     await renderCard();
 

@@ -37,7 +37,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   personal: { authorizedCount: 0, brokerConfigured: true },
   personalChatEnabled: false,
   personalDataEnabled: false,
+  personalDocsEnabled: false,
   personalReportEnabled: false,
+  personalSheetsEnabled: false,
   personalTodoEnabled: false,
   personalWriteEnabled: false,
   platform: 'dingtalk',
@@ -463,7 +465,9 @@ describe('DingTalk connector draft', () => {
       for (const key of [
         'personalChatEnabled',
         'personalDataEnabled',
+        'personalDocsEnabled',
         'personalReportEnabled',
+        'personalSheetsEnabled',
         'personalTodoEnabled',
         'personalWriteEnabled',
       ] as const)
@@ -472,27 +476,42 @@ describe('DingTalk connector draft', () => {
       expect(readDingTalkPersonalSettings(legacy)).toEqual({
         personalChatEnabled: false,
         personalDataEnabled: false,
+        personalDocsEnabled: false,
         personalReportEnabled: false,
+        personalSheetsEnabled: false,
         personalTodoEnabled: false,
         personalWriteEnabled: false,
       });
     });
 
-    it('seeds the five switches from the row and sends them back with it', () => {
+    it('seeds the seven switches from the row and sends them back with it', () => {
       const seed = toDingTalkDraft(
-        view({ personalDataEnabled: true, personalReportEnabled: true, personalTodoEnabled: true }),
+        view({
+          personalDataEnabled: true,
+          personalDocsEnabled: true,
+          personalReportEnabled: true,
+          personalTodoEnabled: true,
+        }),
       );
 
       expect(seed.personalDataEnabled).toBe(true);
       expect(seed.personalTodoEnabled).toBe(true);
       expect(seed.personalReportEnabled).toBe(true);
+      expect(seed.personalDocsEnabled).toBe(true);
       expect(seed.personalChatEnabled).toBe(false);
+      expect(seed.personalSheetsEnabled).toBe(false);
 
-      const input = toDingTalkUpsertInput({ ...seed, personalWriteEnabled: true });
+      const input = toDingTalkUpsertInput({
+        ...seed,
+        personalSheetsEnabled: true,
+        personalWriteEnabled: true,
+      });
       expect(input).toMatchObject({
         personalChatEnabled: false,
         personalDataEnabled: true,
+        personalDocsEnabled: true,
         personalReportEnabled: true,
+        personalSheetsEnabled: true,
         personalTodoEnabled: true,
         personalWriteEnabled: true,
       });
@@ -506,6 +525,8 @@ describe('DingTalk connector draft', () => {
         { personalTodoEnabled: true },
         { personalChatEnabled: true },
         { personalReportEnabled: true },
+        { personalDocsEnabled: true },
+        { personalSheetsEnabled: true },
         { personalWriteEnabled: true },
       ])
         expect(fingerprintDingTalkDraft({ ...seed, ...change })).not.toBe(
@@ -520,12 +541,17 @@ describe('DingTalk connector draft', () => {
         personalTodoEnabled: true,
       };
       const settled = settleDingTalkDraft(
-        draft,
-        view({ personalDataEnabled: true, personalTodoEnabled: false }),
+        { ...draft, personalSheetsEnabled: true },
+        view({
+          personalDataEnabled: true,
+          personalSheetsEnabled: false,
+          personalTodoEnabled: false,
+        }),
       );
 
       expect(settled.personalDataEnabled).toBe(true);
       expect(settled.personalTodoEnabled).toBe(false);
+      expect(settled.personalSheetsEnabled).toBe(false);
     });
 
     it('reads the sidecar summary only when the server sent a well-formed one', () => {

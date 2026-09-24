@@ -1,0 +1,30 @@
+{
+  "name": "@lobechat/builtin-tool-dingtalk-docs",
+  "version": "1.0.0",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client/index.ts",
+    "./client/executor": "./src/client/executor/index.ts",
+    "./executor": "./src/client/executor/index.ts",
+    "./executionRuntime": "./src/ExecutionRuntime/index.ts",
+    "./manifest": "./src/manifest.ts"
+  },
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@lobechat/builtin-tool-dingtalk-personal": "workspace:*",
+    "@lobechat/builtin-tool-dingtalk-workspace": "workspace:*",
+    "@lobechat/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@lobechat/types": "workspace:*"
+  },
+  "peerDependencies": {
+    "@lobehub/ui": "^5",
+    "antd-style": "*",
+    "lucide-react": "*",
+    "react": "*",
+    "react-i18next": "*",
+    "swr": "^2"
+  }
+}

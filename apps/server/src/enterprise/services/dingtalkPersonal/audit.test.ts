@@ -44,11 +44,25 @@ describe('appendDingtalkPersonalAudit', () => {
     await appendDingtalkPersonalAudit(db, 'user-a', 'todo.update', { targetId: 'task-1' });
     await appendDingtalkPersonalAudit(db, 'user-a', 'todo.complete', { targetId: 'task-1' });
     await appendDingtalkPersonalAudit(db, 'user-a', 'report.submit', { targetId: 'report-1' });
+    await appendDingtalkPersonalAudit(db, 'user-a', 'doc.append', { targetId: 'node-1' });
+    await appendDingtalkPersonalAudit(db, 'user-a', 'doc.create', { targetId: '周报' });
+    await appendDingtalkPersonalAudit(db, 'user-a', 'sheet.append', { targetId: 'node-1' });
+    await appendDingtalkPersonalAudit(db, 'user-a', 'aitable.records.create', {
+      targetId: 'table-1',
+    });
+    await appendDingtalkPersonalAudit(db, 'user-a', 'aitable.records.update', {
+      targetId: 'table-1',
+    });
     expect(append.mock.calls.map((call) => call[0].action)).toEqual([
       'dingtalk.personal.revoke',
       'dingtalk.personal.todo.update',
       'dingtalk.personal.todo.complete',
       'dingtalk.personal.report.submit',
+      'dingtalk.personal.doc.append',
+      'dingtalk.personal.doc.create',
+      'dingtalk.personal.sheet.append',
+      'dingtalk.personal.aitable.records.create',
+      'dingtalk.personal.aitable.records.update',
     ]);
   });
 });

@@ -36,9 +36,11 @@ describe('dingTalkConnectorSettingsSchema', () => {
     expect(settings.workspaceTodoEnabled).toBe(false);
     expect(settings.workspaceCalendarEnabled).toBe(false);
     expect(settings.personalDataEnabled).toBe(false);
+    expect(settings.personalDocsEnabled).toBe(false);
     expect(settings.personalTodoEnabled).toBe(false);
     expect(settings.personalChatEnabled).toBe(false);
     expect(settings.personalReportEnabled).toBe(false);
+    expect(settings.personalSheetsEnabled).toBe(false);
     expect(settings.personalWriteEnabled).toBe(false);
     expect(settings.approvalAutomationTier).toBe('moderate');
     expect(settings.robotDisplayName).toBe('');
@@ -47,11 +49,15 @@ describe('dingTalkConnectorSettingsSchema', () => {
   it('keeps an explicit personal-data switch', () => {
     const settings = dingTalkConnectorSettingsSchema.parse({
       personalDataEnabled: true,
+      personalDocsEnabled: true,
+      personalSheetsEnabled: false,
       personalTodoEnabled: true,
       personalWriteEnabled: false,
       robotCode: 'ding-robot',
     });
     expect(settings.personalDataEnabled).toBe(true);
+    expect(settings.personalDocsEnabled).toBe(true);
+    expect(settings.personalSheetsEnabled).toBe(false);
     expect(settings.personalTodoEnabled).toBe(true);
     expect(settings.personalChatEnabled).toBe(false);
     expect(settings.personalWriteEnabled).toBe(false);
@@ -101,9 +107,11 @@ describe('adminImConnectorUpsertInputSchema', () => {
   it('defaults omitted personal-data switches to false', () => {
     const input = adminImConnectorUpsertInputSchema.parse(UPSERT_BASE);
     expect(input.personalDataEnabled).toBe(false);
+    expect(input.personalDocsEnabled).toBe(false);
     expect(input.personalTodoEnabled).toBe(false);
     expect(input.personalChatEnabled).toBe(false);
     expect(input.personalReportEnabled).toBe(false);
+    expect(input.personalSheetsEnabled).toBe(false);
     expect(input.personalWriteEnabled).toBe(false);
   });
 
@@ -198,7 +206,9 @@ describe('adminImConnectorViewSchema', () => {
       personal: { authorizedCount: 2, brokerConfigured: true },
       personalChatEnabled: false,
       personalDataEnabled: true,
+      personalDocsEnabled: false,
       personalReportEnabled: false,
+      personalSheetsEnabled: false,
       personalTodoEnabled: true,
       personalWriteEnabled: false,
       workspaceApprovalEnabled: false,

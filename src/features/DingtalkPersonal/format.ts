@@ -35,11 +35,16 @@ export const formatAuthorizationTime = (value: string | null | undefined): strin
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : null;
 };
 
-/** In the order they are listed on the card: the reads first, the write permission last. */
+/**
+ * In the order they are listed on the card: the reads first (to-dos, group messages, reports, then
+ * the documents and sheets of `lobe-dingtalk-docs`), the write permission last.
+ */
 export const DINGTALK_PERSONAL_FEATURES = [
   'todo',
   'chat',
   'report',
+  'docs',
+  'sheets',
   'write',
 ] as const satisfies readonly DingtalkPersonalFeature[];
 

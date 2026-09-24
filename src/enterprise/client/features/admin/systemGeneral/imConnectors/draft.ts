@@ -55,7 +55,7 @@ export type DingTalkWorkspaceSettingsInput = Required<
 >;
 
 /**
- * The five 钉钉个人数据 switches as the upsert carries them. Like the workspace four, the contract
+ * The seven 钉钉个人数据 switches as the upsert carries them. Like the workspace four, the contract
  * defaults them (all off) and the card always sends every one.
  */
 export type DingTalkPersonalSettingsInput = Required<
@@ -63,7 +63,9 @@ export type DingTalkPersonalSettingsInput = Required<
     AdminImConnectorUpsertInput,
     | 'personalChatEnabled'
     | 'personalDataEnabled'
+    | 'personalDocsEnabled'
     | 'personalReportEnabled'
+    | 'personalSheetsEnabled'
     | 'personalTodoEnabled'
     | 'personalWriteEnabled'
   >
@@ -118,7 +120,11 @@ export interface DingTalkConnectorDraft {
   /** 钉钉个人数据: the member's own authorization via the `aihub-dws` sidecar — all off by default. */
   personalChatEnabled: boolean;
   personalDataEnabled: boolean;
+  /** 文档 / 钉盘 / 知识库 reads of `lobe-dingtalk-docs`. */
+  personalDocsEnabled: boolean;
   personalReportEnabled: boolean;
+  /** 在线表格 / AI 表格 reads of `lobe-dingtalk-docs`. */
+  personalSheetsEnabled: boolean;
   personalTodoEnabled: boolean;
   personalWriteEnabled: boolean;
   pushEnabled: boolean;
@@ -172,7 +178,9 @@ export const readDingTalkPersonalSettings = (
 ): DingTalkPersonalSettingsInput => ({
   personalChatEnabled: view.personalChatEnabled ?? false,
   personalDataEnabled: view.personalDataEnabled ?? false,
+  personalDocsEnabled: view.personalDocsEnabled ?? false,
   personalReportEnabled: view.personalReportEnabled ?? false,
+  personalSheetsEnabled: view.personalSheetsEnabled ?? false,
   personalTodoEnabled: view.personalTodoEnabled ?? false,
   personalWriteEnabled: view.personalWriteEnabled ?? false,
 });
@@ -228,7 +236,9 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
     notifyWorkNoticeEnabled: view.notifyWorkNoticeEnabled ?? true,
     personalChatEnabled: personal.personalChatEnabled,
     personalDataEnabled: personal.personalDataEnabled,
+    personalDocsEnabled: personal.personalDocsEnabled,
     personalReportEnabled: personal.personalReportEnabled,
+    personalSheetsEnabled: personal.personalSheetsEnabled,
     personalTodoEnabled: personal.personalTodoEnabled,
     personalWriteEnabled: personal.personalWriteEnabled,
     pushEnabled: view.pushEnabled,
@@ -270,7 +280,9 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.notifyWorkNoticeEnabled,
     draft.personalChatEnabled,
     draft.personalDataEnabled,
+    draft.personalDocsEnabled,
     draft.personalReportEnabled,
+    draft.personalSheetsEnabled,
     draft.personalTodoEnabled,
     draft.personalWriteEnabled,
     draft.pushEnabled,
@@ -397,7 +409,9 @@ export const toDingTalkUpsertInput = (
   notifyWorkNoticeEnabled: draft.notifyWorkNoticeEnabled,
   personalChatEnabled: draft.personalChatEnabled,
   personalDataEnabled: draft.personalDataEnabled,
+  personalDocsEnabled: draft.personalDocsEnabled,
   personalReportEnabled: draft.personalReportEnabled,
+  personalSheetsEnabled: draft.personalSheetsEnabled,
   personalTodoEnabled: draft.personalTodoEnabled,
   personalWriteEnabled: draft.personalWriteEnabled,
   platform: 'dingtalk',

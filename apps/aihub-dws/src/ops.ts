@@ -1,9 +1,39 @@
-import { CHILD_TIMEOUT_MS, CURSOR_MAX, DAY_MS, DOWNLOAD_TIMEOUT_MS } from './constants.ts';
+import {
+  AITABLE_BASE_LIST_LIMIT,
+  AITABLE_BASE_QUERY_MAX,
+  AITABLE_BASE_QUERY_MIN,
+  AITABLE_CELL_MAX,
+  AITABLE_FIELDS_MAX,
+  AITABLE_RECORD_QUERY_DEFAULT,
+  AITABLE_RECORD_QUERY_MAX,
+  AITABLE_RECORD_QUERY_TEXT_MAX,
+  AITABLE_RECORDS_MAX,
+  CHILD_TIMEOUT_MS,
+  CURSOR_MAX,
+  DAY_MS,
+  DOC_MARKDOWN_MAX,
+  DOC_QUERY_MAX,
+  DOC_SEARCH_LIMIT_DEFAULT,
+  DOC_SEARCH_LIMIT_MAX,
+  DOC_TITLE_MAX,
+  DOWNLOAD_TIMEOUT_MS,
+  DRIVE_LIST_LIMIT,
+  DRIVE_SEARCH_LIMIT_DEFAULT,
+  DRIVE_SEARCH_LIMIT_MAX,
+  SHEET_APPEND_COLS_MAX,
+  SHEET_APPEND_ROWS_MAX,
+  SHEET_CELL_MAX,
+  SHEET_READ_COLS_MAX,
+  SHEET_READ_ROWS_MAX,
+  WIKI_NODE_LIMIT_DEFAULT,
+  WIKI_NODE_LIMIT_MAX,
+  WIKI_SPACE_LIMIT,
+} from './constants.ts';
 import { BrokerError, InvalidArgsError } from './errors.ts';
 
 type Dict = Record<string, unknown>;
 
-export type OpFeature = 'todo' | 'chat' | 'report' | null;
+export type OpFeature = 'todo' | 'chat' | 'report' | 'docs' | 'sheets' | null;
 
 export interface PreparedExec {
   argv: string[];
@@ -18,6 +48,8 @@ interface OpDef {
   argv: (args: Dict) => string[];
   download?: boolean;
   feature: OpFeature;
+  /** True when a retry could duplicate the write. Callers must not retry. */
+  nonIdempotent?: boolean;
   stdin?: (args: Dict) => string;
   timeoutMs: number;
   validate: (args: Dict) => void;
@@ -57,14 +89,17 @@ function has(args: Dict, key: string): boolean {
 }
 
 function assertId(label: string, value: unknown): string {
-  if (typeof value !== 'string' || !ID_RE.test(value)) throw new InvalidArgsError(`${label}不合法`);
+  // ID_RE allows "://", so raw http(s) URLs are rejected here as well.
+  if (typeof value !== 'string' || !ID_RE.test(value) || value.includes('://')) {
+    throw new InvalidArgsError(`${label}不合法`);
+  }
   return value;
 }
 
-function assertText(label: string, value: unknown, max: number): string {
+function assertText(label: string, value: unknown, max: number, min = 1): string {
   if (
     typeof value !== 'string' ||
-    value.length === 0 ||
+    value.length < min ||
     value.length > max ||
     CONTROL.test(value)
   ) {
@@ -161,6 +196,123 @@ function parseUserIds(value: unknown): string[] {
     throw new InvalidArgsError('接收人不合法');
   }
   return value.map((id) => assertId('接收人', id));
+}
+
+const WIKI_TYPES = ['orgWikiSpace', 'myWikiSpace'] as const;
+const RANGE_RE = /^([A-Z]{1,3})([1-9]\d{0,4})(?::([A-Z]{1,3})([1-9]\d{0,4}))?$/;
+
+type CellValue = string | number | boolean;
+
+function optionalId(args: Dict, key: string, label: string): void {
+  if (has(args, key)) assertId(label, args[key]);
+}
+
+/** Newlines stay. `@…` and `-` are dws file/stdin forms, not document text. */
+function assertMarkdown(value: unknown, min: number): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < min ||
+    value.length > DOC_MARKDOWN_MAX ||
+    CONTENT_CONTROL.test(value) ||
+    value === '-' ||
+    value.startsWith('@')
+  ) {
+    throw new InvalidArgsError('文档内容不合法');
+  }
+  return value;
+}
+
+function colIndex(letters: string): number {
+  let index = 0;
+  for (const char of letters) index = index * 26 + (char.charCodeAt(0) - 64);
+  return index;
+}
+
+function assertRange(value: unknown): string {
+  if (typeof value !== 'string') throw new InvalidArgsError('范围不合法');
+  const match = RANGE_RE.exec(value);
+  if (!match) throw new InvalidArgsError('范围不合法');
+  const startCol = colIndex(match[1]);
+  const startRow = Number(match[2]);
+  const endCol = match[3] ? colIndex(match[3]) : startCol;
+  const endRow = match[4] ? Number(match[4]) : startRow;
+  if (endCol < startCol || endRow < startRow) throw new InvalidArgsError('范围不合法');
+  if (endRow - startRow + 1 > SHEET_READ_ROWS_MAX || endCol - startCol + 1 > SHEET_READ_COLS_MAX) {
+    throw new InvalidArgsError('范围不合法');
+  }
+  return value;
+}
+
+function assertSheetCell(value: unknown): string | number {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new InvalidArgsError('单元格不合法');
+    return value;
+  }
+  if (typeof value !== 'string' || value.length > SHEET_CELL_MAX || CONTENT_CONTROL.test(value)) {
+    throw new InvalidArgsError('单元格不合法');
+  }
+  if (value.trimStart().startsWith('=')) throw new InvalidArgsError('单元格不合法');
+  return value;
+}
+
+function parseSheetValues(value: unknown): Array<Array<string | number>> {
+  if (!Array.isArray(value) || value.length < 1 || value.length > SHEET_APPEND_ROWS_MAX) {
+    throw new InvalidArgsError('表格数据不合法');
+  }
+  return value.map((row) => {
+    if (!Array.isArray(row) || row.length > SHEET_APPEND_COLS_MAX) {
+      throw new InvalidArgsError('表格数据不合法');
+    }
+    return row.map((cell) => assertSheetCell(cell));
+  });
+}
+
+function assertAitableCell(value: unknown): CellValue {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new InvalidArgsError('单元格不合法');
+    return value;
+  }
+  if (typeof value !== 'string' || value.length > AITABLE_CELL_MAX || CONTENT_CONTROL.test(value)) {
+    throw new InvalidArgsError('单元格不合法');
+  }
+  return value;
+}
+
+function parseCells(value: unknown): Record<string, CellValue> {
+  if (!isDict(value)) throw new InvalidArgsError('记录不合法');
+  const keys = Object.keys(value);
+  if (keys.length < 1 || keys.length > AITABLE_FIELDS_MAX) throw new InvalidArgsError('记录不合法');
+  const cells: Record<string, CellValue> = Object.create(null);
+  for (const key of keys) {
+    assertId('字段', key);
+    cells[key] = assertAitableCell(value[key]);
+  }
+  return cells;
+}
+
+function parseCreateRecords(value: unknown): Array<{ cells: Record<string, CellValue> }> {
+  if (!Array.isArray(value) || value.length < 1 || value.length > AITABLE_RECORDS_MAX) {
+    throw new InvalidArgsError('记录不合法');
+  }
+  return value.map((item) => {
+    if (!isDict(item)) throw new InvalidArgsError('记录不合法');
+    rejectUnknown(item, ['cells']);
+    return { cells: parseCells(item.cells) };
+  });
+}
+
+function parseUpdateRecords(
+  value: unknown,
+): Array<{ cells: Record<string, CellValue>; recordId: string }> {
+  if (!Array.isArray(value) || value.length < 1 || value.length > AITABLE_RECORDS_MAX) {
+    throw new InvalidArgsError('记录不合法');
+  }
+  return value.map((item) => {
+    if (!isDict(item)) throw new InvalidArgsError('记录不合法');
+    rejectUnknown(item, ['cells', 'recordId']);
+    return { recordId: assertId('记录', item.recordId), cells: parseCells(item.cells) };
+  });
 }
 
 const OPS: Record<string, OpDef> = {
@@ -492,6 +644,360 @@ const OPS: Record<string, OpDef> = {
     },
     write: true,
   },
+  'aitable.bases': {
+    argv: (args) => {
+      if (has(args, 'query')) {
+        return ['aitable', 'base', 'search', flag('query', args.query as string)];
+      }
+      return ['aitable', 'base', 'list', `--limit=${AITABLE_BASE_LIST_LIMIT}`];
+    },
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['query']);
+      if (has(args, 'query')) {
+        assertText('搜索词', args.query, AITABLE_BASE_QUERY_MAX, AITABLE_BASE_QUERY_MIN);
+      }
+    },
+    write: false,
+  },
+  'aitable.records.create': {
+    argv: (args) => [
+      'aitable',
+      '+record-batch-create',
+      flag('base-id', args.baseId as string),
+      flag('table-id', args.tableId as string),
+      flag('records', JSON.stringify(parseCreateRecords(args.records))),
+      '--yes',
+    ],
+    feature: 'sheets',
+    nonIdempotent: true,
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['baseId', 'records', 'tableId']);
+      assertId('多维表', args.baseId);
+      assertId('数据表', args.tableId);
+      parseCreateRecords(args.records);
+    },
+    write: true,
+  },
+  'aitable.records.query': {
+    argv: (args) => {
+      const parts = [
+        'aitable',
+        'record',
+        'query',
+        flag('base-id', args.baseId as string),
+        flag('table-id', args.tableId as string),
+        flag(
+          'limit',
+          optInt(args, 'limit', '条数', 1, AITABLE_RECORD_QUERY_MAX, AITABLE_RECORD_QUERY_DEFAULT),
+        ),
+      ];
+      if (has(args, 'query')) parts.push(flag('query', args.query as string));
+      if (has(args, 'cursor')) parts.push(flag('cursor', assertCursor(args.cursor)));
+      return parts;
+    },
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['baseId', 'cursor', 'limit', 'query', 'tableId']);
+      assertId('多维表', args.baseId);
+      assertId('数据表', args.tableId);
+      if (has(args, 'limit')) assertInt('条数', args.limit, 1, AITABLE_RECORD_QUERY_MAX);
+      if (has(args, 'query')) assertText('搜索词', args.query, AITABLE_RECORD_QUERY_TEXT_MAX);
+      if (has(args, 'cursor')) assertCursor(args.cursor);
+    },
+    write: false,
+  },
+  'aitable.records.update': {
+    argv: (args) => [
+      'aitable',
+      '+record-update',
+      flag('base-id', args.baseId as string),
+      flag('table-id', args.tableId as string),
+      flag('records', JSON.stringify(parseUpdateRecords(args.records))),
+      '--yes',
+    ],
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['baseId', 'records', 'tableId']);
+      assertId('多维表', args.baseId);
+      assertId('数据表', args.tableId);
+      parseUpdateRecords(args.records);
+    },
+    write: true,
+  },
+  'aitable.schema': {
+    argv: (args) => [
+      'aitable',
+      'table',
+      'get',
+      flag('base-id', args.baseId as string),
+      flag('table-ids', args.tableId as string),
+    ],
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['baseId', 'tableId']);
+      assertId('多维表', args.baseId);
+      assertId('数据表', args.tableId);
+    },
+    write: false,
+  },
+  'aitable.tables': {
+    argv: (args) => ['aitable', '+list-tables', flag('base', args.baseId as string)],
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['baseId']);
+      assertId('多维表', args.baseId);
+    },
+    write: false,
+  },
+  'doc.append': {
+    argv: (args) => [
+      'doc',
+      '+doc-append',
+      flag('doc', args.nodeId as string),
+      flag('content', args.markdown as string),
+      '--yes',
+    ],
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['markdown', 'nodeId']);
+      assertId('文档', args.nodeId);
+      assertMarkdown(args.markdown, 1);
+    },
+    write: true,
+  },
+  'doc.create': {
+    argv: (args) => {
+      const parts = [
+        'doc',
+        '+create',
+        flag('name', args.title as string),
+        flag('content', args.markdown as string),
+        '--doc-format=markdown',
+      ];
+      if (has(args, 'folderId')) parts.push(flag('folder', args.folderId as string));
+      if (has(args, 'workspaceId')) parts.push(flag('workspace', args.workspaceId as string));
+      parts.push('--yes');
+      return parts;
+    },
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['folderId', 'markdown', 'title', 'workspaceId']);
+      assertText('标题', args.title, DOC_TITLE_MAX);
+      assertMarkdown(args.markdown, 0);
+      optionalId(args, 'folderId', '文件夹');
+      optionalId(args, 'workspaceId', '知识库');
+    },
+    write: true,
+  },
+  'doc.info': {
+    argv: (args) => ['doc', 'info', flag('node', args.nodeId as string)],
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId']);
+      assertId('文档', args.nodeId);
+    },
+    write: false,
+  },
+  'doc.read': {
+    argv: (args) => ['doc', 'read', flag('node', args.nodeId as string)],
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId']);
+      assertId('文档', args.nodeId);
+    },
+    write: false,
+  },
+  'doc.search': {
+    argv: (args) => [
+      'doc',
+      '+search',
+      flag('query', args.query as string),
+      flag(
+        'limit',
+        optInt(args, 'limit', '条数', 1, DOC_SEARCH_LIMIT_MAX, DOC_SEARCH_LIMIT_DEFAULT),
+      ),
+    ],
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['limit', 'query']);
+      assertText('搜索词', args.query, DOC_QUERY_MAX);
+      if (has(args, 'limit')) assertInt('条数', args.limit, 1, DOC_SEARCH_LIMIT_MAX);
+    },
+    write: false,
+  },
+  'drive.download': {
+    argv: (args) => [
+      'drive',
+      '+download',
+      flag('node', args.nodeId as string),
+      '--output=./files/',
+    ],
+    download: true,
+    feature: 'docs',
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId']);
+      assertId('文件', args.nodeId);
+    },
+    write: false,
+  },
+  'drive.list': {
+    argv: (args) => {
+      const parts = ['drive', '+list', `--limit=${DRIVE_LIST_LIMIT}`];
+      if (has(args, 'folderId')) parts.push(flag('folder', args.folderId as string));
+      if (has(args, 'cursor')) parts.push(flag('cursor', assertCursor(args.cursor)));
+      return parts;
+    },
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['cursor', 'folderId']);
+      optionalId(args, 'folderId', '文件夹');
+      if (has(args, 'cursor')) assertCursor(args.cursor);
+    },
+    write: false,
+  },
+  'drive.search': {
+    argv: (args) => [
+      'drive',
+      '+search',
+      flag('query', args.query as string),
+      '--target=file',
+      flag(
+        'limit',
+        optInt(args, 'limit', '条数', 1, DRIVE_SEARCH_LIMIT_MAX, DRIVE_SEARCH_LIMIT_DEFAULT),
+      ),
+    ],
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['limit', 'query']);
+      assertText('搜索词', args.query, DOC_QUERY_MAX);
+      if (has(args, 'limit')) assertInt('条数', args.limit, 1, DRIVE_SEARCH_LIMIT_MAX);
+    },
+    write: false,
+  },
+  'sheet.append': {
+    argv: (args) => [
+      'sheet',
+      'append',
+      flag('node', args.nodeId as string),
+      flag('sheet-id', args.sheetId as string),
+      flag('values', JSON.stringify(parseSheetValues(args.values))),
+      '--yes',
+    ],
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId', 'sheetId', 'values']);
+      assertId('表格', args.nodeId);
+      assertId('工作表', args.sheetId);
+      parseSheetValues(args.values);
+    },
+    write: true,
+  },
+  'sheet.info': {
+    argv: (args) => {
+      const parts = ['sheet', 'info', flag('node', args.nodeId as string)];
+      if (has(args, 'sheetId')) parts.push(flag('sheet-id', args.sheetId as string));
+      return parts;
+    },
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId', 'sheetId']);
+      assertId('表格', args.nodeId);
+      optionalId(args, 'sheetId', '工作表');
+    },
+    write: false,
+  },
+  'sheet.list': {
+    argv: (args) => ['sheet', '+list-sheets', flag('node', args.nodeId as string)],
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId']);
+      assertId('表格', args.nodeId);
+    },
+    write: false,
+  },
+  'sheet.read': {
+    argv: (args) => {
+      const parts = [
+        'sheet',
+        '+read',
+        flag('node', args.nodeId as string),
+        flag('range', args.range as string),
+      ];
+      if (has(args, 'sheetId')) parts.push(flag('sheet-id', args.sheetId as string));
+      parts.push('--value-render-option=formatted_value');
+      return parts;
+    },
+    feature: 'sheets',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['nodeId', 'range', 'sheetId']);
+      assertId('表格', args.nodeId);
+      assertRange(args.range);
+      optionalId(args, 'sheetId', '工作表');
+    },
+    write: false,
+  },
+  'wiki.nodes': {
+    argv: (args) => {
+      const parts = [
+        'wiki',
+        '+node-list',
+        flag('workspace', args.workspaceId as string),
+        flag(
+          'limit',
+          optInt(args, 'limit', '条数', 1, WIKI_NODE_LIMIT_MAX, WIKI_NODE_LIMIT_DEFAULT),
+        ),
+      ];
+      if (has(args, 'folderId')) parts.push(flag('folder', args.folderId as string));
+      if (has(args, 'cursor')) parts.push(flag('cursor', assertCursor(args.cursor)));
+      return parts;
+    },
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['cursor', 'folderId', 'limit', 'workspaceId']);
+      assertId('知识库', args.workspaceId);
+      if (has(args, 'limit')) assertInt('条数', args.limit, 1, WIKI_NODE_LIMIT_MAX);
+      optionalId(args, 'folderId', '文件夹');
+      if (has(args, 'cursor')) assertCursor(args.cursor);
+    },
+    write: false,
+  },
+  'wiki.spaces': {
+    argv: (args) => [
+      'wiki',
+      '+space-list',
+      flag('type', (args.type as string | undefined) ?? 'orgWikiSpace'),
+      `--limit=${WIKI_SPACE_LIMIT}`,
+    ],
+    feature: 'docs',
+    timeoutMs: CHILD_TIMEOUT_MS,
+    validate: (args) => {
+      rejectUnknown(args, ['type']);
+      if (has(args, 'type') && !WIKI_TYPES.includes(args.type as (typeof WIKI_TYPES)[number])) {
+        throw new InvalidArgsError('知识库类型不合法');
+      }
+    },
+    write: false,
+  },
 };
 
 export const OP_NAMES = Object.keys(OPS);
@@ -502,6 +1008,11 @@ export function opFeature(op: string): OpFeature | undefined {
 
 export function opWrites(op: string): boolean {
   return OPS[op]?.write === true;
+}
+
+/** `aitable.records.create` is non-idempotent. The sidecar never retries; callers must not either. */
+export function opNonIdempotent(op: string): boolean {
+  return OPS[op]?.nonIdempotent === true;
 }
 
 export function prepareExec(op: unknown, profile: string, args: unknown): PreparedExec {

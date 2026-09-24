@@ -13,6 +13,7 @@ import { CalculatorManifest } from '@lobechat/builtin-tool-calculator';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { CredsManifest } from '@lobechat/builtin-tool-creds';
 import { DingtalkApprovalManifest } from '@lobechat/builtin-tool-dingtalk-approval';
+import { DingtalkDocsManifest } from '@lobechat/builtin-tool-dingtalk-docs';
 import { DingtalkPersonalManifest } from '@lobechat/builtin-tool-dingtalk-personal';
 import { DingtalkWorkspaceManifest } from '@lobechat/builtin-tool-dingtalk-workspace';
 import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
@@ -372,6 +373,11 @@ const builtinToolRegistry: LobeBuiltinTool[] = [
   {
     identifier: DingtalkPersonalManifest.identifier,
     manifest: DingtalkPersonalManifest,
+    type: 'builtin',
+  },
+  {
+    identifier: DingtalkDocsManifest.identifier,
+    manifest: DingtalkDocsManifest,
     type: 'builtin',
   },
   {

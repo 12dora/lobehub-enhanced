@@ -1,4 +1,5 @@
 import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval';
+import { DingtalkDocsIdentifier } from '@lobechat/builtin-tool-dingtalk-docs';
 import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace';
 import { EnterpriseLookupIdentifier } from '@lobechat/builtin-tool-enterprise-lookup';
 import type { EnterprisePublicServerConfig } from '@lobechat/types';
@@ -21,6 +22,7 @@ const DINGTALK_PERSONAL_TOOL_IDENTIFIER = 'lobe-dingtalk-personal';
  */
 const PLATFORM_MANAGED_BUILTIN_TOOLS = new Set<string>([
   DingtalkApprovalIdentifier,
+  DingtalkDocsIdentifier,
   DINGTALK_PERSONAL_TOOL_IDENTIFIER,
   DingtalkWorkspaceIdentifier,
   EnterpriseLookupIdentifier,
@@ -50,6 +52,10 @@ export const isBuiltinToolAvailableInDeployment = (
     }
     case DINGTALK_PERSONAL_TOOL_IDENTIFIER: {
       return capabilities?.dingtalkPersonal === true;
+    }
+    // Runs on the member's own 钉钉个人数据 authorization; same AND as the tools engine.
+    case DingtalkDocsIdentifier: {
+      return capabilities?.dingtalkPersonal === true && capabilities?.dingtalkDocs === true;
     }
     case EnterpriseLookupIdentifier: {
       return capabilities?.enterpriseLookup === true;

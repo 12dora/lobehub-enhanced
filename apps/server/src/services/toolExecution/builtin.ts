@@ -1,5 +1,6 @@
 import { DINGTALK_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-approval/executionRuntime';
 import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DingtalkDocsIdentifier } from '@lobechat/builtin-tool-dingtalk-docs/manifest';
 import { DINGTALK_PERSONAL_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-personal/executionRuntime';
 import { DingtalkPersonalIdentifier } from '@lobechat/builtin-tool-dingtalk-personal/manifest';
 import { DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-workspace/executionRuntime';
@@ -22,6 +23,12 @@ import { getServerRuntime, hasServerRuntime } from './serverRuntimes';
 import { type IToolExecutor, type ToolExecutionContext, type ToolExecutionResult } from './types';
 
 const log = debug('lobe-server:builtin-tools-executor');
+
+/** Same sentence as the personal tool: a thrown error must not reach the model. */
+const DINGTALK_DOCS_INTERNAL_TOOL_CONTENT =
+  '操作失败（内部错误），请稍后重试。不要向用户展示技术细节。';
+
+const REDACT_BUILTIN_LOGS = new Set<string>([DingtalkPersonalIdentifier, DingtalkDocsIdentifier]);
 
 /**
  * Declared API names for a builtin tool, read from its manifest — the
@@ -66,6 +73,10 @@ const SANITIZED_TOOL_FAILURES: Record<string, { code: string; content: string }>
   [DingtalkPersonalIdentifier]: {
     code: 'DINGTALK_PERSONAL_INTERNAL',
     content: DINGTALK_PERSONAL_INTERNAL_TOOL_CONTENT,
+  },
+  [DingtalkDocsIdentifier]: {
+    code: 'DINGTALK_DOCS_INTERNAL',
+    content: DINGTALK_DOCS_INTERNAL_TOOL_CONTENT,
   },
   [EnterpriseLookupIdentifier]: {
     code: 'ENTERPRISE_LOOKUP_INTERNAL',
@@ -149,7 +160,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
           `so the tool was not invoked. Fix the JSON syntax and try again.`;
       const content = `${explanation}\n\nThe received arguments string was:\n${argsStr}`;
       const code = truncationReason ? 'TRUNCATED_ARGUMENTS' : 'INVALID_JSON_ARGUMENTS';
-      if (identifier === DingtalkPersonalIdentifier) {
+      if (REDACT_BUILTIN_LOGS.has(identifier)) {
         log('Rejected invalid arguments for %s:%s (%s)', identifier, apiName, code);
       } else {
         log('Rejected invalid arguments for %s:%s (%s): %s', identifier, apiName, code, argsStr);
@@ -163,7 +174,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
 
     const args = parsed || {};
 
-    if (identifier === DingtalkPersonalIdentifier) {
+    if (REDACT_BUILTIN_LOGS.has(identifier)) {
       log('Executing builtin tool: %s:%s', identifier, apiName);
     } else {
       log(
@@ -239,7 +250,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
       return await runtime[apiName](args, context);
     } catch (e) {
       const error = e as Error;
-      if (identifier === DingtalkPersonalIdentifier) {
+      if (REDACT_BUILTIN_LOGS.has(identifier)) {
         console.error('Error executing builtin tool %s:%s', identifier, apiName);
       } else {
         console.error('Error executing builtin tool %s:%s: %O', identifier, apiName, error);

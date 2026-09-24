@@ -119,6 +119,11 @@ export interface ServerCreateAgentToolsEngineParams {
    */
   dingtalkApprovalEnabled?: boolean;
   /**
+   * DingTalk docs/sheets tool. Offered only when personal data would be offered
+   * and `personalDocsEnabled` or `personalSheetsEnabled` is on. Omitted stays off.
+   */
+  dingtalkDocs?: boolean;
+  /**
    * DingTalk personal-data master switch (`getDingtalkPersonalConfig().enabled`).
    * Omitted stays off: the config read is async, so this engine does not peek.
    */

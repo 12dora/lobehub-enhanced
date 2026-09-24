@@ -23,7 +23,12 @@ vi.mock('@/server/modules/KeyVaultsEncrypt', () => ({
   KeyVaultsGateKeeper: { initWithEnvKey: async () => undefined },
 }));
 
-const { getDingtalkPersonalConfig, resetDingtalkPersonalConfigForTest } = await import('./config');
+const {
+  DINGTALK_PERSONAL_OP_FEATURE,
+  DINGTALK_PERSONAL_WRITE_OPS,
+  getDingtalkPersonalConfig,
+  resetDingtalkPersonalConfigForTest,
+} = await import('./config');
 
 afterEach(() => {
   vi.useRealTimers();
@@ -33,7 +38,9 @@ const switches = (patch: Record<string, unknown> = {}) => ({
   settings: {
     personalChatEnabled: true,
     personalDataEnabled: true,
+    personalDocsEnabled: true,
     personalReportEnabled: true,
+    personalSheetsEnabled: true,
     personalTodoEnabled: true,
     personalWriteEnabled: true,
     ...patch,
@@ -54,7 +61,7 @@ describe('dingtalk personal config', () => {
     expect(config).toEqual({
       brokerConfigured: true,
       enabled: true,
-      features: { chat: true, report: true, todo: true, write: true },
+      features: { chat: true, docs: true, report: true, sheets: true, todo: true, write: true },
     });
     await getDingtalkPersonalConfig();
     expect(findByPlatform).toHaveBeenCalledTimes(1);
@@ -70,7 +77,14 @@ describe('dingtalk personal config', () => {
     );
     const config = await getDingtalkPersonalConfig();
     expect(config.enabled).toBe(false);
-    expect(config.features).toEqual({ chat: false, report: false, todo: false, write: false });
+    expect(config.features).toEqual({
+      chat: false,
+      docs: false,
+      report: false,
+      sheets: false,
+      todo: false,
+      write: false,
+    });
   });
 
   it('stays disabled when the broker env is missing', async () => {
@@ -87,6 +101,38 @@ describe('dingtalk personal config', () => {
     expect(config.enabled).toBe(false);
     expect(config.brokerConfigured).toBe(true);
     expect(config.features.chat).toBe(false);
+  });
+
+  it('keeps docs and sheets off unless their own switches are boolean true', async () => {
+    findByPlatform.mockResolvedValue(
+      switches({ personalDocsEnabled: 'true', personalSheetsEnabled: 1 }),
+    );
+    const config = await getDingtalkPersonalConfig();
+    expect(config.enabled).toBe(true);
+    expect(config.features.docs).toBe(false);
+    expect(config.features.sheets).toBe(false);
+    expect(config.features.chat).toBe(true);
+  });
+
+  it('maps the docs and sheets sidecar ops and marks the five writes', () => {
+    expect(DINGTALK_PERSONAL_OP_FEATURE['doc.search']).toBe('docs');
+    expect(DINGTALK_PERSONAL_OP_FEATURE['doc.info']).toBe('docs');
+    expect(DINGTALK_PERSONAL_OP_FEATURE['drive.download']).toBe('docs');
+    expect(DINGTALK_PERSONAL_OP_FEATURE['wiki.nodes']).toBe('docs');
+    expect(DINGTALK_PERSONAL_OP_FEATURE['sheet.read']).toBe('sheets');
+    expect(DINGTALK_PERSONAL_OP_FEATURE['aitable.records.create']).toBe('sheets');
+    expect(DINGTALK_PERSONAL_WRITE_OPS).toEqual(
+      expect.arrayContaining([
+        'doc.append',
+        'doc.create',
+        'sheet.append',
+        'aitable.records.create',
+        'aitable.records.update',
+      ]),
+    );
+    expect(DINGTALK_PERSONAL_WRITE_OPS).not.toContain('doc.read');
+    expect(DINGTALK_PERSONAL_WRITE_OPS).not.toContain('doc.info');
+    expect(DINGTALK_PERSONAL_WRITE_OPS).not.toContain('drive.download');
   });
 
   it('refetches after the 30s cache window', async () => {

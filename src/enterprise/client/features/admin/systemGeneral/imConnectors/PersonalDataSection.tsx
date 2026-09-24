@@ -23,11 +23,13 @@ export interface PersonalDataSectionProps {
 
 /**
  * 钉钉个人数据 — each member authorizes, once, the assistant to read their own to-dos, group
- * messages and work reports through the `aihub-dws` sidecar.
+ * messages and work reports (`lobe-dingtalk-personal`) and their documents, 钉盘, knowledge bases,
+ * online sheets and AI tables (`lobe-dingtalk-docs`) through the `aihub-dws` sidecar.
  *
- * The five fields belong to the connector row and are written by the card's own 保存, like the
- * workspace block above. The master switch gates the four scopes: with it off they cannot take
- * effect, so they are shown as they are stored but cannot be changed.
+ * The seven fields belong to the connector row and are written by the card's own 保存, like the
+ * workspace block above. The master switch gates the six scopes: with it off they cannot take
+ * effect, so they are shown as they are stored but cannot be changed. The write switch covers the
+ * writes of both toolsets.
  */
 export const PersonalDataSection = memo<PersonalDataSectionProps>(
   ({ disabled, draft, onPatch, summary }) => {
@@ -78,6 +80,18 @@ export const PersonalDataSection = memo<PersonalDataSectionProps>(
             disabled={scopesLocked}
             label={t('systemGeneral.imConnectors.personal.fields.report')}
             onChange={(checked) => onPatch({ personalReportEnabled: checked })}
+          />
+          <InfraSwitchRow
+            checked={draft.personalDocsEnabled}
+            disabled={scopesLocked}
+            label={t('systemGeneral.imConnectors.personal.fields.docs')}
+            onChange={(checked) => onPatch({ personalDocsEnabled: checked })}
+          />
+          <InfraSwitchRow
+            checked={draft.personalSheetsEnabled}
+            disabled={scopesLocked}
+            label={t('systemGeneral.imConnectors.personal.fields.sheets')}
+            onChange={(checked) => onPatch({ personalSheetsEnabled: checked })}
           />
           <InfraSwitchRow
             checked={draft.personalWriteEnabled}

@@ -341,4 +341,35 @@ describe('BuiltinToolsExecutor dingtalk personal logs', () => {
     expect(thrown).not.toContain(secret);
     expect(thrown).not.toContain('payload');
   });
+
+  it('hides a thrown docs error and does not log the arguments', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      searchDocs: async () => {
+        throw new Error(`select ${secret} from dingtalk_docs`);
+      },
+    } as any);
+
+    const logged = await captureLogs(async () => {
+      const result = await executor.execute(
+        {
+          apiName: 'searchDocs',
+          arguments: JSON.stringify({ query: secret }),
+          id: 't-docs',
+          identifier: 'lobe-dingtalk-docs',
+          type: 'default' as any,
+        },
+        context,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe('DINGTALK_DOCS_INTERNAL');
+      expect(result.content).not.toContain(secret);
+      expect(result.content).not.toContain('select');
+    });
+
+    expect(logged).toContain('lobe-dingtalk-docs');
+    expect(logged).toContain('searchDocs');
+    expect(logged).not.toContain(secret);
+    expect(logged).not.toContain('select');
+  });
 });

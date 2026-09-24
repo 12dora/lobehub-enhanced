@@ -7,7 +7,8 @@ import { lambdaClient } from '@/libs/trpc/client';
  * with them, so a drift between the router's inferred output and these types is a type error here
  * rather than a silent mismatch in the card.
  */
-export type DingtalkPersonalFeature = 'chat' | 'report' | 'todo' | 'write';
+/** `docs` / `sheets` gate the sibling `lobe-dingtalk-docs` toolset on the same authorization. */
+export type DingtalkPersonalFeature = 'chat' | 'docs' | 'report' | 'sheets' | 'todo' | 'write';
 
 export type DingtalkPersonalLoginStatus =
   'cancelled' | 'expired' | 'failed' | 'pending' | 'succeeded';

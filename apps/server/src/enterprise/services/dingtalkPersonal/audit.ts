@@ -6,26 +6,55 @@ import type {
 import { PlatformAuditService } from '@/server/enterprise/services/platformAudit';
 
 const AUDIT_ACTION = {
+  aitable_records_create: 'dingtalk.personal.aitable.records.create',
+  aitable_records_update: 'dingtalk.personal.aitable.records.update',
   authorize: 'dingtalk.personal.authorize',
+  doc_append: 'dingtalk.personal.doc.append',
+  doc_create: 'dingtalk.personal.doc.create',
   report_submit: 'dingtalk.personal.report.submit',
   revoke: 'dingtalk.personal.revoke',
+  sheet_append: 'dingtalk.personal.sheet.append',
   todo_complete: 'dingtalk.personal.todo.complete',
   todo_update: 'dingtalk.personal.todo.update',
 } as const;
 
 export type DingtalkPersonalAuditAction =
-  'authorize' | 'revoke' | 'todo.update' | 'todo.complete' | 'report.submit';
+  | 'aitable.records.create'
+  | 'aitable.records.update'
+  | 'authorize'
+  | 'doc.append'
+  | 'doc.create'
+  | 'report.submit'
+  | 'revoke'
+  | 'sheet.append'
+  | 'todo.complete'
+  | 'todo.update';
 
 const actionString = (action: DingtalkPersonalAuditAction): string => {
   switch (action) {
+    case 'aitable.records.create': {
+      return AUDIT_ACTION.aitable_records_create;
+    }
+    case 'aitable.records.update': {
+      return AUDIT_ACTION.aitable_records_update;
+    }
     case 'authorize': {
       return AUDIT_ACTION.authorize;
+    }
+    case 'doc.append': {
+      return AUDIT_ACTION.doc_append;
+    }
+    case 'doc.create': {
+      return AUDIT_ACTION.doc_create;
     }
     case 'report.submit': {
       return AUDIT_ACTION.report_submit;
     }
     case 'revoke': {
       return AUDIT_ACTION.revoke;
+    }
+    case 'sheet.append': {
+      return AUDIT_ACTION.sheet_append;
     }
     case 'todo.complete': {
       return AUDIT_ACTION.todo_complete;

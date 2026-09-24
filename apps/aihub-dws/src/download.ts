@@ -10,7 +10,7 @@ import { toExecResult } from './runner.ts';
 import type { ExecResult, RunResult } from './types.ts';
 
 function fail(
-  code: 'API_ERROR' | 'FILE_TOO_LARGE' | 'INTERNAL',
+  code: 'API_ERROR' | 'FILE_TOO_LARGE' | 'INTERNAL' | 'VALIDATION',
   message: string,
   exitCode?: number,
 ): ExecResult {
@@ -20,9 +20,48 @@ function fail(
   };
 }
 
+/** Model-facing copy when dws refuses an axls / alidoc node. */
+export const ONLINE_NODE_MESSAGE =
+  '该节点是在线表格或在线文档，不能直接下载。在线表格请用 readSheet，在线文档请用 readDoc。';
+
+const ONLINE_NODE = /axls|alidoc|钉钉表格|在线表格|钉钉文档|在线文档/i;
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function pathFrom(record: Record<string, unknown>): string | undefined {
+  return stringField(record, 'localPath') ?? stringField(record, 'savedPath');
+}
+
+/** Chat downloads use top-level localPath. Drive downloads use data.savedPath. */
+function resolveDownloadPath(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  const direct = pathFrom(record);
+  if (direct) return direct;
+  const nested = record.data;
+  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return undefined;
+  return pathFrom(nested as Record<string, unknown>);
+}
+
+function remapOnlineNode(result: ExecResult): ExecResult {
+  if (result.ok) return result;
+  if (result.error.code !== 'API_ERROR' || result.error.exitCode !== 1) return result;
+  if (!ONLINE_NODE.test(result.error.message)) return result;
+  return fail('VALIDATION', ONLINE_NODE_MESSAGE, 1);
+}
+
 export async function runDownload(
   runner: Runner,
-  request: { argv: string[]; profile: string; signal?: AbortSignal; timeoutMs: number },
+  request: {
+    argv: string[];
+    op: string;
+    profile: string;
+    signal?: AbortSignal;
+    timeoutMs: number;
+  },
   maxBytes = MAX_FILE_BYTES,
 ): Promise<{ result: ExecResult; run?: RunResult }> {
   const dir = path.join(os.tmpdir(), 'dws-dl', randomUUID());
@@ -43,11 +82,16 @@ export async function runDownload(
       throw error;
     }
     const mapped = toExecResult(run);
-    if (!mapped.ok) return { result: mapped, run };
+    // axls / alidoc is a drive node. chat.downloadFile keeps the upstream error.
+    if (!mapped.ok) {
+      return {
+        result: request.op === 'drive.download' ? remapOnlineNode(mapped) : mapped,
+        run,
+      };
+    }
     const data = 'data' in mapped ? mapped.data : undefined;
-    const localPath =
-      data && typeof data === 'object' ? (data as { localPath?: unknown }).localPath : undefined;
-    if (typeof localPath !== 'string' || localPath.length === 0) {
+    const localPath = resolveDownloadPath(data);
+    if (!localPath) {
       return { result: fail('API_ERROR', '下载结果缺少文件路径', 0), run };
     }
     const root = path.resolve(dir);

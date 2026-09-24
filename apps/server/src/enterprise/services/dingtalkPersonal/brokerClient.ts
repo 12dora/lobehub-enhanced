@@ -168,7 +168,14 @@ const mapExecError = (error: Record<string, unknown>): DingtalkPersonalError => 
       return new DingtalkPersonalError('DINGTALK_PERSONAL_TIMEOUT');
     }
     case 'VALIDATION': {
-      return new DingtalkPersonalError('DINGTALK_PERSONAL_INVALID_ARGS');
+      // Keep the broker sentence (axls / alidoc download hint). Sanitized and
+      // capped; chat downloads stay on the generic invalid-args line unless the
+      // docs tool rewrites this message.
+      const text = sanitizeUpstreamMessage(error.message);
+      return new DingtalkPersonalError(
+        'DINGTALK_PERSONAL_INVALID_ARGS',
+        text ? { message: text } : undefined,
+      );
     }
     default: {
       return new DingtalkPersonalError('DINGTALK_PERSONAL_INTERNAL');

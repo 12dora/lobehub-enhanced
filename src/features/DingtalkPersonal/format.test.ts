@@ -64,4 +64,18 @@ describe('listEnabledFeatures', () => {
     ]);
     expect(listEnabledFeatures(undefined)).toEqual([]);
   });
+
+  it('lists documents and sheets after the personal reads and before the write permission', () => {
+    expect(
+      listEnabledFeatures({
+        chat: false,
+        docs: true,
+        report: true,
+        sheets: true,
+        todo: false,
+        write: true,
+      }),
+    ).toEqual(['report', 'docs', 'sheets', 'write']);
+    expect(listEnabledFeatures({ docs: false, sheets: true })).toEqual(['sheets']);
+  });
 });
