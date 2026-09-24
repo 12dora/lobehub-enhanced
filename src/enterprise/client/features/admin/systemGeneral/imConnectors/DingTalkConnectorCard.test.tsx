@@ -204,6 +204,12 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   notifyAppSecretSet: false,
   notifyRobotEnabled: true,
   notifyWorkNoticeEnabled: true,
+  personal: { authorizedCount: 0, brokerConfigured: true },
+  personalChatEnabled: false,
+  personalDataEnabled: false,
+  personalReportEnabled: false,
+  personalTodoEnabled: false,
+  personalWriteEnabled: false,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: 'ding-robot',
@@ -1035,6 +1041,41 @@ describe('DingTalkConnectorCard', () => {
       await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
       expect(mocks.confirmModal).not.toHaveBeenCalled();
       expect(stub.upsert.mock.calls[0]![0]).toMatchObject({ approvalAutomationTier: 'relaxed' });
+    });
+  });
+
+  // 钉钉个人数据 — the section has its own suite; the card carries its five fields through 保存.
+  describe('钉钉个人数据 block', () => {
+    it('saves the master switch and a scope with the rest of the row', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.personal.fields.enabled'));
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.personal.fields.todo'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        personalChatEnabled: false,
+        personalDataEnabled: true,
+        personalReportEnabled: false,
+        personalTodoEnabled: true,
+        personalWriteEnabled: false,
+      });
+    });
+
+    it('warns about a missing sidecar from the summary the server sent', () => {
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          view={view({ personal: { authorizedCount: 4, brokerConfigured: false } })}
+        />,
+      );
+
+      expect(screen.getByText('systemGeneral.imConnectors.personal.brokerMissing')).toBeTruthy();
+      expect(
+        screen.getByText('systemGeneral.imConnectors.personal.authorizedCount:4'),
+      ).toBeTruthy();
     });
   });
 

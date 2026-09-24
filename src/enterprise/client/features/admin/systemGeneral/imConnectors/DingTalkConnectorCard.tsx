@@ -19,9 +19,11 @@ import {
   formatConnectorTime,
   IM_CONNECTOR_IDLE_HOURS_MAX,
   IM_CONNECTOR_IDLE_HOURS_MIN,
+  readDingTalkPersonalSummary,
   resolveImConnectorTestErrorKey,
 } from './draft';
 import { NotifyAppSection } from './NotifyAppSection';
+import { PersonalDataSection } from './PersonalDataSection';
 import type {
   ImConnectorBindingsService,
   ImConnectorMutationService,
@@ -255,6 +257,15 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
             disabled={locked}
             draft={draft}
             service={workspaceService}
+            onPatch={editor.patch}
+          />
+
+          {/* Beside 工作台能力: both act as the member's own DingTalk identity — this one through
+              the member's own authorization of the aihub-dws sidecar rather than the 服务号. */}
+          <PersonalDataSection
+            disabled={locked}
+            draft={draft}
+            summary={readDingTalkPersonalSummary(view)}
             onPatch={editor.patch}
           />
 

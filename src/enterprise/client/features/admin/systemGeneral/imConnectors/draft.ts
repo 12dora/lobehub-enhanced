@@ -55,6 +55,30 @@ export type DingTalkWorkspaceSettingsInput = Required<
 >;
 
 /**
+ * The five 钉钉个人数据 switches as the upsert carries them. Like the workspace four, the contract
+ * defaults them (all off) and the card always sends every one.
+ */
+export type DingTalkPersonalSettingsInput = Required<
+  Pick<
+    AdminImConnectorUpsertInput,
+    | 'personalChatEnabled'
+    | 'personalDataEnabled'
+    | 'personalReportEnabled'
+    | 'personalTodoEnabled'
+    | 'personalWriteEnabled'
+  >
+>;
+
+/**
+ * What the 钉钉个人数据 block reads about the deployment rather than the row: whether the `aihub-dws`
+ * sidecar is configured, and how many members have authorized. Optional on the view.
+ */
+export interface DingTalkPersonalSummary {
+  authorizedCount: number;
+  brokerConfigured: boolean;
+}
+
+/**
  * Draft state for a secret the server never returns.
  *
  * Unlike the infrastructure cards there is no 清除 action: the contract only knows `keep` and
@@ -91,6 +115,12 @@ export interface DingTalkConnectorDraft {
   notifyRobotEnabled: boolean;
   /** Notify-app work-notification (工作通知) channel. */
   notifyWorkNoticeEnabled: boolean;
+  /** 钉钉个人数据: the member's own authorization via the `aihub-dws` sidecar — all off by default. */
+  personalChatEnabled: boolean;
+  personalDataEnabled: boolean;
+  personalReportEnabled: boolean;
+  personalTodoEnabled: boolean;
+  personalWriteEnabled: boolean;
   pushEnabled: boolean;
   robotCode: string;
   /** Optional label shown in the binding instructions; empty when the deployment never set one. */
@@ -136,8 +166,43 @@ export const readDingTalkWorkspaceSettings = (
   workspaceTodoEnabled: view.workspaceTodoEnabled,
 });
 
+/** The 钉钉个人数据 half of a connector row; a row that predates the feature reads as all off. */
+export const readDingTalkPersonalSettings = (
+  view: AdminImConnectorView,
+): DingTalkPersonalSettingsInput => ({
+  personalChatEnabled: view.personalChatEnabled ?? false,
+  personalDataEnabled: view.personalDataEnabled ?? false,
+  personalReportEnabled: view.personalReportEnabled ?? false,
+  personalTodoEnabled: view.personalTodoEnabled ?? false,
+  personalWriteEnabled: view.personalWriteEnabled ?? false,
+});
+
+/**
+ * The view's live `personal` summary (sidecar configured, members authorized). It is shape-checked
+ * rather than trusted: a card can still hold a view read before the field existed, and `null`
+ * means「unknown」, not「not configured」.
+ */
+export const readDingTalkPersonalSummary = (
+  view: AdminImConnectorView,
+): DingTalkPersonalSummary | null => {
+  const personal = view.personal as unknown;
+  if (!personal || typeof personal !== 'object') return null;
+
+  const { authorizedCount, brokerConfigured } = personal as Partial<
+    Record<keyof DingTalkPersonalSummary, unknown>
+  >;
+  if (typeof brokerConfigured !== 'boolean') return null;
+
+  return {
+    authorizedCount:
+      typeof authorizedCount === 'number' && Number.isFinite(authorizedCount) ? authorizedCount : 0,
+    brokerConfigured,
+  };
+};
+
 export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDraft => {
   const workspace = readDingTalkWorkspaceSettings(view);
+  const personal = readDingTalkPersonalSettings(view);
 
   return {
     agentId: view.agentId ?? '',
@@ -161,6 +226,11 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
     notifyAppSecret: { fingerprint: null, stored: view.notifyAppSecretSet, value: '' },
     notifyRobotEnabled: view.notifyRobotEnabled ?? true,
     notifyWorkNoticeEnabled: view.notifyWorkNoticeEnabled ?? true,
+    personalChatEnabled: personal.personalChatEnabled,
+    personalDataEnabled: personal.personalDataEnabled,
+    personalReportEnabled: personal.personalReportEnabled,
+    personalTodoEnabled: personal.personalTodoEnabled,
+    personalWriteEnabled: personal.personalWriteEnabled,
     pushEnabled: view.pushEnabled,
     robotCode: view.robotCode ?? '',
     // Optional on the view so a row written before the field existed still parses.
@@ -198,6 +268,11 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.notifyAppSecret.value,
     draft.notifyRobotEnabled,
     draft.notifyWorkNoticeEnabled,
+    draft.personalChatEnabled,
+    draft.personalDataEnabled,
+    draft.personalReportEnabled,
+    draft.personalTodoEnabled,
+    draft.personalWriteEnabled,
     draft.pushEnabled,
     draft.robotCode.trim(),
     draft.robotDisplayName.trim(),
@@ -212,12 +287,14 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
  * secret's identity is taken from the row the server just wrote, so the next save sends `keep` and
  * the fingerprint note names the credential that is actually stored — a rotation shows its new
  * fingerprint immediately rather than waiting on (and being ignored by) the list revalidation.
+ * The 钉钉个人数据 switches are taken from that row too, so the card shows what is in force.
  */
 export const settleDingTalkDraft = (
   draft: DingTalkConnectorDraft,
   saved: AdminImConnectorView,
 ): DingTalkConnectorDraft => ({
   ...draft,
+  ...readDingTalkPersonalSettings(saved),
   clientSecret: {
     fingerprint: saved.clientSecretFingerprint,
     stored: saved.hasClientSecret,
@@ -283,12 +360,14 @@ const optionalText = (value: string): string | null => {
 };
 
 /**
- * The whole row, 工作台能力 included: they live in the same `settings` jsonb as the rest, so the
- * section is saved by the card's own 保存 rather than by a call of its own.
+ * The whole row, 工作台能力 and 钉钉个人数据 included: they live in the same `settings` jsonb as the
+ * rest, so both sections are saved by the card's own 保存 rather than by a call of their own.
  */
 export const toDingTalkUpsertInput = (
   draft: DingTalkConnectorDraft,
-): AdminImConnectorUpsertInput & DingTalkWorkspaceSettingsInput => ({
+): AdminImConnectorUpsertInput &
+  DingTalkPersonalSettingsInput &
+  DingTalkWorkspaceSettingsInput => ({
   agentId: optionalText(draft.agentId),
   aiCardTemplateId: optionalText(draft.aiCardTemplateId),
   approvalAutomationTier: draft.approvalAutomationTier,
@@ -316,6 +395,11 @@ export const toDingTalkUpsertInput = (
     : {}),
   notifyRobotEnabled: draft.notifyRobotEnabled,
   notifyWorkNoticeEnabled: draft.notifyWorkNoticeEnabled,
+  personalChatEnabled: draft.personalChatEnabled,
+  personalDataEnabled: draft.personalDataEnabled,
+  personalReportEnabled: draft.personalReportEnabled,
+  personalTodoEnabled: draft.personalTodoEnabled,
+  personalWriteEnabled: draft.personalWriteEnabled,
   platform: 'dingtalk',
   pushEnabled: draft.pushEnabled,
   robotCode: draft.robotCode.trim(),

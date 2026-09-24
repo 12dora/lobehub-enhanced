@@ -287,6 +287,31 @@ describe('CapabilityReadiness', () => {
     expect(sandbox.textContent).toContain('沙箱未启用或不是本地 Docker 提供方');
     expect(sandbox.textContent).not.toContain('system.capabilities.hint');
   });
+
+  it('points at the IM connector settings while DingTalk personal data is off', () => {
+    const { unmount } = render(
+      <CapabilityReadiness
+        status={buildStatus({ capabilities: [{ key: 'dingtalk_personal', status: 'disabled' }] })}
+      />,
+    );
+
+    const [off] = screen.getAllByTestId('capability-tile');
+    expect(off.textContent).toContain('system.capabilities.dingtalk_personal');
+    expect(off.textContent).toContain('system.capabilities.hint.dingtalk_personal');
+    unmount();
+
+    render(
+      <CapabilityReadiness
+        status={buildStatus({
+          capabilities: [{ detail: '已授权 3 人', key: 'dingtalk_personal', status: 'healthy' }],
+        })}
+      />,
+    );
+
+    const [healthy] = screen.getAllByTestId('capability-tile');
+    expect(healthy.textContent).toContain('已授权 3 人');
+    expect(healthy.textContent).not.toContain('system.capabilities.hint');
+  });
 });
 
 describe('WorkerHealthList', () => {

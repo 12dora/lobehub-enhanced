@@ -15,6 +15,7 @@ import {
   Gauge,
   MessageSquare,
   Timer,
+  UserRoundCheck,
   XCircle,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -253,6 +254,7 @@ StatusSummaryBadge.displayName = 'AdminSystemStatusSummaryBadge';
 
 const CAPABILITY_ICON: Record<AdminSystemCapabilityRow['key'], LucideIcon> = {
   dingtalk_connector: MessageSquare,
+  dingtalk_personal: UserRoundCheck,
   memory_embedding: Brain,
   sandbox: Container,
   system_agent_models: Bot,
@@ -261,6 +263,7 @@ const CAPABILITY_ICON: Record<AdminSystemCapabilityRow['key'], LucideIcon> = {
 /** Off-but-unconfigured capabilities whose hint says where to configure them. */
 const HINT_WHEN_DISABLED = new Set<AdminSystemCapabilityRow['key']>([
   'dingtalk_connector',
+  'dingtalk_personal',
   'memory_embedding',
 ]);
 

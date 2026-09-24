@@ -5,6 +5,9 @@ import type { EnterprisePublicServerConfig } from '@lobechat/types';
 
 export type EnterpriseToolCapabilities = EnterprisePublicServerConfig['capabilities'];
 
+/** `@lobechat/builtin-tool-dingtalk-personal`, keyed by identifier as the tools engine does. */
+const DINGTALK_PERSONAL_TOOL_IDENTIFIER = 'lobe-dingtalk-personal';
+
 /**
  * Builtin tools the administrator governs through a deployment capability flag
  * instead of per-user installation.
@@ -18,6 +21,7 @@ export type EnterpriseToolCapabilities = EnterprisePublicServerConfig['capabilit
  */
 const PLATFORM_MANAGED_BUILTIN_TOOLS = new Set<string>([
   DingtalkApprovalIdentifier,
+  DINGTALK_PERSONAL_TOOL_IDENTIFIER,
   DingtalkWorkspaceIdentifier,
   EnterpriseLookupIdentifier,
 ]);
@@ -43,6 +47,9 @@ export const isBuiltinToolAvailableInDeployment = (
     }
     case DingtalkWorkspaceIdentifier: {
       return capabilities?.dingtalkTodo === true || capabilities?.dingtalkCalendar === true;
+    }
+    case DINGTALK_PERSONAL_TOOL_IDENTIFIER: {
+      return capabilities?.dingtalkPersonal === true;
     }
     case EnterpriseLookupIdentifier: {
       return capabilities?.enterpriseLookup === true;

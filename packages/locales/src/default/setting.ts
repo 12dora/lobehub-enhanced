@@ -536,6 +536,84 @@ export default {
   'defaultAgent.model.desc': 'Model used when creating new agents',
   'defaultAgent.model.title': 'Model',
   'defaultAgent.title': 'New Agent',
+  'dingtalkPersonal.actions.authorize': 'Authorize',
+  'dingtalkPersonal.actions.cancel': 'Cancel',
+  'dingtalkPersonal.actions.check': 'Check status',
+  'dingtalkPersonal.actions.copyLink': 'Copy link',
+  'dingtalkPersonal.actions.openLink': 'Open authorization page',
+  'dingtalkPersonal.actions.reauthorize': 'Authorize again',
+  'dingtalkPersonal.actions.revoke': 'Revoke authorization',
+  'dingtalkPersonal.authorized.at': 'Authorized at {{time}}',
+  'dingtalkPersonal.authorized.checkedAt': 'Last checked {{time}}',
+  'dingtalkPersonal.authorized.compactHint': 'Authorization is active. You can ask again now.',
+  'dingtalkPersonal.authorized.features': 'Available:',
+  'dingtalkPersonal.authorized.featuresNone': 'Your administrator has not enabled any data yet',
+  'dingtalkPersonal.authorized.summary': 'Authorized: {{userName}} ({{corpName}})',
+  'dingtalkPersonal.check.expired': 'Authorization has expired. Please authorize again.',
+  'dingtalkPersonal.check.failed': 'Check failed. Please try again later.',
+  'dingtalkPersonal.check.valid': 'Authorization is valid',
+  'dingtalkPersonal.description':
+    'Once you authorize, the assistant can read your own DingTalk to-dos, group messages and work reports as you. It only applies to your account and can be revoked at any time.',
+  'dingtalkPersonal.expired.title': 'Authorization has expired. Please authorize again.',
+  'dingtalkPersonal.expired.withName':
+    'The DingTalk authorization for {{name}} has expired. Please authorize again.',
+  'dingtalkPersonal.features.chat': 'Group messages',
+  'dingtalkPersonal.features.report': 'Work reports',
+  'dingtalkPersonal.features.todo': 'To-dos',
+  'dingtalkPersonal.features.write': 'Changes (confirmed each time)',
+  'dingtalkPersonal.identity.DINGTALK_IDENTITY_INACTIVE':
+    'Your DingTalk identity is deactivated, so authorization is unavailable. Contact your administrator.',
+  'dingtalkPersonal.identity.DINGTALK_IDENTITY_UNBOUND':
+    'Sign in with DingTalk, or send the DingTalk bot a message to link your identity, then authorize here.',
+  'dingtalkPersonal.identity.DINGTALK_IDENTITY_UNVERIFIED':
+    'Sign in with DingTalk, or send the DingTalk bot a message to link your identity, then authorize here.',
+  'dingtalkPersonal.identity.DINGTALK_PERSONAL_CORP_ID_MISSING':
+    'Your administrator has not configured the DingTalk CorpId yet, so authorization is unavailable. Contact your administrator.',
+  'dingtalkPersonal.login.cancelFailed': 'Could not cancel. Please try again later.',
+  'dingtalkPersonal.login.codeLabel': 'Code',
+  'dingtalkPersonal.login.copyFailed':
+    'Could not copy. Scan the QR code or use "Open authorization page" instead.',
+  'dingtalkPersonal.login.countdown': 'Expires in {{time}}',
+  'dingtalkPersonal.login.error.cancelled': 'This authorization was cancelled',
+  'dingtalkPersonal.login.error.expired': 'The code has expired',
+  'dingtalkPersonal.login.error.failed': 'Authorization did not complete. Please try again.',
+  'dingtalkPersonal.login.error.identityMismatch':
+    "You authorized {{name}}'s DingTalk account. Please authorize again with your own account.",
+  'dingtalkPersonal.login.error.identityMismatchUnknown':
+    'The DingTalk account you authorized is not yours. Please authorize again with your own account.',
+  'dingtalkPersonal.login.error.orgCliDisabled':
+    'Your organization has not enabled "Allow members to access personal data via CLI" in DingTalk. Contact your administrator.',
+  'dingtalkPersonal.login.linkCopied':
+    'Link copied. Send it to yourself in DingTalk and open it there.',
+  'dingtalkPersonal.login.scanHint':
+    'Scan with DingTalk on your phone, or send the link to yourself in DingTalk and open it, choose your organization, then approve.',
+  'dingtalkPersonal.login.succeeded': 'DingTalk personal data authorized',
+  'dingtalkPersonal.login.waiting': 'Waiting for you to confirm in DingTalk…',
+  'dingtalkPersonal.revoke.confirmDesc':
+    'After revoking, the assistant can no longer read your DingTalk to-dos, group messages or work reports. You can authorize again at any time.',
+  'dingtalkPersonal.revoke.confirmTitle': 'Revoke DingTalk personal data authorization?',
+  'dingtalkPersonal.revoke.error.retryLater': 'Could not revoke. Please try again later.',
+  'dingtalkPersonal.revoke.failed': 'Could not revoke. Please try again.',
+  'dingtalkPersonal.revoke.hint':
+    'You can also remove this authorization in DingTalk → Me → Settings → Privacy → Authorization management.',
+  'dingtalkPersonal.revoke.success': 'Authorization revoked',
+  'dingtalkPersonal.start.error.disabled':
+    'Your administrator has not enabled DingTalk personal data',
+  'dingtalkPersonal.start.error.failed': 'Could not start authorization. Please try again.',
+  'dingtalkPersonal.start.error.rateLimited': 'Too many attempts. Please try again later.',
+  'dingtalkPersonal.start.error.unavailable':
+    'The authorization service is temporarily unavailable. Please try again later.',
+  'dingtalkPersonal.status.loadFailed': 'Could not load the authorization status',
+  'dingtalkPersonal.status.loading': 'Loading authorization status…',
+  'dingtalkPersonal.status.retry': 'Retry',
+  'dingtalkPersonal.tag.authorized': 'Authorized',
+  'dingtalkPersonal.tag.expired': 'Expired',
+  'dingtalkPersonal.tag.identityRequired': 'DingTalk not linked',
+  'dingtalkPersonal.tag.pending': 'Waiting for confirmation',
+  'dingtalkPersonal.tag.unauthorized': 'Not authorized',
+  'dingtalkPersonal.title': 'DingTalk personal data',
+  'dingtalkPersonal.unauthorized.hint':
+    'Click "Authorize" and confirm once in DingTalk. The assistant can then look up your DingTalk data in conversations.',
   'group.aiConfig': 'Agent',
   'group.common': 'General',
   'group.profile': 'Account',

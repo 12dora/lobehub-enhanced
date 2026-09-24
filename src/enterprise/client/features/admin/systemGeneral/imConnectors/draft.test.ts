@@ -5,6 +5,8 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 import {
   fingerprintDingTalkDraft,
   isDingTalkNotifyAppConfigured,
+  readDingTalkPersonalSettings,
+  readDingTalkPersonalSummary,
   resolveApprovalTierTightening,
   settleDingTalkDraft,
   toDingTalkDraft,
@@ -32,6 +34,12 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   notifyAppSecretSet: false,
   notifyRobotEnabled: true,
   notifyWorkNoticeEnabled: true,
+  personal: { authorizedCount: 0, brokerConfigured: true },
+  personalChatEnabled: false,
+  personalDataEnabled: false,
+  personalReportEnabled: false,
+  personalTodoEnabled: false,
+  personalWriteEnabled: false,
   platform: 'dingtalk',
   pushEnabled: true,
   robotCode: 'ding-robot',
@@ -446,6 +454,98 @@ describe('DingTalk connector draft', () => {
       expect(resolveApprovalTierTightening('off', 'strict')).toBeNull();
       expect(resolveApprovalTierTightening('strict', 'strict')).toBeNull();
       expect(resolveApprovalTierTightening('moderate', 'relaxed')).toBeNull();
+    });
+  });
+
+  describe('钉钉个人数据', () => {
+    it('reads a row without the switches as all off', () => {
+      const legacy = view();
+      for (const key of [
+        'personalChatEnabled',
+        'personalDataEnabled',
+        'personalReportEnabled',
+        'personalTodoEnabled',
+        'personalWriteEnabled',
+      ] as const)
+        delete (legacy as Partial<AdminImConnectorView>)[key];
+
+      expect(readDingTalkPersonalSettings(legacy)).toEqual({
+        personalChatEnabled: false,
+        personalDataEnabled: false,
+        personalReportEnabled: false,
+        personalTodoEnabled: false,
+        personalWriteEnabled: false,
+      });
+    });
+
+    it('seeds the five switches from the row and sends them back with it', () => {
+      const seed = toDingTalkDraft(
+        view({ personalDataEnabled: true, personalReportEnabled: true, personalTodoEnabled: true }),
+      );
+
+      expect(seed.personalDataEnabled).toBe(true);
+      expect(seed.personalTodoEnabled).toBe(true);
+      expect(seed.personalReportEnabled).toBe(true);
+      expect(seed.personalChatEnabled).toBe(false);
+
+      const input = toDingTalkUpsertInput({ ...seed, personalWriteEnabled: true });
+      expect(input).toMatchObject({
+        personalChatEnabled: false,
+        personalDataEnabled: true,
+        personalReportEnabled: true,
+        personalTodoEnabled: true,
+        personalWriteEnabled: true,
+      });
+    });
+
+    it('counts every switch as part of the draft identity', () => {
+      const seed = toDingTalkDraft(view());
+
+      for (const change of [
+        { personalDataEnabled: true },
+        { personalTodoEnabled: true },
+        { personalChatEnabled: true },
+        { personalReportEnabled: true },
+        { personalWriteEnabled: true },
+      ])
+        expect(fingerprintDingTalkDraft({ ...seed, ...change })).not.toBe(
+          fingerprintDingTalkDraft(seed),
+        );
+    });
+
+    it('adopts the switches the server holds once a save has landed', () => {
+      const draft = {
+        ...toDingTalkDraft(view()),
+        personalDataEnabled: true,
+        personalTodoEnabled: true,
+      };
+      const settled = settleDingTalkDraft(
+        draft,
+        view({ personalDataEnabled: true, personalTodoEnabled: false }),
+      );
+
+      expect(settled.personalDataEnabled).toBe(true);
+      expect(settled.personalTodoEnabled).toBe(false);
+    });
+
+    it('reads the sidecar summary only when the server sent a well-formed one', () => {
+      const withSummary = (personal: unknown) =>
+        ({ ...view(), personal }) as unknown as AdminImConnectorView;
+
+      expect(readDingTalkPersonalSummary(view())).toEqual({
+        authorizedCount: 0,
+        brokerConfigured: true,
+      });
+      expect(
+        readDingTalkPersonalSummary(withSummary({ authorizedCount: 3, brokerConfigured: true })),
+      ).toEqual({ authorizedCount: 3, brokerConfigured: true });
+      expect(readDingTalkPersonalSummary(withSummary(undefined))).toBeNull();
+      expect(readDingTalkPersonalSummary(withSummary({ brokerConfigured: false }))).toEqual({
+        authorizedCount: 0,
+        brokerConfigured: false,
+      });
+      expect(readDingTalkPersonalSummary(withSummary({ authorizedCount: 3 }))).toBeNull();
+      expect(readDingTalkPersonalSummary(withSummary(null))).toBeNull();
     });
   });
 });

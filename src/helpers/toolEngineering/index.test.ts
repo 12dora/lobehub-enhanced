@@ -153,6 +153,22 @@ vi.mock('@/store/tool', () => ({
         type: 'builtin' as const,
       },
       {
+        identifier: 'lobe-dingtalk-personal',
+        manifest: {
+          api: [
+            {
+              description: 'List my DingTalk todos',
+              name: 'listMyTodos',
+              parameters: { properties: {}, type: 'object' },
+            },
+          ],
+          identifier: 'lobe-dingtalk-personal',
+          meta: { title: 'DingTalk Personal Data', avatar: '🔑' },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
+      {
         identifier: 'lobe-enterprise-lookup',
         manifest: {
           api: [
@@ -239,6 +255,7 @@ vi.mock('@/store/user', () => ({
 let mockDingtalkCaps: {
   dingtalkApproval?: boolean;
   dingtalkCalendar?: boolean;
+  dingtalkPersonal?: boolean;
   dingtalkTodo?: boolean;
   enterpriseLookup?: boolean;
 } = {};
@@ -766,6 +783,57 @@ describe('toolEngineering', () => {
 
       expect(result.enabledToolIds).toContain('lobe-dingtalk-approval');
       expect(result.enabledToolIds).not.toContain('lobe-dingtalk-workspace');
+    });
+  });
+
+  describe('DingTalk personal data capability gate', () => {
+    const generate = (toolIds: string[] = [], explicit = false) =>
+      createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' }).generateToolsDetailed({
+        context: explicit ? { isExplicitActivation: true } : undefined,
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds,
+      });
+
+    it('drops lobe-dingtalk-personal when the capability flag is off, even if selected', () => {
+      mockDingtalkCaps = { dingtalkPersonal: false };
+      mockCurrentAgentPlugins = ['lobe-dingtalk-personal'];
+
+      expect(generate(['lobe-dingtalk-personal']).enabledToolIds).not.toContain(
+        'lobe-dingtalk-personal',
+      );
+    });
+
+    it('fails closed when the capability flag is unknown', () => {
+      mockDingtalkCaps = {};
+
+      expect(generate([], true).enabledToolIds).not.toContain('lobe-dingtalk-personal');
+    });
+
+    it('exposes lobe-dingtalk-personal in agent mode without plugin selection when on', () => {
+      mockDingtalkCaps = { dingtalkPersonal: true };
+      mockCurrentAgentPlugins = [];
+
+      expect(generate().enabledToolIds).toContain('lobe-dingtalk-personal');
+    });
+
+    it('does not expose lobe-dingtalk-personal in chat mode even when on', () => {
+      mockEnableAgentMode = false;
+      mockDingtalkCaps = { dingtalkPersonal: true };
+
+      expect(generate().enabledToolIds).not.toContain('lobe-dingtalk-personal');
+    });
+
+    it('gates personal data independently of the workspace tool', () => {
+      mockDingtalkCaps = { dingtalkPersonal: false, dingtalkTodo: true };
+      const workspaceOnly = generate().enabledToolIds;
+      expect(workspaceOnly).toContain('lobe-dingtalk-workspace');
+      expect(workspaceOnly).not.toContain('lobe-dingtalk-personal');
+
+      mockDingtalkCaps = { dingtalkPersonal: true, dingtalkTodo: false };
+      const personalOnly = generate().enabledToolIds;
+      expect(personalOnly).toContain('lobe-dingtalk-personal');
+      expect(personalOnly).not.toContain('lobe-dingtalk-workspace');
     });
   });
 

@@ -38,6 +38,7 @@ const buildStatus = (overrides: {
       { key: 'memory_embedding', status: 'healthy' },
       { key: 'system_agent_models', status: 'healthy' },
       { key: 'dingtalk_connector', status: 'healthy' },
+      { detail: '已授权 3 人', key: 'dingtalk_personal', status: 'healthy' },
       { key: 'sandbox', status: 'disabled' },
     ],
     dependencies: {
@@ -85,6 +86,7 @@ describe('summarizeStatus', () => {
           { key: 'memory_embedding', reason: '未配置记忆向量模型', status: 'disabled' },
           { key: 'system_agent_models', status: 'unknown' },
           { key: 'dingtalk_connector', status: 'disabled' },
+          { key: 'dingtalk_personal', status: 'disabled' },
           { key: 'sandbox', status: 'disabled' },
         ],
         dependencies: {
@@ -116,6 +118,16 @@ describe('summarizeStatus', () => {
     expect(summary.tone).toBe('error');
     expect(summary.problems).toEqual([
       { key: 'memory_embedding', severity: 'error', source: 'capability' },
+    ]);
+  });
+
+  it('counts an unreachable DingTalk personal-data sidecar as a capability problem', () => {
+    const summary = summarizeStatus(
+      buildStatus({ capabilities: [{ key: 'dingtalk_personal', status: 'unavailable' }] }),
+    );
+
+    expect(summary.problems).toEqual([
+      { key: 'dingtalk_personal', severity: 'error', source: 'capability' },
     ]);
   });
 

@@ -42,6 +42,7 @@ import { buildClientConnectorManifests } from './buildClientConnectorManifests';
 
 const DINGTALK_APPROVAL_TOOL_IDENTIFIER = 'lobe-dingtalk-approval';
 const DINGTALK_WORKSPACE_TOOL_IDENTIFIER = 'lobe-dingtalk-workspace';
+const DINGTALK_PERSONAL_TOOL_IDENTIFIER = 'lobe-dingtalk-personal';
 const ENTERPRISE_LOOKUP_TOOL_IDENTIFIER = 'lobe-enterprise-lookup';
 
 /**
@@ -53,6 +54,7 @@ const readEnterpriseToolFlags = () => {
   const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
   return {
     dingtalkApproval: !!caps?.dingtalkApproval,
+    dingtalkPersonal: !!caps?.dingtalkPersonal,
     dingtalkWorkspace: !!(caps?.dingtalkTodo || caps?.dingtalkCalendar),
     enterpriseLookup: !!caps?.enterpriseLookup,
   };
@@ -256,7 +258,8 @@ export const createAgentToolsEngine = (
       settingsSelectors.memoryEnabled(useUserStore.getState())) &&
     memoryEmbeddingAvailable !== false;
   const webBrowsingEnabled = searchConfig.useApplicationBuiltinSearchTool;
-  const { dingtalkApproval, dingtalkWorkspace, enterpriseLookup } = readEnterpriseToolFlags();
+  const { dingtalkApproval, dingtalkPersonal, dingtalkWorkspace, enterpriseLookup } =
+    readEnterpriseToolFlags();
   // Native search and the platform browsing tool must not stack. Drop the
   // web-browsing manifest from the pool so `allowExplicitActivation` cannot
   // re-enable it after lobe-activator. DingTalk / enterprise-lookup are
@@ -268,6 +271,7 @@ export const createAgentToolsEngine = (
       : [...disabledPluginIds, WebBrowsingManifest.identifier]),
     ...(!dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
     ...(!dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
+    ...(!dingtalkPersonal ? [DINGTALK_PERSONAL_TOOL_IDENTIFIER] : []),
     ...(!enterpriseLookup ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
     ...(memoryEmbeddingAvailable === false ? [MemoryManifest.identifier] : []),
   ];
@@ -299,6 +303,7 @@ export const createAgentToolsEngine = (
     // the connector flag is off.
     [DINGTALK_APPROVAL_TOOL_IDENTIFIER]: dingtalkApproval,
     [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: dingtalkWorkspace,
+    [DINGTALK_PERSONAL_TOOL_IDENTIFIER]: dingtalkPersonal,
   };
 
   return createToolsEngine({
@@ -313,6 +318,7 @@ export const createAgentToolsEngine = (
           ...defaultToolIds,
           ...(dingtalkApproval ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
           ...(dingtalkWorkspace ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
+          ...(dingtalkPersonal ? [DINGTALK_PERSONAL_TOOL_IDENTIFIER] : []),
         ],
     disabledPluginIds: disabledIds,
     manifestContext,

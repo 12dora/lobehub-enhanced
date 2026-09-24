@@ -16,6 +16,7 @@ export const AUDIT_LOG_TARGET_TYPES = [
   'content_moderation_settings',
   'dingtalk_approval',
   'dingtalk_calendar',
+  'dingtalk_personal',
   'dingtalk_todo',
   'email_delivery',
   'file',
