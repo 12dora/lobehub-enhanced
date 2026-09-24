@@ -46,11 +46,11 @@ const alias = {
 
 export default defineConfig({
   define: {
-    '__CI__': process.env.CI === 'true' ? 'true' : 'false',
-    '__DEV__': process.env.NODE_ENV !== 'production' ? 'true' : 'false',
-    '__ELECTRON__': 'false',
-    '__MOBILE__': 'false',
-    '__TEST__': 'true',
+    __CI__: process.env.CI === 'true' ? 'true' : 'false',
+    __DEV__: process.env.NODE_ENV !== 'production' ? 'true' : 'false',
+    __ELECTRON__: 'false',
+    __MOBILE__: 'false',
+    __TEST__: 'true',
   },
   optimizeDeps: {
     exclude: ['crypto', 'util', 'tty'],
@@ -63,8 +63,7 @@ export default defineConfig({
     {
       name: 'raw-md',
       transform(_, id) {
-        if (id.endsWith('.md'))
-          return { code: 'export default ""', map: null };
+        if (id.endsWith('.md')) return { code: 'export default ""', map: null };
       },
     },
     /**
@@ -141,6 +140,7 @@ export default defineConfig({
       '**/apps/desktop/**',
       '**/apps/mobile/**',
       '**/apps/cli/**',
+      '**/apps/aihub-dws/**',
       '**/packages/**',
       '**/e2e/**',
     ],

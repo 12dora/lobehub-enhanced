@@ -150,4 +150,11 @@ export default eslint(
       'no-console': 0,
     },
   },
+  // aihub-dws broker - JSON audit lines and startup errors go to stdio
+  {
+    files: ['apps/aihub-dws/**/*'],
+    rules: {
+      'no-console': 0,
+    },
+  },
 );

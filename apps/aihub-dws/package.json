@@ -1,0 +1,10 @@
+{
+  "name": "aihub-dws",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "vitest run --config vitest.config.mts"
+  }
+}
