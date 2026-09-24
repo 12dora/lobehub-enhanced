@@ -143,6 +143,11 @@ export const DINGTALK_PENDING_APPROVAL_THREAD_KEY_PREFIX =
 export const DINGTALK_PENDING_APPROVAL_TTL_SECONDS = 24 * 60 * 60;
 export const DINGTALK_CONFIRM_TIMEOUT_MS = 30 * 60 * 1000;
 export const DINGTALK_CONFIRM_TIMEOUT_REASON = '超时未确认';
+/**
+ * One card previews at most this many parked calls. A larger turn is
+ * web-only and is not previewed (each preview is a billed DingTalk read).
+ */
+export const DINGTALK_CONFIRM_BATCH_CAP = 20;
 export const DINGTALK_CONFIRM_CLICK_REPLY = '请点击确认卡片上的「批准」或「拒绝」。';
 export const DINGTALK_LIST_PAGE_SIZE = 5;
 

@@ -99,6 +99,55 @@ describe('extractDingtalkPatUri', () => {
     expect(extractDingtalkPatUri(`请确认：[去确认](${PAT_URI})`)).toBe(PAT_URI);
   });
 
+  describe('tRPC client errors', () => {
+    const OPEN_PAT_URI = 'https://open.dingtalk.com/pat/confirm?ticket=abc';
+
+    /** What `TRPCClientError` carries: the lambda formatter puts `cause.data` under `errorData`. */
+    const trpcError = (details: Record<string, unknown>) =>
+      Object.assign(new Error('DINGTALK_PERSONAL_PAT_REQUIRED'), {
+        data: {
+          code: 'BAD_REQUEST',
+          errorData: { code: 'DINGTALK_PERSONAL_PAT_REQUIRED', details },
+          httpStatus: 400,
+        },
+      });
+
+    it('reads the uri from data.errorData.details', () => {
+      expect(
+        extractDingtalkPatUri({
+          data: {
+            code: 'BAD_REQUEST',
+            errorData: { code: 'DINGTALK_PERSONAL_PAT_REQUIRED', details: { uri: OPEN_PAT_URI } },
+          },
+          message: 'DINGTALK_PERSONAL_PAT_REQUIRED',
+        }),
+      ).toBe(OPEN_PAT_URI);
+      expect(extractDingtalkPatUri(trpcError({ uri: OPEN_PAT_URI }))).toBe(OPEN_PAT_URI);
+    });
+
+    it('reads the https URL written into data.errorData.details.message', () => {
+      expect(
+        extractDingtalkPatUri(
+          trpcError({ message: `这是钉钉自己的权限页面：[打开权限页面](${OPEN_PAT_URI})` }),
+        ),
+      ).toBe(OPEN_PAT_URI);
+    });
+
+    it('still finds it when the error is wrapped once more', () => {
+      expect(extractDingtalkPatUri({ error: trpcError({ uri: OPEN_PAT_URI }) })).toBe(OPEN_PAT_URI);
+    });
+
+    it('ignores non-https links under data.errorData', () => {
+      expect(
+        extractDingtalkPatUri(trpcError({ uri: 'http://open.dingtalk.com/pat' })),
+      ).toBeUndefined();
+      expect(extractDingtalkPatUri(trpcError({ uri: 'javascript:alert(1)' }))).toBeUndefined();
+      expect(
+        extractDingtalkPatUri(trpcError({ message: '权限页面：http://open.dingtalk.com/pat' })),
+      ).toBeUndefined();
+    });
+  });
+
   it('ignores non-https links', () => {
     expect(extractDingtalkPatUri({ uri: 'javascript:alert(1)' })).toBeUndefined();
     expect(extractDingtalkPatUri({ message: 'see http://x.example.com/a' })).toBeUndefined();

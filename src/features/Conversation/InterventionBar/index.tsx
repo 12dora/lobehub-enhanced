@@ -1,10 +1,12 @@
 import { ChatInput } from '@lobehub/editor/react';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { type PendingIntervention } from '../store/slices/data/pendingInterventions';
+import InterventionBatchHeader from './InterventionBatchHeader';
 import InterventionContent from './InterventionContent';
 import InterventionTabBar from './InterventionTabBar';
 import { styles } from './style';
+import { useInterventionBatch } from './useInterventionBatch';
 
 interface InterventionBarProps {
   interventions: PendingIntervention[];
@@ -31,6 +33,16 @@ const InterventionBar = memo<InterventionBarProps>(({ interventions }) => {
     [interventions],
   );
 
+  const batch = useInterventionBatch(interventions, activeIndex);
+  const { activeToolMessageId } = batch;
+
+  // While approving all, keep the call being approved on screen.
+  useEffect(() => {
+    if (!activeToolMessageId) return;
+    const target = interventions.find((i) => i.toolMessageId === activeToolMessageId);
+    if (target) setActiveId(target.toolCallId);
+  }, [activeToolMessageId, interventions]);
+
   const activeIntervention = interventions[activeIndex];
   if (!activeIntervention) return null;
 
@@ -42,6 +54,15 @@ const InterventionBar = memo<InterventionBarProps>(({ interventions }) => {
       maxHeight={'50vh' as any}
       resize={false}
     >
+      {(batch.items.length > 1 || !!batch.progress) && (
+        <InterventionBatchHeader
+          count={batch.items.length}
+          progress={batch.progress}
+          onApproveAll={batch.approveAll}
+          onRejectAll={batch.rejectAll}
+          onStop={batch.stopApproveAll}
+        />
+      )}
       {interventions.length > 1 && (
         <InterventionTabBar
           activeIndex={activeIndex}

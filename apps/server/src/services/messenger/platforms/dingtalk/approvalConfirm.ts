@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+import { DingtalkDocsIdentifier } from '@lobechat/builtin-tool-dingtalk-docs';
 import {
   CONVERSATION_TYPE_GROUP,
   decodeDingTalkThreadId,
-  DingTalkApiClient,
   DingTalkCardUnavailableError,
   fitDingTalkConfirmCardContent,
   formatDingTalkConfirmOverflowLine,
@@ -44,26 +44,48 @@ import {
 import { createDingTalkReplySink, sendDingTalkMarkdown } from './cards';
 import {
   buildDingTalkTopicDeepLink,
+  dingTalkInvalidPreviewDetail,
   type DingTalkRenderedConfirm,
+  formatDingTalkAggregateBody,
+  formatDingTalkAggregateTitle,
   formatDingTalkCardSendFailedContent,
   formatDingTalkConfirmSummary,
+  formatDingTalkOversizedBatch,
   formatDingTalkPreviewCard,
   formatDingTalkPreviewUnavailable,
   formatDingTalkWebConfirmMarkdown,
+  hasDingTalkApiLabel,
 } from './confirmSummary';
 import {
   DINGTALK_ASKER_ONLY_REPLY,
+  DINGTALK_CONFIRM_BATCH_CAP,
   DINGTALK_CONFIRM_TIMEOUT_MS,
   DINGTALK_CONFIRM_TIMEOUT_REASON,
   DINGTALK_PENDING_APPROVAL_KEY_PREFIX,
 } from './const';
 import { forwardDingTalkWaitingQuestion } from './questions';
+import { sharedDingTalkApiClient } from './tokenCache';
 
 const log = debug('lobe-server:messenger:dingtalk:approval');
+
+const apiForConfig = (config: { clientId: string; clientSecret: string; robotCode: string }) =>
+  sharedDingTalkApiClient({
+    appKey: config.clientId,
+    appSecret: config.clientSecret,
+    robotCode: config.robotCode,
+  });
 
 /** How long a click waits for the parked run to leave `activeThreads`. */
 const DINGTALK_RESUME_SETTLE_MS = 10_000;
 const DINGTALK_RESUME_POLL_MS = 100;
+/**
+ * Restart may finish an approved batch only while the claim is this fresh.
+ * Older `resuming` records are interrupted instead of executing the rest.
+ */
+const DINGTALK_RESUME_RECONCILE_MS = 10 * 60 * 1000;
+/** v1.10.1 cards showed one call. The others were rejected with this reason. */
+const LEGACY_SIBLING_SKIP_REASON = '钉钉一次只能确认一项，此项已跳过。';
+const INTERRUPTED_STATUS_TEXT = '已中断，未执行';
 
 /**
  * Tests set this to `0` so a still-active thread fails the wait immediately.
@@ -120,6 +142,8 @@ interface ApprovalCall {
   apiName?: string;
   args: Record<string, unknown>;
   identifier?: string;
+  /** `manifest.meta.title` for an unlabeled non-DingTalk tool. */
+  manifestTitle?: string;
   parentMessageId: string;
   toolCallId: string;
 }
@@ -224,6 +248,27 @@ const rejectMessages = async (
   }
 };
 
+/**
+ * An invalid preview cannot be approved. Refuse every parked call with the
+ * sanitized reason and continue the run so the model can split or fix it.
+ * Sealing drops the thread index; a later click must not resume these rows.
+ */
+const refusedPreviewOutcome = async (
+  userId: string,
+  workspaceId: string | undefined,
+  calls: ApprovalCall[],
+  reason: string,
+  outTrackId?: string,
+): Promise<DingTalkWaitingOutcome> => {
+  await rejectMessages(userId, workspaceId, calls, reason);
+  if (outTrackId) await sealDingTalkPendingApproval(outTrackId, 'rejected');
+  return {
+    resumeHistory: {
+      parentMessageId: (calls.at(-1) ?? calls[0])?.parentMessageId ?? '',
+    },
+  };
+};
+
 const resumeThread = (threadId: string, topicId: string) =>
   ({
     adapter: {
@@ -278,6 +323,7 @@ const waitForDingTalkThreadIdle = async (threadId: string): Promise<boolean> => 
 const runResumeOnce = async (
   record: DingTalkPendingApproval,
   extra: {
+    onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
     resumeApproval?: DingTalkWaitingOutcome['resumeApproval'];
     resumeHistory?: { parentMessageId: string };
   },
@@ -296,6 +342,7 @@ const runResumeOnce = async (
       onSkippedActive: async () => {
         skipped = true;
       },
+      onWaitingForHuman: extra.onWaitingForHuman,
       replySink,
       resumeApproval: extra.resumeApproval,
       resumeHistory: extra.resumeHistory,
@@ -312,6 +359,7 @@ const runResumeOnce = async (
 const runResume = async (
   record: DingTalkPendingApproval,
   extra: {
+    onWaitingForHuman?: (event: AgentWaitingForHumanEvent) => Promise<void>;
     resumeApproval?: DingTalkWaitingOutcome['resumeApproval'];
     resumeHistory?: { parentMessageId: string };
   },
@@ -328,7 +376,7 @@ const updateCardStatus = async (
 ): Promise<void> => {
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = apiForConfig(config);
   await updateDingTalkConfirmCard(api, record.outTrackId, {
     status: STATUS_BUTTON[status],
     statusText: STATUS_LABEL[status],
@@ -341,22 +389,89 @@ const labelKeyFor = (decision: DingTalkApprovalDecision): keyof typeof STATUS_LA
   return 'expired';
 };
 
-/** Past the confirm window and resume was not accepted. Reject the tool rows in place. */
-const rejectTimedOut = async (record: DingTalkPendingApproval): Promise<void> => {
-  const calls = [
-    { args: {}, parentMessageId: record.parentMessageId, toolCallId: record.toolCallId },
-    ...(record.siblings ?? []).map((item) => ({
+/** A v1.10.1 record has no `calls`. Its card covered only `toolCallId`. */
+const isLegacyApprovalRecord = (record: DingTalkPendingApproval): boolean =>
+  !record.calls || record.calls.length === 0;
+
+/** Primary first. Legacy records do not include siblings; those were skipped. */
+const allCalls = (record: DingTalkPendingApproval): ApprovalCall[] => {
+  if (record.calls && record.calls.length > 0) {
+    return record.calls.map((item) => ({
+      apiName: item.apiName,
       args: {},
       parentMessageId: item.parentMessageId,
       toolCallId: item.toolCallId,
-    })),
-  ];
-  await rejectMessages(record.userId, record.workspaceId, calls, DINGTALK_CONFIRM_TIMEOUT_REASON);
+    }));
+  }
+  return [{ args: {}, parentMessageId: record.parentMessageId, toolCallId: record.toolCallId }];
+};
+
+const legacySiblingCalls = (record: DingTalkPendingApproval): ApprovalCall[] => {
+  if (!isLegacyApprovalRecord(record)) return [];
+  return (record.siblings ?? [])
+    .filter((item) => item.toolCallId.length > 0 && item.toolCallId !== record.toolCallId)
+    .map((item) => ({
+      args: {},
+      parentMessageId: item.parentMessageId,
+      toolCallId: item.toolCallId,
+    }));
+};
+
+const rejectLegacySiblings = async (
+  record: DingTalkPendingApproval,
+  reason: string,
+): Promise<void> => {
+  const siblings = legacySiblingCalls(record);
+  if (siblings.length === 0) return;
+  await rejectMessages(record.userId, record.workspaceId, siblings, reason);
+};
+
+/** In-batch writes must not move the thread index onto this older card. */
+const saveInBatch = (record: DingTalkPendingApproval): Promise<boolean> =>
+  saveDingTalkPendingApproval(record, { threadIndex: 'skip' });
+
+const resumeIsRecent = (record: DingTalkPendingApproval, now = Date.now()): boolean =>
+  typeof record.resumingAt === 'number' && now - record.resumingAt <= DINGTALK_RESUME_RECONCILE_MS;
+
+const rejectionReasonFor = (decision: DingTalkApprovalDecision): string =>
+  decision === 'expired' ? DINGTALK_CONFIRM_TIMEOUT_REASON : '已拒绝';
+
+const resumePayloadFor = (
+  record: DingTalkPendingApproval,
+  call: ApprovalCall,
+): NonNullable<DingTalkWaitingOutcome['resumeApproval']> => {
+  const decision = decisionOf(record);
+  if (decision === 'approved') {
+    return {
+      decision: 'approved',
+      parentMessageId: call.parentMessageId,
+      toolCallId: call.toolCallId,
+    };
+  }
+  return {
+    decision: 'rejected_continue',
+    parentMessageId: call.parentMessageId,
+    rejectionReason: rejectionReasonFor(decision),
+    toolCallId: call.toolCallId,
+  };
+};
+
+/** Past the confirm window and resume was not accepted. Reject the tool rows in place. */
+const rejectTimedOut = async (record: DingTalkPendingApproval): Promise<void> => {
+  await rejectMessages(
+    record.userId,
+    record.workspaceId,
+    allCalls(record),
+    DINGTALK_CONFIRM_TIMEOUT_REASON,
+  );
+  await rejectLegacySiblings(record, DINGTALK_CONFIRM_TIMEOUT_REASON);
   const expired: DingTalkPendingApproval = { ...record, decision: 'expired', status: 'resuming' };
-  try {
-    await updateCardStatus(expired, 'expired');
-  } catch (error) {
-    log('timeout card update failed outTrackId=%s: %O', record.outTrackId, error);
+  if (!record.cardPatched) {
+    try {
+      await updateCardStatus(expired, 'expired');
+    } catch (error) {
+      log('timeout card update failed outTrackId=%s: %O', record.outTrackId, error);
+    }
   }
   await finalizeDingTalkPendingApproval(expired);
 };
@@ -376,64 +491,193 @@ const releaseUnaccepted = async (record: DingTalkPendingApproval): Promise<void>
   await rejectTimedOut(record);
 };
 
-/** @returns whether the resume was accepted. The card is updated only then. */
-const finishClaimed = async (record: DingTalkPendingApproval): Promise<boolean> => {
-  const siblings = record.siblings ?? [];
-  if (siblings.length > 0) {
-    await rejectMessages(
-      record.userId,
-      record.workspaceId,
-      siblings.map((item) => ({
-        args: {},
-        parentMessageId: item.parentMessageId,
-        toolCallId: item.toolCallId,
-      })),
-      '钉钉一次只能确认一项，此项已跳过。',
-    );
+const pluginStatus = async (
+  record: DingTalkPendingApproval,
+  parentMessageId: string,
+): Promise<string | undefined> => {
+  const db = await getServerDB();
+  const model = new MessageModel(db, record.userId, record.workspaceId);
+  const plugin = await model.findMessagePlugin(parentMessageId);
+  return plugin?.intervention?.status;
+};
+
+/**
+ * Apply one decision to every parked call.
+ * Approve resumes the first still-pending call; a re-park whose ids are all in
+ * `decidedCallIds` resumes the next one here, with no new card.
+ * Reject and timeout wait until the thread is idle, reject every other
+ * still-pending row, then one rejected_continue resume, so the model does not
+ * answer while calls 2..N are still pending. If the thread never goes idle,
+ * the card is reverted and nothing has been rejected. Legacy records skip
+ * siblings before resume. The card is patched at most once. In-batch saves
+ * do not touch the thread index.
+ *
+ * @returns whether the first resume was accepted. The original `record` is
+ * what a failed first resume reverts, so callers can match it.
+ */
+const driveBatch = async (
+  record: DingTalkPendingApproval,
+  start: ApprovalCall,
+): Promise<boolean> => {
+  const decision = decisionOf(record);
+  if (isLegacyApprovalRecord(record)) {
+    const reason =
+      decision === 'expired' ? DINGTALK_CONFIRM_TIMEOUT_REASON : LEGACY_SIBLING_SKIP_REASON;
+    await rejectLegacySiblings(record, reason);
   }
 
-  const decision = decisionOf(record);
-  let accepted: boolean;
-  try {
-    accepted = await runResume(record, {
-      resumeApproval:
-        decision === 'approved'
-          ? {
-              decision: 'approved',
-              parentMessageId: record.parentMessageId,
-              toolCallId: record.toolCallId,
-            }
-          : {
-              decision: 'rejected_continue',
-              parentMessageId: record.parentMessageId,
-              rejectionReason: decision === 'expired' ? DINGTALK_CONFIRM_TIMEOUT_REASON : '已拒绝',
-              toolCallId: record.toolCallId,
-            },
-    });
-  } catch (error) {
-    if (record.expiresAt <= Date.now()) {
-      await rejectTimedOut(record);
-      log('resume failed after timeout outTrackId=%s: %O', record.outTrackId, error);
+  let snapshot: DingTalkPendingApproval = record;
+  let current = start;
+  let othersRejected = false;
+  const limit = Math.max(allCalls(record).length, 1);
+  const singleResume = decision !== 'approved' && !isLegacyApprovalRecord(record);
+
+  const rejectOtherPending = async (): Promise<void> => {
+    if (othersRejected || decision === 'approved' || isLegacyApprovalRecord(record)) return;
+    othersRejected = true;
+    const others: ApprovalCall[] = [];
+    for (const call of allCalls(record)) {
+      if (call.toolCallId === start.toolCallId) continue;
+      const status = await pluginStatus(record, call.parentMessageId);
+      if (status !== 'pending') continue;
+      others.push(call);
+    }
+    if (others.length === 0) return;
+    await rejectMessages(record.userId, record.workspaceId, others, rejectionReasonFor(decision));
+  };
+
+  if (singleResume) {
+    if (!(await waitForDingTalkThreadIdle(record.threadId))) {
+      await releaseUnaccepted(record);
       return false;
     }
-    await revertDingTalkPendingApproval(record);
-    armExpiry(record.outTrackId, record.expiresAt - Date.now());
-    throw error;
+    await rejectOtherPending();
   }
 
-  if (!accepted) {
-    await releaseUnaccepted(record);
-    return false;
+  const finish = async (next: DingTalkPendingApproval): Promise<boolean> => {
+    await finalizeDingTalkPendingApproval({ ...next, decision });
+    return true;
+  };
+
+  for (let step = 0; step < limit; step += 1) {
+    snapshot = {
+      ...snapshot,
+      decision,
+      lastResumedToolCallId: current.toolCallId,
+      status: 'resuming',
+    };
+    await saveInBatch(snapshot);
+
+    let continuation: DingTalkWaitingOutcome | undefined;
+    let accepted: boolean;
+    try {
+      accepted = await runResume(snapshot, {
+        onWaitingForHuman: async (event) => {
+          continuation = await forwardDingTalkWaitingHuman(snapshot.threadId, event, {
+            agentId: snapshot.agentId,
+            userId: snapshot.userId,
+            workspaceId: snapshot.workspaceId,
+          });
+        },
+        resumeApproval: resumePayloadFor(snapshot, current),
+      });
+    } catch (error) {
+      if (snapshot.expiresAt <= Date.now() && !snapshot.cardPatched) {
+        await rejectTimedOut(record);
+        log('resume failed after timeout outTrackId=%s: %O', record.outTrackId, error);
+        return false;
+      }
+      if (snapshot.cardPatched) {
+        log('later resume failed outTrackId=%s: %O', record.outTrackId, error);
+        await finalizeDingTalkPendingApproval({ ...snapshot, decision });
+        return false;
+      }
+      await revertDingTalkPendingApproval(record);
+      armExpiry(record.outTrackId, record.expiresAt - Date.now());
+      throw error;
+    }
+
+    if (!accepted) {
+      if (snapshot.cardPatched) {
+        await finalizeDingTalkPendingApproval({ ...snapshot, decision });
+        return false;
+      }
+      await releaseUnaccepted(record);
+      return false;
+    }
+
+    if (!snapshot.cardPatched) {
+      const patched: DingTalkPendingApproval = { ...snapshot, cardPatched: true, decision };
+      try {
+        await updateCardStatus(patched, labelKeyFor(decision));
+      } catch (error) {
+        log('confirm card update failed after resume outTrackId=%s: %O', record.outTrackId, error);
+      }
+      snapshot = patched;
+      await saveInBatch(snapshot);
+    }
+
+    // A failed follow-up card, or a covered reject, asks for one history resume.
+    if (continuation?.resumeHistory && !continuation.resumeApproval) {
+      await rejectOtherPending();
+      await runResume(snapshot, {
+        onWaitingForHuman: async (event) => {
+          await forwardDingTalkWaitingHuman(snapshot.threadId, event, {
+            agentId: snapshot.agentId,
+            userId: snapshot.userId,
+            workspaceId: snapshot.workspaceId,
+          });
+        },
+        resumeHistory: continuation.resumeHistory,
+      });
+      return finish(snapshot);
+    }
+
+    const next = continuation?.resumeApproval;
+    if (!next?.toolCallId || !next.parentMessageId || next.toolCallId === current.toolCallId) {
+      await rejectOtherPending();
+      // The run ended without re-parking (/stop, or a step that was not accepted).
+      // Finalize so a restart does not execute the calls that are still pending.
+      return finish(snapshot);
+    }
+    await rejectOtherPending();
+    // Reject and timeout already refused the other rows. A second
+    // rejected_continue would run only after the model had answered.
+    if (singleResume) return finish(snapshot);
+    current = { args: {}, parentMessageId: next.parentMessageId, toolCallId: next.toolCallId };
   }
 
-  const finalized: DingTalkPendingApproval = { ...record, decision };
-  try {
-    await updateCardStatus(finalized, labelKeyFor(decision));
-  } catch (error) {
-    log('confirm card update failed after resume outTrackId=%s: %O', record.outTrackId, error);
+  return finish(snapshot);
+};
+
+const firstPendingCall = async (
+  record: DingTalkPendingApproval,
+): Promise<ApprovalCall | undefined> => {
+  for (const call of allCalls(record)) {
+    const status = await pluginStatus(record, call.parentMessageId);
+    if (status === 'pending') return call;
   }
-  await finalizeDingTalkPendingApproval(finalized);
-  return true;
+  return undefined;
+};
+
+/**
+ * @returns whether the resume was accepted. Already-decided rows are skipped.
+ * When nothing is still pending the card is patched and the record finalized.
+ */
+const finishClaimed = async (record: DingTalkPendingApproval): Promise<boolean> => {
+  const start = await firstPendingCall(record);
+  if (!start) {
+    const decision = decisionOf(record);
+    if (isLegacyApprovalRecord(record)) {
+      const reason =
+        decision === 'expired' ? DINGTALK_CONFIRM_TIMEOUT_REASON : LEGACY_SIBLING_SKIP_REASON;
+      await rejectLegacySiblings(record, reason);
+    }
+    await patchCardOnce(record, decision);
+    await finalizeDingTalkPendingApproval({ ...record, decision });
+    return true;
+  }
+  return driveBatch(record, start);
 };
 
 export const expireDingTalkApproval = async (outTrackId: string): Promise<void> => {
@@ -557,6 +801,23 @@ const loadDingTalkToolPreview = async (
     };
   }
 
+  if (identifier === DingtalkDocsIdentifier) {
+    const { previewDingtalkDocsWrite } =
+      await import('@/server/enterprise/services/dingtalkDocs/tool');
+    const preview = await previewDingtalkDocsWrite(
+      db,
+      userId,
+      apiName as Parameters<typeof previewDingtalkDocsWrite>[2],
+      args,
+    );
+    return {
+      danger: preview.danger,
+      lines: preview.lines.map((line) => ({ value: line })),
+      title: preview.title,
+      warnings: preview.warnings,
+    };
+  }
+
   const [
     { DingtalkTodoService, isTodoWriteApiName },
     { DingtalkCalendarService, isCalendarWriteApiName },
@@ -573,6 +834,55 @@ const loadDingTalkToolPreview = async (
   throw new DingtalkWorkspaceError('DINGTALK_INVALID');
 };
 
+interface BuiltinToolTitle {
+  identifier?: string;
+  manifest?: { meta?: { title?: string } };
+  title?: string;
+}
+
+let builtinToolTitles: Promise<Map<string, string>> | undefined;
+
+const manifestTitleFor = (identifier?: string): Promise<string | undefined> => {
+  if (!identifier) return Promise.resolve(undefined);
+  if (!builtinToolTitles) {
+    builtinToolTitles = import('@lobechat/builtin-tools')
+      .then((mod) => {
+        const tools = (mod as { builtinTools?: BuiltinToolTitle[] }).builtinTools ?? [];
+        const map = new Map<string, string>();
+        for (const tool of tools) {
+          const title = tool.title ?? tool.manifest?.meta?.title;
+          if (tool.identifier && typeof title === 'string' && title.trim()) {
+            map.set(tool.identifier, title.trim());
+          }
+        }
+        return map;
+      })
+      .catch((error: unknown) => {
+        log('builtin manifest title lookup failed: %O', error);
+        return new Map<string, string>();
+      });
+  }
+  return builtinToolTitles.then((map) => map.get(identifier));
+};
+
+const isDingTalkWriteTool = (identifier?: string): boolean =>
+  identifier === DINGTALK_APPROVAL_TOOL_IDENTIFIER ||
+  identifier === DINGTALK_PERSONAL_TOOL_IDENTIFIER ||
+  identifier === DINGTALK_WORKSPACE_TOOL_IDENTIFIER ||
+  identifier === DingtalkDocsIdentifier;
+
+const attachManifestTitle = async (call: ApprovalCall): Promise<ApprovalCall> => {
+  if (
+    isDingTalkWriteTool(call.identifier) ||
+    hasDingTalkApiLabel(call.apiName) ||
+    call.manifestTitle
+  ) {
+    return call;
+  }
+  const manifestTitle = await manifestTitleFor(call.identifier);
+  return manifestTitle ? { ...call, manifestTitle } : call;
+};
+
 const renderDingTalkConfirmCard = async (
   tool: ApprovalCall,
   userId: string,
@@ -582,7 +892,8 @@ const renderDingTalkConfirmCard = async (
   if (
     identifier !== DINGTALK_APPROVAL_TOOL_IDENTIFIER &&
     identifier !== DINGTALK_PERSONAL_TOOL_IDENTIFIER &&
-    identifier !== DINGTALK_WORKSPACE_TOOL_IDENTIFIER
+    identifier !== DINGTALK_WORKSPACE_TOOL_IDENTIFIER &&
+    identifier !== DingtalkDocsIdentifier
   ) {
     return formatDingTalkConfirmSummary(tool);
   }
@@ -604,14 +915,101 @@ const renderDingTalkConfirmCard = async (
       code,
       error,
     );
-    const note = formatDingTalkPreviewUnavailable(code, link);
+    const detail = dingTalkInvalidPreviewDetail(error, code);
+    const note = formatDingTalkPreviewUnavailable(code, link, detail);
     return {
       allowApprove: false,
-      content: `无法解析操作对象（${code}）`,
+      content: detail ?? `无法解析操作对象（${code}）`,
       note,
+      ...(detail ? { refusalReason: detail } : {}),
       title: formatDingTalkConfirmSummary(tool).title,
     };
   }
+};
+
+/** Preview every parked call (at most {@link DINGTALK_CONFIRM_BATCH_CAP}), sequentially. */
+const renderTurnCard = async (
+  calls: ApprovalCall[],
+  userId: string,
+  link: string,
+): Promise<DingTalkRenderedConfirm> => {
+  if (calls.length > DINGTALK_CONFIRM_BATCH_CAP) {
+    return formatDingTalkOversizedBatch(calls, link);
+  }
+  const rendered: DingTalkRenderedConfirm[] = [];
+  for (const call of calls) {
+    rendered.push(await renderDingTalkConfirmCard(await attachManifestTitle(call), userId, link));
+  }
+  const first = rendered[0];
+  if (rendered.length <= 1 && first) return first;
+  const refused = rendered.find((item) => item.refusalReason);
+  const failed = refused ?? rendered.find((item) => item.allowApprove === false);
+  return {
+    content: formatDingTalkAggregateBody(rendered),
+    title: formatDingTalkAggregateTitle(calls, first?.title ?? '确认操作'),
+    ...(refused?.refusalReason ? { refusalReason: refused.refusalReason } : {}),
+    ...(failed ? { allowApprove: false, note: failed.note } : {}),
+  };
+};
+
+/** Same tool call and the same tool message. A reused id with a new parent is a new card. */
+const decisionCoversCall = (record: DingTalkPendingApproval, call: ApprovalCall): boolean => {
+  const decided = record.decidedCallIds ?? [];
+  if (!decided.includes(call.toolCallId)) return false;
+  if (record.calls && record.calls.length > 0) {
+    const stored = record.calls.find((item) => item.toolCallId === call.toolCallId);
+    return !!stored && stored.parentMessageId === call.parentMessageId;
+  }
+  return call.toolCallId === record.toolCallId && call.parentMessageId === record.parentMessageId;
+};
+
+/**
+ * A re-park of a turn that was already decided. Approve resumes the next
+ * call and does not send a card. Reject or timeout drops any still-pending
+ * rows with the same reason and does not send a card.
+ */
+const matchCoveredBatch = async (
+  threadId: string,
+  calls: ApprovalCall[],
+): Promise<{ kind: 'card' } | { kind: 'resume'; outcome: DingTalkWaitingOutcome | undefined }> => {
+  const record = await loadDingTalkPendingApprovalByThread(threadId);
+  if (!record || record.status === 'pending' || !record.decision) return { kind: 'card' };
+  if (
+    record.decision !== 'approved' &&
+    record.decision !== 'rejected' &&
+    record.decision !== 'expired'
+  ) {
+    return { kind: 'card' };
+  }
+  const decided = record.decidedCallIds ?? [];
+  if (decided.length === 0 || !calls.every((call) => decisionCoversCall(record, call))) {
+    return { kind: 'card' };
+  }
+  if (record.decision === 'approved') {
+    const next = calls.find((call) => call.toolCallId !== record.lastResumedToolCallId);
+    if (!next) return { kind: 'resume', outcome: undefined };
+    return {
+      kind: 'resume',
+      outcome: {
+        resumeApproval: {
+          decision: 'approved',
+          parentMessageId: next.parentMessageId,
+          toolCallId: next.toolCallId,
+        },
+      },
+    };
+  }
+  await rejectMessages(
+    record.userId,
+    record.workspaceId,
+    calls,
+    rejectionReasonFor(record.decision),
+  );
+  const last = calls.at(-1);
+  return {
+    kind: 'resume',
+    outcome: last ? { resumeHistory: { parentMessageId: last.parentMessageId } } : undefined,
+  };
 };
 
 export const forwardDingTalkWaitingHuman = async (
@@ -624,6 +1022,9 @@ export const forwardDingTalkWaitingHuman = async (
     await forwardDingTalkWaitingQuestion(threadId, event);
     return undefined;
   }
+
+  const covered = await matchCoveredBatch(threadId, calls);
+  if (covered.kind === 'resume') return covered.outcome;
 
   const primary = calls[0];
   if (!primary) return undefined;
@@ -649,7 +1050,7 @@ export const forwardDingTalkWaitingHuman = async (
   if (!config?.robotCode) return failClosed();
 
   // Preview hits DingTalk. Run it only when a card will be sent, and only here.
-  const summary = await renderDingTalkConfirmCard(primary, ctx.userId, link);
+  const summary = await renderTurnCard(calls, ctx.userId, link);
   const fitted = fitDingTalkConfirmCardContent(summary.content, link);
   const allowApprove = summary.allowApprove === false ? false : fitted.allowApprove;
   const note =
@@ -664,6 +1065,11 @@ export const forwardDingTalkWaitingHuman = async (
     approveOnCard: allowApprove,
     askerStaffId: staffId,
     botContext: botContextFromState(event, threadId, staffId),
+    calls: calls.map((item) => ({
+      apiName: item.apiName,
+      parentMessageId: item.parentMessageId,
+      toolCallId: item.toolCallId,
+    })),
     cardContent: fitted.content,
     cardTitle: summary.title,
     conversationId: decoded.conversationId,
@@ -686,11 +1092,16 @@ export const forwardDingTalkWaitingHuman = async (
     workspaceId: ctx.workspaceId,
   };
 
-  const saved = await saveDingTalkPendingApproval(record);
-  if (!saved) return failClosed();
+  const saved = await saveDingTalkPendingApproval(record, { threadIndex: 'claim' });
+  if (!saved) {
+    if (summary.refusalReason) {
+      return refusedPreviewOutcome(ctx.userId, ctx.workspaceId, calls, summary.refusalReason);
+    }
+    return failClosed();
+  }
 
   try {
-    const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+    const api = apiForConfig(config);
     await sendDingTalkStreamConfirmCard(api, {
       card: {
         allowApprove,
@@ -714,6 +1125,15 @@ export const forwardDingTalkWaitingHuman = async (
       threadId,
       error instanceof DingTalkCardUnavailableError ? error.message : String(error),
     );
+    if (summary.refusalReason) {
+      return refusedPreviewOutcome(
+        ctx.userId,
+        ctx.workspaceId,
+        calls,
+        summary.refusalReason,
+        outTrackId,
+      );
+    }
     await sealDingTalkPendingApproval(outTrackId, 'expired', record.expiresAt + 1);
     return failClosed();
   }
@@ -724,21 +1144,109 @@ export const forwardDingTalkWaitingHuman = async (
     conversationType: record.conversationType,
     threadId,
   });
+  if (summary.refusalReason) {
+    return refusedPreviewOutcome(
+      ctx.userId,
+      ctx.workspaceId,
+      calls,
+      summary.refusalReason,
+      outTrackId,
+    );
+  }
   armExpiry(outTrackId, DINGTALK_CONFIRM_TIMEOUT_MS);
   return undefined;
 };
 
+const patchCardOnce = async (
+  record: DingTalkPendingApproval,
+  decision: DingTalkApprovalDecision,
+): Promise<void> => {
+  if (record.cardPatched) return;
+  try {
+    await updateCardStatus({ ...record, decision }, labelKeyFor(decision));
+  } catch (error) {
+    log('reconcile card update failed outTrackId=%s: %O', record.outTrackId, error);
+  }
+};
+
+/** A stale in-progress batch must not stay on 「执行中」. */
+const patchInterruptedCard = async (record: DingTalkPendingApproval): Promise<void> => {
+  const config = await getMessengerDingTalkConfig();
+  if (!config) return;
+  try {
+    const api = apiForConfig(config);
+    await updateDingTalkConfirmCard(api, record.outTrackId, {
+      status: 'reject',
+      statusText: INTERRUPTED_STATUS_TEXT,
+    });
+  } catch (error) {
+    log('interrupt card update failed outTrackId=%s: %O', record.outTrackId, error);
+  }
+};
+
+const interruptStaleBatch = async (
+  record: DingTalkPendingApproval,
+  pending: ApprovalCall[],
+): Promise<void> => {
+  const siblings = legacySiblingCalls(record);
+  const extra: ApprovalCall[] = [];
+  for (const sibling of siblings) {
+    if (pending.some((call) => call.toolCallId === sibling.toolCallId)) continue;
+    const status = await pluginStatus(record, sibling.parentMessageId);
+    if (status === 'pending') extra.push(sibling);
+  }
+  const rows = [...pending, ...extra];
+  if (rows.length > 0) {
+    await rejectMessages(record.userId, record.workspaceId, rows, INTERRUPTED_STATUS_TEXT);
+  }
+  await patchInterruptedCard(record);
+  const decision = record.decision ?? 'rejected';
+  await finalizeDingTalkPendingApproval({ ...record, decision });
+};
+
 /**
- * A crash between claim and resume leaves `resuming`. If the tool row is
- * still pending, put the card back (or reject it once the window has passed).
- * If the row is already resolved, only update the card.
+ * A crash between claim and resume leaves `resuming`. If nothing in the
+ * batch has left `pending`, put the card back (or reject it once the window
+ * has passed). An approved batch that already started resumes the next
+ * pending call only while `resumingAt` is within 10 minutes. Older batches
+ * are rejected as 已中断，未执行 so a restart does not run them a day later.
  */
 const reconcileResumingApproval = async (record: DingTalkPendingApproval): Promise<void> => {
+  const calls = allCalls(record);
   const db = await getServerDB();
   const model = new MessageModel(db, record.userId, record.workspaceId);
-  const plugin = await model.findMessagePlugin(record.parentMessageId);
-  const interventionStatus = plugin?.intervention?.status;
-  if (interventionStatus === 'pending') {
+  const statuses: Array<string | undefined> = [];
+  for (const call of calls) {
+    const plugin = await model.findMessagePlugin(call.parentMessageId);
+    statuses.push(plugin?.intervention?.status);
+  }
+  const nextPending = statuses.indexOf('pending');
+
+  if (record.decision === 'approved' && nextPending > 0) {
+    if (!resumeIsRecent(record)) {
+      const pending = calls.filter((_, index) => statuses[index] === 'pending');
+      await interruptStaleBatch(record, pending);
+      return;
+    }
+    const next = calls[nextPending];
+    if (next) await driveBatch(record, next);
+    return;
+  }
+
+  if (nextPending > 0 && record.decision && record.decision !== 'approved') {
+    const pending = calls.filter((_, index) => statuses[index] === 'pending');
+    await rejectMessages(
+      record.userId,
+      record.workspaceId,
+      pending,
+      rejectionReasonFor(record.decision),
+    );
+    await patchCardOnce(record, record.decision);
+    await finalizeDingTalkPendingApproval({ ...record, decision: record.decision });
+    return;
+  }
+
+  if (nextPending === 0) {
     if (record.expiresAt <= Date.now()) {
       await finishClaimed({ ...record, decision: 'expired', status: 'resuming' });
       return;
@@ -750,16 +1258,23 @@ const reconcileResumingApproval = async (record: DingTalkPendingApproval): Promi
 
   let decision: DingTalkApprovalDecision = record.decision ?? 'expired';
   if (!record.decision) {
-    if (interventionStatus === 'approved') decision = 'approved';
-    else if (interventionStatus === 'rejected') decision = 'rejected';
+    if (statuses[0] === 'approved') decision = 'approved';
+    else if (statuses[0] === 'rejected') decision = 'rejected';
   }
-  const finalized: DingTalkPendingApproval = { ...record, decision, status: 'resuming' };
-  try {
-    await updateCardStatus(finalized, labelKeyFor(decision));
-  } catch (error) {
-    log('reconcile card update failed outTrackId=%s: %O', record.outTrackId, error);
+  if (isLegacyApprovalRecord(record)) {
+    const pendingSiblings: ApprovalCall[] = [];
+    for (const sibling of legacySiblingCalls(record)) {
+      const status = await pluginStatus(record, sibling.parentMessageId);
+      if (status === 'pending') pendingSiblings.push(sibling);
+    }
+    if (pendingSiblings.length > 0) {
+      const reason =
+        decision === 'expired' ? DINGTALK_CONFIRM_TIMEOUT_REASON : LEGACY_SIBLING_SKIP_REASON;
+      await rejectMessages(record.userId, record.workspaceId, pendingSiblings, reason);
+    }
   }
-  await finalizeDingTalkPendingApproval(finalized);
+  await patchCardOnce(record, decision);
+  await finalizeDingTalkPendingApproval({ ...record, decision, status: 'resuming' });
 };
 
 /** Re-arm timers for pending cards after a process restart. Not a DingTalk poll. */

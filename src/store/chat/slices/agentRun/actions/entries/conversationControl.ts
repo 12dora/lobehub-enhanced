@@ -1544,6 +1544,99 @@ export class ConversationControlActionImpl {
       });
     }
   };
+
+  /**
+   * Reject every pending approval parked by one assistant turn and resume the
+   * run **exactly once**.
+   *
+   * Rejecting the rows one by one would resume the run once per row: client-mode
+   * `rejectAndContinueToolCalling` starts a local `user_input` run each time, and
+   * every Gateway reject (`rejectToolCalling` included) is a `rejected_continue`
+   * resume op that the server always answers with an LLM turn — `execAgent`
+   * rebuilds the run from the DB and does not wait for pending siblings (only the
+   * in-place `HumanInterventionHandler` path does). So every row but the last is
+   * closed WITHOUT a resume, and only the last one continues:
+   *
+   * - client runtime → `rejectToolCalling` (local persist, no run);
+   * - Gateway → `cancelToolInteraction` (the server's single-winner CAS, no
+   *   resume op). Its reason becomes the tool result the model reads, so callers
+   *   pass a model-facing sentence as `cancelReason`, not UI copy.
+   *
+   * Stops at the first row that could not be closed (lost race, error) and then
+   * does not resume at all: a partial batch never answers the model, and the rows
+   * left pending stay on screen for the user.
+   *
+   * `resume: false` closes every row without a resume — for when the same turn
+   * still parks calls outside this batch: the run then continues (once) when the
+   * user decides the last of those.
+   */
+  rejectAllToolCallings = async (
+    toolMessageIds: string[],
+    options: {
+      /** Gateway only: model-facing tool result for rows closed without their own resume. */
+      cancelReason: string;
+      context?: ConversationContext;
+      /** Called after each closed row with the running count. */
+      onProgress?: (rejected: number, total: number) => void;
+      /** Optional user reason, same as a single reject. */
+      reason?: string;
+      /** Resume the run from the last row (default). */
+      resume?: boolean;
+    },
+  ): Promise<{ rejected: number; resumed: boolean; total: number }> => {
+    const { cancelReason, onProgress, reason, resume = true } = options;
+
+    const effectiveContext: ConversationContext = options.context ?? {
+      agentId: this.#get().activeAgentId,
+      topicId: this.#get().activeTopicId,
+      threadId: this.#get().activeThreadId,
+    };
+
+    const getStatus = (id: string) =>
+      dbMessageSelectors.getDbMessageById(id)(this.#get())?.pluginIntervention?.status;
+
+    const ids = [...new Set(toolMessageIds)].filter((id) => getStatus(id) === 'pending');
+    const total = ids.length;
+    if (total === 0) return { rejected: 0, resumed: false, total };
+
+    const useGatewayResume = this.#shouldUseGatewayResume(effectiveContext);
+    const lastId = ids.at(-1)!;
+    let rejected = 0;
+
+    for (const id of resume ? ids.slice(0, -1) : ids) {
+      try {
+        if (useGatewayResume) {
+          await this.#get().cancelToolInteraction(id, cancelReason, effectiveContext);
+        } else {
+          await this.#get().rejectToolCalling(id, reason, effectiveContext);
+        }
+      } catch (error) {
+        console.error('[rejectAllToolCallings] failed to reject tool message:', id, error);
+        return { rejected, resumed: false, total };
+      }
+
+      // Lost the race (decided elsewhere) or the write was refused: keep the rest
+      // pending and do not resume on a partial batch.
+      if (getStatus(id) !== 'rejected') return { rejected, resumed: false, total };
+
+      rejected += 1;
+      onProgress?.(rejected, total);
+    }
+
+    if (!resume) return { rejected, resumed: false, total };
+
+    try {
+      await this.#get().rejectAndContinueToolCalling(lastId, reason, effectiveContext);
+    } catch (error) {
+      console.error('[rejectAllToolCallings] failed to reject and continue:', lastId, error);
+      return { rejected, resumed: false, total };
+    }
+
+    rejected += 1;
+    onProgress?.(rejected, total);
+
+    return { rejected, resumed: true, total };
+  };
 }
 
 export type ConversationControlAction = Pick<

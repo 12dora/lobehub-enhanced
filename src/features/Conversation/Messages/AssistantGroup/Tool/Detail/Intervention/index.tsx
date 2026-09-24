@@ -1,7 +1,7 @@
 import { getBuiltinIntervention } from '@lobechat/builtin-tools/interventions';
 import { safeParseJSON } from '@lobechat/utils';
 import { Flexbox } from '@lobehub/ui';
-import { memo, Suspense, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { useUserStore } from '@/store/user';
@@ -10,6 +10,11 @@ import { toolInterventionSelectors } from '@/store/user/selectors';
 import { dataSelectors, useConversationStore } from '../../../../../store';
 import Arguments from '../Arguments';
 import ApprovalActions from './ApprovalActions';
+import {
+  type BeforeApproveCheckOptions,
+  markInterventionMounted,
+  registerBeforeApproveCheck,
+} from './beforeApproveRegistry';
 import {
   isCustomInteractionIdentifier,
   isHeteroInteractionIdentifier,
@@ -42,16 +47,24 @@ const Intervention = memo<InterventionProps>(
     // Use Map with id as key for reliable cleanup
     const beforeApproveCallbacksRef = useRef<Map<string, () => void | Promise<void>>>(new Map());
 
-    // Register a callback to be called before approval
+    // Register a callback to be called before approval. Also mirrored into the
+    // shared registry (keyed by tool message id) so "approve all" runs the same
+    // check for this call; the card's own approve keeps using the local map.
     const registerBeforeApprove = useCallback(
-      (callbackId: string, callback: () => void | Promise<void>) => {
+      (
+        callbackId: string,
+        callback: () => void | Promise<void>,
+        options?: BeforeApproveCheckOptions,
+      ) => {
         beforeApproveCallbacksRef.current.set(callbackId, callback);
+        const unregisterShared = registerBeforeApproveCheck(id, callbackId, callback, options);
         // Return cleanup function to unregister
         return () => {
           beforeApproveCallbacksRef.current.delete(callbackId);
+          unregisterShared();
         };
       },
-      [],
+      [id],
     );
 
     // Handler to be called before approve action - calls all registered callbacks
@@ -94,6 +107,14 @@ const Intervention = memo<InterventionProps>(
     const parsedArgs = useMemo(() => safeParseJSON(requestArgs || '') ?? {}, [requestArgs]);
 
     const isCustomInteraction = isCustomInteractionIdentifier(identifier, apiName);
+
+    const BuiltinToolInterventionRender = getBuiltinIntervention(identifier, apiName);
+
+    // An approve / reject body is on screen (not the args editor, not a custom
+    // interaction). Runs after the card's own effects, so the checks it registers
+    // on mount are already in the shared registry.
+    const isApprovable = BuiltinToolInterventionRender ? !isEditing && !isCustomInteraction : true;
+    useEffect(() => (isApprovable ? markInterventionMounted(id) : undefined), [id, isApprovable]);
 
     const topicId = useConversationStore((s) => dataSelectors.getDbMessageById(id)(s)?.topicId);
     const submitToolInteraction = useConversationStore((s) => s.submitToolInteraction);
@@ -170,8 +191,6 @@ const Intervention = memo<InterventionProps>(
         topicId,
       ],
     );
-
-    const BuiltinToolInterventionRender = getBuiltinIntervention(identifier, apiName);
 
     if (BuiltinToolInterventionRender) {
       if (isEditing)

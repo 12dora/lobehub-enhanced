@@ -11,6 +11,34 @@ export const styles = createStaticStyles(({ css, cssVar }) => ({
       display: none;
     }
   `,
+  batchActions: css`
+    display: flex;
+    flex: none;
+    gap: 8px;
+    align-items: center;
+  `,
+  batchHeader: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+    justify-content: space-between;
+
+    padding-block: 6px;
+    padding-inline: 10px;
+    border-block-end: 1px solid ${cssVar.colorBorderSecondary};
+  `,
+  batchTitle: css`
+    overflow: hidden;
+
+    min-width: 0;
+
+    font-size: 13px;
+    font-weight: 500;
+    color: ${cssVar.colorText};
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  `,
   container: css`
     margin-block-end: 12px;
   `,

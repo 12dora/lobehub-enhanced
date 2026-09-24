@@ -6,10 +6,16 @@ vi.mock('@/envs/app', () => ({
 
 const {
   buildDingTalkTopicDeepLink,
+  dingTalkInvalidPreviewDetail,
+  formatDingTalkAggregateBody,
+  formatDingTalkAggregateTitle,
   formatDingTalkCardSendFailedContent,
   formatDingTalkConfirmSummary,
+  formatDingTalkCountTitle,
+  formatDingTalkOversizedBatch,
   formatDingTalkPreviewCard,
   formatDingTalkPreviewUnavailable,
+  sanitizeDingTalkPreviewDetail,
 } = await import('./confirmSummary');
 
 describe('formatDingTalkConfirmSummary', () => {
@@ -245,6 +251,56 @@ describe('formatDingTalkPreviewUnavailable', () => {
     expect(formatDingTalkPreviewUnavailable('  ', '')).toBe(
       '无法解析操作对象（UNKNOWN），请到网页端确认：当前话题',
     );
+    expect(
+      formatDingTalkPreviewUnavailable(
+        'DINGTALK_PERSONAL_INVALID_ARGS',
+        link,
+        '内容过大（约 80 KB），请分成多次写入',
+      ),
+    ).toBe(`内容过大（约 80 KB），请分成多次写入，请到网页端确认：${link}`);
+  });
+});
+
+describe('dingTalkInvalidPreviewDetail', () => {
+  it('strips the invalid-args prefix and caps the message at 150 characters', () => {
+    const long = `字段「金额」不在该数据表中${'啊'.repeat(200)}`;
+    expect(
+      sanitizeDingTalkPreviewDetail(`参数无效（DINGTALK_PERSONAL_INVALID_ARGS）：${long}`),
+    ).toBe(long.slice(0, 150));
+    expect(sanitizeDingTalkPreviewDetail('参数无效（DINGTALK_INVALID）：无法确认文档标题')).toBe(
+      '无法确认文档标题',
+    );
+    expect(sanitizeDingTalkPreviewDetail('  参数无效（VALIDATION）：审批任务不能重复。  ')).toBe(
+      '审批任务不能重复。',
+    );
+    expect(
+      sanitizeDingTalkPreviewDetail('参数无效（DINGTALK_INVALID）：token=abc'),
+    ).toBeUndefined();
+  });
+
+  it('keeps details.message only for an invalid-args code', () => {
+    const error = {
+      code: 'DINGTALK_PERSONAL_INVALID_ARGS',
+      details: {
+        message: '参数无效（DINGTALK_PERSONAL_INVALID_ARGS）：内容过大（约 80 KB），请分成多次写入',
+      },
+    };
+    expect(dingTalkInvalidPreviewDetail(error, 'DINGTALK_PERSONAL_INVALID_ARGS')).toBe(
+      '内容过大（约 80 KB），请分成多次写入',
+    );
+    expect(dingTalkInvalidPreviewDetail(error, 'DINGTALK_NOT_FOUND')).toBeUndefined();
+    expect(
+      dingTalkInvalidPreviewDetail(
+        { code: 'DINGTALK_INVALID', details: { message: '字段「状态」不在该数据表中' } },
+        'DINGTALK_INVALID',
+      ),
+    ).toBe('字段「状态」不在该数据表中');
+    expect(
+      dingTalkInvalidPreviewDetail(
+        { code: 'VALIDATION', details: { message: '无法确认文档标题，不能发起确认' } },
+        'VALIDATION',
+      ),
+    ).toBe('无法确认文档标题，不能发起确认');
   });
 });
 
@@ -259,5 +315,171 @@ describe('formatDingTalkCardSendFailedContent', () => {
         encodeURIComponent('/agent/agt_1/topic_1'),
     );
     expect(text).not.toContain('Blocked by security/privacy');
+  });
+});
+
+describe('DingTalk confirm labels', () => {
+  it('uses Chinese labels and never the raw api name', () => {
+    expect(formatDingTalkConfirmSummary({ apiName: 'submitReport', args: {} }).title).toBe(
+      '提交日志',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'completeTodos', args: {} }).title).toBe(
+      '批量完成待办',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'deleteTodos', args: {} }).title).toBe(
+      '批量删除待办',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'appendDoc', args: {} }).title).toBe(
+      '追加文档内容',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'createDoc', args: {} }).title).toBe('新建文档');
+    expect(formatDingTalkConfirmSummary({ apiName: 'appendSheetRows', args: {} }).title).toBe(
+      '向表格追加行',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'createAitableRecords', args: {} }).title).toBe(
+      '新增 AI 表格记录',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'updateAitableRecords', args: {} }).title).toBe(
+      '修改 AI 表格记录',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'approveTasks', args: {} }).title).toBe(
+      '批量同意审批',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'refuseTasks', args: {} }).title).toBe(
+      '批量拒绝审批',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'installPlugin', args: {} }).title).toBe(
+      '安装技能',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'showAgentMarketplace', args: {} }).title).toBe(
+      '打开助手市场',
+    );
+    expect(formatDingTalkConfirmSummary({ apiName: 'saveUserQuestion', args: {} }).title).toBe(
+      '保存助手设置',
+    );
+
+    const unknown = formatDingTalkConfirmSummary({
+      apiName: 'customTool',
+      args: { name: '甲' },
+    });
+    expect(unknown.title).toBe('确认操作');
+    expect(unknown.content).not.toContain('customTool');
+    expect(unknown.content).toContain('甲');
+
+    const titled = formatDingTalkConfirmSummary({
+      apiName: 'customTool',
+      args: {},
+      manifestTitle: '群组助手',
+    });
+    expect(titled.title).toBe('执行「群组助手」操作');
+    expect(titled.content).not.toContain('customTool');
+  });
+
+  it('builds a count title for the same api and a mixed title otherwise', () => {
+    expect(formatDingTalkCountTitle('completeTodo', 3)).toBe('完成 3 项待办');
+    expect(formatDingTalkCountTitle('completeTodos', 3)).toBe('完成 3 项待办');
+    expect(formatDingTalkCountTitle('deleteTodos', 2)).toBe('删除 2 项待办');
+    expect(formatDingTalkCountTitle('approveTasks', 4)).toBe('同意 4 项审批');
+    expect(formatDingTalkCountTitle('refuseTasks', 2)).toBe('拒绝 2 项审批');
+    expect(formatDingTalkCountTitle('appendDoc', 2)).toBe('追加 2 项文档内容');
+    expect(formatDingTalkCountTitle('createDoc', 2)).toBe('新建 2 项文档');
+    expect(formatDingTalkCountTitle('appendSheetRows', 15)).toBe('追加 15 行表格数据');
+    expect(formatDingTalkCountTitle('createAitableRecords', 8)).toBe('新增 8 条 AI 表格记录');
+    expect(formatDingTalkCountTitle('updateAitableRecords', 3)).toBe('修改 3 条 AI 表格记录');
+    expect(formatDingTalkAggregateTitle([{ apiName: 'completeTodo' }], '完成待办「甲」')).toBe(
+      '完成待办「甲」',
+    );
+    expect(
+      formatDingTalkAggregateTitle(
+        [{ apiName: 'completeTodo' }, { apiName: 'completeTodo' }, { apiName: 'completeTodo' }],
+        'x',
+      ),
+    ).toBe('完成 3 项待办');
+    expect(
+      formatDingTalkAggregateTitle([{ apiName: 'completeTodo' }, { apiName: 'deleteTodo' }], 'x'),
+    ).toBe('确认 2 项操作');
+    expect(
+      formatDingTalkAggregateTitle([{ apiName: 'customTool' }, { apiName: 'customTool' }], 'x'),
+    ).toBe('确认 2 项操作');
+    expect(
+      formatDingTalkAggregateTitle(
+        [
+          { apiName: 'completeTodos', args: { taskIds: ['a', 'b', 'c'] } },
+          { apiName: 'completeTodos', args: { taskIds: ['d', 'e'] } },
+        ],
+        'x',
+      ),
+    ).toBe('完成 5 项待办');
+    expect(
+      formatDingTalkAggregateTitle(
+        [
+          { apiName: 'approveTasks', args: { tasks: [{ taskId: '1' }, { taskId: '2' }] } },
+          { apiName: 'approveTasks', args: { tasks: [{ taskId: '3' }] } },
+        ],
+        'x',
+      ),
+    ).toBe('同意 3 项审批');
+    expect(
+      formatDingTalkAggregateTitle([{ apiName: 'appendDoc' }, { apiName: 'appendDoc' }], 'x'),
+    ).toBe('追加 2 项文档内容');
+    expect(
+      formatDingTalkAggregateTitle(
+        [
+          { apiName: 'appendSheetRows', args: { rows: Array.from({ length: 10 }, () => []) } },
+          { apiName: 'appendSheetRows', args: { rows: Array.from({ length: 5 }, () => []) } },
+        ],
+        'x',
+      ),
+    ).toBe('追加 15 行表格数据');
+    expect(
+      formatDingTalkAggregateTitle(
+        [
+          { apiName: 'createAitableRecords', args: { records: [{}, {}] } },
+          { apiName: 'createAitableRecords', args: { records: [{}, {}, {}, {}, {}, {}] } },
+        ],
+        'x',
+      ),
+    ).toBe('新增 8 条 AI 表格记录');
+    expect(
+      formatDingTalkAggregateTitle(
+        [
+          { apiName: 'updateAitableRecords', args: { records: [{}] } },
+          { apiName: 'updateAitableRecords', args: { records: [{}, {}] } },
+        ],
+        'x',
+      ),
+    ).toBe('修改 3 条 AI 表格记录');
+  });
+
+  it('lists every preview line and warning under each number', () => {
+    const body = formatDingTalkAggregateBody([
+      {
+        content: ['⚠️ 高风险操作', '审批单：付款', '⚠️ 拒绝后该审批单将结束。'].join('\n'),
+        title: '拒绝「付款」',
+      },
+      {
+        content: ['待办：甲', '⚠️ 完成后该待办会标记为已完成。'].join('\n'),
+        title: '完成待办',
+      },
+    ]);
+    expect(body).toBe(
+      [
+        '1. 拒绝「付款」 — ⚠️ 高风险操作',
+        '   审批单：付款',
+        '   ⚠️ 拒绝后该审批单将结束。',
+        '2. 完成待办 — 待办：甲',
+        '   ⚠️ 完成后该待办会标记为已完成。',
+      ].join('\n'),
+    );
+  });
+
+  it('describes an oversized turn without an api name', () => {
+    const names = Array.from({ length: 21 }, () => ({ apiName: 'completeTodo' }));
+    const card = formatDingTalkOversizedBatch(names, 'https://chat.example.com/t');
+    expect(card.allowApprove).toBe(false);
+    expect(card.title).toBe('完成 21 项待办');
+    expect(card.content).toBe('共 21 项操作，请到网页端确认。');
+    expect(card.note).toContain('内容较长，完整内容请在网页端确认：');
+    expect(card.content).not.toContain('completeTodo');
   });
 });

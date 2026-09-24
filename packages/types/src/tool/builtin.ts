@@ -466,9 +466,17 @@ export interface BuiltinInterventionProps<Arguments = any> {
    * before the approve action proceeds
    * @param id - Unique identifier for the callback (for reliable cleanup)
    * @param callback - The callback to execute before approval
+   * @param options - `pending: true` while the check would refuse only because the
+   *   card's data is still loading (e.g. a confirm card waiting for its preview), so
+   *   "approve all" waits for the card to re-register instead of running the check.
+   *   Register again with the new value when it flips.
    * @returns Cleanup function to unregister the callback
    */
-  registerBeforeApprove?: (id: string, callback: () => void | Promise<void>) => () => void;
+  registerBeforeApprove?: (
+    id: string,
+    callback: () => void | Promise<void>,
+    options?: { pending?: boolean },
+  ) => () => void;
 }
 
 export type BuiltinIntervention = (props: BuiltinInterventionProps) => ReactNode;

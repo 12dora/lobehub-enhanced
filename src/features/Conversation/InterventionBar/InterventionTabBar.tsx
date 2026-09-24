@@ -2,7 +2,26 @@ import { cx } from 'antd-style';
 import { memo } from 'react';
 
 import { type PendingIntervention } from '../store/slices/data/pendingInterventions';
+import { useInterventionLabel } from './interventionLabel';
 import { styles } from './style';
+
+interface InterventionTabProps {
+  active: boolean;
+  item: PendingIntervention;
+  onSelect: () => void;
+}
+
+const InterventionTab = memo<InterventionTabProps>(({ active, item, onSelect }) => {
+  const label = useInterventionLabel(item.identifier, item.apiName);
+
+  return (
+    <div className={cx(styles.tab, active && styles.tabActive)} title={label} onClick={onSelect}>
+      🔧 {label}
+    </div>
+  );
+});
+
+InterventionTab.displayName = 'InterventionTab';
 
 interface InterventionTabBarProps {
   activeIndex: number;
@@ -15,13 +34,12 @@ const InterventionTabBar = memo<InterventionTabBarProps>(
     return (
       <div className={styles.tabBar}>
         {interventions.map((item, index) => (
-          <div
-            className={cx(styles.tab, index === activeIndex && styles.tabActive)}
+          <InterventionTab
+            active={index === activeIndex}
+            item={item}
             key={item.toolCallId}
-            onClick={() => onTabChange(index)}
-          >
-            🔧 {item.apiName}
-          </div>
+            onSelect={() => onTabChange(index)}
+          />
         ))}
         <div className={styles.tabCounter}>
           {activeIndex + 1} / {interventions.length}

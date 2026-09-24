@@ -24,6 +24,7 @@ const {
   claimDingTalkApprovalNotice,
   claimDingTalkPendingApproval,
   finalizeDingTalkPendingApproval,
+  revertDingTalkPendingApproval,
   saveDingTalkPendingApproval,
   sealDingTalkPendingApproval,
 } = await import('./approvalStore');
@@ -119,6 +120,103 @@ describe('claimDingTalkPendingApproval', () => {
     await finalizeDingTalkPendingApproval(claimed.record);
     expect(JSON.parse(store.get(dataKey) ?? '{}').status).toBe('approved');
     expect(store.has(threadKey)).toBe(false);
+  });
+});
+
+describe('batch decision record', () => {
+  it('stores every call id when the card is claimed and clears it on revert', async () => {
+    await saveDingTalkPendingApproval({
+      ...record,
+      calls: [
+        { parentMessageId: 'msg_tool', toolCallId: 'call_1' },
+        { parentMessageId: 'msg_2', toolCallId: 'call_2' },
+      ],
+      siblings: [{ parentMessageId: 'msg_2', toolCallId: 'call_2' }],
+    });
+    const claimed = await claimDingTalkPendingApproval(
+      'confirm-1',
+      'approved',
+      record.expiresAt - 1,
+    );
+    expect(claimed.outcome).toBe('claimed');
+    if (claimed.outcome !== 'claimed') return;
+    expect(claimed.record.decidedCallIds).toEqual(['call_1', 'call_2']);
+    expect(claimed.record.cardPatched).toBe(false);
+    expect(store.has(threadKey)).toBe(true);
+
+    await revertDingTalkPendingApproval(claimed.record);
+    const stored = JSON.parse(store.get(dataKey) ?? '{}') as {
+      decidedCallIds?: string[];
+      decision?: string;
+      status?: string;
+    };
+    expect(stored.status).toBe('pending');
+    expect(stored.decision).toBeUndefined();
+    expect(stored.decidedCallIds).toBeUndefined();
+  });
+
+  it('decides only the primary call when a legacy record has no calls', async () => {
+    await saveDingTalkPendingApproval({
+      ...record,
+      siblings: [{ parentMessageId: 'msg_2', toolCallId: 'call_2' }],
+    });
+    const claimed = await claimDingTalkPendingApproval(
+      'confirm-1',
+      'approved',
+      record.expiresAt - 1,
+    );
+    expect(claimed.outcome).toBe('claimed');
+    if (claimed.outcome !== 'claimed') return;
+    expect(claimed.record.decidedCallIds).toEqual(['call_1']);
+  });
+
+  it('does not let an in-batch save replace a newer thread index', async () => {
+    await saveDingTalkPendingApproval(record);
+    expect(store.get(threadKey)).toBe('confirm-1');
+
+    store.set(threadKey, 'confirm-2');
+    await saveDingTalkPendingApproval({ ...record, cardTitle: '再次保存' });
+    expect(store.get(threadKey)).toBe('confirm-2');
+
+    await saveDingTalkPendingApproval(record, { threadIndex: 'skip' });
+    expect(store.get(threadKey)).toBe('confirm-2');
+
+    store.delete(threadKey);
+    await saveDingTalkPendingApproval(record);
+    expect(store.get(threadKey)).toBe('confirm-1');
+
+    await saveDingTalkPendingApproval(
+      { ...record, outTrackId: 'confirm-3' },
+      { threadIndex: 'claim' },
+    );
+    expect(store.get(threadKey)).toBe('confirm-3');
+  });
+
+  it('does not point the thread index back at an older card on revert', async () => {
+    await saveDingTalkPendingApproval(record);
+    const claimed = await claimDingTalkPendingApproval(
+      'confirm-1',
+      'approved',
+      record.expiresAt - 1,
+    );
+    expect(claimed.outcome).toBe('claimed');
+    if (claimed.outcome !== 'claimed') return;
+    store.set(threadKey, 'confirm-2');
+    await revertDingTalkPendingApproval(claimed.record);
+    expect(store.get(threadKey)).toBe('confirm-2');
+    expect(JSON.parse(store.get(dataKey) ?? '{}').status).toBe('pending');
+
+    store.delete(threadKey);
+    await revertDingTalkPendingApproval(claimed.record);
+    expect(store.get(threadKey)).toBe('confirm-1');
+  });
+
+  it('leaves a newer thread index in place when an older card finalizes', async () => {
+    await saveDingTalkPendingApproval(record);
+    store.set(threadKey, 'confirm-2');
+    await finalizeDingTalkPendingApproval({ ...record, decision: 'approved', status: 'resuming' });
+    expect(store.get(threadKey)).toBe('confirm-2');
+    expect(JSON.parse(store.get(dataKey) ?? '{}').status).toBe('approved');
   });
 });
 

@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as TokenCacheModule from './tokenCache';
+
 const load = vi.fn();
+const loadByThread = vi.fn();
 const claim = vi.fn();
 const revert = vi.fn();
 const finalize = vi.fn();
 const save = vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true);
 const claimNotice = vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true);
+const seal = vi.fn<(...args: unknown[]) => Promise<{ outcome: string }>>(async () => ({
+  outcome: 'claimed',
+}));
 const sendMarkdown = vi.fn();
 const threadActive = vi.fn<(...args: unknown[]) => boolean>(() => false);
 const handleSubscribedMessage = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
@@ -16,6 +22,10 @@ const scan = vi.fn<(...args: unknown[]) => Promise<[string, string[]]>>(
 );
 const sendCard = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 const updateCard = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+const sharedDingTalkApi = vi.hoisted(() => {
+  const client = { kind: 'shared-dingtalk-api' };
+  return { client, sharedDingTalkApiClient: vi.fn(() => client) };
+});
 const approvalPreview = vi.fn();
 const approvalCtor = vi.fn();
 const todoPreview = vi.fn();
@@ -23,16 +33,17 @@ const todoCtor = vi.fn();
 const calendarPreview = vi.fn();
 const calendarCtor = vi.fn();
 const personalPreview = vi.fn();
+const docsPreview = vi.fn();
 
 vi.mock('./approvalStore', () => ({
   claimDingTalkApprovalNotice: (...args: unknown[]) => claimNotice(...args),
   claimDingTalkPendingApproval: (...args: unknown[]) => claim(...args),
   finalizeDingTalkPendingApproval: (...args: unknown[]) => finalize(...args),
   loadDingTalkPendingApproval: (...args: unknown[]) => load(...args),
-  loadDingTalkPendingApprovalByThread: vi.fn(),
+  loadDingTalkPendingApprovalByThread: (...args: unknown[]) => loadByThread(...args),
   revertDingTalkPendingApproval: (...args: unknown[]) => revert(...args),
   saveDingTalkPendingApproval: (...args: unknown[]) => save(...args),
-  sealDingTalkPendingApproval: vi.fn(),
+  sealDingTalkPendingApproval: (...args: unknown[]) => seal(...args),
 }));
 
 vi.mock('./cards', () => ({
@@ -57,6 +68,13 @@ vi.mock('@/database/models/message', () => ({
   },
 }));
 vi.mock('@/config/messenger', () => ({ getMessengerDingTalkConfig: vi.fn() }));
+vi.mock('./tokenCache', async (importOriginal) => {
+  const actual = await importOriginal<typeof TokenCacheModule>();
+  return {
+    ...actual,
+    sharedDingTalkApiClient: sharedDingTalkApi.sharedDingTalkApiClient,
+  };
+});
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: () => ({ scan: (...args: unknown[]) => scan(...args) }),
 }));
@@ -72,6 +90,15 @@ vi.mock('@/server/services/bot/AgentBridgeService', () => ({
   },
 }));
 vi.mock('@/envs/app', () => ({ appEnv: { APP_URL: 'https://chat.example.com' } }));
+vi.mock('@lobechat/builtin-tools', () => ({
+  builtinTools: [
+    {
+      identifier: 'lobe-local-system',
+      manifest: { meta: { title: '本地系统' } },
+      title: '本地系统',
+    },
+  ],
+}));
 
 vi.mock('@lobechat/chat-adapter-dingtalk', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@lobechat/chat-adapter-dingtalk');
@@ -112,6 +139,10 @@ vi.mock('@/server/enterprise/services/dingtalkPersonal/tool', () => ({
   previewDingtalkPersonalWrite: (...args: unknown[]) => personalPreview(...args),
 }));
 
+vi.mock('@/server/enterprise/services/dingtalkDocs/tool', () => ({
+  previewDingtalkDocsWrite: (...args: unknown[]) => docsPreview(...args),
+}));
+
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/calendar', () => ({
   DingtalkCalendarService: class {
     constructor(db: unknown, userId: string) {
@@ -129,8 +160,10 @@ vi.mock('@/server/enterprise/services/dingtalkWorkspace/calendar', () => ({
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const {
   applyDingTalkConfirmClick,
+  expireDingTalkApproval,
   extractDingTalkApprovalCalls,
   forwardDingTalkWaitingHuman,
+  holdDingTalkPendingApproval,
   restoreDingTalkApprovalTimers,
 } = await import('./approvalConfirm');
 
@@ -175,12 +208,16 @@ beforeEach(() => {
   save.mockResolvedValue(true);
   threadActive.mockReturnValue(false);
   handleSubscribedMessage.mockResolvedValue(undefined);
+  loadByThread.mockReset();
+  loadByThread.mockResolvedValue(null);
   approvalPreview.mockReset();
   todoPreview.mockReset();
   calendarPreview.mockReset();
   personalPreview.mockReset();
+  docsPreview.mockReset();
   vi.mocked(getMessengerDingTalkConfig).mockReset();
   delete process.env.DINGTALK_CONFIRM_RESUME_SETTLE_MS;
+  findMessagePlugin.mockResolvedValue({ intervention: { status: 'pending' } });
 });
 
 describe('extractDingTalkApprovalCalls', () => {
@@ -272,6 +309,35 @@ describe('applyDingTalkConfirmClick', () => {
     expect(result).toBe('applied');
     expect(claim).toHaveBeenCalledWith('confirm-1', 'rejected');
     expect(updateCard).toHaveBeenCalledWith(expect.anything(), 'confirm-1', {
+      status: 'reject',
+      statusText: '已拒绝',
+    });
+  });
+
+  it('updates the confirm card through the shared DingTalk client', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(CONFIRM_CONFIG as never);
+    load.mockResolvedValue({
+      ...claimedRecord,
+      approveOnCard: false,
+      status: 'pending',
+    });
+    claim.mockResolvedValue({
+      outcome: 'claimed',
+      record: { ...claimedRecord, approveOnCard: false, decision: 'rejected', status: 'resuming' },
+    });
+
+    await applyDingTalkConfirmClick({
+      decision: 'reject',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(sharedDingTalkApi.sharedDingTalkApiClient).toHaveBeenCalledWith({
+      appKey: 'client',
+      appSecret: 'secret',
+      robotCode: 'robot',
+    });
+    expect(updateCard).toHaveBeenCalledWith(sharedDingTalkApi.client, 'confirm-1', {
       status: 'reject',
       statusText: '已拒绝',
     });
@@ -569,6 +635,49 @@ describe('forwardDingTalkWaitingHuman preview', () => {
     expect(approvalPreview).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a non-invalid preview failure on the generic line and does not refuse the call', async () => {
+    approvalPreview.mockRejectedValue({
+      code: 'DINGTALK_NOT_FOUND',
+      details: { message: '参数无效（DINGTALK_NOT_FOUND）：字段「状态」不在该数据表中' },
+    });
+    const outcome = await sendWaiting({
+      apiName: 'approveTask',
+      args: approveArgs,
+      identifier: 'lobe-dingtalk-approval',
+    });
+    const card = sentCard();
+    expect(card.allowApprove).toBe(false);
+    expect(card.content).toBe('无法解析操作对象（DINGTALK_NOT_FOUND）');
+    expect(card.note).toContain('无法解析操作对象（DINGTALK_NOT_FOUND）');
+    expect(card.content).not.toContain('不在该数据表中');
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(outcome).toBeUndefined();
+  });
+
+  it('puts an invalid-args preview message on the card and refuses the call with it', async () => {
+    const reason = '字段「金额」不在该数据表中';
+    approvalPreview.mockRejectedValue({
+      code: 'DINGTALK_INVALID',
+      details: { message: `参数无效（DINGTALK_INVALID）：${reason}` },
+    });
+    const outcome = await sendWaiting({
+      apiName: 'approveTask',
+      args: approveArgs,
+      identifier: 'lobe-dingtalk-approval',
+    });
+    const card = sentCard();
+    expect(card.allowApprove).toBe(false);
+    expect(card.content).toBe(reason);
+    expect(card.note).toBe(`${reason}，请到网页端确认：${topicLink()}`);
+    expect(card.content).not.toContain('DINGTALK_INVALID');
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_tool', {
+      content: reason,
+      rejectedReason: reason,
+    });
+    expect(seal).toHaveBeenCalledWith(expect.any(String), 'rejected');
+    expect(outcome).toEqual({ resumeHistory: { parentMessageId: 'msg_tool' } });
+  });
+
   it('appends saveTemplate field details the preview dropped', async () => {
     approvalPreview.mockResolvedValue({
       danger: false,
@@ -775,5 +884,1039 @@ describe('forwardDingTalkWaitingHuman preview', () => {
     expect(approvalPreview).not.toHaveBeenCalled();
     expect(sendCard).not.toHaveBeenCalled();
     expect(rejectPlugin).toHaveBeenCalled();
+  });
+});
+
+describe('aggregated DingTalk confirm card', () => {
+  beforeEach(() => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(CONFIRM_CONFIG as never);
+    personalPreview.mockImplementation(async (...args: unknown[]) => {
+      const toolArgs = (args[3] ?? {}) as { taskId?: string };
+      return {
+        danger: false,
+        lines: [`待办：${toolArgs.taskId ?? ''}`],
+        title: '完成待办',
+        warnings: [],
+      };
+    });
+  });
+
+  const sentCard = () =>
+    (
+      sendCard.mock.calls[0]?.[1] as {
+        card: {
+          allowApprove?: boolean;
+          content: string;
+          note?: string;
+          statusText?: string;
+          title: string;
+        };
+      }
+    ).card;
+
+  const park = (
+    items: Array<{
+      apiName: string;
+      args?: Record<string, unknown>;
+      id: string;
+      identifier: string;
+      messageId: string;
+    }>,
+  ) =>
+    forwardDingTalkWaitingHuman(
+      'dingtalk:cid:staff_1',
+      {
+        finalState: {
+          pendingHumanToolMessages: items.map((item) => ({
+            kind: 'approval',
+            messageId: item.messageId,
+            toolCallId: item.id,
+          })),
+          pendingToolsCalling: items.map((item) => ({
+            apiName: item.apiName,
+            arguments: JSON.stringify(item.args ?? {}),
+            id: item.id,
+            identifier: item.identifier,
+          })),
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+
+  const todos = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      apiName: 'completeTodo',
+      args: { taskId: `task_${index + 1}` },
+      id: `call_${index + 1}`,
+      identifier: 'lobe-dingtalk-personal',
+      messageId: `msg_${index + 1}`,
+    }));
+
+  const savedRecord = () => save.mock.calls[0]?.[0] as Record<string, unknown>;
+
+  it('sends one card titled 完成 3 项待办 and approves the three calls in order', async () => {
+    await park(todos(3));
+    const card = sentCard();
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(personalPreview).toHaveBeenCalledTimes(3);
+    expect(card.title).toBe('完成 3 项待办');
+    expect(card.allowApprove).toBe(true);
+    expect(card.content).toBe(
+      [
+        '1. 完成待办 — 待办：task_1',
+        '2. 完成待办 — 待办：task_2',
+        '3. 完成待办 — 待办：task_3',
+      ].join('\n'),
+    );
+    const saved = savedRecord();
+    expect(saved.calls).toEqual([
+      { apiName: 'completeTodo', parentMessageId: 'msg_1', toolCallId: 'call_1' },
+      { apiName: 'completeTodo', parentMessageId: 'msg_2', toolCallId: 'call_2' },
+      { apiName: 'completeTodo', parentMessageId: 'msg_3', toolCallId: 'call_3' },
+    ]);
+
+    const decided = {
+      ...saved,
+      decidedCallIds: ['call_1', 'call_2', 'call_3'],
+      decision: 'approved' as const,
+      status: 'resuming' as const,
+    };
+    load.mockResolvedValue({ ...saved, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record: decided });
+    loadByThread.mockResolvedValue(decided);
+    handleSubscribedMessage.mockImplementation(async (...args: unknown[]) => {
+      const opts = args[2] as {
+        onWaitingForHuman?: (event: unknown) => Promise<void>;
+        resumeApproval?: { toolCallId?: string };
+      };
+      const order = ['call_1', 'call_2', 'call_3'];
+      const index = order.indexOf(opts.resumeApproval?.toolCallId ?? '');
+      const rest = index === -1 ? [] : order.slice(index + 1);
+      if (rest.length === 0) return;
+      await opts.onWaitingForHuman?.({
+        finalState: {
+          pendingHumanToolMessages: rest.map((id) => ({
+            kind: 'approval',
+            messageId: id.replace('call_', 'msg_'),
+            toolCallId: id,
+          })),
+          pendingToolsCalling: rest.map((id) => ({
+            apiName: 'completeTodo',
+            arguments: '{}',
+            id,
+            identifier: 'lobe-dingtalk-personal',
+          })),
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      });
+    });
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: String(saved.outTrackId),
+      userId: 'staff_1',
+    });
+    expect(result).toBe('applied');
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(updateCard).toHaveBeenCalledTimes(1);
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(
+      handleSubscribedMessage.mock.calls.map(
+        (call) =>
+          (call[2] as { resumeApproval?: { decision?: string; toolCallId?: string } })
+            .resumeApproval,
+      ),
+    ).toEqual([
+      { decision: 'approved', parentMessageId: 'msg_1', toolCallId: 'call_1' },
+      { decision: 'approved', parentMessageId: 'msg_2', toolCallId: 'call_2' },
+      { decision: 'approved', parentMessageId: 'msg_3', toolCallId: 'call_3' },
+    ]);
+  });
+
+  it('uses 确认 N 项操作 when the parked calls differ', async () => {
+    calendarPreview.mockResolvedValue({
+      danger: false,
+      lines: [{ label: '日程', value: '周会' }],
+      title: '删除日程',
+      warnings: [],
+    });
+    await park([
+      {
+        apiName: 'completeTodo',
+        args: { taskId: 'task_1' },
+        id: 'call_1',
+        identifier: 'lobe-dingtalk-personal',
+        messageId: 'msg_1',
+      },
+      {
+        apiName: 'deleteEvent',
+        args: { eventId: 'evt-1' },
+        id: 'call_2',
+        identifier: 'lobe-dingtalk-workspace',
+        messageId: 'msg_2',
+      },
+    ]);
+    const card = sentCard();
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(card.title).toBe('确认 2 项操作');
+    expect(card.allowApprove).toBe(true);
+    expect(card.content).toContain('1. 完成待办 — 待办：task_1');
+    expect(card.content).toContain('2. 删除日程 — 日程：周会');
+    expect(card.content).not.toContain('evt-1');
+  });
+
+  it('rejects every parked call with one reason and does not skip siblings', async () => {
+    await park(todos(3));
+    const saved = savedRecord();
+    load.mockResolvedValue({ ...saved, status: 'pending' });
+    claim.mockResolvedValue({
+      outcome: 'claimed',
+      record: { ...saved, decision: 'rejected', status: 'resuming' },
+    });
+    const result = await applyDingTalkConfirmClick({
+      decision: 'reject',
+      outTrackId: String(saved.outTrackId),
+      userId: 'staff_1',
+    });
+    expect(result).toBe('applied');
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(updateCard).toHaveBeenCalledTimes(1);
+    expect(rejectPlugin).toHaveBeenCalledTimes(2);
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_2', {
+      content: '已拒绝',
+      rejectedReason: '已拒绝',
+    });
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_3', {
+      content: '已拒绝',
+      rejectedReason: '已拒绝',
+    });
+    expect(JSON.stringify(rejectPlugin.mock.calls)).not.toContain('跳过');
+    expect(
+      (handleSubscribedMessage.mock.calls[0]?.[2] as { resumeApproval?: unknown }).resumeApproval,
+    ).toEqual({
+      decision: 'rejected_continue',
+      parentMessageId: 'msg_1',
+      rejectionReason: '已拒绝',
+      toolCallId: 'call_1',
+    });
+  });
+
+  it('rejects every parked call when the card times out', async () => {
+    await park(todos(3));
+    const saved = savedRecord();
+    claim.mockResolvedValue({
+      outcome: 'claimed',
+      record: { ...saved, decision: 'expired', status: 'resuming' },
+    });
+    await expireDingTalkApproval(String(saved.outTrackId));
+    expect(rejectPlugin).toHaveBeenCalledTimes(2);
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_2', {
+      content: '超时未确认',
+      rejectedReason: '超时未确认',
+    });
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_3', {
+      content: '超时未确认',
+      rejectedReason: '超时未确认',
+    });
+    expect(JSON.stringify(rejectPlugin.mock.calls)).not.toContain('跳过');
+    expect(
+      (handleSubscribedMessage.mock.calls[0]?.[2] as { resumeApproval?: unknown }).resumeApproval,
+    ).toEqual({
+      decision: 'rejected_continue',
+      parentMessageId: 'msg_1',
+      rejectionReason: '超时未确认',
+      toolCallId: 'call_1',
+    });
+    expect(updateCard).toHaveBeenCalledTimes(1);
+    expect(sendCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects the other pending rows before the rejected_continue resume', async () => {
+    await park(todos(3));
+    const saved = savedRecord();
+    load.mockResolvedValue({ ...saved, status: 'pending' });
+    claim.mockResolvedValue({
+      outcome: 'claimed',
+      record: { ...saved, decision: 'rejected', status: 'resuming' },
+    });
+    const order: string[] = [];
+    rejectPlugin.mockImplementation(async (id: unknown) => {
+      order.push(`reject:${String(id)}`);
+      return true;
+    });
+    handleSubscribedMessage.mockImplementation(async () => {
+      order.push('resume');
+    });
+
+    await applyDingTalkConfirmClick({
+      decision: 'reject',
+      outTrackId: String(saved.outTrackId),
+      userId: 'staff_1',
+    });
+
+    expect(order).toEqual(['reject:msg_2', 'reject:msg_3', 'resume']);
+    expect(handleSubscribedMessage).toHaveBeenCalledTimes(1);
+    expect(
+      (handleSubscribedMessage.mock.calls[0]?.[2] as { resumeApproval?: { decision?: string } })
+        .resumeApproval?.decision,
+    ).toBe('rejected_continue');
+  });
+
+  it('rejects the other pending rows before a timeout resume, and not if the thread stays busy', async () => {
+    await park(todos(3));
+    const saved = savedRecord();
+    claim.mockResolvedValue({
+      outcome: 'claimed',
+      record: { ...saved, decision: 'expired', status: 'resuming' },
+    });
+    const order: string[] = [];
+    rejectPlugin.mockImplementation(async (id: unknown) => {
+      order.push(`reject:${String(id)}`);
+      return true;
+    });
+    handleSubscribedMessage.mockImplementation(async () => {
+      order.push('resume');
+    });
+
+    await expireDingTalkApproval(String(saved.outTrackId));
+    expect(order).toEqual(['reject:msg_2', 'reject:msg_3', 'resume']);
+
+    rejectPlugin.mockClear();
+    handleSubscribedMessage.mockClear();
+    revert.mockClear();
+    process.env.DINGTALK_CONFIRM_RESUME_SETTLE_MS = '0';
+    threadActive.mockReturnValue(true);
+    claim.mockResolvedValue({
+      outcome: 'claimed',
+      record: { ...saved, decision: 'expired', status: 'resuming' },
+    });
+    await expireDingTalkApproval(String(saved.outTrackId));
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(revert).toHaveBeenCalled();
+  });
+
+  it('makes the whole card web-only when one preview fails', async () => {
+    let seen = 0;
+    personalPreview.mockImplementation(async () => {
+      seen += 1;
+      if (seen === 2) throw Object.assign(new Error('missing'), { code: 'DINGTALK_NOT_FOUND' });
+      return { danger: false, lines: ['待办：甲'], title: '完成待办', warnings: [] };
+    });
+    await park(todos(3));
+    const card = sentCard();
+    expect(personalPreview).toHaveBeenCalledTimes(3);
+    expect(card.allowApprove).toBe(false);
+    expect(card.title).toBe('完成 3 项待办');
+    expect(card.statusText).toBe('请到网页端确认');
+    expect(card.content).toContain('无法解析操作对象（DINGTALK_NOT_FOUND）');
+    expect(card.note).toContain('请到网页端确认');
+    expect(card.note).toContain(topicLink());
+    expect(savedRecord().approveOnCard).toBe(false);
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(seal).not.toHaveBeenCalled();
+  });
+
+  it('does not preview or approve on the card when more than 20 calls are parked', async () => {
+    await park(todos(21));
+    const card = sentCard();
+    expect(personalPreview).not.toHaveBeenCalled();
+    expect(sendCard).toHaveBeenCalledTimes(1);
+    expect(card.allowApprove).toBe(false);
+    expect(card.title).toBe('完成 21 项待办');
+    expect(card.statusText).toBe('请到网页端确认');
+    expect(card.content).toBe('共 21 项操作，请到网页端确认。');
+    expect(card.note).toContain('内容较长，完整内容请在网页端确认：');
+    expect((savedRecord().calls as unknown[]).length).toBe(21);
+  });
+
+  it('continues an approved batch after restart without a new card', async () => {
+    const record = {
+      ...claimedRecord,
+      calls: [
+        { apiName: 'completeTodo', parentMessageId: 'msg_1', toolCallId: 'call_1' },
+        { apiName: 'completeTodo', parentMessageId: 'msg_2', toolCallId: 'call_2' },
+        { apiName: 'completeTodo', parentMessageId: 'msg_3', toolCallId: 'call_3' },
+      ],
+      cardPatched: true,
+      decidedCallIds: ['call_1', 'call_2', 'call_3'],
+      decision: 'approved' as const,
+      parentMessageId: 'msg_1',
+      siblings: [
+        { parentMessageId: 'msg_2', toolCallId: 'call_2' },
+        { parentMessageId: 'msg_3', toolCallId: 'call_3' },
+      ],
+      resumingAt: Date.now(),
+      status: 'resuming' as const,
+      toolCallId: 'call_1',
+    };
+    scan.mockResolvedValueOnce(['0', ['messenger:dingtalk:pending-approval:confirm-1']]);
+    load.mockResolvedValue(record);
+    loadByThread.mockResolvedValue(record);
+    findMessagePlugin.mockImplementation(async (id: unknown) => ({
+      intervention: {
+        kind: 'approval',
+        status: id === 'msg_1' ? 'approved' : 'pending',
+      },
+    }));
+    handleSubscribedMessage.mockImplementation(async (...args: unknown[]) => {
+      const opts = args[2] as {
+        onWaitingForHuman?: (event: unknown) => Promise<void>;
+        resumeApproval?: { toolCallId?: string };
+      };
+      if (opts.resumeApproval?.toolCallId !== 'call_2') return;
+      await opts.onWaitingForHuman?.({
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_3', toolCallId: 'call_3' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodo',
+              arguments: '{}',
+              id: 'call_3',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      });
+    });
+
+    await restoreDingTalkApprovalTimers();
+    expect(sendCard).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+    expect(revert).not.toHaveBeenCalled();
+    expect(
+      handleSubscribedMessage.mock.calls.map(
+        (call) =>
+          (call[2] as { resumeApproval?: { decision?: string; toolCallId?: string } })
+            .resumeApproval,
+      ),
+    ).toEqual([
+      { decision: 'approved', parentMessageId: 'msg_2', toolCallId: 'call_2' },
+      { decision: 'approved', parentMessageId: 'msg_3', toolCallId: 'call_3' },
+    ]);
+  });
+
+  it('does not approve when inbound text arrives while the card is pending', async () => {
+    loadByThread.mockResolvedValue({
+      ...claimedRecord,
+      expiresAt: Date.now() + 60_000,
+      status: 'pending',
+    });
+    await expect(holdDingTalkPendingApproval(claimedRecord.threadId)).resolves.toBe('pending');
+    expect(claim).not.toHaveBeenCalled();
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(sendCard).not.toHaveBeenCalled();
+  });
+
+  it('does not put an unknown api name on the card', async () => {
+    await park([
+      {
+        apiName: 'doSomethingWeird',
+        args: { name: '甲' },
+        id: 'call_1',
+        identifier: 'lobe-local-system',
+        messageId: 'msg_1',
+      },
+    ]);
+    const card = sentCard();
+    expect(card.title).toBe('执行「本地系统」操作');
+    expect(card.content).toContain('甲');
+    expect(card.content).not.toContain('doSomethingWeird');
+    expect(card.title).not.toContain('doSomethingWeird');
+  });
+});
+
+describe('confirm card review fixes', () => {
+  const thread = 'dingtalk:cid:staff_1';
+
+  beforeEach(() => {
+    findMessagePlugin.mockReset();
+    findMessagePlugin.mockResolvedValue({ intervention: { status: 'pending' } });
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(CONFIRM_CONFIG as never);
+    personalPreview.mockImplementation(async (...args: unknown[]) => {
+      const toolArgs = (args[3] ?? {}) as { taskId?: string };
+      return {
+        danger: false,
+        lines: [`待办：${toolArgs.taskId ?? ''}`],
+        title: '完成待办',
+        warnings: [],
+      };
+    });
+  });
+
+  const batchRecord = (
+    decision: 'approved' | 'rejected' | 'expired',
+    extra?: Record<string, unknown>,
+  ) => ({
+    ...claimedRecord,
+    calls: [
+      { apiName: 'completeTodo', parentMessageId: 'msg_1', toolCallId: 'call_1' },
+      { apiName: 'completeTodo', parentMessageId: 'msg_2', toolCallId: 'call_2' },
+    ],
+    decidedCallIds: ['call_1', 'call_2'],
+    decision,
+    parentMessageId: 'msg_1',
+    status: 'resuming' as const,
+    toolCallId: 'call_1',
+    ...extra,
+  });
+
+  it('skips siblings on a legacy record and resumes only the primary', async () => {
+    const legacy = {
+      ...claimedRecord,
+      decision: 'approved' as const,
+      parentMessageId: 'msg_1',
+      siblings: [{ parentMessageId: 'msg_2', toolCallId: 'call_2' }],
+      status: 'resuming' as const,
+      toolCallId: 'call_1',
+    };
+    load.mockResolvedValue({ ...legacy, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record: legacy });
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(result).toBe('applied');
+    expect(rejectPlugin).toHaveBeenCalledTimes(1);
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_2', {
+      content: '钉钉一次只能确认一项，此项已跳过。',
+      rejectedReason: '钉钉一次只能确认一项，此项已跳过。',
+    });
+    expect(handleSubscribedMessage).toHaveBeenCalledTimes(1);
+    expect(
+      (handleSubscribedMessage.mock.calls[0]?.[2] as { resumeApproval?: unknown }).resumeApproval,
+    ).toEqual({
+      decision: 'approved',
+      parentMessageId: 'msg_1',
+      toolCallId: 'call_1',
+    });
+  });
+
+  it('does not auto-resume a sibling the legacy card never showed', async () => {
+    loadByThread.mockResolvedValue({
+      ...claimedRecord,
+      decidedCallIds: ['call_1', 'call_2'],
+      decision: 'approved',
+      parentMessageId: 'msg_1',
+      siblings: [{ parentMessageId: 'msg_2', toolCallId: 'call_2' }],
+      status: 'resuming',
+      toolCallId: 'call_1',
+    });
+
+    await forwardDingTalkWaitingHuman(
+      thread,
+      {
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_2', toolCallId: 'call_2' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodo',
+              arguments: '{}',
+              id: 'call_2',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(sendCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims the thread index for a new card and skips it on in-batch saves', async () => {
+    await forwardDingTalkWaitingHuman(
+      thread,
+      {
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_1', toolCallId: 'call_1' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodo',
+              arguments: JSON.stringify({ taskId: 'task_1' }),
+              id: 'call_1',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+    expect(save).toHaveBeenCalledWith(expect.anything(), { threadIndex: 'claim' });
+
+    const record = batchRecord('approved');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+    const batchSaves = save.mock.calls.slice(1);
+    expect(batchSaves.length).toBeGreaterThan(0);
+    expect(
+      batchSaves.every(
+        (call) => (call[1] as { threadIndex?: string } | undefined)?.threadIndex === 'skip',
+      ),
+    ).toBe(true);
+  });
+
+  it('finalizes when the run stops with later calls still pending', async () => {
+    const record = batchRecord('approved');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    findMessagePlugin.mockResolvedValue({ intervention: { status: 'pending' } });
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(result).toBe('applied');
+    expect(handleSubscribedMessage).toHaveBeenCalledTimes(1);
+    expect(finalize).toHaveBeenCalled();
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  it('finalizes a later step that is not accepted after the card was patched', async () => {
+    const record = batchRecord('approved');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    loadByThread.mockResolvedValue(record);
+    handleSubscribedMessage.mockImplementation(async (...args: unknown[]) => {
+      const opts = args[2] as {
+        onSkippedActive?: () => Promise<void>;
+        onWaitingForHuman?: (event: unknown) => Promise<void>;
+        resumeApproval?: { toolCallId?: string };
+      };
+      if (opts.resumeApproval?.toolCallId === 'call_2') {
+        await opts.onSkippedActive?.();
+        return;
+      }
+      await opts.onWaitingForHuman?.({
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_2', toolCallId: 'call_2' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodo',
+              arguments: '{}',
+              id: 'call_2',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      });
+    });
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(result).toBe('deferred');
+    expect(finalize).toHaveBeenCalled();
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale in-progress batch instead of running the remaining writes', async () => {
+    scan.mockResolvedValueOnce(['0', ['messenger:dingtalk:pending-approval:confirm-1']]);
+    load.mockResolvedValue({
+      ...batchRecord('approved'),
+      cardPatched: true,
+      resumingAt: Date.now() - 11 * 60 * 1000,
+    });
+    findMessagePlugin.mockImplementation(async (id: unknown) => ({
+      intervention: { status: id === 'msg_1' ? 'approved' : 'pending' },
+    }));
+
+    await restoreDingTalkApprovalTimers();
+
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_2', {
+      content: '已中断，未执行',
+      rejectedReason: '已中断，未执行',
+    });
+    expect(updateCard).toHaveBeenCalledWith(expect.anything(), 'confirm-1', {
+      status: 'reject',
+      statusText: '已中断，未执行',
+    });
+    expect(finalize).toHaveBeenCalled();
+  });
+
+  it('runs one history resume when a covered reject does not send another card', async () => {
+    const record = batchRecord('rejected');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    loadByThread.mockResolvedValue(record);
+    handleSubscribedMessage.mockImplementation(async (...args: unknown[]) => {
+      const opts = args[2] as {
+        onWaitingForHuman?: (event: unknown) => Promise<void>;
+        resumeApproval?: { toolCallId?: string };
+        resumeHistory?: { parentMessageId: string };
+      };
+      if (opts.resumeHistory || opts.resumeApproval?.toolCallId !== 'call_1') return;
+      await opts.onWaitingForHuman?.({
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_2', toolCallId: 'call_2' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodo',
+              arguments: '{}',
+              id: 'call_2',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      });
+    });
+
+    await applyDingTalkConfirmClick({
+      decision: 'reject',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    const payloads = handleSubscribedMessage.mock.calls.map(
+      (call) =>
+        call[2] as {
+          resumeApproval?: { toolCallId?: string };
+          resumeHistory?: { parentMessageId: string };
+        },
+    );
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.resumeApproval?.toolCallId).toBe('call_1');
+    expect(payloads[1]?.resumeHistory).toEqual({ parentMessageId: 'msg_2' });
+  });
+
+  it('starts a click at the first call that is still pending', async () => {
+    const record = batchRecord('approved');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    findMessagePlugin.mockImplementation(async (id: unknown) => ({
+      intervention: { status: id === 'msg_1' ? 'approved' : 'pending' },
+    }));
+
+    await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    const resumed = handleSubscribedMessage.mock.calls.map(
+      (call) =>
+        (call[2] as { resumeApproval?: { toolCallId?: string } }).resumeApproval?.toolCallId,
+    );
+    expect(resumed[0]).toBe('call_2');
+    expect(resumed).not.toContain('call_1');
+  });
+
+  it('patches the card and finalizes when every call was already decided', async () => {
+    const record = batchRecord('approved', {
+      calls: [{ apiName: 'completeTodo', parentMessageId: 'msg_1', toolCallId: 'call_1' }],
+      decidedCallIds: ['call_1'],
+    });
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    findMessagePlugin.mockResolvedValue({ intervention: { status: 'approved' } });
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(result).toBe('applied');
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(updateCard).toHaveBeenCalledWith(expect.anything(), 'confirm-1', {
+      status: 'agree',
+      statusText: '已批准，执行中…',
+    });
+    expect(finalize).toHaveBeenCalled();
+  });
+
+  it('does not reject the other rows when resume is deferred', async () => {
+    process.env.DINGTALK_CONFIRM_RESUME_SETTLE_MS = '0';
+    threadActive.mockReturnValue(true);
+    const record = batchRecord('rejected');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'reject',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(result).toBe('deferred');
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(revert).toHaveBeenCalled();
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not cover a call when only the tool call id matches', async () => {
+    loadByThread.mockResolvedValue({
+      ...claimedRecord,
+      calls: [{ apiName: 'completeTodo', parentMessageId: 'msg_1', toolCallId: 'call_1' }],
+      decidedCallIds: ['call_1'],
+      decision: 'approved',
+      status: 'resuming',
+    });
+
+    await forwardDingTalkWaitingHuman(
+      thread,
+      {
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_other', toolCallId: 'call_1' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodo',
+              arguments: JSON.stringify({ taskId: 'task_9' }),
+              id: 'call_1',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(sendCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts batch items and keeps every preview line on the combined card', async () => {
+    personalPreview.mockImplementation(async () => ({
+      danger: true,
+      lines: ['待办：甲', '截止：今天'],
+      title: '批量完成待办',
+      warnings: ['完成后不可恢复'],
+    }));
+
+    await forwardDingTalkWaitingHuman(
+      thread,
+      {
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_1', toolCallId: 'call_1' },
+            { kind: 'approval', messageId: 'msg_2', toolCallId: 'call_2' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'completeTodos',
+              arguments: JSON.stringify({ taskIds: ['a', 'b', 'c'] }),
+              id: 'call_1',
+              identifier: 'lobe-dingtalk-personal',
+            },
+            {
+              apiName: 'completeTodos',
+              arguments: JSON.stringify({ taskIds: ['d', 'e'] }),
+              id: 'call_2',
+              identifier: 'lobe-dingtalk-personal',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+
+    const card = (sendCard.mock.calls[0]?.[1] as { card: { content: string; title: string } }).card;
+    expect(card.title).toBe('完成 5 项待办');
+    expect(card.content).toContain('⚠️ 高风险操作');
+    expect(card.content).toContain('待办：甲');
+    expect(card.content).toContain('截止：今天');
+    expect(card.content).toContain('⚠️ 完成后不可恢复');
+    expect(card.content).toContain('1. 批量完成待办');
+    expect(card.content).toContain('2. 批量完成待办');
+  });
+
+  it('previews a lobe-dingtalk-docs write on the confirm card', async () => {
+    docsPreview.mockResolvedValue({
+      danger: false,
+      lines: ['补充一行'],
+      title: '追加内容到文档「周报」',
+      warnings: [],
+    });
+
+    await forwardDingTalkWaitingHuman(
+      thread,
+      {
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_1', toolCallId: 'call_1' },
+            { kind: 'approval', messageId: 'msg_2', toolCallId: 'call_2' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'appendDoc',
+              arguments: JSON.stringify({ markdown: '补充一行', nodeId: 'node-1' }),
+              id: 'call_1',
+              identifier: 'lobe-dingtalk-docs',
+            },
+            {
+              apiName: 'appendDoc',
+              arguments: JSON.stringify({ markdown: '再一行', nodeId: 'node-2' }),
+              id: 'call_2',
+              identifier: 'lobe-dingtalk-docs',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+
+    expect(docsPreview).toHaveBeenCalledTimes(2);
+    const card = (sendCard.mock.calls[0]?.[1] as { card: { content: string; title: string } }).card;
+    expect(card.title).toBe('追加 2 项文档内容');
+    expect(card.content).toContain('追加内容到文档「周报」');
+    expect(card.content).toContain('补充一行');
+  });
+
+  it('starts a reject at the first pending row and skips aborted or missing rows', async () => {
+    const record = batchRecord('rejected', {
+      calls: [
+        { apiName: 'completeTodo', parentMessageId: 'msg_1', toolCallId: 'call_1' },
+        { apiName: 'completeTodo', parentMessageId: 'msg_2', toolCallId: 'call_2' },
+        { apiName: 'completeTodo', parentMessageId: 'msg_3', toolCallId: 'call_3' },
+      ],
+      decidedCallIds: ['call_1', 'call_2', 'call_3'],
+    });
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    findMessagePlugin.mockImplementation(async (id: unknown) => {
+      if (id === 'msg_1') return { intervention: { status: 'aborted' } };
+      if (id === 'msg_2') return undefined;
+      return { intervention: { status: 'pending' } };
+    });
+
+    await applyDingTalkConfirmClick({
+      decision: 'reject',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    const resumed = handleSubscribedMessage.mock.calls.map(
+      (call) =>
+        (call[2] as { resumeApproval?: { toolCallId?: string } }).resumeApproval?.toolCallId,
+    );
+    expect(resumed[0]).toBe('call_3');
+    expect(resumed).not.toContain('call_1');
+    expect(resumed).not.toContain('call_2');
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  it('patches the card and finalizes when no row is still pending', async () => {
+    const record = batchRecord('approved');
+    load.mockResolvedValue({ ...record, status: 'pending' });
+    claim.mockResolvedValue({ outcome: 'claimed', record });
+    findMessagePlugin.mockImplementation(async (id: unknown) =>
+      id === 'msg_1' ? { intervention: { status: 'aborted' } } : undefined,
+    );
+
+    const result = await applyDingTalkConfirmClick({
+      decision: 'approve',
+      outTrackId: 'confirm-1',
+      userId: 'staff_1',
+    });
+
+    expect(result).toBe('applied');
+    expect(handleSubscribedMessage).not.toHaveBeenCalled();
+    expect(rejectPlugin).not.toHaveBeenCalled();
+    expect(revert).not.toHaveBeenCalled();
+    expect(updateCard).toHaveBeenCalledWith(expect.anything(), 'confirm-1', {
+      status: 'agree',
+      statusText: '已批准，执行中…',
+    });
+    expect(finalize).toHaveBeenCalled();
+  });
+
+  it('refuses an invalid preview with the sanitized reason the model can fix', async () => {
+    const reason = '内容过大（约 80 KB），请分成多次写入';
+    docsPreview.mockRejectedValue({
+      code: 'DINGTALK_PERSONAL_INVALID_ARGS',
+      details: { message: `参数无效（DINGTALK_PERSONAL_INVALID_ARGS）：${reason}` },
+    });
+
+    const outcome = await forwardDingTalkWaitingHuman(
+      thread,
+      {
+        finalState: {
+          pendingHumanToolMessages: [
+            { kind: 'approval', messageId: 'msg_1', toolCallId: 'call_1' },
+            { kind: 'approval', messageId: 'msg_2', toolCallId: 'call_2' },
+          ],
+          pendingToolsCalling: [
+            {
+              apiName: 'appendDoc',
+              arguments: JSON.stringify({ markdown: '很长', nodeId: 'node-1' }),
+              id: 'call_1',
+              identifier: 'lobe-dingtalk-docs',
+            },
+            {
+              apiName: 'appendSheetRows',
+              arguments: JSON.stringify({ nodeId: 'node-1', rows: [['甲']], sheetId: 'sheet-1' }),
+              id: 'call_2',
+              identifier: 'lobe-dingtalk-docs',
+            },
+          ],
+        },
+        operationId: 'op_1',
+        topicId: 'topic_1',
+      },
+      { agentId: 'agt_1', userId: 'user_1' },
+    );
+
+    const card = (
+      sendCard.mock.calls[0]?.[1] as {
+        card: { allowApprove?: boolean; content: string; note?: string };
+      }
+    ).card;
+    expect(card.allowApprove).toBe(false);
+    expect(card.content).toContain(reason);
+    expect(card.content).not.toContain('参数无效');
+    expect(card.content).not.toContain('DINGTALK_PERSONAL_INVALID_ARGS');
+    expect(card.note).toContain(reason);
+    expect(card.note).toContain('请到网页端确认');
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_1', { content: reason, rejectedReason: reason });
+    expect(rejectPlugin).toHaveBeenCalledWith('msg_2', { content: reason, rejectedReason: reason });
+    expect(seal).toHaveBeenCalledWith(expect.any(String), 'rejected');
+    expect(outcome).toEqual({ resumeHistory: { parentMessageId: 'msg_2' } });
   });
 });

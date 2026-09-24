@@ -70,8 +70,18 @@ export const resolveDingtalkActionKind = (
 
 const URL_IN_TEXT = /https:\/\/[^\s"'<>()[\]（）「」，。]+/;
 
+/**
+ * Where a transport may have put the service's `details`. A tRPC client error nests it under
+ * `data.errorData` (the lambda error formatter exposes `cause.data` as `errorData`), so a URL in
+ * error → data → errorData → details → message is read four levels down; the limit leaves one
+ * level for a wrapper such as `{ error }`.
+ */
+const NESTED_KEYS = ['details', 'body', 'data', 'errorData', 'error', 'cause'] as const;
+
+const MAX_DEPTH = 5;
+
 const readUri = (value: unknown, depth = 0): string | undefined => {
-  if (!value || depth > 3) return undefined;
+  if (!value || depth > MAX_DEPTH) return undefined;
 
   if (typeof value === 'string') {
     const match = value.match(URL_IN_TEXT)?.[0];
@@ -85,7 +95,7 @@ const readUri = (value: unknown, depth = 0): string | undefined => {
     if (typeof candidate === 'string' && resolveActionHref(candidate)?.external)
       return candidate.trim();
   }
-  for (const key of ['details', 'body', 'data', 'error', 'cause']) {
+  for (const key of NESTED_KEYS) {
     const nested = readUri(record[key], depth + 1);
     if (nested) return nested;
   }

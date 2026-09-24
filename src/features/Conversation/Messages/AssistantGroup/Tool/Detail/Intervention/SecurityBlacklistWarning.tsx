@@ -1,7 +1,9 @@
-import { DEFAULT_SECURITY_BLACKLIST, InterventionChecker } from '@lobechat/agent-runtime';
-import { Alert, Flexbox } from '@lobehub/ui';
+import { Flexbox } from '@lobehub/ui';
+import { Alert } from '@lobehub/ui/base-ui';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { checkInterventionSecurityBlacklist } from './securityBlacklist';
 
 interface SecurityBlacklistWarningProps {
   args: Record<string, any>;
@@ -10,19 +12,19 @@ interface SecurityBlacklistWarningProps {
 const SecurityBlacklistWarning = memo<SecurityBlacklistWarningProps>(({ args }) => {
   const { t } = useTranslation('tool');
 
-  const securityCheck = useMemo(
-    () => InterventionChecker.checkSecurityBlacklist(DEFAULT_SECURITY_BLACKLIST, args),
-    [args],
-  );
+  const securityCheck = useMemo(() => checkInterventionSecurityBlacklist(args), [args]);
 
   if (!securityCheck.blocked) return null;
 
   return (
     <Alert
+      colorfulText
       showIcon
+      // base-ui greys the description by default; keep the whole warning in the error colour
+      styles={{ description: { color: 'inherit' } }}
       title={t('localFiles.securityBlacklist.warning')}
       type="error"
-      variant="borderless"
+      variant="plain"
       description={
         <Flexbox gap={4} style={{ fontSize: 12 }}>
           <div>{securityCheck.reason ? t(securityCheck.reason as any) : undefined}</div>

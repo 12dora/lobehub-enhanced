@@ -1,11 +1,12 @@
 'use client';
 
 import { safeParseJSON } from '@lobechat/utils';
-import { Flexbox, Highlighter, Icon, Text } from '@lobehub/ui';
+import { Flexbox, Highlighter, Icon } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import { AlertTriangle } from 'lucide-react';
 import type { ErrorInfo, ReactNode } from 'react';
-import { Component, memo, useMemo } from 'react';
+import { Component, memo, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -13,6 +14,11 @@ import { useUserStore } from '@/store/user';
 import { toolInterventionSelectors } from '@/store/user/selectors';
 
 import ApprovalActions from '../Messages/AssistantGroup/Tool/Detail/Intervention/ApprovalActions';
+import {
+  markInterventionMounted,
+  registerBeforeApproveCheck,
+} from '../Messages/AssistantGroup/Tool/Detail/Intervention/beforeApproveRegistry';
+import { useInterventionLabel } from './interventionLabel';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   description: css`
@@ -46,6 +52,26 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     color: ${cssVar.colorWarning};
   `,
 }));
+
+/** Check id the render fallback claims in the shared before-approve registry. */
+export const RENDER_FALLBACK_CHECK_ID = 'render-fallback';
+
+/**
+ * Refuses "approve all" for a call whose card crashed. The card's own guard (a
+ * DingTalk confirm card refusing until its preview loaded, …) is gone with it, so
+ * nothing vouches for the write any more; the raw-JSON footer stays available for
+ * a deliberate one-by-one decision.
+ */
+export class InterventionRenderFallbackError extends Error {
+  constructor() {
+    super('INTERVENTION_RENDER_FALLBACK');
+    this.name = 'InterventionRenderFallbackError';
+  }
+}
+
+const refuseBatchApproval = () => {
+  throw new InterventionRenderFallbackError();
+};
 
 interface UserInterventionFallbackProps {
   actionsPortalTarget?: HTMLDivElement | null;
@@ -84,8 +110,25 @@ const UserInterventionFallback = memo<UserInterventionFallbackProps>(
     toolMessageId,
   }) => {
     const { t } = useTranslation('chat');
+    const label = useInterventionLabel(identifier, apiName);
     const approvalMode = useUserStore(toolInterventionSelectors.approvalMode);
     const json = useMemo(() => formatRequestArgs(requestArgs), [requestArgs]);
+    // Never "on screen without checks": approve-all would approve the crashed
+    // card's write blind. Registered after the mark on purpose, so approve-all
+    // asks it right away instead of waiting for the card to settle. The footer
+    // below does not run it — a one-by-one approve stays possible.
+    useEffect(() => {
+      const unmark = markInterventionMounted(toolMessageId);
+      const unregister = registerBeforeApproveCheck(
+        toolMessageId,
+        RENDER_FALLBACK_CHECK_ID,
+        refuseBatchApproval,
+      );
+      return () => {
+        unregister();
+        unmark();
+      };
+    }, [toolMessageId]);
     const actions = (
       <Flexbox horizontal justify={'flex-end'}>
         <ApprovalActions
@@ -108,8 +151,8 @@ const UserInterventionFallback = memo<UserInterventionFallbackProps>(
             {t('tool.intervention.renderFallback.description')}
           </span>
         </div>
-        <Text fontSize={12} type="secondary">
-          {identifier} / {apiName} · {t('tool.intervention.renderFallback.rawJson')}
+        <Text fontSize={12} title={`${identifier} / ${apiName}`} type="secondary">
+          {label} · {t('tool.intervention.renderFallback.rawJson')}
         </Text>
         <Highlighter wrap actionIconSize="small" language="json" variant="borderless">
           {json}

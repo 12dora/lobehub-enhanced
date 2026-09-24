@@ -24,6 +24,12 @@ export interface DingTalkApprovalBotContext {
   senderExternalUserId: string;
 }
 
+export interface DingTalkPendingApprovalCall {
+  apiName?: string;
+  parentMessageId: string;
+  toolCallId: string;
+}
+
 export interface DingTalkPendingApproval {
   agentId: string;
   /**
@@ -34,19 +40,34 @@ export interface DingTalkPendingApproval {
   approveOnCard?: boolean;
   askerStaffId: string;
   botContext: DingTalkApprovalBotContext;
+  /** Every approval call parked in this turn, primary first. */
+  calls?: DingTalkPendingApprovalCall[];
   /**
    * Frozen card body. Name lookup runs once before send; click, timeout, and
    * re-arm reuse this string and must not call the preview again.
    */
   cardContent: string;
+  /**
+   * True after the card status was patched for this decision.
+   * A batch updates the card once, on the first accepted resume.
+   */
+  cardPatched?: boolean;
   /** Frozen card title. Same lifetime as `cardContent`. */
   cardTitle: string;
   conversationId: string;
   /** `'1'` DM, `'2'` group. */
   conversationType: string;
+  /**
+   * Tool-call ids covered by `decision`, primary first.
+   * Set when the user decides; a later re-park of this same set resumes
+   * without a new card.
+   */
+  decidedCallIds?: string[];
   /** Intended outcome while `status` is `resuming`. */
   decision?: DingTalkApprovalDecision;
   expiresAt: number;
+  /** Call most recently handed to the runtime. A re-park skips this id. */
+  lastResumedToolCallId?: string;
   operationId: string;
   outTrackId: string;
   parentMessageId: string;
@@ -77,6 +98,19 @@ const lockKey = (outTrackId: string): string =>
 const noticeKey = (kind: string, outTrackId: string, staffId: string): string =>
   `${DINGTALK_PENDING_APPROVAL_KEY_PREFIX}notice:${kind}:${outTrackId}:${staffId}`;
 
+/**
+ * Ids this card's decision covers, primary first.
+ * v1.10.1 records have no `calls`. The card showed only the primary, so siblings
+ * stay out of `decidedCallIds` and are not auto-resumed.
+ */
+export const dingTalkApprovalCallIds = (record: DingTalkPendingApproval): string[] => {
+  const fromCalls = (record.calls ?? [])
+    .map((item) => item.toolCallId)
+    .filter((id) => id.length > 0);
+  if (fromCalls.length > 0) return fromCalls;
+  return record.toolCallId ? [record.toolCallId] : [];
+};
+
 const parseRecord = (raw: string | null): DingTalkPendingApproval | null => {
   if (!raw) return null;
   try {
@@ -89,8 +123,30 @@ const parseRecord = (raw: string | null): DingTalkPendingApproval | null => {
   }
 };
 
+export type DingTalkPendingApprovalIndexMode = 'claim' | 'keep' | 'skip';
+
+/**
+ * `claim` — this newly sent card becomes the thread's pending card.
+ * `keep` — write the index only when it is empty or already this outTrackId.
+ * `skip` — record only. In-batch updates must not steal a follow-up card's index.
+ */
+const writeThreadIndex = async (
+  redis: NonNullable<ReturnType<typeof getAgentRuntimeRedisClient>>,
+  record: DingTalkPendingApproval,
+  mode: DingTalkPendingApprovalIndexMode,
+): Promise<void> => {
+  if (mode === 'skip') return;
+  const key = threadIndexKey(record.threadId);
+  if (mode === 'keep') {
+    const indexed = await redis.get(key);
+    if (indexed && indexed !== record.outTrackId) return;
+  }
+  await redis.set(key, record.outTrackId, 'EX', DINGTALK_PENDING_APPROVAL_TTL_SECONDS);
+};
+
 export const saveDingTalkPendingApproval = async (
   record: DingTalkPendingApproval,
+  options?: { threadIndex?: DingTalkPendingApprovalIndexMode },
 ): Promise<boolean> => {
   const redis = getAgentRuntimeRedisClient();
   if (!redis) return false;
@@ -101,12 +157,7 @@ export const saveDingTalkPendingApproval = async (
       'EX',
       DINGTALK_PENDING_APPROVAL_TTL_SECONDS,
     );
-    await redis.set(
-      threadIndexKey(record.threadId),
-      record.outTrackId,
-      'EX',
-      DINGTALK_PENDING_APPROVAL_TTL_SECONDS,
-    );
+    await writeThreadIndex(redis, record, options?.threadIndex ?? 'keep');
     return true;
   } catch (error) {
     log('saveDingTalkPendingApproval failed: %O', error);
@@ -193,12 +244,18 @@ export const claimDingTalkPendingApproval = async (
 ): Promise<DingTalkApprovalClaim> =>
   transitionPending(
     outTrackId,
-    (record) => ({
-      ...record,
-      decision: record.expiresAt <= now ? 'expired' : next,
-      resumingAt: now,
-      status: 'resuming',
-    }),
+    (record) => {
+      const claimed: DingTalkPendingApproval = {
+        ...record,
+        cardPatched: false,
+        decidedCallIds: dingTalkApprovalCallIds(record),
+        decision: record.expiresAt <= now ? 'expired' : next,
+        resumingAt: now,
+        status: 'resuming',
+      };
+      delete claimed.lastResumedToolCallId;
+      return claimed;
+    },
     false,
   );
 
@@ -242,7 +299,9 @@ export const finalizeDingTalkPendingApproval = async (
       'EX',
       DINGTALK_PENDING_APPROVAL_TTL_SECONDS,
     );
-    await redis.del(threadIndexKey(record.threadId));
+    // A newer card for this thread may already own the index.
+    const indexed = await redis.get(threadIndexKey(record.threadId));
+    if (indexed === record.outTrackId) await redis.del(threadIndexKey(record.threadId));
   } catch (error) {
     log('finalizeDingTalkPendingApproval failed: %O', error);
   }
@@ -257,6 +316,9 @@ export const revertDingTalkPendingApproval = async (
   const rest = { ...record };
   delete rest.decision;
   delete rest.resumingAt;
+  delete rest.decidedCallIds;
+  delete rest.cardPatched;
+  delete rest.lastResumedToolCallId;
   const restored: DingTalkPendingApproval = { ...rest, status: 'pending' };
   try {
     await redis.set(
@@ -265,12 +327,8 @@ export const revertDingTalkPendingApproval = async (
       'EX',
       DINGTALK_PENDING_APPROVAL_TTL_SECONDS,
     );
-    await redis.set(
-      threadIndexKey(record.threadId),
-      record.outTrackId,
-      'EX',
-      DINGTALK_PENDING_APPROVAL_TTL_SECONDS,
-    );
+    // A follow-up card may already own the index. Only restore this one.
+    await writeThreadIndex(redis, record, 'keep');
   } catch (error) {
     log('revertDingTalkPendingApproval failed: %O', error);
   }
