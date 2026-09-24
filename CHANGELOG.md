@@ -5,6 +5,13 @@
 All notable changes to **LobeHub Enhanced** are documented here.
 Upstream LobeHub release notes live in the [lobehub/lobehub](https://github.com/lobehub/lobehub) repository.
 
+## 1.11.1 (2026-09-25)
+
+#### 🐛 Fixes
+
+- 「钉钉文档与表格」新增 AI 表格记录实际已写入却提示失败（钉钉写入后立即读回有延迟），可能导致助手重试写出重复记录：改用不读回校验的写入方式，并按每次工具调用生成幂等键，同一次调用重放也不会重复写入。
+- 新建文档、追加文档、追加表格行、新增 / 修改 AI 表格记录的结果附「在钉钉中打开」链接。
+
 ## 1.11.0 (2026-09-25)
 
 #### ✨ Features
