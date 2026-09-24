@@ -57,6 +57,8 @@ interface OpDef {
 }
 
 const ID_RE = /^[\w+/=.:-]{1,256}$/;
+/** UUID v4: version nibble 4, variant 10xx. `--client-token` rejects anything else. */
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CURSOR_RE = new RegExp(`^[A-Za-z0-9_+/=.:-]{1,${CURSOR_MAX}}$`);
 const PROFILE_PART = '[\\w+/=.-]{1,128}';
 const PROFILE_RE = new RegExp(`^${PROFILE_PART}:${PROFILE_PART}$`);
@@ -91,6 +93,13 @@ function has(args: Dict, key: string): boolean {
 function assertId(label: string, value: unknown): string {
   // ID_RE allows "://", so raw http(s) URLs are rejected here as well.
   if (typeof value !== 'string' || !ID_RE.test(value) || value.includes('://')) {
+    throw new InvalidArgsError(`${label}不合法`);
+  }
+  return value;
+}
+
+function assertUuidV4(label: string, value: unknown): string {
+  if (typeof value !== 'string' || !UUID_V4_RE.test(value)) {
     throw new InvalidArgsError(`${label}不合法`);
   }
   return value;
@@ -664,20 +673,22 @@ const OPS: Record<string, OpDef> = {
   'aitable.records.create': {
     argv: (args) => [
       'aitable',
-      '+record-batch-create',
+      'record',
+      'create',
       flag('base-id', args.baseId as string),
       flag('table-id', args.tableId as string),
       flag('records', JSON.stringify(parseCreateRecords(args.records))),
-      '--yes',
+      flag('client-token', args.clientToken as string),
     ],
     feature: 'sheets',
     nonIdempotent: true,
     timeoutMs: CHILD_TIMEOUT_MS,
     validate: (args) => {
-      rejectUnknown(args, ['baseId', 'records', 'tableId']);
+      rejectUnknown(args, ['baseId', 'clientToken', 'records', 'tableId']);
       assertId('多维表', args.baseId);
       assertId('数据表', args.tableId);
       parseCreateRecords(args.records);
+      assertUuidV4('幂等键', args.clientToken);
     },
     write: true,
   },
@@ -713,11 +724,11 @@ const OPS: Record<string, OpDef> = {
   'aitable.records.update': {
     argv: (args) => [
       'aitable',
-      '+record-update',
+      'record',
+      'update',
       flag('base-id', args.baseId as string),
       flag('table-id', args.tableId as string),
       flag('records', JSON.stringify(parseUpdateRecords(args.records))),
-      '--yes',
     ],
     feature: 'sheets',
     timeoutMs: CHILD_TIMEOUT_MS,
@@ -1010,7 +1021,10 @@ export function opWrites(op: string): boolean {
   return OPS[op]?.write === true;
 }
 
-/** `aitable.records.create` is non-idempotent. The sidecar never retries; callers must not either. */
+/**
+ * `aitable.records.create` repeats safely only when the same `clientToken` is sent again.
+ * A new token inserts more rows. The sidecar never retries.
+ */
 export function opNonIdempotent(op: string): boolean {
   return OPS[op]?.nonIdempotent === true;
 }

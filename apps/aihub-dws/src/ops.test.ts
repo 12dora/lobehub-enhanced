@@ -242,6 +242,7 @@ describe('op allowlist', () => {
 
 const NODE = 'NkDw8v2oZBY0123456789012345678';
 const CURSOR = 'pos:-1.2713976E7';
+const CLIENT_TOKEN = '550e8400-e29b-41d4-a716-446655440000';
 
 describe('docs and sheets ops', () => {
   it('builds read argv and keeps forbidden flags off the command', () => {
@@ -387,28 +388,41 @@ describe('docs and sheets ops', () => {
       '--yes',
     ]);
     const records = [{ cells: { BGV86kr: '你好', buxAQKc: 1, flag: true } }];
-    expect(argsOf('aitable.records.create', { baseId: NODE, records, tableId: 'tbl1' })).toEqual([
+    expect(
+      argsOf('aitable.records.create', {
+        baseId: NODE,
+        clientToken: CLIENT_TOKEN,
+        records,
+        tableId: 'tbl1',
+      }),
+    ).toEqual([
       'aitable',
-      '+record-batch-create',
+      'record',
+      'create',
       `--base-id=${NODE}`,
       '--table-id=tbl1',
       `--records=${JSON.stringify(records)}`,
-      '--yes',
+      `--client-token=${CLIENT_TOKEN}`,
     ]);
     const updates = [{ recordId: 'rec1', cells: { BGV86kr: '改' } }];
     expect(
       argsOf('aitable.records.update', { baseId: NODE, records: updates, tableId: 'tbl1' }),
     ).toEqual([
       'aitable',
-      '+record-update',
+      'record',
+      'update',
       `--base-id=${NODE}`,
       '--table-id=tbl1',
       `--records=${JSON.stringify(updates)}`,
-      '--yes',
     ]);
     expect(prep('sheet.append', { nodeId: NODE, sheetId: 'st-1', values }).write).toBe(true);
     expect(
-      prep('aitable.records.create', { baseId: NODE, records, tableId: 'tbl1' }).timeoutMs,
+      prep('aitable.records.create', {
+        baseId: NODE,
+        clientToken: CLIENT_TOKEN,
+        records,
+        tableId: 'tbl1',
+      }).timeoutMs,
     ).toBe(50_000);
   });
 
@@ -551,5 +565,41 @@ describe('docs and sheets ops', () => {
     expect(() =>
       prep('aitable.records.query', { all: true, baseId: NODE, tableId: 'tbl1' }),
     ).toThrow(/未知参数/);
+    const one = [{ cells: { BGV86kr: 'x' } }];
+    expect(() =>
+      prep('aitable.records.create', { baseId: NODE, records: one, tableId: 'tbl1' }),
+    ).toThrow(/幂等键/);
+    expect(() =>
+      prep('aitable.records.create', {
+        baseId: NODE,
+        clientToken: 'not-a-uuid',
+        records: one,
+        tableId: 'tbl1',
+      }),
+    ).toThrow(/幂等键/);
+    expect(() =>
+      prep('aitable.records.create', {
+        baseId: NODE,
+        clientToken: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        records: one,
+        tableId: 'tbl1',
+      }),
+    ).toThrow(/幂等键/);
+    expect(() =>
+      prep('aitable.records.create', {
+        baseId: NODE,
+        clientToken: '550e8400-e29b-41d4-c716-446655440000',
+        records: one,
+        tableId: 'tbl1',
+      }),
+    ).toThrow(/幂等键/);
+    expect(() =>
+      prep('aitable.records.create', {
+        baseId: NODE,
+        clientToken: CLIENT_TOKEN.toUpperCase(),
+        records: one,
+        tableId: 'tbl1',
+      }),
+    ).not.toThrow();
   });
 });

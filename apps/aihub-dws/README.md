@@ -41,28 +41,28 @@
 
 文档 / 知识库 / 钉盘 / 在线表格 / AI 表格（broker 在每条命令后仍加 `--format=json --timeout=30`；不会传 `--page-all`、`--all`、`--url-only`）：
 
-| op                       | 功能   | 写  | argv（`--profile` 之后）                                                                         |
-| ------------------------ | ------ | --- | ------------------------------------------------------------------------------------------------ |
-| `doc.search`             | docs   |     | `doc +search --query --limit`（1–10，默认 5）                                                    |
-| `doc.info`               | docs   |     | `doc info --node`                                                                                |
-| `doc.read`               | docs   |     | `doc read --node`                                                                                |
-| `doc.append`             | docs   | 是  | `doc +doc-append --doc --content --yes`                                                          |
-| `doc.create`             | docs   | 是  | `doc +create --name --content --doc-format=markdown [--folder] [--workspace] --yes`              |
-| `wiki.spaces`            | docs   |     | `wiki +space-list --type=orgWikiSpace\|myWikiSpace --limit=20`                                   |
-| `wiki.nodes`             | docs   |     | `wiki +node-list --workspace --limit [--folder] [--cursor]`（条数 1–30，默认 20）                |
-| `drive.search`           | docs   |     | `drive +search --query --target=file --limit`（1–10，默认 5）                                    |
-| `drive.list`             | docs   |     | `drive +list --limit=20 [--folder] [--cursor]`                                                   |
-| `drive.download`         | docs   |     | `drive +download --node --output=./files/`（下载，100 秒；接受 `localPath` 或 `data.savedPath`） |
-| `sheet.list`             | sheets |     | `sheet +list-sheets --node`                                                                      |
-| `sheet.info`             | sheets |     | `sheet info --node [--sheet-id]`                                                                 |
-| `sheet.read`             | sheets |     | `sheet +read --node --range [--sheet-id] --value-render-option=formatted_value`                  |
-| `sheet.append`           | sheets | 是  | `sheet append --node --sheet-id --values=<JSON> --yes`                                           |
-| `aitable.bases`          | sheets |     | 有 query：`aitable base search --query`；无 query：`aitable base list --limit=10`                |
-| `aitable.tables`         | sheets |     | `aitable +list-tables --base`                                                                    |
-| `aitable.schema`         | sheets |     | `aitable table get --base-id --table-ids`（一个表）                                              |
-| `aitable.records.query`  | sheets |     | `aitable record query --base-id --table-id --limit [--query] [--cursor]`（条数 1–50，默认 20）   |
-| `aitable.records.create` | sheets | 是  | `aitable +record-batch-create --base-id --table-id --records=<JSON> --yes`（不可重试）           |
-| `aitable.records.update` | sheets | 是  | `aitable +record-update --base-id --table-id --records=<JSON> --yes`                             |
+| op                       | 功能   | 写  | argv（`--profile` 之后）                                                                                            |
+| ------------------------ | ------ | --- | ------------------------------------------------------------------------------------------------------------------- |
+| `doc.search`             | docs   |     | `doc +search --query --limit`（1–10，默认 5）                                                                       |
+| `doc.info`               | docs   |     | `doc info --node`                                                                                                   |
+| `doc.read`               | docs   |     | `doc read --node`                                                                                                   |
+| `doc.append`             | docs   | 是  | `doc +doc-append --doc --content --yes`                                                                             |
+| `doc.create`             | docs   | 是  | `doc +create --name --content --doc-format=markdown [--folder] [--workspace] --yes`                                 |
+| `wiki.spaces`            | docs   |     | `wiki +space-list --type=orgWikiSpace\|myWikiSpace --limit=20`                                                      |
+| `wiki.nodes`             | docs   |     | `wiki +node-list --workspace --limit [--folder] [--cursor]`（条数 1–30，默认 20）                                   |
+| `drive.search`           | docs   |     | `drive +search --query --target=file --limit`（1–10，默认 5）                                                       |
+| `drive.list`             | docs   |     | `drive +list --limit=20 [--folder] [--cursor]`                                                                      |
+| `drive.download`         | docs   |     | `drive +download --node --output=./files/`（下载，100 秒；接受 `localPath` 或 `data.savedPath`）                    |
+| `sheet.list`             | sheets |     | `sheet +list-sheets --node`                                                                                         |
+| `sheet.info`             | sheets |     | `sheet info --node [--sheet-id]`                                                                                    |
+| `sheet.read`             | sheets |     | `sheet +read --node --range [--sheet-id] --value-render-option=formatted_value`                                     |
+| `sheet.append`           | sheets | 是  | `sheet append --node --sheet-id --values=<JSON> --yes`                                                              |
+| `aitable.bases`          | sheets |     | 有 query：`aitable base search --query`；无 query：`aitable base list --limit=10`                                   |
+| `aitable.tables`         | sheets |     | `aitable +list-tables --base`                                                                                       |
+| `aitable.schema`         | sheets |     | `aitable table get --base-id --table-ids`（一个表）                                                                 |
+| `aitable.records.query`  | sheets |     | `aitable record query --base-id --table-id --limit [--query] [--cursor]`（条数 1–50，默认 20）                      |
+| `aitable.records.create` | sheets | 是  | `aitable record create --base-id --table-id --records=<JSON> --client-token=<UUID>`（幂等键由服务端按工具调用派生） |
+| `aitable.records.update` | sheets | 是  | `aitable record update --base-id --table-id --records=<JSON>`                                                       |
 
 `--values` / `--records` 由 broker 把校验后的数组序列化成 JSON，不接受原始字符串。在线表格或在线文档节点的下载失败会变成 `VALIDATION`，提示改用 readSheet /readDoc。
 
@@ -75,7 +75,7 @@
 - 镜像以 uid 10077 运行。建议 `read_only`，并把 `/tmp` 做成 tmpfs（下载的临时目录在这里，用完即删，单文件上限 20MB）。
 - 全局最多 4 个短命令同时跑，同一 profile 同时只有一个子进程。排队（profile 锁和全局名额共用一个时钟）最多 10 秒，超时错误码是 `TIMEOUT`。普通命令的子进程上限 50 秒，下载是 100 秒。
 - 登录设备码最多 10 个进行中的任务。名额在开始等待之前扣下，失败或结束时放回，所以同时来 11 个会是 10 个任务加一个 429。
-- 读操作和 `GET /v1/profiles/:profile/status` 在 HTTP 客户端断开时会杀掉子进程。写操作（改待办、完成待办、提交日志、新建或追加文档、追加表格行、新增或修改 AI 表格记录）以及 `DELETE /v1/profiles/:profile` 断开后仍会跑完。`aitable.records.create` 不是幂等的，调用方不要重试。
+- 读操作和 `GET /v1/profiles/:profile/status` 在 HTTP 客户端断开时会杀掉子进程。写操作（改待办、完成待办、提交日志、新建或追加文档、追加表格行、新增或修改 AI 表格记录）以及 `DELETE /v1/profiles/:profile` 断开后仍会跑完。`aitable.records.create` 只有复用同一个 `clientToken` 才是幂等的；sidecar 不重试，调用方重试时必须带同一个 token。（`+record-batch-create` 写入后立即读回校验，钉钉有延迟时会报 status unknown 但其实已写入，所以改用不读回的 `record create`。）
 - `GET /v1/profiles/:profile/status` 的排队上限是 5 秒、子进程上限是 15 秒（给 AIHub 的 30 秒留余量）。登出的三次子进程各 10 秒，整段 35 秒（给 AIHub 的 45 秒留余量）。
 - 身份不符时，用登录前成功的 `dws profile list` 判断：返回的 profile 不在那次快照里才登出。快照任何失败都会让登录直接 502，不会启动设备码进程。没有快照却已发布的任务仍不登出（防御分支，审计码 `MISMATCH_CLEANUP_SKIPPED`）。
 - 取消进行中的登录也用这份快照。子进程退出后再读一次列表：期望身份若是这次写上的（或 `lastLoginAt` 更新了）就按成功返回，令牌留给 AIHub 落账；其它新身份会登出。这次列表失败则返回 `cancelled` 且 `reconciled:false`，并打审计 `CANCEL_RECONCILE_FAILED`，不会猜着登出。这次读列表不占该 profile 的锁，避免和尚未退出的登录子进程互相卡住。

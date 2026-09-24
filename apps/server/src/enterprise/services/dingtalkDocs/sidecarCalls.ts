@@ -1,9 +1,16 @@
+import { aitableCreateClientToken } from './clientToken';
+
 /**
  * Every broker call `runDingtalkDocsTool` produces for the 18 APIs
  * (typical arguments and optional arguments). The sidecar contract test
  * feeds these through `prepareExec`; the server test checks the executor
  * actually emits them.
  */
+
+/** Fixed tool-call id so create fixtures carry the token the executor derives. */
+export const DOCS_TOOL_CALL_ID = 'call_docs_contract';
+export const DOCS_CLIENT_TOKEN = aitableCreateClientToken(DOCS_TOOL_CALL_ID);
+
 export interface DocsExecCall {
   args: Record<string, unknown>;
   op: string;
@@ -223,6 +230,7 @@ export const DOCS_EXEC_SCENARIOS: DocsExecScenario[] = [
     calls: [
       exec('aitable.records.create', {
         baseId: DOCS_BASE,
+        clientToken: DOCS_CLIENT_TOKEN,
         records: [{ cells: { BGV86kr: '甲', buxAQKc: true } }],
         tableId: DOCS_TABLE,
       }),
@@ -330,6 +338,7 @@ export const DOCS_CONTENT_PARITY: DocsContentParityCase[] = [
     sidecar: {
       args: {
         baseId: DOCS_BASE,
+        clientToken: DOCS_CLIENT_TOKEN,
         records: [{ cells: { BGV86kr: `甲${NUL}` } }],
         tableId: DOCS_TABLE,
       },
@@ -366,7 +375,12 @@ export const DOCS_CONTENT_PARITY: DocsContentParityCase[] = [
       schema: 'createAitableRecords',
     },
     sidecar: {
-      args: { baseId: DOCS_BASE, records: [{ cells: {} }], tableId: DOCS_TABLE },
+      args: {
+        baseId: DOCS_BASE,
+        clientToken: DOCS_CLIENT_TOKEN,
+        records: [{ cells: {} }],
+        tableId: DOCS_TABLE,
+      },
       op: 'aitable.records.create',
     },
   },
@@ -453,6 +467,7 @@ export const DOCS_CONTENT_PARITY: DocsContentParityCase[] = [
     sidecar: {
       args: {
         baseId: DOCS_BASE,
+        clientToken: DOCS_CLIENT_TOKEN,
         records: [{ cells: { BGV86kr: '甲' } }],
         tableId: DOCS_TABLE,
       },

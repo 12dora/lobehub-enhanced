@@ -11,6 +11,8 @@ import {
   projectSheetRange,
   projectWikiNodes,
   projectWikiSpaces,
+  readCreatedCount,
+  readResultUrl,
   trimSheetGrid,
 } from './project';
 
@@ -216,5 +218,43 @@ describe('dingtalk docs projections', () => {
       { cells: { 负责人: '甲', 备注: '跟进中' }, recordId: '4vNpqOwrec' },
     ]);
     expect(projected.unknownFieldIds).toEqual([]);
+  });
+
+  it('reads a nested doc url, then a node or base id that passes the id check', () => {
+    const nested = {
+      complete: true,
+      contractVersion: '1',
+      data: {
+        nodeId: NODE,
+        result: { docUrl: 'https://alidocs.dingtalk.com/i/nodes/from-result', name: '周报' },
+      },
+    };
+    expect(readResultUrl(nested)).toBe('https://alidocs.dingtalk.com/i/nodes/from-result');
+    expect(
+      readResultUrl({
+        data: { nodeId: NODE, result: { url: 'https://alidocs.dingtalk.com/i/nodes/from-url' } },
+      }),
+    ).toBe('https://alidocs.dingtalk.com/i/nodes/from-url');
+    expect(readResultUrl({ data: { nodeId: NODE, result: { name: '周报' } } })).toBe(
+      `https://alidocs.dingtalk.com/i/nodes/${NODE}`,
+    );
+    expect(readResultUrl({ data: { baseId: 'YndMjz5aAbase00000000000000001' } })).toBe(
+      'https://alidocs.dingtalk.com/i/nodes/YndMjz5aAbase00000000000000001',
+    );
+    expect(readResultUrl({}, NODE)).toBe(`https://alidocs.dingtalk.com/i/nodes/${NODE}`);
+    expect(readResultUrl({ data: { nodeId: 'https://evil.example/x' } }, NODE)).toBe(
+      `https://alidocs.dingtalk.com/i/nodes/${NODE}`,
+    );
+    expect(readResultUrl({}, 'https://alidocs.dingtalk.com/i/nodes/abc')).toBeUndefined();
+    expect(readResultUrl({}, 'bad id')).toBeUndefined();
+    expect(readResultUrl({ url: 'javascript:alert(1)' }, NODE)).toBe(
+      `https://alidocs.dingtalk.com/i/nodes/${NODE}`,
+    );
+  });
+
+  it('counts created records from data.newRecordIds', () => {
+    expect(readCreatedCount({ data: { newRecordIds: ['cNWjCoD8Pn', ''] } })).toBe(1);
+    expect(readCreatedCount({ data: { newRecordIds: [] } })).toBe(0);
+    expect(readCreatedCount({ success: true })).toBeUndefined();
   });
 });

@@ -28,6 +28,7 @@ export const dingtalkDocsRuntime: ServerRuntimeRegistration = {
             botPlatform: context.botPlatform,
             botThreadId: context.botThreadId,
             resolveLink,
+            toolCallId: context.toolCallId,
             topicId: context.topicId,
             workspaceId: context.workspaceId,
           }),

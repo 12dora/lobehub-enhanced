@@ -30,6 +30,7 @@ vi.mock('@/server/enterprise/services/dingtalkPersonal/audit', () => ({
 }));
 
 const { appendSheetRowsSchema, parseDocsArgs } = await import('./args');
+const { aitableCreateClientToken } = await import('./clientToken');
 const { previewDingtalkDocsWrite, runDingtalkDocsTool } = await import('./tool');
 
 const db = { tag: 'db' } as never;
@@ -41,7 +42,8 @@ const TABLE = 'knhttimpzdr31aq2r3ykq';
 const run = (
   apiName: Parameters<typeof runDingtalkDocsTool>[2],
   args: Record<string, unknown> = {},
-) => runDingtalkDocsTool(db, 'user-1', apiName, args, { workspaceId: 'ws-1' });
+  ctx: { toolCallId?: string } = {},
+) => runDingtalkDocsTool(db, 'user-1', apiName, args, { workspaceId: 'ws-1', ...ctx });
 
 beforeEach(() => {
   exec.mockReset();
@@ -275,19 +277,100 @@ describe('runDingtalkDocsTool', () => {
   });
 
   it('creates aitable records in one non-retried call', async () => {
-    exec.mockResolvedValueOnce({ success: true });
-    const result = await run('createAitableRecords', {
-      baseId: BASE,
-      records: [{ cells: { BGV86kr: '甲', buxAQKc: true } }],
-      tableId: TABLE,
+    exec.mockResolvedValueOnce({
+      data: { newRecordIds: ['cNWjCoD8Pn'] },
+      success: true,
     });
+    const result = await run(
+      'createAitableRecords',
+      {
+        baseId: BASE,
+        records: [{ cells: { BGV86kr: '甲', buxAQKc: true } }],
+        tableId: TABLE,
+      },
+      { toolCallId: 'call_create_1' },
+    );
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith('aitable.records.create', {
       baseId: BASE,
+      clientToken: aitableCreateClientToken('call_create_1'),
       records: [{ cells: { BGV86kr: '甲', buxAQKc: true } }],
       tableId: TABLE,
     });
-    expect(result.state).toMatchObject({ action: 'createAitableRecords', count: 1, kind: 'write' });
+    expect(result.content).toBe('已新增 1 条记录');
+    expect(result.state).toMatchObject({
+      action: 'createAitableRecords',
+      count: 1,
+      kind: 'write',
+      url: `https://alidocs.dingtalk.com/i/nodes/${BASE}`,
+    });
+  });
+
+  it('reuses the client token for the same tool call and counts newRecordIds', async () => {
+    exec.mockResolvedValue({
+      data: { newRecordIds: ['recA', 'recB'] },
+      success: true,
+    });
+    const args = {
+      baseId: BASE,
+      records: [{ cells: { BGV86kr: '甲' } }],
+      tableId: TABLE,
+    };
+    const first = await run('createAitableRecords', args, { toolCallId: 'call_same' });
+    const second = await run('createAitableRecords', args, { toolCallId: 'call_same' });
+    const token = aitableCreateClientToken('call_same');
+    expect(exec.mock.calls[0]?.[1]).toMatchObject({ clientToken: token });
+    expect(exec.mock.calls[1]?.[1]).toMatchObject({ clientToken: token });
+    expect(first.content).toBe('已新增 2 条记录');
+    expect(second.state).toMatchObject({ count: 2 });
+
+    exec.mockClear();
+    exec.mockResolvedValue({ data: { newRecordIds: ['recC'] }, success: true });
+    await run('createAitableRecords', args);
+    await run('createAitableRecords', args);
+    const minted = [exec.mock.calls[0]?.[1], exec.mock.calls[1]?.[1]].map(
+      (call) => (call as { clientToken?: string }).clientToken,
+    );
+    expect(minted[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(minted[1]).not.toBe(minted[0]);
+  });
+
+  it('attaches a DingTalk url on every write', async () => {
+    exec.mockResolvedValueOnce({
+      complete: true,
+      data: {
+        nodeId: NODE,
+        result: { docUrl: 'https://alidocs.dingtalk.com/i/nodes/created', name: '新文档' },
+      },
+    });
+    const created = await run('createDoc', { markdown: '正文', title: '新文档' });
+    expect(created.state).toMatchObject({
+      url: 'https://alidocs.dingtalk.com/i/nodes/created',
+    });
+
+    exec.mockResolvedValueOnce({});
+    const appended = await run('appendDoc', { markdown: '补充', nodeId: NODE });
+    expect(appended.state).toMatchObject({
+      url: `https://alidocs.dingtalk.com/i/nodes/${NODE}`,
+    });
+
+    exec.mockResolvedValueOnce({});
+    const rows = await run('appendSheetRows', { nodeId: NODE, rows: [['甲']], sheetId: SHEET });
+    expect(rows.state).toMatchObject({
+      url: `https://alidocs.dingtalk.com/i/nodes/${NODE}`,
+    });
+
+    exec.mockResolvedValueOnce({});
+    const updated = await run('updateAitableRecords', {
+      baseId: BASE,
+      records: [{ cells: { BGV86kr: '乙' }, recordId: '4vNpqOwrec' }],
+      tableId: TABLE,
+    });
+    expect(updated.state).toMatchObject({
+      url: `https://alidocs.dingtalk.com/i/nodes/${BASE}`,
+    });
   });
 
   it('passes a wiki cursor through and maps my-space to myWikiSpace', async () => {

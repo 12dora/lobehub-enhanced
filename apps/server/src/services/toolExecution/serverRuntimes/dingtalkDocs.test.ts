@@ -50,9 +50,28 @@ describe('dingtalkDocsRuntime', () => {
         botPlatform: 'dingtalk',
         botThreadId: 'dingtalk:cid_group:staff_1',
         resolveLink: expect.any(Function),
+        toolCallId: undefined,
         topicId: 'topic-1',
         workspaceId: 'ws-1',
       },
+    );
+  });
+
+  it('forwards toolCallId so an AI-table create can reuse its idempotency key', async () => {
+    const runtime = await dingtalkDocsRuntime.factory({
+      serverDB: { tag: 'db' },
+      toolCallId: 'call_create_1',
+      userId: 'user-1',
+    } as never);
+
+    await runtime.searchDocs({ query: '周报' });
+
+    expect(runDingtalkDocsTool).toHaveBeenCalledWith(
+      { tag: 'db' },
+      'user-1',
+      'searchDocs',
+      { query: '周报' },
+      expect.objectContaining({ toolCallId: 'call_create_1' }),
     );
   });
 

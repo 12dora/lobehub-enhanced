@@ -233,6 +233,53 @@ async function doExec(control) {
   finish(0, `${JSON.stringify({ data: { echo: true }, ok: true, outcome: 'success' })}\n`);
 }
 
+function flagValue(argv, name) {
+  const prefix = `--${name}=`;
+  const hit = argv.find((arg) => arg.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : '';
+}
+
+/** Plain `aitable record create|update` (no read-back). The plus-commands are not emulated. */
+function isAitableRecordWrite(argv) {
+  return (
+    argv.includes('aitable') &&
+    argv.includes('record') &&
+    (argv.includes('create') || argv.includes('update'))
+  );
+}
+
+function writeAitableRecords(argv) {
+  if (argv.includes('create')) {
+    let count = 1;
+    try {
+      const parsed = JSON.parse(flagValue(argv, 'records') || '[]');
+      if (Array.isArray(parsed) && parsed.length > 0) count = parsed.length;
+    } catch {
+      count = 1;
+    }
+    const newRecordIds = Array.from({ length: count }, (_, index) => `rec${index + 1}`);
+    finish(
+      0,
+      `${JSON.stringify({
+        data: { clientToken: flagValue(argv, 'client-token'), newRecordIds },
+        status: 'success',
+        success: true,
+        summary: `Successfully created ${count} record(s)`,
+      })}\n`,
+    );
+    return;
+  }
+  finish(
+    0,
+    `${JSON.stringify({
+      data: {},
+      status: 'success',
+      success: true,
+      summary: 'Successfully updated records',
+    })}\n`,
+  );
+}
+
 function downloadBody(shape, relativePath, size) {
   if (shape === 'savedPath') {
     return {
@@ -402,6 +449,8 @@ if (args[0] === 'version') {
   doDownload(control, 'localPath');
 } else if (args.includes('drive') && args.includes('+download')) {
   doDownload(control, 'savedPath');
+} else if (isAitableRecordWrite(args)) {
+  writeAitableRecords(args);
 } else {
   await doExec(control);
 }

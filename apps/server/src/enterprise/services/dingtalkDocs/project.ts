@@ -414,11 +414,55 @@ export const renderRecordsContent = (
   return content;
 };
 
-export const readResultUrl = (raw: unknown): string | undefined => {
+const ID_RE = /^[\w+/=.:-]{1,256}$/;
+const ALIDOCS_NODE_URL = 'https://alidocs.dingtalk.com/i/nodes/';
+
+/** Same check as the sidecar `assertId`: ID_RE, and a raw URL (`://`) is not an id. */
+const passesIdCheck = (value: string): boolean => ID_RE.test(value) && !value.includes('://');
+
+/**
+ * How many rows `aitable record create` actually inserted.
+ * Missing `newRecordIds` means the caller should keep its own count.
+ */
+export const readCreatedCount = (raw: unknown): number | undefined => {
+  const ids = unwrapDws(raw).newRecordIds;
+  if (!Array.isArray(ids)) return undefined;
+  return ids.filter((id) => typeof id === 'string' && id.trim() !== '').length;
+};
+
+/**
+ * Link for a write result. Prefers an http(s) URL on the payload, including
+ * `data.result.docUrl` from `doc +create`, then `https://alidocs.dingtalk.com/i/nodes/<id>`
+ * for a node id or AI-table base id that passes the id check.
+ */
+export const readResultUrl = (raw: unknown, fallbackId?: string): string | undefined => {
   const data = unwrapDws(raw);
-  return (
-    httpUrl(data.url) ?? httpUrl(data.docUrl) ?? (isRecord(raw) ? httpUrl(raw.url) : undefined)
-  );
+  const nested = isRecord(data.result) ? data.result : undefined;
+  const direct =
+    httpUrl(data.url) ??
+    httpUrl(data.docUrl) ??
+    (nested ? (httpUrl(nested.docUrl) ?? httpUrl(nested.url)) : undefined) ??
+    (isRecord(raw) ? httpUrl(raw.url) : undefined);
+  if (direct) return direct;
+
+  const rawRecord = isRecord(raw) ? raw : undefined;
+  const rawNested = rawRecord && isRecord(rawRecord.result) ? rawRecord.result : undefined;
+  const candidates = [
+    text(data.nodeId),
+    text(data.baseId),
+    nested ? text(nested.nodeId) : '',
+    nested ? text(nested.baseId) : '',
+    rawRecord ? text(rawRecord.nodeId) : '',
+    rawRecord ? text(rawRecord.baseId) : '',
+    rawNested ? text(rawNested.nodeId) : '',
+    rawNested ? text(rawNested.baseId) : '',
+    fallbackId ?? '',
+  ];
+  for (const candidate of candidates) {
+    const id = candidate.trim();
+    if (passesIdCheck(id)) return `${ALIDOCS_NODE_URL}${id}`;
+  }
+  return undefined;
 };
 
 /** Title from `doc.info` or `doc.read`. `doc info` may only carry `name`. */

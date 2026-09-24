@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DOCS_EXEC_SCENARIOS, DOCS_SHEET } from './sidecarCalls';
+import { DOCS_EXEC_SCENARIOS, DOCS_SHEET, DOCS_TOOL_CALL_ID } from './sidecarCalls';
 import type { DingtalkDocsApiName } from './types';
 
 const exec = vi.hoisted(() => vi.fn());
@@ -117,6 +117,7 @@ describe('docs executor sidecar contract', () => {
         'user-1',
         scenario.apiName as DingtalkDocsApiName,
         scenario.args,
+        { toolCallId: DOCS_TOOL_CALL_ID },
       );
       expect(result.success, scenario.apiName).toBe(true);
       expect(calls, `${scenario.apiName} ${JSON.stringify(scenario.args)}`).toEqual(scenario.calls);

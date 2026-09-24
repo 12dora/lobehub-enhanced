@@ -44,6 +44,7 @@ import {
   searchDriveSchema,
   updateAitableRecordsSchema,
 } from './args';
+import { resolveAitableCreateClientToken } from './clientToken';
 import { rewriteDriveDownloadError } from './driveError';
 import { previewDingtalkDocsWrite } from './preview';
 import {
@@ -60,6 +61,7 @@ import {
   projectSheets,
   projectWikiNodes,
   projectWikiSpaces,
+  readCreatedCount,
   readResultUrl,
   readSheetSummaries,
   readUsedRange,
@@ -256,14 +258,34 @@ const writeResult = (
   },
 });
 
+export interface DingtalkDocsToolContext extends DingtalkPersonalToolContext {
+  /** LLM tool-call id. Reused as the AI-table create idempotency key. */
+  toolCallId?: string;
+}
+
+const finishWrite = (
+  action: WriteState['action'],
+  summary: string,
+  raw: unknown,
+  fallbackId?: string,
+  count?: number,
+): ToolSuccess => {
+  const url = readResultUrl(raw, fallbackId);
+  return writeResult(action, summary, {
+    ...(count !== undefined ? { count } : {}),
+    ...(url ? { url } : {}),
+  });
+};
+
 const execute = async (
   service: DingtalkPersonalService,
   db: LobeChatDatabase,
   userId: string,
   apiName: DingtalkDocsApiName,
   args: unknown,
-  workspaceId?: string,
+  ctx: DingtalkDocsToolContext = {},
 ): Promise<ToolSuccess> => {
+  const workspaceId = ctx.workspaceId;
   switch (apiName) {
     case 'searchDocs': {
       const parsed = parseDocsArgs(searchDocsSchema, args);
@@ -452,8 +474,7 @@ const execute = async (
         markdown: parsed.markdown,
         nodeId: parsed.nodeId,
       });
-      const url = readResultUrl(raw);
-      return writeResult('appendDoc', '已追加内容到文档', url ? { url } : {});
+      return finishWrite('appendDoc', '已追加内容到文档', raw, parsed.nodeId);
     }
     case 'createDoc': {
       const parsed = parseDocsArgs(createDocSchema, args);
@@ -465,8 +486,7 @@ const execute = async (
           title: parsed.title,
         }),
       );
-      const url = readResultUrl(raw);
-      return writeResult('createDoc', `已新建文档「${parsed.title}」`, url ? { url } : {});
+      return finishWrite('createDoc', `已新建文档「${parsed.title}」`, raw);
     }
     case 'appendSheetRows': {
       const parsed = parseDocsArgs(appendSheetRowsSchema, args);
@@ -475,24 +495,30 @@ const execute = async (
         sheetId: parsed.sheetId,
         values: parsed.rows,
       });
-      const url = readResultUrl(raw);
-      return writeResult('appendSheetRows', `已追加 ${parsed.rows.length} 行`, {
-        count: parsed.rows.length,
-        ...(url ? { url } : {}),
-      });
+      return finishWrite(
+        'appendSheetRows',
+        `已追加 ${parsed.rows.length} 行`,
+        raw,
+        parsed.nodeId,
+        parsed.rows.length,
+      );
     }
     case 'createAitableRecords': {
       const parsed = parseDocsArgs(createAitableRecordsSchema, args);
       const raw = await service.exec('aitable.records.create', {
         baseId: parsed.baseId,
+        clientToken: resolveAitableCreateClientToken(ctx.toolCallId),
         records: parsed.records.map((record) => ({ cells: record.cells })),
         tableId: parsed.tableId,
       });
-      const url = readResultUrl(raw);
-      return writeResult('createAitableRecords', `已新增 ${parsed.records.length} 条记录`, {
-        count: parsed.records.length,
-        ...(url ? { url } : {}),
-      });
+      const count = readCreatedCount(raw) ?? parsed.records.length;
+      return finishWrite(
+        'createAitableRecords',
+        `已新增 ${count} 条记录`,
+        raw,
+        parsed.baseId,
+        count,
+      );
     }
     case 'updateAitableRecords': {
       const parsed = parseDocsArgs(updateAitableRecordsSchema, args);
@@ -501,11 +527,13 @@ const execute = async (
         records: parsed.records,
         tableId: parsed.tableId,
       });
-      const url = readResultUrl(raw);
-      return writeResult('updateAitableRecords', `已修改 ${parsed.records.length} 条记录`, {
-        count: parsed.records.length,
-        ...(url ? { url } : {}),
-      });
+      return finishWrite(
+        'updateAitableRecords',
+        `已修改 ${parsed.records.length} 条记录`,
+        raw,
+        parsed.baseId,
+        parsed.records.length,
+      );
     }
     default: {
       const unknown: never = apiName;
@@ -521,7 +549,7 @@ export const runDingtalkDocsTool = async (
   userId: string,
   apiName: DingtalkDocsApiName,
   args: Record<string, unknown>,
-  ctx: DingtalkPersonalToolContext = {},
+  ctx: DingtalkDocsToolContext = {},
 ): Promise<BuiltinServerRuntimeOutput> => {
   let service: DingtalkPersonalService;
   try {
@@ -538,7 +566,7 @@ export const runDingtalkDocsTool = async (
   }
 
   try {
-    const outcome = await execute(service, db, userId, apiName, args ?? {}, ctx.workspaceId);
+    const outcome = await execute(service, db, userId, apiName, args ?? {}, ctx);
     await recordDocsWriteAudit(db, userId, apiName, args ?? {}, outcome.state);
     return {
       content: outcome.content ?? buildModelContent(outcome.state),
