@@ -14,7 +14,9 @@ import {
   writeControl,
 } from '../test/harness.ts';
 import { assertBrokerToken } from './auth.ts';
-import { parseDwsVersion } from './server.ts';
+import { toExecResult } from './runner.ts';
+import { EMPTY_COLLECTION_MESSAGE, emptyCollectionSearch, parseDwsVersion } from './server.ts';
+import type { RunResult } from './types.ts';
 
 describe('parseDwsVersion', () => {
   it('normalizes the version probe', () => {
@@ -614,6 +616,149 @@ describe('http broker', () => {
       expect(audit).toContain('"exitCode":0');
     } finally {
       process.stdout.write = original;
+    }
+  });
+});
+
+const emptyStderr = (message: string) =>
+  `${JSON.stringify({ error: { category: 'api', code: 1, message } })}\n`;
+
+describe('emptyCollectionSearch', () => {
+  const run = (over: Partial<RunResult> = {}): RunResult => ({
+    durationMs: 4,
+    exitCode: 1,
+    outputTooLarge: false,
+    signal: null,
+    stderr: emptyStderr(EMPTY_COLLECTION_MESSAGE),
+    stdout: '',
+    stdoutBytes: 0,
+    timedOut: false,
+    ...over,
+  });
+
+  it('matches only the exact zero-hit sentence on chat.searchMessages', () => {
+    const hit = run();
+    expect(emptyCollectionSearch('chat.searchMessages', hit, toExecResult(hit))).toBe(true);
+    const padded = run({ stderr: emptyStderr(`  ${EMPTY_COLLECTION_MESSAGE}  `) });
+    expect(emptyCollectionSearch('chat.searchMessages', padded, toExecResult(padded))).toBe(true);
+
+    const timed = run({ timedOut: true });
+    expect(emptyCollectionSearch('chat.searchMessages', timed, toExecResult(timed))).toBe(false);
+    const huge = run({ outputTooLarge: true });
+    expect(emptyCollectionSearch('chat.searchMessages', huge, toExecResult(huge))).toBe(false);
+    const otherOp = run();
+    expect(emptyCollectionSearch('todo.list', otherOp, toExecResult(otherOp))).toBe(false);
+  });
+});
+
+describe('chat.searchMessages empty collection', () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    while (cleanups.length) await cleanups.pop()?.();
+  });
+
+  it('remaps only that op and keeps every other failure', async () => {
+    const started = await boot({ profiles: [PROFILE], version: 'v1.0.62' });
+    cleanups.push(started.close);
+
+    const call = async (
+      op: string,
+      args: Record<string, unknown>,
+      exec: Record<string, unknown>,
+    ) => {
+      await writeControl(started.configDir, {
+        exec,
+        profiles: [PROFILE],
+        version: 'v1.0.62',
+      });
+      const lines: string[] = [];
+      const original = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        lines.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write;
+      try {
+        const response = await api(started.server, 'POST', '/v1/exec', {
+          args,
+          op,
+          profile: PROFILE,
+        });
+        return { audit: lines.join(''), response };
+      } finally {
+        process.stdout.write = original;
+      }
+    };
+
+    const emptyExec = {
+      action: 'exit',
+      exitCode: 1,
+      stderr: emptyStderr(EMPTY_COLLECTION_MESSAGE),
+      stdout: '',
+    };
+    const hit = await call('chat.searchMessages', { query: 'zzz-no-such-xq3-9f2' }, emptyExec);
+    expect(hit.response.status).toBe(200);
+    expect(hit.response.json).toMatchObject({
+      data: {
+        complete: true,
+        count: 0,
+        hasMore: false,
+        messages: [],
+        stopReason: 'empty',
+        truncated: false,
+      },
+      ok: true,
+    });
+    expect(hit.audit).toContain('"errorCode":"EMPTY_COLLECTION"');
+    expect(hit.audit).toContain('"exitCode":1');
+    expect(hit.audit).toContain('"op":"chat.searchMessages"');
+    expect(hit.audit).toContain('"stdoutBytes":0');
+
+    const others: Array<[string, Record<string, unknown>]> = [
+      ['chat.searchGroups', { query: '福瑞思' }],
+      [
+        'chat.messages',
+        {
+          conversationId: 'cid1',
+          end: '2026-09-22T00:00:00.000Z',
+          start: '2026-09-20T00:00:00.000Z',
+        },
+      ],
+      ['todo.list', {}],
+    ];
+    for (const [op, args] of others) {
+      const missed = await call(op, args, emptyExec);
+      expect(missed.response.json).toMatchObject({
+        error: { code: 'API_ERROR', message: EMPTY_COLLECTION_MESSAGE },
+        ok: false,
+      });
+      expect(missed.audit).toContain('"errorCode":"API_ERROR"');
+      expect(missed.audit).not.toContain('EMPTY_COLLECTION');
+    }
+
+    const rejects: Array<[Record<string, unknown>, { code: string }]> = [
+      [
+        { ...emptyExec, stderr: emptyStderr(`${EMPTY_COLLECTION_MESSAGE}。`) },
+        { code: 'API_ERROR' },
+      ],
+      [
+        { ...emptyExec, stderr: emptyStderr(`前缀${EMPTY_COLLECTION_MESSAGE}`) },
+        { code: 'API_ERROR' },
+      ],
+      [
+        {
+          ...emptyExec,
+          stderr: emptyStderr('服务返回空响应，无法证明成功或合法空结果'),
+        },
+        { code: 'API_ERROR' },
+      ],
+      [{ ...emptyExec, stderr: '调用频率超限\n' }, { code: 'RATE_LIMITED' }],
+      [{ ...emptyExec, exitCode: 2 }, { code: 'NOT_AUTHORIZED' }],
+      [{ ...emptyExec, stdout: '{"messages":[]}' }, { code: 'API_ERROR' }],
+    ];
+    for (const [exec, error] of rejects) {
+      const rejected = await call('chat.searchMessages', { query: 'zzz-no-such-xq3-9f2' }, exec);
+      expect(rejected.response.json).toMatchObject({ error, ok: false });
+      expect(rejected.audit).not.toContain('EMPTY_COLLECTION');
     }
   });
 });

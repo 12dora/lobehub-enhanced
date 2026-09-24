@@ -25,7 +25,47 @@ import { createProfiles } from './profiles.ts';
 import { startRetention } from './retention.ts';
 import type { Runner } from './runner.ts';
 import { createRunner, toExecResult } from './runner.ts';
-import type { ExecResult } from './types.ts';
+import type { ExecResult, RunResult } from './types.ts';
+
+/** dws v1.0.62 zero-hit guard for `chat +search-msg` only. Trim, do not substring. */
+export const EMPTY_COLLECTION_MESSAGE = '下游缺少明确的集合字段，无法判定结果为空';
+
+export function emptySearchPayload(): {
+  complete: true;
+  count: 0;
+  hasMore: false;
+  messages: [];
+  stopReason: 'empty';
+  truncated: false;
+} {
+  return {
+    complete: true,
+    count: 0,
+    hasMore: false,
+    messages: [],
+    stopReason: 'empty',
+    truncated: false,
+  };
+}
+
+/**
+ * True only for the reproduced zero-hit `chat.searchMessages` failure.
+ * Other ops, timeouts, oversized output, and any other sentence stay errors.
+ */
+export function emptyCollectionSearch(
+  op: string,
+  run: Pick<RunResult, 'exitCode' | 'outputTooLarge' | 'stdout' | 'stdoutBytes' | 'timedOut'>,
+  result: ExecResult,
+): boolean {
+  if (op !== 'chat.searchMessages') return false;
+  if (run.exitCode !== 1 || run.timedOut || run.outputTooLarge) return false;
+  if (run.stdoutBytes !== 0 || run.stdout.trim() !== '') return false;
+  return (
+    !result.ok &&
+    result.error.code === 'API_ERROR' &&
+    result.error.message === EMPTY_COLLECTION_MESSAGE
+  );
+}
 
 // eslint-disable-next-line no-control-regex -- reject/strip control characters in untrusted input
 const CONTROL = /[\u0000-\u001F\u007F]/;
@@ -257,12 +297,14 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
     let exitCode: number | null = null;
     let stdoutBytes = 0;
     let durationMs: number;
+    let emptyCollection = false;
     try {
       if (prepared.download) {
         const downloaded = await runDownload(
           runner,
           {
             argv: prepared.argv,
+            op: prepared.op,
             profile: body.profile,
             signal: opSignal,
             timeoutMs: prepared.timeoutMs,
@@ -285,6 +327,15 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
         exitCode = run.exitCode;
         stdoutBytes = run.stdoutBytes;
         durationMs = run.durationMs;
+        if (emptyCollectionSearch(prepared.op, run, result)) {
+          emptyCollection = true;
+          result = {
+            data: emptySearchPayload(),
+            durationMs: run.durationMs,
+            ok: true,
+            stdoutBytes: 0,
+          };
+        }
       }
     } catch (error) {
       if (error instanceof ClientClosedError) throw error;
@@ -296,7 +347,7 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
     writeAudit({
       actor,
       durationMs,
-      errorCode: result.ok ? '' : result.error.code,
+      errorCode: emptyCollection ? 'EMPTY_COLLECTION' : result.ok ? '' : result.error.code,
       event: 'exec',
       exitCode,
       op: prepared.op,
