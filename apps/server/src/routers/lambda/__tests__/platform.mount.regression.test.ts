@@ -1,10 +1,20 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { createCallerFactory } from '@/libs/trpc/lambda';
-import { createContextInner } from '@/libs/trpc/lambda/context';
+import { getTestDB } from '@/database/core/getTestDB';
+import type { LobeChatDatabase } from '@/database/type';
 
-import { lambdaRouter } from '../index';
+// Flag-off getCapabilities still reads the managed-resource policy table. The
+// test-env db adaptor is an empty object (`select` is missing); use PGlite.
+const db: LobeChatDatabase = await getTestDB();
+
+vi.mock('@/database/core/db-adaptor', () => ({
+  getServerDB: vi.fn(async () => db),
+}));
+
+const { createCallerFactory } = await import('@/libs/trpc/lambda');
+const { createContextInner } = await import('@/libs/trpc/lambda/context');
+const { lambdaRouter } = await import('../index');
 
 const createCaller = createCallerFactory(lambdaRouter);
 

@@ -151,8 +151,7 @@ describe('HeterogeneousChatInput cloud credential guard (shared-infra/F5)', () =
 
     render(<HeterogeneousChatInput />);
 
-    expect(screen.getByText('Checking cloud credentials…')).toBeTruthy();
-    expect(screen.queryByText('Cloud credentials required')).toBeNull();
+    expect(screen.getByText('heteroAgent.cloudCredLoading.title')).toBeTruthy();
     expect(screen.queryByText('heteroAgent.cloudNotConfigured.title')).toBeNull();
     expect(screen.getByTestId('guard-alert').getAttribute('data-type')).toBe('info');
     expect(screen.getByTestId('send-button')).toBeDisabled();
@@ -163,12 +162,12 @@ describe('HeterogeneousChatInput cloud credential guard (shared-infra/F5)', () =
 
     render(<HeterogeneousChatInput />);
 
-    expect(screen.getByText('Could not verify cloud credentials')).toBeTruthy();
-    expect(screen.queryByText('Cloud credentials required')).toBeNull();
+    expect(screen.getByText('heteroAgent.cloudCredError.title')).toBeTruthy();
+    expect(screen.queryByText('heteroAgent.cloudNotConfigured.title')).toBeNull();
     expect(screen.getByTestId('guard-alert').getAttribute('data-type')).toBe('error');
     expect(screen.getByTestId('send-button')).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'heteroAgent.cloudCredError.retry' }));
     expect(cloudConfig.refetch).toHaveBeenCalledTimes(1);
   });
 
@@ -179,8 +178,8 @@ describe('HeterogeneousChatInput cloud credential guard (shared-infra/F5)', () =
 
     expect(screen.getByText('heteroAgent.cloudNotConfigured.title')).toBeTruthy();
     expect(screen.getByText('heteroAgent.cloudNotConfigured.action')).toBeTruthy();
-    expect(screen.queryByText('Checking cloud credentials…')).toBeNull();
-    expect(screen.queryByText('Could not verify cloud credentials')).toBeNull();
+    expect(screen.queryByText('heteroAgent.cloudCredLoading.title')).toBeNull();
+    expect(screen.queryByText('heteroAgent.cloudCredError.title')).toBeNull();
     expect(screen.getByTestId('send-button')).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'heteroAgent.cloudNotConfigured.action' }));
@@ -193,8 +192,8 @@ describe('HeterogeneousChatInput cloud credential guard (shared-infra/F5)', () =
     render(<HeterogeneousChatInput />);
 
     expect(screen.queryByTestId('guard-alert')).toBeNull();
-    expect(screen.queryByText('Checking cloud credentials…')).toBeNull();
-    expect(screen.queryByText('Could not verify cloud credentials')).toBeNull();
+    expect(screen.queryByText('heteroAgent.cloudCredLoading.title')).toBeNull();
+    expect(screen.queryByText('heteroAgent.cloudCredError.title')).toBeNull();
     expect(screen.queryByText('heteroAgent.cloudNotConfigured.title')).toBeNull();
     expect(screen.getByTestId('send-button')).not.toBeDisabled();
   });

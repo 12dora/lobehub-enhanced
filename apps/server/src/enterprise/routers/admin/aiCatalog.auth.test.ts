@@ -22,6 +22,7 @@ import { assignGlobalPlatformRole, seedPlatformRoles } from '@/database/utils/se
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
 
+import { ADMIN_REAUTH_MAX_AGE_MS } from '../../contracts/adminUsers';
 import { deletePlatformAuditLogsForTest } from '../../testing/deletePlatformAuditLogs';
 import { deletePlatformResourceRevisionsForTest } from '../../testing/deletePlatformResourceRevisions';
 import { adminRouter } from '../admin';
@@ -185,7 +186,7 @@ describe('admin AI catalog permission and reauth gates', () => {
     const authStates = [
       { authenticatedAt: null, authMethod: 'better-auth' as const },
       {
-        authenticatedAt: new Date(Date.now() - 60 * 60 * 1000),
+        authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
         authMethod: 'better-auth' as const,
       },
       { authenticatedAt: new Date(), authMethod: 'api-key' as const },
@@ -243,7 +244,7 @@ describe('admin AI catalog permission and reauth gates', () => {
     const authStates = [
       { authenticatedAt: null, authMethod: 'better-auth' as const },
       {
-        authenticatedAt: new Date(Date.now() - 60 * 60 * 1000),
+        authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
         authMethod: 'better-auth' as const,
       },
       { authenticatedAt: new Date(), authMethod: 'api-key' as const },
@@ -465,7 +466,10 @@ describe('admin AI catalog permission and reauth gates', () => {
     expect(JSON.stringify(created)).not.toContain(credential);
     const detail = await caller.aiProviders.get({ id: created.draft.id });
 
-    const staleCaller = await callerFor(ids.aiAdmin, new Date(Date.now() - 60 * 60 * 1000));
+    const staleCaller = await callerFor(
+      ids.aiAdmin,
+      new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
+    );
     await expect(
       staleCaller.aiProviders.applyImmediate({
         displayName: 'Blocked',

@@ -6,6 +6,12 @@ export const REGEX_MATCH_TIMEOUT_MS = 50;
 export const REGEX_PROBE_TIMEOUT_MS = 200;
 export const REGEX_WORKER_MAX_IN_FLIGHT = 32;
 export const REGEX_WORKER_DIGEST_LRU = 8;
+/**
+ * Cold `worker_threads` spawn is about the same size as the match budget.
+ * Counting it as match time fuses ordinary patterns (café, a literal) and
+ * treats a healthy worker as timed out. The slack applies only until `online`.
+ */
+const REGEX_WORKER_STARTUP_SLACK_MS = 2_000;
 
 export interface RegexWorkerRule {
   id: string;
@@ -29,7 +35,10 @@ type WorkerReply =
 type PendingResolve = (reply: MatchRegexRulesResult | RegexSafetyResult) => void;
 
 interface PendingJob {
+  /** True once the match budget (not spawn slack) is the armed timer. */
+  deadlineArmed: boolean;
   resolve: PendingResolve;
+  timeoutMs: number;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -147,6 +156,7 @@ const WORKER_SOURCE = [
 ].join('\n');
 
 let worker: Worker | null = null;
+let workerReady = false;
 let nextId = 1;
 const pending = new Map<number, PendingJob>();
 /** Digests already compiled into the live worker (cleared on worker death). */
@@ -177,11 +187,28 @@ const forgetCompiledDigests = (): void => {
   compiledDigests.clear();
 };
 
+const expirePending = () => {
+  killWorker();
+  settleAll({ timedOut: true });
+};
+
+const armMatchDeadlines = (instance: Worker) => {
+  if (worker !== instance) return;
+  workerReady = true;
+  for (const job of pending.values()) {
+    if (job.deadlineArmed) continue;
+    job.deadlineArmed = true;
+    clearTimeout(job.timer);
+    job.timer = setTimeout(expirePending, job.timeoutMs);
+  }
+};
+
 const bindDeathHandlers = (instance: Worker) => {
   const onDeath = () => {
     if (worker !== instance) return;
     instance.removeAllListeners();
     worker = null;
+    workerReady = false;
     // Fresh workers start with an empty compiledByDigest — forget parent-side
     // "already sent" marks so the next match re-sends patterns.
     forgetCompiledDigests();
@@ -194,6 +221,7 @@ const bindDeathHandlers = (instance: Worker) => {
 const killWorker = () => {
   const dying = worker;
   worker = null;
+  workerReady = false;
   forgetCompiledDigests();
   if (!dying) return;
   dying.removeAllListeners();
@@ -202,7 +230,9 @@ const killWorker = () => {
 
 const ensureWorker = (): Worker => {
   if (worker) return worker;
+  workerReady = false;
   const next = new Worker(WORKER_SOURCE, { eval: true });
+  next.on('online', () => armMatchDeadlines(next));
   next.on('message', (reply: WorkerReply) => {
     if (worker !== next) return;
     const job = pending.get(reply.id);
@@ -236,18 +266,39 @@ const runOnWorker = (
   nextId += 1;
 
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      killWorker();
-      settleAll({ timedOut: true });
-    }, timeoutMs);
+    // Queue before spawn so a constructor throw settles this caller with the
+    // same { timedOut: true } result as a match deadline, instead of rejecting.
+    const alreadyReady = Boolean(worker && workerReady);
+    const timer = setTimeout(
+      expirePending,
+      alreadyReady ? timeoutMs : timeoutMs + REGEX_WORKER_STARTUP_SLACK_MS,
+    );
+    pending.set(id, { deadlineArmed: alreadyReady, resolve, timeoutMs, timer });
 
-    pending.set(id, { resolve, timer });
-
+    let spawned = false;
     try {
-      ensureWorker().postMessage({ ...payload, id });
+      const instance = ensureWorker();
+      spawned = true;
+      if (!alreadyReady && workerReady) {
+        const job = pending.get(id);
+        if (job && !job.deadlineArmed) {
+          job.deadlineArmed = true;
+          clearTimeout(job.timer);
+          job.timer = setTimeout(expirePending, timeoutMs);
+        }
+      }
+      instance.postMessage({ ...payload, id });
     } catch {
-      pending.delete(id);
-      clearTimeout(timer);
+      if (!spawned) {
+        killWorker();
+        settleAll({ timedOut: true });
+        return;
+      }
+      const job = pending.get(id);
+      if (job) {
+        pending.delete(id);
+        clearTimeout(job.timer);
+      }
       killWorker();
       resolve({ timedOut: true });
     }

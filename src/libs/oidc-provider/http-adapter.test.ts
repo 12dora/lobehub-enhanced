@@ -81,6 +81,8 @@ describe('OIDC HTTP adapter', () => {
       const ctx: SelectiveBodyContext = {
         charset: 'utf-8',
         is: (contentType: string) => contentType === 'application/x-www-form-urlencoded',
+        // oidc-provider >= 9.12 only parses urlencoded bodies when the Koa ctx is a POST.
+        method: nodeRequest.method,
         oidc: {},
         req: nodeRequest,
         request: { length: Buffer.byteLength(body) },

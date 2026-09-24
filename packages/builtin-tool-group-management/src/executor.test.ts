@@ -17,18 +17,13 @@ vi.mock('@/store/agentGroup', () => ({
   },
 }));
 
-// Mock lambdaClient for Task APIs
-const mockExecGroupSubAgentTask = vi.fn();
-const mockGetTaskStatus = vi.fn();
+// interrupt() dynamically imports this service. Do not load the real module:
+// it pulls the app tRPC client, which this package's tests do not run.
 const mockInterruptTask = vi.fn();
 
-vi.mock('@/libs/trpc/client', () => ({
-  lambdaClient: {
-    aiAgent: {
-      execGroupSubAgentTask: { mutate: (...args: any[]) => mockExecGroupSubAgentTask(...args) },
-      getGroupSubAgentTaskStatus: { query: (...args: any[]) => mockGetTaskStatus(...args) },
-      interruptTask: { mutate: (...args: any[]) => mockInterruptTask(...args) },
-    },
+vi.mock('@/services/aiAgent', () => ({
+  aiAgentService: {
+    interruptTask: (...args: any[]) => mockInterruptTask(...args),
   },
 }));
 

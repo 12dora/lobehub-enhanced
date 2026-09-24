@@ -109,10 +109,13 @@ describe('SkillImporter', () => {
   });
 
   afterEach(async () => {
-    // Cleanup: delete user (cascade deletes agentSkills and files)
+    // `global_files.creator` is NOT NULL, but the baseline FK is still
+    // ON DELETE SET NULL. Deleting the user first tries to null `creator` and
+    // the constraint rejects the delete. Drop this user's files and blobs first
+    // (agent_skills.zip_file_hash is ON DELETE SET NULL), then the user.
+    await db.delete(files).where(eq(files.userId, userId));
+    await db.delete(globalFiles).where(eq(globalFiles.creator, userId));
     await db.delete(users).where(eq(users.id, userId));
-    // Clean up orphaned globalFiles
-    await db.delete(globalFiles);
   });
 
   describe('createUserSkill', () => {

@@ -41,7 +41,7 @@ export const scanCollapsedSource = (source: string): string[] => {
 const ALLOWLIST: Record<string, SiteKind> = {
   'core/anthropicCompatibleFactory/index.ts:new Anthropic({ ...options, ...(baseURL ? { baseURL } : {}), defaultHeaders, timeout: options.ti':
     'explicit-fetch',
-  "core/anthropicCompatibleFactory/index.ts:injectedFetch(`${baseURL}/v1/models`, { headers: { 'anthropic-version': '2023-06-01', 'x-api-key":
+  "core/anthropicCompatibleFactory/index.ts:injectedFetch(`${baseURL}/v1/models?${search.toString()}`, { headers, method: 'GET', }); if (!re":
     'explicit-fetch',
   'core/anthropicCompatibleFactory/index.ts:new Anthropic(initOptions as ConstructorOptions<T>); } this.baseURL = finalBaseURL || this.clien':
     'explicit-fetch',
@@ -59,10 +59,14 @@ const ALLOWLIST: Record<string, SiteKind> = {
     'als',
   "providers/bfl/createImage.ts:fetch(url, { body: JSON.stringify(payload), headers: { 'Content-Type': 'application/json', 'x-ke":
     'als',
+  'providers/cerebras/index.ts:fetch(resolveCerebrasPublicModelsUrl(baseURL), { signal: abort.signal, }); if (!response.ok) ret':
+    'als',
   "providers/bfl/createImage.ts:fetch(pollingUrl, { headers: { 'accept': 'application/json', 'x-key': options.apiKey, }, method:":
     'als',
-  'providers/chatGPT/index.ts:new OpenAI({ ...options, defaultHeaders: { ...options.defaultHeaders, ...(chatgptAccountId && {':
-    'explicit-fetch',
+  "providers/chatGPT/clientVersion.ts:fetch( source === 'npm' ? 'https://registry.npmjs.org/@openai/codex/latest' : 'https://api.githu":
+    'als',
+  'providers/chatGPT/createImage.ts:new OpenAI({ apiKey: options.apiKey, baseURL: options.baseURL || CHATGPT_CODEX_BASE_URL, default':
+    'als',
   'providers/chatgptWeb/assetDownload.ts:ssrfSafeFetch(url, { signal }, { maxContentLength: MAX_DOWNLOAD_BYTES + 1 }), ) : await globalTh':
     'als',
   'providers/chatgptWeb/assetDownload.ts:globalThis.fetch(url, { signal }); } catch (error) { // the caller pressing stop keeps its own A':
@@ -81,11 +85,13 @@ const ALLOWLIST: Record<string, SiteKind> = {
     'explicit-fetch',
   'providers/comfyui/index.ts:fetchImpl(`${appUrl}/webapi/create-image/comfyui`, { body: JSON.stringify({ model: payload.model':
     'explicit-fetch',
-  'providers/cursor/index.ts:globalThis.fetch(input, init)); } async chat(payload: ChatStreamPayload, options?: ChatMethodOpt':
+  'providers/cursor/index.ts:globalThis.fetch(input, init)); // Both halves are required: without the installation id two dep':
     'explicit-fetch',
   'providers/cursor/index.ts:fetchImpl(url, { ...init, headers: { ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}`':
     'explicit-fetch',
-  "providers/github/index.ts:fetch('https://models.github.ai/catalog/models'); const modelList: GithubModelCard[] = await res":
+  "providers/deepseek/modelFetch.ts:injectedFetch(`${toOpenAICompatibleBaseURL(client.baseURL)}/models`, { headers: { Accept: 'appli":
+    'explicit-fetch',
+  "providers/github/index.ts:fetch('https://models.github.ai/catalog/models'); if (!response.ok) { throw new Error(`GitHub Mo":
     'als',
   "providers/githubCopilot/index.ts:fetch(TOKEN_EXCHANGE_URL, { headers: { 'Accept': 'application/json', 'Authorization': `Token ${g":
     'als',
@@ -97,11 +103,13 @@ const ALLOWLIST: Record<string, SiteKind> = {
     'als',
   'providers/google/index.ts:new GoogleGenAI({ apiKey, httpOptions }); this.baseURL = client ? undefined : baseURL || DEFAULT':
     'als',
-  "providers/google/index.ts:fetch(url, { headers: { 'x-goog-api-key': this.apiKey!, }, method: 'GET', signal: options?.signa":
+  "providers/google/index.ts:fetch(`${this.baseURL}/v1beta/models?${search}`, { headers: { 'x-goog-api-key': this.apiKey!, },":
     'als',
-  "providers/grok/index.ts:new OpenAI({ ...options, defaultHeaders: { ...options.defaultHeaders, ...suppressStainlessHeader":
+  'providers/grok/index.ts:new OpenAI({ ...options, defaultHeaders: { ...options.defaultHeaders, ...suppressStainlessHeader':
     'explicit-fetch',
   "providers/huggingface/index.ts:fetch('https://router.huggingface.co/v1/models'); if (!response.ok) { throw new Error(`HuggingFa":
+    'als',
+  "providers/lmstudio/index.ts:fetch(resolveLmStudioNativeModelsUrl(client.baseURL), { headers: { Accept: 'application/json', .":
     'als',
   "providers/hunyuan/createImage.ts:fetch(submitUrl, { body: JSON.stringify(requestBody), headers: { 'Authorization': `Bearer ${apiK":
     'als',
@@ -118,6 +126,10 @@ const ALLOWLIST: Record<string, SiteKind> = {
   'providers/minimax/createVideo.ts:fetch(urlWithParams.toString(), { headers: { Authorization: `Bearer ${options.apiKey}`, }, metho':
     'als',
   'providers/minimax/createVideo.ts:fetch(urlWithParams.toString(), { headers: { Authorization: `Bearer ${options.apiKey}`, }, metho#2':
+    'als',
+  "providers/minimax/createVideo.ts:fetch(statusUrl, { headers: { Authorization: `Bearer ${options.apiKey}`, }, method: 'GET', }); i":
+    'als',
+  'providers/minimax/createVideo.ts:fetch(`${resolveMiniMaxV2BaseURL(baseURL)}/video_generation`, { body: JSON.stringify(body), head':
     'als',
   "providers/minimax/createVideo.ts:fetch(`${baseURL}/video_generation`, { body: JSON.stringify(body), headers: { 'Authorization': `":
     'als',
@@ -159,6 +171,10 @@ const ALLOWLIST: Record<string, SiteKind> = {
     'als',
   "providers/stepfun/createImage.ts:fetch(`${baseURL}/images/${endpoint}`, { method: 'POST', headers: { 'Authorization': `Bearer ${a":
     'als',
+  'providers/superGrok/index.ts:fetchImpl(`${baseURL}/files`, { body: form, headers: { Authorization: `Bearer ${context.apiKey ?':
+    'explicit-fetch',
+  'providers/superGrok/index.ts:new OpenAI(options), }, handlePollVideoStatus: async (inferenceId, options) => { const { pollXAI':
+    'explicit-fetch',
   "providers/straico/index.ts:fetch(url, { headers: { Authorization: `Bearer ${client.apiKey}`, }, method: 'GET', }); if (!res":
     'als',
   'providers/vertexai/index.ts:new GoogleGenAI({ ...googleOptions, ...(googleAuthOptions ? { googleAuthOptions } : {}), locatio':
@@ -177,7 +193,7 @@ const ALLOWLIST: Record<string, SiteKind> = {
     'als',
   "providers/xai/createVideo.ts:fetch(statusUrl, { headers: { 'Authorization': `Bearer ${options.apiKey}`, 'Content-Type': 'appl":
     'als',
-  "providers/xai/createVideo.ts:fetch(`${baseURL}/videos/generations`, { body: JSON.stringify(body), headers: { 'Authorization':":
+  "providers/xai/createVideo.ts:fetch(endpoint, { body: JSON.stringify(body), headers: { 'Authorization': `Bearer ${options.apiK":
     'als',
   "providers/zhipu/createImage.ts:fetch(statusUrl, { headers: { 'Authorization': `Bearer ${options.apiKey}`, 'Content-Type': 'appl":
     'als',

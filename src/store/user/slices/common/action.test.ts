@@ -201,6 +201,13 @@ describe('createCommonSlice', () => {
       aiProvider: {},
     } as GlobalServerConfig;
 
+    // Init persists auto-detected timezone / reply language. Settle that write inside each test:
+    // an unmocked request outlives the store reset, and the settings slice replays its still
+    // pending group into the next test's first settings write.
+    beforeEach(() => {
+      vi.spyOn(userService, 'updateUserSettings').mockResolvedValue(undefined as never);
+    });
+
     it('should not fetch user state if user is not login', async () => {
       const mockUserConfig: any = undefined; // 模拟未初始化服务器的情况
       vi.spyOn(userService, 'getUserState').mockResolvedValueOnce(mockUserConfig);

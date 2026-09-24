@@ -172,7 +172,7 @@ describe('AgentProfilePopup thinking effort', () => {
 
     await waitFor(() => expect(picker().value).toBe('low'));
     // gpt-5.6 defaults to `medium`; seeing it here would mean the stored level never arrived.
-    expect(optionValues()).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(optionValues()).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
   });
 
   it('keeps showing the chosen level after the write settles', async () => {

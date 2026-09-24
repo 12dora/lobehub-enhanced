@@ -68,20 +68,19 @@ export const createCurlImpersonateFetch = (
     init?: RequestInit,
   ): Promise<Response> => {
     const request = await normalizeRequest(input, init);
+    if (request.signal?.aborted) throw createAbortError();
+
+    // Resolve the jar before the binary. A retired or tombstoned context must
+    // fail closed with CONTEXT_GONE even when curl-impersonate is not installed;
+    // otherwise the missing-binary error masks a gone browser session.
+    const stripped = stripCookieJarHeader(request.headers);
+    const cookieJarPath = resolveCliCookieJarPath(stripped.cookieJarKey, options.cookieJarPath);
+
     const settings = readEnv(options, process.env);
     resolvedBinary ??= options.binaryPath
       ? resolveCurlImpersonateBinary({ override: options.binaryPath })
       : resolveCurlImpersonateBinaryCached();
     const binary = resolvedBinary;
-
-    if (request.signal?.aborted) throw createAbortError();
-
-    // `X-AIHub-Cookie-Jar` is a private hop-by-hop header: map it to a jar and
-    // drop it so curl never sends it upstream. A context-scoped key is a digest
-    // (or path) and must NOT be written as `oai-did` — that cookie is the
-    // ChatGPT device id, seeded when the context is acquired.
-    const stripped = stripCookieJarHeader(request.headers);
-    const cookieJarPath = resolveCliCookieJarPath(stripped.cookieJarKey, options.cookieJarPath);
 
     let tempBodyPath: string | undefined;
     if (request.body) {

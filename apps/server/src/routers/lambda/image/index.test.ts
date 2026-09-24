@@ -96,18 +96,29 @@ vi.mock('@/server/routers/async/caller', () => ({
   createAsyncCaller: mockCreateAsyncCaller,
 }));
 
-// Mock drizzle-orm
-vi.mock('drizzle-orm', () => ({
-  and: vi.fn((...args) => args),
-  eq: vi.fn((a, b) => ({ a, b })),
-}));
+// Mock drizzle-orm. Spread the real module so schema imports (sql, relations, …)
+// keep resolving; only the predicates this router builds are stubbed.
+vi.mock('drizzle-orm', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    and: vi.fn((...args) => args),
+    eq: vi.fn((a, b) => ({ a, b })),
+  };
+});
 
-// Mock database schemas
-vi.mock('@/database/schemas', () => ({
-  asyncTasks: { id: 'asyncTasks.id', userId: 'asyncTasks.userId' },
-  generationBatches: { id: 'generationBatches.id' },
-  generations: { id: 'generations.id', userId: 'generations.userId' },
-}));
+// Mock database schemas. Keep every real export (OIDC artifact tables are read
+// at module scope by the lambda context) and override only the tables this
+// router inserts into.
+vi.mock('@/database/schemas', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    asyncTasks: { id: 'asyncTasks.id', userId: 'asyncTasks.userId' },
+    generationBatches: { id: 'generationBatches.id' },
+    generations: { id: 'generations.id', userId: 'generations.userId' },
+  };
+});
 
 // Mock seed generator
 vi.mock('@/utils/number', () => ({

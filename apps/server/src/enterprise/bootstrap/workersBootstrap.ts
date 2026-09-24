@@ -182,6 +182,17 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
+    // Same entry as documentRender: the GC lane and hourly enqueue scheduler
+    // are latched inside ensureDocumentRenderWorkerStarted. A separate spec
+    // keeps PLATFORM_MODULES.documentRender.workers in lockstep with bootstrap.
+    moduleId: 'documentRender',
+    name: 'documentRenderGc',
+    start: async () => {
+      const { ensureDocumentRenderWorkerStarted } = await import('../jobs/documentRender');
+      ensureDocumentRenderWorkerStarted();
+    },
+  },
+  {
     moduleId: 'audit',
     name: 'auditExport',
     start: async () => {

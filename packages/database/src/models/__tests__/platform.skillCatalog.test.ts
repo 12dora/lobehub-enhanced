@@ -14,6 +14,7 @@ import {
 import type { LobeChatDatabase } from '../../type';
 import { PlatformRevisionModel } from '../platform/revision';
 import {
+  canonicalizePlatformSkillResources,
   createPlatformSkillPointerAdapter,
   PlatformSkillBuiltinOverrideError,
   PlatformSkillCatalogModel,
@@ -122,6 +123,10 @@ describe('PlatformSkillCatalogModel', () => {
       resources,
     };
     const checksum = platformSkillVersionChecksum(payload);
+    // Stored resources are canonical: size and checksum are recomputed from the
+    // UTF-8 bytes, so a caller-supplied checksum is not kept.
+    const canonicalResources = canonicalizePlatformSkillResources(resources);
+    expect(canonicalResources[0]?.checksum).not.toBe(resources[0]?.checksum);
     await expect(
       model.createVersion({
         ...payload,
@@ -131,7 +136,11 @@ describe('PlatformSkillCatalogModel', () => {
         skillId: created.draft.id,
         version: '1.0.0',
       }),
-    ).resolves.toMatchObject({ checksum, resources });
+    ).resolves.toMatchObject({
+      checksum,
+      // JSON round-trip drops `contentRef: undefined`, which the stored row omits.
+      resources: JSON.parse(JSON.stringify(canonicalResources)),
+    });
 
     const fresh = await model.getDetail(created.draft.id);
     const mutations = [

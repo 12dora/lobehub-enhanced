@@ -52,35 +52,16 @@ vi.mock('@/utils/sleep', () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
 }));
 
-const bootstrapToolStoreWithDesktop = async (isDesktopEnv: boolean) => {
-  vi.resetModules();
-  vi.mock('zustand/traditional');
+// Flipped per test instead of reloading the whole tool store graph with `vi.resetModules()`,
+// which re-evaluated hundreds of modules and blew the 5s test timeout.
+const mockConstEnv = vi.hoisted(() => ({ isDesktop: false }));
 
-  vi.doMock('@lobechat/const', async () => {
-    const actual = await vi.importActual<typeof LobechatConstModule>('@lobechat/const');
-    return {
-      ...actual,
-      isDesktop: isDesktopEnv,
-    };
-  });
-
-  const storeModule = await import('@/store/tool');
-  const discoverModule = await import('@/services/discover');
-  const helpersModule = await import('@/store/global/helpers');
-
-  const cleanup = () => {
-    vi.resetModules();
-    vi.doUnmock('@lobechat/const');
-    vi.mock('zustand/traditional');
-  };
-
-  return {
-    useToolStore: storeModule.useToolStore,
-    discoverService: discoverModule.discoverService,
-    globalHelpers: helpersModule.globalHelpers,
-    cleanup,
-  };
-};
+vi.mock('@lobechat/const', async (importOriginal) => ({
+  ...(await importOriginal<typeof LobechatConstModule>()),
+  get isDesktop() {
+    return mockConstEnv.isDesktop;
+  },
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -645,13 +626,6 @@ describe('mcpStore actions', () => {
     });
 
     it('should not append connectionType in desktop environment', async () => {
-      const {
-        useToolStore: desktopStore,
-        discoverService: desktopDiscoverService,
-        globalHelpers: desktopGlobalHelpers,
-        cleanup,
-      } = await bootstrapToolStoreWithDesktop(true);
-
       const mockData = {
         items: [{ identifier: 'desktop-plugin', name: 'Desktop Plugin' }] as PluginItem[],
         categories: [],
@@ -661,14 +635,13 @@ describe('mcpStore actions', () => {
         pageSize: 20,
       };
 
+      mockConstEnv.isDesktop = true;
       try {
-        vi.spyOn(desktopGlobalHelpers, 'getCurrentLanguage').mockReturnValue('en-US');
-        const fetchSpy = vi
-          .spyOn(desktopDiscoverService, 'getMCPPluginList')
-          .mockResolvedValue(mockData);
+        vi.spyOn(globalHelpers, 'getCurrentLanguage').mockReturnValue('en-US');
+        const fetchSpy = vi.spyOn(discoverService, 'getMCPPluginList').mockResolvedValue(mockData);
 
         const { result } = renderHook(() =>
-          desktopStore.getState().useFetchMCPPluginList({ page: 1, pageSize: 20 }),
+          useToolStore.getState().useFetchMCPPluginList({ page: 1, pageSize: 20 }),
         );
 
         await waitFor(() => {
@@ -680,7 +653,7 @@ describe('mcpStore actions', () => {
         expect(firstCallArgs).toMatchObject({ page: 1, pageSize: 20 });
         expect(firstCallArgs.connectionType).toBeUndefined();
       } finally {
-        cleanup();
+        mockConstEnv.isDesktop = false;
       }
     });
   });

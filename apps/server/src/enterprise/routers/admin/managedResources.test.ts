@@ -24,6 +24,7 @@ import {
   MANAGED_POLICY_RESOURCE_TYPE,
 } from '@/types/platform/managedResources';
 
+import { ADMIN_REAUTH_MAX_AGE_MS } from '../../contracts/adminUsers';
 import { deletePlatformAuditLogsForTest } from '../../testing/deletePlatformAuditLogs';
 import { deletePlatformResourceRevisionsForTest } from '../../testing/deletePlatformResourceRevisions';
 import { adminRouter } from '../admin';
@@ -222,7 +223,10 @@ describe('admin.managedResources permission contract', () => {
 
   it.each([
     {
-      auth: { authenticatedAt: new Date(Date.now() - 60 * 60 * 1000), authMethod: 'better-auth' },
+      auth: {
+        authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
+        authMethod: 'better-auth',
+      },
       label: 'stale',
     },
     {

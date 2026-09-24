@@ -10,6 +10,7 @@ import {
   MODERATION_HEADERS,
 } from '@/const/platform/contentModeration';
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
+import type * as UserActiveCacheModule from '@/libs/oidc-provider/userActiveCache';
 import { createModerationAwareRuntime } from '@/server/enterprise/services/contentModeration/runtime';
 import {
   initModelRuntimeFromDB,
@@ -51,6 +52,13 @@ vi.mock('@/auth', () => ({
       getSession: vi.fn().mockResolvedValue(null),
     },
   },
+}));
+
+// checkAuth fails closed on a live user/session row (assertUserActiveCached); the test DB
+// double has no tables, so the liveness check is stubbed as "active".
+vi.mock('@/libs/oidc-provider/userActiveCache', async (importOriginal) => ({
+  ...(await importOriginal<typeof UserActiveCacheModule>()),
+  assertUserActiveCached: vi.fn(async () => undefined),
 }));
 
 // 模拟请求和响应

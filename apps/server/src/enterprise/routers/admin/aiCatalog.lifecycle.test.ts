@@ -22,6 +22,7 @@ import { assignGlobalPlatformRole, seedPlatformRoles } from '@/database/utils/se
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
 
+import { ADMIN_REAUTH_MAX_AGE_MS } from '../../contracts/adminUsers';
 import {
   InMemoryAdminMutationRateLimiter,
   resetSharedAdminMutationRateLimiter,
@@ -220,7 +221,10 @@ describe('admin AI catalog publication, models, and delete lifecycle', () => {
     const { providerId } = await seedPublishedProvider('reauth-gate');
     const fresh = await callerFor(ids.aiAdmin);
     const detail = await fresh.aiProviders.get({ id: providerId });
-    const stale = await callerFor(ids.aiAdmin, new Date(Date.now() - 60 * 60 * 1000));
+    const stale = await callerFor(
+      ids.aiAdmin,
+      new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
+    );
     await expect(
       stale.aiProviders.applyImmediate({
         displayName: 'Blocked',

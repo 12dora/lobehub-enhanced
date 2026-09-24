@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import type * as WorkerThreads from 'node:worker_threads';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getCompiledRegexDigestCountForTest,
@@ -10,7 +12,24 @@ import {
   validateKeywordRegex,
 } from './regexWorker';
 
+const workerControl = vi.hoisted(() => ({ failSpawn: false }));
+
+vi.mock('node:worker_threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof WorkerThreads>();
+  const ActualWorker = actual.Worker;
+  function GuardedWorker(
+    this: unknown,
+    ...args: ConstructorParameters<typeof ActualWorker>
+  ): InstanceType<typeof ActualWorker> {
+    if (workerControl.failSpawn) throw new Error('spawn failed');
+    return new ActualWorker(...args);
+  }
+  GuardedWorker.prototype = ActualWorker.prototype;
+  return { ...actual, Worker: GuardedWorker as unknown as typeof ActualWorker };
+});
+
 afterEach(async () => {
+  workerControl.failSpawn = false;
   await resetRegexWorkerForTest();
 });
 
@@ -145,6 +164,37 @@ describe('regexWorker', () => {
     original!.emit('exit', 1);
     expect(getRegexWorkerForTest()).toBe(replacement);
     await expect(pending).resolves.toEqual({ matchedRuleIds: ['b'] });
+  });
+
+  it('resolves timedOut when the worker cannot be spawned and settles pending callers', async () => {
+    workerControl.failSpawn = true;
+    const pending = Promise.all([
+      matchRegexRules({
+        digest: 'spawn-a',
+        rules: [{ id: 'r', pattern: 'foo' }],
+        text: 'foo',
+      }),
+      matchRegexRules({
+        digest: 'spawn-b',
+        rules: [{ id: 'r', pattern: 'foo' }],
+        text: 'bar',
+      }),
+    ]);
+    await expect(pending).resolves.toEqual([{ timedOut: true }, { timedOut: true }]);
+    await expect(probeRegexPattern('foo')).resolves.toMatchObject({
+      ok: false,
+      reason: 'slow_probe',
+    });
+    expect(getRegexWorkerForTest()).toBeNull();
+
+    workerControl.failSpawn = false;
+    await expect(
+      matchRegexRules({
+        digest: 'spawn-ok',
+        rules: [{ id: 'r', pattern: 'foo' }],
+        text: 'foo',
+      }),
+    ).resolves.toEqual({ matchedRuleIds: ['r'] });
   });
 
   it('probes a cheap pattern as ok and a catastrophic one as slow', async () => {

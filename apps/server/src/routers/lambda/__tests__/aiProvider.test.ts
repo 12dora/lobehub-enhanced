@@ -34,6 +34,14 @@ const catalogAuthorityMocks = vi.hoisted(() => ({
 const enforcementMocks = vi.hoisted(() => ({ takeover: false }));
 vi.mock('@/server/enterprise/services/aiCatalog/enforcement', async (importOriginal) => ({
   ...(await importOriginal<typeof AiCatalogEnforcement>()),
+  // Runtime state reads the combined snapshot, not the provider-only predicate.
+  // `enforcementMocks.takeover` is that provider dimension; model takeover stays off
+  // so BYOK providers still union under the published catalog.
+  getPlatformAiTakeoverFlags: vi.fn(async () => ({
+    models: false,
+    providers: enforcementMocks.takeover,
+  })),
+  isPlatformAiModelTakeoverActive: vi.fn(async () => false),
   isPlatformAiTakeoverActive: vi.fn(async () => enforcementMocks.takeover),
 }));
 vi.mock('@/database/repositories/platformAiCatalog', () => ({

@@ -47,6 +47,8 @@ vi.mock('@/server/enterprise/services/settings/runtimeSettingsAdapter', async (i
   return {
     ...actual,
     getEffectiveMemorySettings: mockGetEffectiveMemorySettings,
+    // Tool policy mirrors the raw row's tool slice in these unit tests.
+    getEffectiveToolSettings: async () => ((await mockGetRawUserSettings()) as any)?.tool,
     getRawUserSettings: mockGetRawUserSettings,
   };
 });

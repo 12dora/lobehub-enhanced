@@ -2,18 +2,21 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { collectUserDisabledSkillIds, type UserToolConfig } from '@lobechat/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LobeChatDatabase } from '@/database/type';
 
 import {
   getEffectiveSystemAgentConfig,
+  getEffectiveToolSettings,
   getRawUserSettings,
   isSettingsPolicyEnabled,
   loadEffectiveUserSettings,
 } from './runtimeSettingsAdapter';
 
-const { policyState, isModuleEnabled } = vi.hoisted(() => ({
+const { policyState, isModuleEnabled, getPlatformLayerEffectiveSettings } = vi.hoisted(() => ({
+  getPlatformLayerEffectiveSettings: vi.fn(),
   isModuleEnabled: vi.fn(async (_id: string) => true),
   policyState: { enabled: false },
 }));
@@ -43,11 +46,18 @@ vi.mock('@/database/models/user', () => ({
   },
 }));
 
+vi.mock('./effectiveSettingsService', () => ({
+  EffectiveSettingsService: class {
+    getPlatformLayerEffectiveSettings = getPlatformLayerEffectiveSettings;
+  },
+}));
+
 describe('runtimeSettingsAdapter', () => {
   beforeEach(() => {
     policyState.enabled = false;
     isModuleEnabled.mockReset().mockResolvedValue(true);
     getUserSettings.mockReset();
+    getPlatformLayerEffectiveSettings.mockReset();
   });
 
   it('dedupes getUserSettings only inside one execAgent memo slot', async () => {
@@ -226,5 +236,56 @@ describe('runtimeSettingsAdapter', () => {
       offenders,
       `Runtime settings bypasses must use runtimeSettingsAdapter. Offenders: ${offenders.join(', ')}`,
     ).toEqual([]);
+  });
+
+  it('keeps a workspace-disabled skill disabled under platform tool policy', async () => {
+    policyState.enabled = true;
+    const workspaceId = 'ws-1';
+    getUserSettings.mockResolvedValue({
+      tool: {
+        disabledSkillIdentifiers: ['personal-only'],
+        disabledSkillIdentifiersByWorkspace: { [workspaceId]: ['catalog-skill'] },
+        humanIntervention: { approvalMode: 'auto-run' },
+        uninstalledBuiltinToolsByWorkspace: { [workspaceId]: ['lobe-artifacts'] },
+      },
+    });
+    getPlatformLayerEffectiveSettings.mockResolvedValue({
+      effectiveSettings: {
+        tool: { humanIntervention: { approvalMode: 'manual' } },
+      },
+    });
+
+    const tool = (await getEffectiveToolSettings({
+      db: {} as LobeChatDatabase,
+      scope: 'workspace',
+      userId: 'u-ws',
+    })) as UserToolConfig;
+
+    const disabled = collectUserDisabledSkillIds({ toolConfig: tool, workspaceId });
+    expect(disabled.has('catalog-skill')).toBe(true);
+    expect(disabled.has('lobe-artifacts')).toBe(true);
+    expect(disabled.has('personal-only')).toBe(false);
+    expect(tool).toEqual({
+      disabledSkillIdentifiersByWorkspace: { [workspaceId]: ['catalog-skill'] },
+      humanIntervention: { approvalMode: 'manual' },
+      uninstalledBuiltinToolsByWorkspace: { [workspaceId]: ['lobe-artifacts'] },
+    });
+    expect(getPlatformLayerEffectiveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag off still returns the raw tool slice for a workspace run', async () => {
+    const tool = {
+      disabledSkillIdentifiersByWorkspace: { 'ws-1': ['catalog-skill'] },
+    };
+    getUserSettings.mockResolvedValue({ tool });
+
+    await expect(
+      getEffectiveToolSettings({
+        db: {} as LobeChatDatabase,
+        scope: 'workspace',
+        userId: 'u-raw',
+      }),
+    ).resolves.toBe(tool);
+    expect(getPlatformLayerEffectiveSettings).not.toHaveBeenCalled();
   });
 });

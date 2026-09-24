@@ -42,15 +42,15 @@ export class PlatformConnectorRuntimeAdapter {
     let outboundStarted = false;
     try {
       const args = parseArguments(invocation.arguments);
+      // Emergency archive/current-state guard precedes credential use, outbound
+      // preflight, and idempotency reservation. A connector archived after the
+      // manifest was built must not open a transport or consume a toolCall key.
+      await this.dependencies.assertCurrentPublished?.();
       const credentials = await this.resolveInvocationCredentials(
         invocation,
         admitted.connector,
         admitted.snapshot.proof.publishedRevision,
       );
-      // Emergency archive/current-state guard must precede idempotency reservation.
-      // A rejected stale manifest must not consume a toolCall key or create a
-      // running journal entry that later reconciles as unknown.
-      await this.dependencies.assertCurrentPublished?.();
       if (admitted.connector.credentialMode === 'shared_service_account') {
         const reserved = await this.reserveSharedJournal(
           invocation,

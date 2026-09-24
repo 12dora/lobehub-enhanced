@@ -17,18 +17,22 @@ import {
   type StartExecutionParams,
 } from './types';
 
-vi.mock('@lobechat/model-runtime', () => ({
-  // RuntimeExecutors (loaded transitively) resolves extend params via this
-  // helper; an empty result keeps the runtime payload unchanged.
-  applyModelExtendParams: vi.fn(() => ({})),
-  getModelPropertyWithFallback: vi.fn(),
-  // `llmErrorClassification.ts` reads these at module-load time; an empty
-  // spec map is fine here because this suite never exercises the runtime
-  // retry classifier path.
-  ERROR_CODE_SPECS: {},
-  getErrorCodeSpec: () => undefined,
-  refineErrorCode: () => undefined,
-}));
+vi.mock('@lobechat/model-runtime', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    // RuntimeExecutors (loaded transitively) resolves extend params via this
+    // helper; an empty result keeps the runtime payload unchanged.
+    applyModelExtendParams: vi.fn(() => ({})),
+    getModelPropertyWithFallback: vi.fn(),
+    // `llmErrorClassification.ts` reads these at module-load time; an empty
+    // spec map is fine here because this suite never exercises the runtime
+    // retry classifier path.
+    ERROR_CODE_SPECS: {},
+    getErrorCodeSpec: () => undefined,
+    refineErrorCode: () => undefined,
+  };
+});
 
 // Mock trusted client to avoid server-side env access
 vi.mock('@/libs/trusted-client', () => ({
@@ -248,10 +252,12 @@ describe('AgentRuntimeService', () => {
   });
 
   describe('constructor', () => {
-    it('should initialize with default base URL', () => {
+    it('should initialize with default base URL', async () => {
       delete process.env.AGENT_RUNTIME_BASE_URL;
       const newService = new AgentRuntimeService(mockDb, mockUserId);
-      expect((newService as any).baseURL).toBe('http://localhost:3010/api/agent');
+      // Falls back to APP_URL, whose default port depends on NODE_ENV.
+      const { appEnv } = await import('@/envs/app');
+      expect((newService as any).baseURL).toBe(`${appEnv.APP_URL}/api/agent`);
     });
 
     it('should initialize with custom base URL from environment', () => {

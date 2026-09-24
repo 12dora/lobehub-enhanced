@@ -5,6 +5,7 @@ import { ChatErrorType } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { auth } from '@/auth';
+import type * as UserActiveCacheModule from '@/libs/oidc-provider/userActiveCache';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 
 import { GET } from './route';
@@ -35,6 +36,13 @@ vi.mock('@/auth', () => ({
       getSession: vi.fn().mockResolvedValue(null),
     },
   },
+}));
+
+// checkAuth fails closed on a live user/session row (assertUserActiveCached); the test DB
+// double has no tables, so the liveness check is stubbed as "active".
+vi.mock('@/libs/oidc-provider/userActiveCache', async (importOriginal) => ({
+  ...(await importOriginal<typeof UserActiveCacheModule>()),
+  assertUserActiveCached: vi.fn(async () => undefined),
 }));
 
 vi.mock('@/server/modules/ModelRuntime', () => ({

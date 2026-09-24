@@ -24,6 +24,7 @@ import {
   PLATFORM_SETTINGS_RESOURCE_TYPE,
 } from '@/types/platform/settings';
 
+import { ADMIN_REAUTH_MAX_AGE_MS } from '../../contracts/adminUsers';
 import { getPlatformConfigInvalidationPublisher } from '../../services/platformConfigInvalidation';
 import { deletePlatformAuditLogsForTest } from '../../testing/deletePlatformAuditLogs';
 import { deletePlatformResourceRevisionsForTest } from '../../testing/deletePlatformResourceRevisions';
@@ -242,7 +243,7 @@ describe('admin.settings denied audit outcomes', () => {
     for (const auth of [
       { authenticatedAt: null, authMethod: 'better-auth' as const },
       {
-        authenticatedAt: new Date(Date.now() - 60 * 60 * 1000),
+        authenticatedAt: new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
         authMethod: 'better-auth' as const,
       },
       { authenticatedAt: new Date(), authMethod: 'api-key' as const },

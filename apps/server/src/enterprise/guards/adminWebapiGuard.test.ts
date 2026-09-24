@@ -1,11 +1,14 @@
 // @vitest-environment node
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ADMIN_ERROR_CODES, PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import { getTestDB } from '@/database/core/getTestDB';
+import { session } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 
+import { ADMIN_REAUTH_MAX_AGE_MS } from '../contracts/adminUsers';
 import { createAdminAuthorizationFixture } from '../testing/adminAuthorizationFixture';
 import { withAdminWebapiGuard } from './adminWebapiGuard';
 
@@ -46,10 +49,22 @@ const guard = withAdminWebapiGuard({
   procedure: 'admin.networkProxy.uploadArtifact',
 });
 
-const requestFor = (createdAt: Date) => {
+const requestFor = async (userId: string, createdAt: Date) => {
+  // The guard live-checks auth_sessions for the Better Auth session id. A mocked
+  // getSession whose id is not a live row for this user is ADMIN_ACCESS_DENIED.
+  const id = `sess-${userId}`;
+  await db.delete(session).where(eq(session.userId, userId));
+  await db.insert(session).values({
+    createdAt,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    id,
+    token: `token-${userId}`,
+    updatedAt: new Date(),
+    userId,
+  });
   getSession.mockResolvedValue({
-    session: { createdAt, id: 'sess_1' },
-    user: { id: fixture.actors.superAdmin },
+    session: { createdAt, id },
+    user: { id: userId },
   });
   return new Request('https://app.lobehub.com/webapi/admin/network-proxy/artifact?kind=engine', {
     method: 'POST',
@@ -73,7 +88,7 @@ afterEach(async () => {
 
 describe('withAdminWebapiGuard', () => {
   it('allows a recent interactive session with NETWORK_PROXY_MANAGE', async () => {
-    const req = requestFor(new Date());
+    const req = await requestFor(fixture.actors.superAdmin, new Date());
     const res = await guard(handler)(req, { serverDB: db, userId: fixture.actors.superAdmin });
     expect(res.status).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
@@ -86,7 +101,7 @@ describe('withAdminWebapiGuard', () => {
   });
 
   it('denies an auditor without manage permission', async () => {
-    const req = requestFor(new Date());
+    const req = await requestFor(fixture.actors.auditor, new Date());
     const res = await guard(handler)(req, { serverDB: db, userId: fixture.actors.auditor });
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ code: PLATFORM_ERROR_CODES.PLATFORM_PERMISSION_DENIED });
@@ -94,7 +109,10 @@ describe('withAdminWebapiGuard', () => {
   });
 
   it('requires recent reauth for dangerous uploads', async () => {
-    const req = requestFor(new Date(Date.now() - 60 * 60 * 1000));
+    const req = await requestFor(
+      fixture.actors.superAdmin,
+      new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
+    );
     const res = await guard(handler)(req, { serverDB: db, userId: fixture.actors.superAdmin });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ code: ADMIN_ERROR_CODES.ADMIN_REAUTH_REQUIRED });
@@ -103,7 +121,7 @@ describe('withAdminWebapiGuard', () => {
 
   it('fails closed when the mutation limiter is exhausted', async () => {
     consume.mockResolvedValue('limited');
-    const req = requestFor(new Date());
+    const req = await requestFor(fixture.actors.superAdmin, new Date());
     const res = await guard(handler)(req, { serverDB: db, userId: fixture.actors.superAdmin });
     expect(res.status).toBe(429);
     expect(await res.json()).toEqual({ code: ADMIN_ERROR_CODES.ADMIN_RATE_LIMITED });

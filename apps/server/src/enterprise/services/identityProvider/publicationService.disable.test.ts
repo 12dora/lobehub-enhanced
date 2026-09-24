@@ -297,7 +297,14 @@ describe('IdentityProviderPublicationService — disable + revocation', () => {
     // Total DB outage: selection cannot read tombstones; only advanced LKG remains.
     const outageDb = new Proxy(db, {
       get(target, prop, receiver) {
-        if (prop === 'select' || prop === 'transaction' || prop === 'execute') {
+        // Startup selection is selectDistinctOn, not select. A proxy that only
+        // rejects select still serves the real database and reports source database.
+        if (
+          prop === 'select' ||
+          prop === 'selectDistinctOn' ||
+          prop === 'transaction' ||
+          prop === 'execute'
+        ) {
           return () => {
             throw new Error('simulated total database outage');
           };

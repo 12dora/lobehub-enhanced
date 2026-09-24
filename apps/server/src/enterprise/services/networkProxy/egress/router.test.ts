@@ -281,6 +281,13 @@ describe('createEgressFetch with a fake HTTP CONNECT proxy', () => {
       connectCount += 1;
       const [host, portRaw] = (req.url ?? '').split(':');
       const port = Number(portRaw || 80);
+      // example.invalid is only here to prove the proxy path was selected.
+      // Answer like a real proxy that cannot reach the host: a bare socket
+      // destroy makes undici retry CONNECT in a tight loop until the test times out.
+      if (host?.endsWith('.invalid')) {
+        clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        return;
+      }
       const upstream = net.connect(port, host, () => {
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         if (head.length) upstream.write(head);

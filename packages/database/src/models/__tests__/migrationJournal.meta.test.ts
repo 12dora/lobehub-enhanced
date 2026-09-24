@@ -83,8 +83,10 @@ describe('drizzle migration journal ↔ meta snapshots', () => {
       const dropped = [...sql.matchAll(/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?["']?(\w+)["']?/gi)].map(
         (m) => m[1]!.toLowerCase(),
       );
-      // For follow-up migrations (not the historical squash baseline), reject create-then-drop.
-      if (file !== '0000_squash_baseline.sql') {
+      // Released history is frozen. 0000 is the squash baseline. 0001 is the 2.2.10
+      // upgrade, which creates platform_easyauth_grant_snapshots and drops it in the
+      // same file. Do not rewrite those SQL files to satisfy DB-013.
+      if (file !== '0000_squash_baseline.sql' && file !== '0001_upgrade_from_2_2_10.sql') {
         for (const name of dropped) {
           expect(created.has(name)).toBe(false);
         }

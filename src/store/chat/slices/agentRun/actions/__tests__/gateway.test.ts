@@ -108,6 +108,12 @@ vi.mock('@/services/electron/gatewayConnection', () => ({
 
 vi.mock('@/store/agent', () => ({ getAgentStoreState: () => mockAgentStore.state }));
 
+// buildRunLifecycle refreshes the home recents list. The real home store imports `@/store/chat`,
+// which would build the chat store while this module (one of its slices) is still evaluating.
+vi.mock('@/store/home', () => ({
+  getHomeStoreState: () => ({ refreshRecents: vi.fn(async () => undefined) }),
+}));
+
 vi.mock('@/store/agent/selectors', () => ({
   agentSelectors: { currentAgentWorkingDirectory: () => () => undefined },
   chatConfigByIdSelectors: {

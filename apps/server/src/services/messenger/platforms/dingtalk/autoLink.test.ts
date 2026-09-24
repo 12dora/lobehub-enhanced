@@ -28,7 +28,7 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
 
 const { tryAutoLinkDingTalk } = await import('./autoLink');
 const { resolveDingTalkBrandingDisplayName } = await import('./branding');
-const { DINGTALK_UNKNOWN_USER_REPLY, formatDingTalkUnknownUserReply } = await import('./const');
+const { formatDingTalkUnknownUserReply } = await import('./const');
 
 const serverDB = {} as any;
 const binder = { sendDmText } as any;
@@ -110,7 +110,7 @@ describe('tryAutoLinkDingTalk', () => {
     });
 
     expect(link).toBeNull();
-    expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
+    expect(sendDmText).toHaveBeenCalledWith('cid_1', formatDingTalkUnknownUserReply('AI 平台'));
     expect(mockUpsertForPlatform).not.toHaveBeenCalled();
   });
 
@@ -123,7 +123,7 @@ describe('tryAutoLinkDingTalk', () => {
     });
 
     expect(link).toBeNull();
-    expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
+    expect(sendDmText).toHaveBeenCalledWith('cid_1', formatDingTalkUnknownUserReply('AI 平台'));
     expect(mockEnsureDingTalkUser).not.toHaveBeenCalled();
     expect(mockUpsertForPlatform).not.toHaveBeenCalled();
   });
@@ -164,7 +164,7 @@ describe('tryAutoLinkDingTalk', () => {
     });
 
     expect(link).toBeNull();
-    expect(sendDmText).toHaveBeenCalledWith('cid_1', DINGTALK_UNKNOWN_USER_REPLY);
+    expect(sendDmText).toHaveBeenCalledWith('cid_1', formatDingTalkUnknownUserReply('AI 平台'));
     expect(mockUpsertForPlatform).not.toHaveBeenCalled();
   });
 

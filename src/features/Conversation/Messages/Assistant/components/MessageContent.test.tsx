@@ -5,6 +5,7 @@ import { type ChatFileItem, type UIChatMessage } from '@lobechat/types';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ReasoningModule from '../../components/Reasoning';
 import MessageContent from './MessageContent';
 
 vi.mock('../../../store', () => ({
@@ -35,7 +36,10 @@ vi.mock('../../components/DisplayContent', () => ({
 }));
 
 vi.mock('../../components/FileChunks', () => ({ default: () => <div /> }));
-vi.mock('../../components/Reasoning', () => ({ default: () => <div /> }));
+vi.mock('../../components/Reasoning', async (importOriginal) => ({
+  ...(await importOriginal<typeof ReasoningModule>()),
+  default: () => <div />,
+}));
 vi.mock('../../components/SearchGrounding', () => ({ default: () => <div /> }));
 vi.mock('../../AssistantGroup/components/CollapsedMessage', () => ({
   CollapsedMessage: () => <div />,

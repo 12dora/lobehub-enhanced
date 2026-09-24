@@ -1,5 +1,5 @@
 import { generateApiKey, isApiKeyExpired, validateApiKeyFormat } from '@lobechat/utils/apiKey';
-import { hashApiKey } from '@lobechat/utils/server';
+import { hashApiKey } from '@lobechat/utils/server/apiKeyHash';
 import { and, desc, eq } from 'drizzle-orm';
 
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';

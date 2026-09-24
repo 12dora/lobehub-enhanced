@@ -254,8 +254,13 @@ const resume = async (
       (e) => e as { code?: string; message?: string },
     );
   return {
+    // Fail-closed platform resolution is NOT_FOUND. Older builds put the encoded
+    // list id in the message; the resolver now returns the redacted
+    // PLATFORM_AGENT_UNAVAILABLE code (http NOT_FOUND) and does not echo the id.
     resolutionFailedClosed:
-      error?.code === 'NOT_FOUND' && String(error?.message ?? '').includes(ENCODED),
+      error?.code === 'NOT_FOUND' &&
+      (String(error?.message ?? '').includes(ENCODED) ||
+        error?.message === 'PLATFORM_AGENT_UNAVAILABLE'),
   };
 };
 

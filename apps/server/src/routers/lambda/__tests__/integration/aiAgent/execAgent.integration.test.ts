@@ -632,7 +632,9 @@ describe('execAgent', () => {
       const [agentWithTools] = await serverDB
         .insert(agents)
         .values({
-          chatConfig: { searchMode: 'auto' },
+          // OpenAI defaults to native search when the toggle is unset, which
+          // physically drops lobe-web-browsing. This block exercises that tool.
+          chatConfig: { searchMode: 'auto', useModelBuiltinSearch: false },
           model: 'gpt-5-pro',
           plugins: [],
           provider: 'openai',

@@ -280,6 +280,65 @@ export const getToolSlice = async (params: LoadEffectiveUserSettingsParams): Pro
   return settings.tool;
 };
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+};
+
+/**
+ * Workspace runs take platform locks and defaults, and must not inherit personal
+ * tool lists. The per-user `*ByWorkspace` maps are not platform policy — skill
+ * discovery reads this slice, while execution reads the same maps off the user
+ * row, so both have to see them.
+ */
+const mergeWorkspaceScopedToolLists = (platformTool: unknown, userTool: unknown): unknown => {
+  const user = asRecord(userTool);
+  if (!user) return platformTool;
+
+  const lists: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(user)) {
+    if (!key.endsWith('ByWorkspace')) continue;
+    const record = asRecord(value);
+    if (!record) continue;
+    lists[key] = record;
+  }
+  if (Object.keys(lists).length === 0) return platformTool;
+
+  return { ...asRecord(platformTool), ...lists };
+};
+
+/**
+ * Effective tool settings slice (aiAgent exec path, including skill disables).
+ * Flag OFF: raw user_settings.tool (parent parity). Shares the execAgent memo.
+ * Flag ON workspace: platform policy, plus the user row's workspace-scoped lists.
+ */
+export const getEffectiveToolSettings = async (params: {
+  db: LobeChatDatabase;
+  memo?: UserSettingsReadMemo;
+  scope?: 'personal' | 'workspace';
+  userId: string;
+}): Promise<unknown> => {
+  const scope = params.scope ?? 'personal';
+  if (!isPolicyEnabled()) {
+    const settings = await getRawUserSettings(params);
+    return settings?.tool;
+  }
+
+  if (scope === 'workspace') {
+    const service = new EffectiveSettingsService(params.db);
+    const platformOnly = await service.getPlatformLayerEffectiveSettings();
+    const row = await getRawUserSettings(params);
+    return mergeWorkspaceScopedToolLists(platformOnly.effectiveSettings.tool, row?.tool);
+  }
+
+  const row = await getRawUserSettings(params);
+  return getToolSlice({
+    db: params.db,
+    legacySettings: { tool: row?.tool } as Record<string, unknown>,
+    userId: params.userId,
+  });
+};
+
 export type EffectiveUserInterventionConfig = UserInterventionConfig;
 
 const APPROVAL_MODE_PATH = 'tool.humanIntervention.approvalMode';

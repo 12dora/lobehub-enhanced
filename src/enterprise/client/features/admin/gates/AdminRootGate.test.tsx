@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import AdminAccessProvider from '@/enterprise/client/providers/AdminAccessProvider';
 import { createAdminRouteTree } from '@/enterprise/client/routes/admin/createAdminRouteTree';
+import type * as ServerConfigModule from '@/store/serverConfig';
 
 import AdminPermissionOutlet from './AdminPermissionOutlet';
 import AdminRootGate from './AdminRootGate';
@@ -42,18 +43,24 @@ vi.mock('@/store/user/slices/auth/selectors', () => ({
   },
 }));
 
-vi.mock('@/store/serverConfig', () => ({
-  useServerConfigStore: (selector: (s: any) => unknown) =>
-    selector({
-      serverConfig: {
-        enterprise: {
-          enabled: serverConfigState.platformAdmin,
-          platformAdmin: serverConfigState.platformAdmin,
-        },
+vi.mock('@/store/serverConfig', async (importOriginal) => {
+  const snapshot = () => ({
+    serverConfig: {
+      enterprise: {
+        enabled: serverConfigState.platformAdmin,
+        platformAdmin: serverConfigState.platformAdmin,
       },
-      serverConfigInit: serverConfigState.serverConfigInit,
-    }),
-}));
+    },
+    serverConfigInit: serverConfigState.serverConfigInit,
+  });
+
+  return {
+    ...(await importOriginal<typeof ServerConfigModule>()),
+    // The admin side nav reads deployment capabilities outside React.
+    getServerConfigStoreState: () => snapshot(),
+    useServerConfigStore: (selector: (s: any) => unknown) => selector(snapshot()),
+  };
+});
 
 vi.mock('@/hooks/useIsMobile', () => ({
   useIsMobile: () => false,

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { mkdir, truncate, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -624,9 +625,11 @@ describe('file operations', () => {
   });
 
   // ─── grepContent ───
+  // requires ripgrep on PATH; the host running the gate may not have it
+  const hasRipgrep = spawnSync('rg', ['--version']).status === 0;
 
   describe('grepContent', () => {
-    it('should return matches', async () => {
+    it.skipIf(!hasRipgrep)('should return matches', async () => {
       await writeFile(path.join(tmpDir, 'search.txt'), 'hello world\nfoo bar\nhello again');
 
       const result = await grepContent({ cwd: tmpDir, pattern: 'hello' });
@@ -636,7 +639,7 @@ describe('file operations', () => {
       expect(result.matches).toContain('./search.txt');
     });
 
-    it('should return matching lines in content mode', async () => {
+    it.skipIf(!hasRipgrep)('should return matching lines in content mode', async () => {
       await writeFile(path.join(tmpDir, 'search.txt'), 'hello world\nfoo bar\nhello again');
 
       const result = await grepContent({ cwd: tmpDir, output_mode: 'content', pattern: 'hello' });

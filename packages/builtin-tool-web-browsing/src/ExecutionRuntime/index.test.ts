@@ -67,7 +67,9 @@ describe('WebBrowsingExecutionRuntime', () => {
       const result = await runtime.search({ query: 'test' });
 
       expect(result.success).toBe(true);
-      expect(result.content).toBe('<searchResults />');
+      // Empty payload is still a successful search. The XML text comes from
+      // searchResultsPrompt, which spells out the empty case for the model.
+      expect(result.content).toBe('<searchResults>No results found.</searchResults>');
     });
 
     it('should return success: false when webSearch throws', async () => {

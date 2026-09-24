@@ -155,16 +155,23 @@ describe('DataExporterRepos', () => {
     });
   };
 
+  // global_files.creator is NOT NULL, but the released FK is ON DELETE SET NULL
+  // (0000 baseline). Deleting the user first tries to null creator and the statement
+  // aborts. files.file_hash is ON DELETE NO ACTION, so drop file rows before the blob.
+  const resetUsersAndFiles = async () => {
+    await db.delete(files);
+    await db.delete(globalFiles);
+    await db.delete(users);
+  };
+
   beforeEach(async () => {
     // Clean up and insert test data
-    await db.delete(users);
-    await db.delete(globalFiles);
+    await resetUsersAndFiles();
     await setupTestData();
   }, 30000);
 
   afterEach(async () => {
-    await db.delete(users);
-    await db.delete(globalFiles);
+    await resetUsersAndFiles();
 
     vi.restoreAllMocks();
   });
@@ -240,8 +247,7 @@ describe('DataExporterRepos', () => {
     it('should handle empty database gracefully', async () => {
       // Clear the database
 
-      await db.delete(users);
-      await db.delete(globalFiles);
+      await resetUsersAndFiles();
 
       // Create exporter instance
       const dataExporter = new DataExporterRepos(db, userId);

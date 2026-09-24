@@ -131,6 +131,8 @@ describe('assignment draft normalization + validation', () => {
       pinnedVersionId: null,
       targetId: 'user-9',
       targetType: 'user',
+      // Display-only; normalized to null when the server row carries no `targetUser`.
+      targetUser: null,
       versionPolicy: 'latest_published',
     });
   });

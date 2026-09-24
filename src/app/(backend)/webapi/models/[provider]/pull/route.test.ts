@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { auth } from '@/auth';
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
+import type * as UserActiveCacheModule from '@/libs/oidc-provider/userActiveCache';
 import { initModelRuntimeFromDB } from '@/server/modules/ModelRuntime';
 
 import { POST } from './route';
@@ -24,6 +25,14 @@ vi.mock('@/app/(backend)/middleware/auth/utils', () => ({ checkAuthMethod: vi.fn
 vi.mock('@/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
+
+// checkAuth fails closed on a live user/session row (assertUserActiveCached); the test DB
+// double has no tables, so the liveness check is stubbed as "active".
+vi.mock('@/libs/oidc-provider/userActiveCache', async (importOriginal) => ({
+  ...(await importOriginal<typeof UserActiveCacheModule>()),
+  assertUserActiveCached: vi.fn(async () => undefined),
+}));
+
 vi.mock('@/server/modules/ModelRuntime', () => ({ initModelRuntimeFromDB: vi.fn() }));
 vi.mock('@/server/modules/ModelRuntime/platformAiRuntimeBridge', () => bridgeMocks);
 
