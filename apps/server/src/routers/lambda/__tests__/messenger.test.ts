@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCallerFactory } from '@/libs/trpc/lambda';
 import { createContextInner } from '@/libs/trpc/lambda/context';
+import { getEnterpriseErrorBody } from '@/server/enterprise/guards/enterpriseErrors';
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
 
 import { messengerRouter } from '../messenger';
+
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
 
 const {
   mockConsumeLinkToken,
@@ -119,6 +123,25 @@ vi.mock('@/server/modules/KeyVaultsEncrypt', () => ({
   },
 }));
 
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    assertModuleEnabled: async (id: string) => {
+      if (await mockIsModuleEnabled(id)) return;
+      const { PLATFORM_ERROR_CODES } = await import('@/const/platform/errorCodes');
+      const { throwEnterpriseError } = await import('@/server/enterprise/guards/enterpriseErrors');
+      throwEnterpriseError({
+        code: PLATFORM_ERROR_CODES.PLATFORM_MODULE_DISABLED,
+        details: { moduleId: id },
+        httpCode: 'FORBIDDEN',
+        message: PLATFORM_ERROR_CODES.PLATFORM_MODULE_DISABLED,
+      });
+    },
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
+
 vi.mock('@/server/featureFlags', () => ({
   getServerFeatureFlagsStateFromRuntimeConfig: mockGetServerFeatureFlagsStateFromRuntimeConfig,
 }));
@@ -153,6 +176,10 @@ vi.mock('@/server/services/bot/platforms/slack/api', () => ({
 }));
 
 const createCaller = createCallerFactory(messengerRouter);
+
+beforeEach(() => {
+  mockIsModuleEnabled.mockImplementation(async () => true);
+});
 
 const buildSlackInstall = () => ({
   accountId: null,
@@ -238,6 +265,18 @@ describe('messengerRouter.listMyInstallations', () => {
     const result = await caller.listMyInstallations();
 
     expect(result).toHaveLength(1);
+    expect(mockMarkRevoked).not.toHaveBeenCalled();
+  });
+
+  it('does not call Slack when bots is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'bots');
+    mockListByInstallerUserId.mockResolvedValue([buildSlackInstall()]);
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const result = await caller.listMyInstallations();
+
+    expect(result).toEqual([]);
+    expect(mockSlackAuthTest).not.toHaveBeenCalled();
     expect(mockMarkRevoked).not.toHaveBeenCalled();
   });
 });
@@ -605,6 +644,48 @@ describe('messengerRouter.availablePlatforms', () => {
 
     expect(result[0].binding).toEqual({ linked: true, platformUsername: 'staff_1' });
   });
+
+  it('omits DingTalk when the dingtalk module is off and other platforms when bots is off', async () => {
+    mockGetEnabledMessengerPlatforms.mockResolvedValue(['dingtalk', 'slack']);
+    mockListSerializedPlatforms.mockReturnValue([
+      { connectionMode: 'websocket', id: 'dingtalk', name: '钉钉' },
+      { connectionMode: 'webhook', id: 'slack', name: 'Slack' },
+    ]);
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalk');
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const dingtalkOff = await caller.availablePlatforms();
+    expect(dingtalkOff.map((item) => item.id)).toEqual(['slack']);
+    expect(mockGetMessengerDingTalkConfig).not.toHaveBeenCalled();
+
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'bots');
+    const botsOff = await caller.availablePlatforms();
+    expect(botsOff.map((item) => item.id)).toEqual(['dingtalk']);
+  });
+
+  it('turns chat and push off with dingtalkChat and dingtalkNotify', async () => {
+    mockGetMessengerDingTalkConfig.mockResolvedValue({
+      chatEnabled: true,
+      clientId: 'app_key',
+      pushEnabled: true,
+      robotCode: 'robot_1',
+    });
+    mockIsModuleEnabled.mockImplementation(
+      async (id: string) => id !== 'dingtalkChat' && id !== 'dingtalkNotify',
+    );
+
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+    const bothOff = await caller.availablePlatforms();
+    expect(bothOff[0]?.capabilities).toEqual({ chat: false, push: false });
+
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkNotify');
+    const pushOff = await caller.availablePlatforms();
+    expect(pushOff[0]?.capabilities).toEqual({ chat: true, push: false });
+
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkChat');
+    const chatOff = await caller.availablePlatforms();
+    expect(chatOff[0]?.capabilities).toEqual({ chat: false, push: true });
+  });
 });
 
 describe('messengerRouter.mirrorWebTurn', () => {
@@ -682,5 +763,56 @@ describe('messengerRouter.mirrorWebTurn', () => {
       }),
     );
     expect(mockTopicFindById).not.toHaveBeenCalled();
+  });
+
+  it('rejects with PLATFORM_MODULE_DISABLED when dingtalkChat is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkChat');
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+
+    await expect(
+      caller.mirrorWebTurn({
+        assistantMessageId: 'a1',
+        topicId: 'tpc-1',
+        userMessageId: 'u1',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockMirrorWebTurnToDingTalk).not.toHaveBeenCalled();
+    expect(mockGetServerDB).not.toHaveBeenCalled();
+
+    try {
+      await caller.mirrorWebTurn({
+        assistantMessageId: 'a1',
+        topicId: 'tpc-1',
+        userMessageId: 'u1',
+      });
+    } catch (error) {
+      expect(getEnterpriseErrorBody(error)).toMatchObject({
+        code: 'PLATFORM_MODULE_DISABLED',
+        details: { moduleId: 'dingtalkChat' },
+      });
+    }
+  });
+});
+
+describe('messengerRouter.getMyLink module gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByPlatform.mockResolvedValue(null);
+  });
+
+  it('requires dingtalk for DingTalk and bots for other platforms', async () => {
+    const caller = createCaller(await createContextInner({ userId: 'user-1' }));
+
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalk');
+    await expect(caller.getMyLink({ platform: 'dingtalk' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockFindByPlatform).not.toHaveBeenCalled();
+
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'bots');
+    await expect(caller.getMyLink({ platform: 'slack' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockFindByPlatform).not.toHaveBeenCalled();
   });
 });

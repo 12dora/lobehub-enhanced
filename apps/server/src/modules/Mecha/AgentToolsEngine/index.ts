@@ -15,6 +15,7 @@ import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { MemoryManifest } from '@lobechat/builtin-tool-memory';
 import { MessageManifest } from '@lobechat/builtin-tool-message';
+import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder';
 import { RemoteDeviceManifest } from '@lobechat/builtin-tool-remote-device';
 import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
 import {
@@ -190,6 +191,7 @@ export const createServerAgentToolsEngine = (
     enterpriseLookupConfigured,
     dingtalkApprovalEnabled,
     dingtalkDocs,
+    dingtalkNotifyEnabled,
     dingtalkPersonal,
     dingtalkWorkspaceEnabled,
   } = params;
@@ -205,6 +207,8 @@ export const createServerAgentToolsEngine = (
   const isDingtalkPersonalEnabled = dingtalkPersonal === true;
   // Docs rides on the same authorization as personal data, plus its own switch.
   const isDingtalkDocsEnabled = isDingtalkPersonalEnabled && dingtalkDocs === true;
+  // Omitted keeps the always-on reminder. Callers that loaded module state pass false to drop it.
+  const isDingtalkNotifyEnabled = dingtalkNotifyEnabled !== false;
 
   if (exactBuiltinToolIds) {
     const exactIds = new Set([
@@ -218,6 +222,7 @@ export const createServerAgentToolsEngine = (
     if (!isDingtalkWorkspaceEnabled) exactIds.delete(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
     if (!isDingtalkPersonalEnabled) exactIds.delete(DINGTALK_PERSONAL_TOOL_IDENTIFIER);
     if (!isDingtalkDocsEnabled) exactIds.delete(DINGTALK_DOCS_TOOL_IDENTIFIER);
+    if (!isDingtalkNotifyEnabled) exactIds.delete(ReminderIdentifier);
     if (memoryEmbeddingAvailable === false) exactIds.delete(MemoryManifest.identifier);
     const exactExclude = new Set<string>();
     if (dropDocumentPages) exactExclude.add(DocumentPagesIdentifier);
@@ -226,6 +231,7 @@ export const createServerAgentToolsEngine = (
     if (!isDingtalkWorkspaceEnabled) exactExclude.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
     if (!isDingtalkPersonalEnabled) exactExclude.add(DINGTALK_PERSONAL_TOOL_IDENTIFIER);
     if (!isDingtalkDocsEnabled) exactExclude.add(DINGTALK_DOCS_TOOL_IDENTIFIER);
+    if (!isDingtalkNotifyEnabled) exactExclude.add(ReminderIdentifier);
     if (memoryEmbeddingAvailable === false) exactExclude.add(MemoryManifest.identifier);
     return createServerToolsEngine(
       { ...context, installedPlugins: [] },
@@ -366,6 +372,7 @@ export const createServerAgentToolsEngine = (
     [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: isDingtalkWorkspaceEnabled,
     [DINGTALK_PERSONAL_TOOL_IDENTIFIER]: isDingtalkPersonalEnabled,
     [DINGTALK_DOCS_TOOL_IDENTIFIER]: isDingtalkDocsEnabled,
+    [ReminderIdentifier]: isDingtalkNotifyEnabled,
   };
 
   const excludeIdentifiers = new Set<string>(
@@ -378,6 +385,7 @@ export const createServerAgentToolsEngine = (
   if (!isDingtalkWorkspaceEnabled) excludeIdentifiers.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
   if (!isDingtalkPersonalEnabled) excludeIdentifiers.add(DINGTALK_PERSONAL_TOOL_IDENTIFIER);
   if (!isDingtalkDocsEnabled) excludeIdentifiers.add(DINGTALK_DOCS_TOOL_IDENTIFIER);
+  if (!isDingtalkNotifyEnabled) excludeIdentifiers.add(ReminderIdentifier);
   if (memoryEmbeddingAvailable === false) excludeIdentifiers.add(MemoryManifest.identifier);
 
   return createServerToolsEngine(context, {

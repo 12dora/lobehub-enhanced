@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  BOT_CALLBACK_BODY_LIMIT_BYTES,
   gateWebapiRequest,
   platformModuleDisabledBody,
   resolveWebapiModuleId,
@@ -25,7 +26,10 @@ describe('resolveWebapiModuleId', () => {
   it('maps agent gateway / messenger / webhooks to bots', () => {
     expect(resolveWebapiModuleId('/api/agent/gateway')).toBe('bots');
     expect(resolveWebapiModuleId('/api/agent/gateway/start')).toBeUndefined();
-    expect(resolveWebapiModuleId('/api/agent/webhooks/bot-callback')).toBe('bots');
+    expect(resolveWebapiModuleId('/api/agent/webhooks/discord/app-1')).toBe('bots');
+    expect(resolveWebapiModuleId('/api/agent/webhooks/bot-callback')).toBeUndefined();
+    expect(resolveWebapiModuleId('/api/agent/webhooks/subagent-callback')).toBeUndefined();
+    expect(resolveWebapiModuleId('/api/agent/webhooks/group-member-callback')).toBeUndefined();
     expect(resolveWebapiModuleId('/api/agent/messenger/slack/install')).toBe('bots');
     expect(resolveWebapiModuleId('/gateway/start')).toBeUndefined();
   });
@@ -66,6 +70,163 @@ describe('gateWebapiRequest', () => {
     expect(
       await gateWebapiRequest(new Request('http://localhost/api/workflows/task/watchdog')),
     ).toBeNull();
+  });
+
+  it('gates bot-callback by platform and leaves the body readable', async () => {
+    const dingtalkBody = JSON.stringify({
+      platformThreadId: 'dingtalk:cid',
+      type: 'completion',
+    });
+    const dingtalkRequest = new Request('http://localhost/api/agent/webhooks/bot-callback', {
+      body: dingtalkBody,
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'bots');
+    expect(await gateWebapiRequest(dingtalkRequest)).toBeNull();
+    expect(mocks.isModuleEnabled).toHaveBeenCalledWith('dingtalk');
+    await expect(dingtalkRequest.json()).resolves.toMatchObject({
+      platformThreadId: 'dingtalk:cid',
+    });
+
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'dingtalk');
+    const denied = await gateWebapiRequest(
+      new Request('http://localhost/api/agent/webhooks/bot-callback', {
+        body: JSON.stringify({ messengerInstallationKey: 'dingtalk:singleton' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    expect(denied?.status).toBe(403);
+    await expect(denied!.json()).resolves.toEqual(platformModuleDisabledBody('dingtalk'));
+
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'bots');
+    const slack = await gateWebapiRequest(
+      new Request('http://localhost/api/agent/webhooks/bot-callback', {
+        body: JSON.stringify({ platformThreadId: 'slack:C1' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    expect(slack?.status).toBe(403);
+    await expect(slack!.json()).resolves.toEqual(platformModuleDisabledBody('bots'));
+  });
+
+  it('does not parse a bot-callback whose Content-Length is over 1 MB and falls back to bots', async () => {
+    const payload = { platformThreadId: 'dingtalk:cid', type: 'completion' };
+    const request = new Request('http://localhost/api/agent/webhooks/bot-callback', {
+      body: JSON.stringify(payload),
+      headers: {
+        'content-length': String(BOT_CALLBACK_BODY_LIMIT_BYTES + 1),
+        'content-type': 'application/json',
+      },
+      method: 'POST',
+    });
+    mocks.isModuleEnabled.mockResolvedValue(true);
+    expect(await gateWebapiRequest(request)).toBeNull();
+    expect(mocks.isModuleEnabled).toHaveBeenCalledTimes(1);
+    expect(mocks.isModuleEnabled).toHaveBeenCalledWith('bots');
+    await expect(request.json()).resolves.toEqual(payload);
+
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'bots');
+    const denied = await gateWebapiRequest(
+      new Request('http://localhost/api/agent/webhooks/bot-callback', {
+        body: JSON.stringify(payload),
+        headers: {
+          'content-length': String(BOT_CALLBACK_BODY_LIMIT_BYTES + 1),
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      }),
+    );
+    expect(denied?.status).toBe(403);
+    await expect(denied!.json()).resolves.toEqual(platformModuleDisabledBody('bots'));
+  });
+
+  it('still classifies a bot-callback whose Content-Length is exactly 1 MB', async () => {
+    const request = new Request('http://localhost/api/agent/webhooks/bot-callback', {
+      body: JSON.stringify({ platformThreadId: 'dingtalk:cid' }),
+      headers: {
+        'content-length': String(BOT_CALLBACK_BODY_LIMIT_BYTES),
+        'content-type': 'application/json',
+      },
+      method: 'POST',
+    });
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'bots');
+    expect(await gateWebapiRequest(request)).toBeNull();
+    expect(mocks.isModuleEnabled).toHaveBeenCalledWith('dingtalk');
+  });
+
+  it('falls back to bots when a bot-callback has no Content-Length and exceeds 1 MB', async () => {
+    const payload = JSON.stringify({
+      padding: 'x'.repeat(BOT_CALLBACK_BODY_LIMIT_BYTES),
+      platformThreadId: 'dingtalk:cid',
+    });
+    const bytes = new TextEncoder().encode(payload);
+    expect(bytes.byteLength).toBeGreaterThan(BOT_CALLBACK_BODY_LIMIT_BYTES);
+    let offset = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= bytes.byteLength) {
+          controller.close();
+          return;
+        }
+        const end = Math.min(offset + 64 * 1024, bytes.byteLength);
+        controller.enqueue(bytes.subarray(offset, end));
+        offset = end;
+      },
+    });
+    const request = new Request('http://localhost/api/agent/webhooks/bot-callback', {
+      body,
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      // Node requires duplex when the body is a stream.
+      duplex: 'half',
+    } as RequestInit);
+    expect(request.headers.get('content-length')).toBeNull();
+    mocks.isModuleEnabled.mockResolvedValue(true);
+    expect(await gateWebapiRequest(request)).toBeNull();
+    expect(mocks.isModuleEnabled).toHaveBeenCalledWith('bots');
+    expect(mocks.isModuleEnabled).not.toHaveBeenCalledWith('dingtalk');
+  });
+
+  it('classifies a small bot-callback that has no Content-Length and leaves the body readable', async () => {
+    const payload = { platformThreadId: 'dingtalk:cid' };
+    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const request = new Request('http://localhost/api/agent/webhooks/bot-callback', {
+      body,
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      duplex: 'half',
+    } as RequestInit);
+    expect(request.headers.get('content-length')).toBeNull();
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'bots');
+    expect(await gateWebapiRequest(request)).toBeNull();
+    expect(mocks.isModuleEnabled).toHaveBeenCalledWith('dingtalk');
+    await expect(request.json()).resolves.toEqual(payload);
+  });
+
+  it('does not require bots for subagent or group-member callbacks', async () => {
+    mocks.isModuleEnabled.mockImplementation(async (id) => id !== 'bots');
+    expect(
+      await gateWebapiRequest(
+        new Request('http://localhost/api/agent/webhooks/subagent-callback', { method: 'POST' }),
+      ),
+    ).toBeNull();
+    expect(
+      await gateWebapiRequest(
+        new Request('http://localhost/api/agent/webhooks/group-member-callback', {
+          method: 'POST',
+        }),
+      ),
+    ).toBeNull();
+    expect(mocks.isModuleEnabled).not.toHaveBeenCalled();
   });
 });
 

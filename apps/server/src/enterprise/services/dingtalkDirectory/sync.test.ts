@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
+
 const redisMocks = vi.hoisted(() => ({
   eval: vi.fn(),
   get: vi.fn(),
@@ -15,6 +17,16 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn(),
 }));
+
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
   fetchDirectoryReplaceAllInput: vi.fn(),
@@ -91,6 +103,7 @@ const createModel = () => ({
 });
 
 beforeEach(() => {
+  mockIsModuleEnabled.mockImplementation(async () => true);
   redisMocks.getRedis.mockReset();
   redisMocks.get.mockReset();
   redisMocks.set.mockReset();
@@ -518,6 +531,25 @@ describe('ensureDingTalkDirectorySyncWorkerStarted', () => {
       expect(isDingTalkDirectorySyncWorkerStarted()).toBe(false);
       expect(vi.mocked(getServerDB)).not.toHaveBeenCalled();
     } finally {
+      if (previous === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previous;
+    }
+  });
+
+  it('does not walk when dingtalkNotify is off', async () => {
+    const previous = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgres://directory-sync-test';
+    vi.useFakeTimers();
+    try {
+      ensureDingTalkDirectorySyncWorkerStarted({
+        isNotifyModuleEnabled: async () => false,
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vi.mocked(getServerDB)).not.toHaveBeenCalled();
+      expect(vi.mocked(resolveNotifyAppConfig)).not.toHaveBeenCalled();
+    } finally {
+      stopDingTalkDirectorySyncWorkerForTest();
+      vi.useRealTimers();
       if (previous === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = previous;
     }

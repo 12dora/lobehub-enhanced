@@ -9,6 +9,20 @@ const mockListReceived = vi.fn();
 const mockCancel = vi.fn();
 const mockFireNow = vi.fn();
 const mockHideReceived = vi.fn();
+const notifyModuleOn = vi.hoisted(() => ({ value: true }));
+
+vi.mock('@/server/enterprise/services/moduleSettings', () => ({
+  assertModuleEnabled: async (id: string) => {
+    if (notifyModuleOn.value) return;
+    const { throwEnterpriseError } = await import('@/server/enterprise/guards/enterpriseErrors');
+    throwEnterpriseError({
+      code: 'PLATFORM_MODULE_DISABLED',
+      details: { moduleId: id },
+      httpCode: 'FORBIDDEN',
+      message: 'PLATFORM_MODULE_DISABLED',
+    });
+  },
+}));
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn(() => ({})),
@@ -51,6 +65,7 @@ const createCaller = () => reminderRouter.createCaller({ serverDB: {}, userId: '
 
 describe('reminderRouter', () => {
   beforeEach(() => {
+    notifyModuleOn.value = true;
     vi.clearAllMocks();
   });
 
@@ -207,6 +222,56 @@ describe('reminderRouter', () => {
       taskId: 'task-1',
     });
     expect(mockFireNow).toHaveBeenCalledWith('task-1');
+  });
+
+  it('rejects create, fireNow and saveTask with PLATFORM_MODULE_DISABLED when dingtalkNotify is off', async () => {
+    const { getEnterpriseErrorBody } = await import('@/server/enterprise/guards/enterpriseErrors');
+    notifyModuleOn.value = false;
+
+    const createError = await createCaller()
+      .create({
+        content: '交报告',
+        recipients: ['胡玉琴A'],
+        schedule: { date: '2026-09-16', kind: 'once', time: '09:00' },
+      })
+      .then(
+        () => {
+          throw new Error('expected PLATFORM_MODULE_DISABLED');
+        },
+        (error: unknown) => error,
+      );
+    const fireError = await createCaller()
+      .fireNow({ taskId: 'task-1' })
+      .then(
+        () => {
+          throw new Error('expected PLATFORM_MODULE_DISABLED');
+        },
+        (error: unknown) => error,
+      );
+    const saveError = await createCaller()
+      .saveTask({ instruction: '@胡玉琴A\n\n开会', taskId: 'task-1' })
+      .then(
+        () => {
+          throw new Error('expected PLATFORM_MODULE_DISABLED');
+        },
+        (error: unknown) => error,
+      );
+
+    for (const error of [createError, fireError, saveError]) {
+      expect(getEnterpriseErrorBody(error)).toMatchObject({
+        code: 'PLATFORM_MODULE_DISABLED',
+        details: { moduleId: 'dingtalkNotify' },
+      });
+    }
+    expect(mockCreateReminderTask).not.toHaveBeenCalled();
+    expect(mockFireNow).not.toHaveBeenCalled();
+    expect(mockSaveReminderTask).not.toHaveBeenCalled();
+
+    mockListCreated.mockResolvedValueOnce([]);
+    mockCancel.mockResolvedValueOnce(undefined);
+    await expect(createCaller().listCreated()).resolves.toEqual([]);
+    await expect(createCaller().cancel({ taskId: 'task-1' })).resolves.toEqual({ success: true });
+    expect(mockCancel).toHaveBeenCalledWith('task-1');
   });
 
   it('cancel maps REMINDER_NOT_FOUND to NOT_FOUND', async () => {

@@ -277,9 +277,15 @@ let mockDingtalkCaps: {
   enterpriseLookup?: boolean;
 } = {};
 
+/** `enterprise.modules` (effective platform modules). `undefined` = payload missing. */
+let mockModules: Record<string, boolean> | undefined;
+
 vi.mock('@/store/serverConfig', () => ({
   getServerConfigStoreState: () => ({
-    serverConfig: { enterprise: { capabilities: mockDingtalkCaps }, telemetry: {} },
+    serverConfig: {
+      enterprise: { capabilities: mockDingtalkCaps, modules: mockModules },
+      telemetry: {},
+    },
   }),
 }));
 
@@ -340,6 +346,7 @@ describe('toolEngineering', () => {
     mockEnableAgentMode = undefined;
     mockIsCanUseFC = true;
     mockDingtalkCaps = {};
+    mockModules = undefined;
     mockGlobalMemoryEnabled = false;
     mockCacheScope = CURRENT_SCOPE;
     mockEmbeddingAvailabilityMap = {};
@@ -941,6 +948,135 @@ describe('toolEngineering', () => {
       });
 
       expect(result.enabledToolIds).toContain('lobe-enterprise-lookup');
+    });
+  });
+
+  describe('platform module gates', () => {
+    const REMINDER = 'lobe-reminder';
+    const DINGTALK_TOOLS = [
+      'lobe-dingtalk-approval',
+      'lobe-dingtalk-workspace',
+      'lobe-dingtalk-personal',
+      'lobe-dingtalk-docs',
+    ];
+    const ALL_CAPS = {
+      dingtalkApproval: true,
+      dingtalkCalendar: true,
+      dingtalkDocs: true,
+      dingtalkPersonal: true,
+      dingtalkTodo: true,
+      enterpriseLookup: true,
+    };
+    const generate = (options: { explicit?: boolean; toolIds?: string[] } = {}) =>
+      createAgentToolsEngine({ model: 'gpt-4', provider: 'openai' }).generateToolsDetailed({
+        context: options.explicit ? { isExplicitActivation: true } : undefined,
+        model: 'gpt-4',
+        provider: 'openai',
+        toolIds: options.toolIds ?? [],
+      });
+
+    it('keeps the always-on reminder when the module payload is missing or silent', () => {
+      mockModules = undefined;
+      expect(generate().enabledToolIds).toContain(REMINDER);
+
+      // Missing id = on, exactly like useModuleEnabled / the boot view.
+      mockModules = { audit: false };
+      expect(generate().enabledToolIds).toContain(REMINDER);
+
+      mockModules = { dingtalk: true, dingtalkNotify: true };
+      expect(generate().enabledToolIds).toContain(REMINDER);
+    });
+
+    it('drops lobe-reminder from the pool when the dingtalkNotify module is off', () => {
+      mockModules = { dingtalkNotify: false };
+
+      const result = generate();
+
+      expect(result.enabledToolIds).not.toContain(REMINDER);
+      // Physically absent from the manifest pool, not merely rule-disabled.
+      expect(result.filteredTools).toContainEqual({ id: REMINDER, reason: 'not_found' });
+    });
+
+    it('drops lobe-reminder when 钉钉 itself is off, whatever dingtalkNotify says', () => {
+      mockModules = { dingtalk: false, dingtalkNotify: true };
+
+      expect(generate().enabledToolIds).not.toContain(REMINDER);
+    });
+
+    it('does not let a selection or explicit activation bring the reminder back', () => {
+      mockModules = { dingtalkNotify: false };
+      mockCurrentAgentPlugins = [REMINDER];
+
+      expect(generate({ toolIds: [REMINDER] }).enabledToolIds).not.toContain(REMINDER);
+      expect(generate({ explicit: true, toolIds: [REMINDER] }).enabledToolIds).not.toContain(
+        REMINDER,
+      );
+    });
+
+    it('leaves the other always-on tools alone when only the reminder is gated', () => {
+      mockModules = { dingtalkNotify: false };
+
+      expect(generate().enabledToolIds).toContain('lobe-agent');
+    });
+
+    it('offers every DingTalk / lookup tool when capabilities and modules are all on', () => {
+      mockDingtalkCaps = ALL_CAPS;
+      mockModules = {};
+
+      const enabled = generate({ toolIds: ['lobe-enterprise-lookup'] }).enabledToolIds;
+      for (const id of [...DINGTALK_TOOLS, 'lobe-enterprise-lookup', REMINDER]) {
+        expect(enabled).toContain(id);
+      }
+    });
+
+    it('lets the module win over a capability flag from the same payload', () => {
+      // The server folds modules into capabilities, but the two are cached separately: a
+      // payload can briefly say "capability on" for a module it also reports off.
+      mockDingtalkCaps = ALL_CAPS;
+
+      mockModules = { dingtalkApproval: false };
+      const explicitApproval = { explicit: true, toolIds: ['lobe-dingtalk-approval'] };
+      let enabled = generate(explicitApproval).enabledToolIds;
+      expect(enabled).not.toContain('lobe-dingtalk-approval');
+      expect(enabled).toContain('lobe-dingtalk-workspace');
+
+      mockModules = { dingtalkWorkspace: false };
+      enabled = generate().enabledToolIds;
+      expect(enabled).not.toContain('lobe-dingtalk-workspace');
+      expect(enabled).toContain('lobe-dingtalk-approval');
+
+      mockModules = { dingtalkDocs: false };
+      enabled = generate().enabledToolIds;
+      expect(enabled).not.toContain('lobe-dingtalk-docs');
+      expect(enabled).toContain('lobe-dingtalk-personal');
+
+      mockModules = { enterpriseLookup: false };
+      mockCurrentAgentPlugins = ['lobe-enterprise-lookup'];
+      enabled = generate({ toolIds: ['lobe-enterprise-lookup'] }).enabledToolIds;
+      expect(enabled).not.toContain('lobe-enterprise-lookup');
+      expect(enabled).toContain('lobe-dingtalk-approval');
+    });
+
+    it('follows hard dependencies: personal data off takes the docs tool with it', () => {
+      mockDingtalkCaps = ALL_CAPS;
+      mockModules = { dingtalkPersonal: false };
+
+      const enabled = generate().enabledToolIds;
+      expect(enabled).not.toContain('lobe-dingtalk-personal');
+      expect(enabled).not.toContain('lobe-dingtalk-docs');
+      expect(enabled).toContain('lobe-dingtalk-workspace');
+    });
+
+    it('drops every DingTalk tool and the reminder once 钉钉 is off, and nothing else', () => {
+      mockDingtalkCaps = ALL_CAPS;
+      mockModules = { dingtalk: false };
+      mockCurrentAgentPlugins = ['lobe-enterprise-lookup'];
+
+      const enabled = generate({ explicit: true, toolIds: DINGTALK_TOOLS }).enabledToolIds;
+      for (const id of [...DINGTALK_TOOLS, REMINDER]) expect(enabled).not.toContain(id);
+      // Company lookup is its own module, not a DingTalk capability.
+      const lookup = generate({ toolIds: ['lobe-enterprise-lookup'] }).enabledToolIds;
+      expect(lookup).toContain('lobe-enterprise-lookup');
     });
   });
 

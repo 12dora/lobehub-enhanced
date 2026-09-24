@@ -51,18 +51,14 @@ describe('ENTERPRISE_WORKER_SPECS', () => {
     }
   });
 
-  it('registers dingtalkDirectorySyncWorker as a core spec', () => {
-    const spec = ENTERPRISE_WORKER_SPECS.find(
-      (item) => item.name === 'dingtalkDirectorySyncWorker',
-    );
-    expect(spec?.moduleId).toBeUndefined();
-    expect(spec?.start).toEqual(expect.any(Function));
-  });
-
-  it('registers globalFileOrphanGc as a core spec', () => {
-    const spec = ENTERPRISE_WORKER_SPECS.find((item) => item.name === 'globalFileOrphanGc');
-    expect(spec?.moduleId).toBeUndefined();
-    expect(spec?.start).toEqual(expect.any(Function));
+  it('assigns module ids so boot skips DingTalk and orphan-gc workers when off', () => {
+    const moduleIdOf = (name: string) =>
+      ENTERPRISE_WORKER_SPECS.find((item) => item.name === name)?.moduleId;
+    expect(moduleIdOf('dingtalkStreamWorker')).toBe('dingtalkChat');
+    expect(moduleIdOf('dingtalkDirectorySyncWorker')).toBe('dingtalkNotify');
+    expect(moduleIdOf('dingtalkApprovalRuleWorker')).toBe('dingtalkApproval');
+    expect(moduleIdOf('globalFileOrphanGc')).toBe('fileOrphanGc');
+    expect(moduleIdOf('reminderWorker')).toBeUndefined();
   });
 });
 

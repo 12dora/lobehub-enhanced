@@ -13,6 +13,7 @@ import debug from 'debug';
 
 import type { MessengerDingTalkConfig } from '@/config/messenger';
 import { getMessengerDingTalkConfig } from '@/config/messenger';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
 import {
   markWorkerFailed,
@@ -33,6 +34,8 @@ import {
   recordDingTalkHttpCallSafely,
 } from '@/server/services/messenger/platforms/dingtalk/tokenCache';
 
+// Task push also registers from MessengerPushService, so this import is not
+// required for notify-only deployments (dingtalkChat off).
 registerDingTalkMessengerPushProvider();
 
 /** Count gateway opens even when the bot client module was not imported first. */
@@ -61,6 +64,12 @@ const configFingerprintLog = (config: MessengerDingTalkConfig | null): string =>
 const resolveWebhookUrl = (): string => {
   const port = process.env.PORT || '3010';
   return `http://127.0.0.1:${port}/api/agent/messenger/webhooks/dingtalk`;
+};
+
+/** Chat credentials plus the hot dingtalkChat module. Off disconnects the stream. */
+const streamChatEnabled = async (config: MessengerDingTalkConfig | null): Promise<boolean> => {
+  if (!config?.chatEnabled) return false;
+  return isModuleEnabled('dingtalkChat');
 };
 
 const mapStreamState = (
@@ -134,7 +143,7 @@ export class DingTalkStreamWorker {
     markWorkerTick('dingtalk_stream', POLL_INTERVAL_MS);
 
     const config = await getMessengerDingTalkConfig();
-    const enabled = Boolean(config?.chatEnabled);
+    const enabled = await streamChatEnabled(config);
     const nextConfig = enabled ? config : null;
     const next = configFingerprint(nextConfig);
     const nextLog = configFingerprintLog(nextConfig);
@@ -169,7 +178,7 @@ export class DingTalkStreamWorker {
   private async runTick(): Promise<void> {
     const epoch = this.tickEpoch;
     const config = await getMessengerDingTalkConfig();
-    const enabled = Boolean(config?.chatEnabled);
+    const enabled = await streamChatEnabled(config);
     const nextConfig = enabled ? config : null;
     const next = configFingerprint(nextConfig);
     const nextLog = configFingerprintLog(nextConfig);

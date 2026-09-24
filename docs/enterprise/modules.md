@@ -16,14 +16,37 @@ operator may leave out of a deployment to save memory, CPU, or sidecars.
 - Every module defaults **ON**. An unconfigured deployment behaves exactly like
   today's image.
 - env can only **disable**. A missing database row also means everything on.
-- Effective rule:
-  `effective[id] = envDisabled ? false : (dbRow?.modules[id] ?? true)`.
+- Two maps:
+  - `requested[id] = envDisabled(id) ? false : (dbRow?.modules[id] ?? true)` — the switch's own choice. This is what the admin page edits and what `update` stores.
+  - `effective[id] = requested[id] && effective[parent] && every(dependsOn → effective)` (fixpoint). Gates, workers, tool pool, and `pendingRestart` read this map.
 - tRPC routers are always mounted. A disabled module answers
   `PLATFORM_MODULE_DISABLED` (tRPC `FORBIDDEN`, `data.moduleId`), never
   `NOT_FOUND`.
 - `kind: hot` takes effect on the next page load. `kind: restart` owns
-  boot-time workers / subprocesses / the bot gateway; toggling it is pending
+  boot-time workers / subprocesses / the bot gateway; toggling them is pending
   until the process restarts.
+
+## Tree and hard dependencies
+
+`parent` is a tree edge, max depth 1. `dependsOn` is a **hard** dependency, not a hint. Turning a parent off does not rewrite the children's stored bits: they stay in `requested` and come back when the parent is on again. While the parent (or a hard dependency) is off, the child is effective-off — its tools disappear, its workers are skipped at the next boot, and its admin procedures answer `PLATFORM_MODULE_DISABLED`.
+
+An env-disabled parent forces its children effective-off even when their own DB bit is true. A child whose own DB bit is false stays off when the parent is on.
+
+| id                  | group       | parent     | dependsOn          | what it gates                                                                                                              |
+| ------------------- | ----------- | ---------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `dingtalk`          | integration | —          | —                  | `admin.imConnectors` (moved off `bots`)                                                                                    |
+| `dingtalkChat`      | integration | `dingtalk` | —                  | stream worker `dingtalkStreamWorker`                                                                                       |
+| `dingtalkNotify`    | integration | `dingtalk` | —                  | directory-sync worker, tool `lobe-reminder`                                                                                |
+| `dingtalkWorkspace` | integration | `dingtalk` | `dingtalkNotify`   | tool `lobe-dingtalk-workspace`                                                                                             |
+| `dingtalkApproval`  | integration | `dingtalk` | `dingtalkNotify`   | tool `lobe-dingtalk-approval`, `admin.dingtalkApprovalRules`, approval-rule worker                                         |
+| `dingtalkPersonal`  | integration | `dingtalk` | —                  | tool `lobe-dingtalk-personal` (aihub-dws sidecar)                                                                          |
+| `dingtalkDocs`      | integration | `dingtalk` | `dingtalkPersonal` | tool `lobe-dingtalk-docs` (same sidecar)                                                                                   |
+| `enterpriseLookup`  | integration | —          | —                  | tool `lobe-enterprise-lookup`                                                                                              |
+| `fileOrphanGc`      | platform    | —          | —                  | orphan-file GC worker. Falsy `GLOBAL_FILE_ORPHAN_GC` (`0`/`false`/`no`/`off`) env-disables the module and stays a hard off |
+
+`bots` is group `integration` and keeps Discord / Slack / Telegram plus `gatewayService` only. `lambda.messenger` is not a module router key: that router is shared, and each platform is gated inside it. The reminder worker stays core (no `moduleId`).
+
+Page groups are `group`, not `origin`: **platform** / **integration** / **app**. Existing rows: fork → platform, upstream → app, `bots` → integration. Children render under their parent.
 
 ## Storage & API
 
@@ -31,14 +54,16 @@ operator may leave out of a deployment to save memory, CPU, or sidecars.
   \= partial `{ [moduleId]: boolean }`, `setup_completed_at`, CAS `revision`, `updated_by`);
   migration `0020_platform_module_settings`. A missing row means "everything enabled".
 - **Resolution** (`apps/server/src/enterprise/services/moduleSettings`):
-  `effective[id] = envDisabled ? false : (db.modules[id] ?? true)` where the env layer is
-  `LOBE_MODULE_PRESET` + `LOBE_MODULES_DISABLED` + legacy `ENABLE_PLATFORM_*=0`
-  (`packages/const/src/platform/modules.ts`).
+  `requested` is the env+DB bit above; `effective` is `resolveModuleTree(requested)`.
+  The env layer is `LOBE_MODULE_PRESET` + `LOBE_MODULES_DISABLED` + legacy `ENABLE_PLATFORM_*=0`
+  (`packages/const/src/platform/modules.ts`). Presets are still tier ranks (`modulesForPreset`);
+  `matchPreset` compares the tree-resolved map.
   - _Hot view_ (`getModuleSettingsSnapshot()` / `isModuleEnabled()`): 30 s `DomainConfigCache`
     - Redis scope `modules` for cross-instance invalidation; used by every request-time gate.
-  - _Boot view_ (`initBootModules()` / `getBootModules()`): resolved once at the start of
-    `instrumentation.register()` and frozen for the process; used by the worker registry,
-    the bot gateway, the mihomo supervisor and the moderation / egress wrappers.
+      The snapshot includes both `requested` and tree-resolved `effective`.
+  - _Boot view_ (`initBootModules()` / `getBootModules()`): the tree-resolved map, frozen once
+    at the start of `instrumentation.register()`; used by the worker registry, worker-health
+    expectations, the bot gateway, the mihomo supervisor and the moderation / egress wrappers.
 - **Gates**: `enterprise/guards/platformPermission.ts` (every `admin.*` procedure, by router
   key), `guards/moduleGuard.ts` (`platform.*` user-facing sub-routers),
   `enterprise/routers/moduleRouter.ts` (upstream sub-routers, tRPC `lazy()`),
@@ -82,32 +107,41 @@ operator may leave out of a deployment to save memory, CPU, or sidecars.
 
 <!-- BEGIN MODULE TABLE -->
 
-| id | origin | tier | kind | minimal | standard | full | cost |
-|---|---|---|---|---|---|---|---|
-| `knowledgeBase` | upstream | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse, s3 |
-| `imageGen` | upstream | standard | hot | ✗ | ✓ | ✓ | rss 0MB, 0 jobs, onUse, s3 |
-| `speech` | upstream | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse |
-| `webSearch` | upstream | standard | hot | ✗ | ✓ | ✓ | rss 0MB, 0 jobs, onUse, searxng |
-| `market` | upstream | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse |
-| `memory` | upstream | standard | hot | ✗ | ✓ | ✓ | rss 0MB, 0 jobs, perMessage |
-| `bots` | upstream | full | restart | ✗ | ✗ | ✓ | rss 22MB, 1 jobs, onUse |
-| `agentSignal` | upstream | full | restart | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse, redis |
-| `workflows` | upstream | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse, externalService |
-| `sandbox` | upstream | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse, externalService |
-| `documentRender` | fork | full | hot | ✗ | ✗ | ✓ | rss 0MB, 1 jobs, onUse, externalService |
-| `deviceGateway` | upstream | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, onUse, externalService |
-| `managedAi` | fork | minimal | hot | ✓ | ✓ | ✓ | rss 6MB, 0 jobs, perMessage |
-| `managedSkills` | fork | minimal | hot | ✓ | ✓ | ✓ | rss 0MB, 0 jobs, none |
-| `managedConnectors` | fork | standard | restart | ✗ | ✓ | ✓ | rss 0MB, 3 jobs, none |
-| `managedAgents` | fork | standard | restart | ✗ | ✓ | ✓ | rss 0MB, 1 jobs, none |
-| `settingsPolicy` | fork | minimal | hot | ✓ | ✓ | ✓ | rss 0MB, 0 jobs, perRequest |
-| `branding` | fork | minimal | hot | ✓ | ✓ | ✓ | rss 6MB, 1 jobs, none, s3 |
-| `databaseIdp` | fork | minimal | restart | ✓ | ✓ | ✓ | rss 0MB, 2 jobs, none |
-| `audit` | fork | standard | restart | ✗ | ✓ | ✓ | rss 0MB, 2 jobs, perRequest, s3 |
-| `moderation` | fork | standard | restart | ✗ | ✓ | ✓ | rss 0MB, 0 jobs, perMessage, load-sensitive, redis |
-| `networkProxy` | fork | standard | restart | ✗ | ✓ | ✓ | rss 8MB, 3 jobs, perFetch, subprocess |
-| `platformStats` | fork | minimal | hot | ✓ | ✓ | ✓ | rss 0MB, 0 jobs, onUse |
-| `taskTemplates` | fork | full | hot | ✗ | ✗ | ✓ | rss 0MB, 0 jobs, none |
+| id                  | origin   | tier     | kind    | minimal | standard | full | cost                                               |
+| ------------------- | -------- | -------- | ------- | ------- | -------- | ---- | -------------------------------------------------- |
+| `knowledgeBase`     | upstream | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, s3                         |
+| `imageGen`          | upstream | standard | hot     | ✗       | ✓        | ✓    | rss 0MB, 0 jobs, onUse, s3                         |
+| `speech`            | upstream | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse                             |
+| `webSearch`         | upstream | standard | hot     | ✗       | ✓        | ✓    | rss 0MB, 0 jobs, onUse, searxng                    |
+| `market`            | upstream | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse                             |
+| `memory`            | upstream | standard | hot     | ✗       | ✓        | ✓    | rss 0MB, 0 jobs, perMessage                        |
+| `bots`              | upstream | full     | restart | ✗       | ✗        | ✓    | rss 22MB, 1 jobs, onUse                            |
+| `agentSignal`       | upstream | full     | restart | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, redis                      |
+| `workflows`         | upstream | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `sandbox`           | upstream | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `documentRender`    | fork     | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 1 jobs, onUse, externalService            |
+| `deviceGateway`     | upstream | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `managedAi`         | fork     | minimal  | hot     | ✓       | ✓        | ✓    | rss 6MB, 0 jobs, perMessage                        |
+| `managedSkills`     | fork     | minimal  | hot     | ✓       | ✓        | ✓    | rss 0MB, 0 jobs, none                              |
+| `managedConnectors` | fork     | standard | restart | ✗       | ✓        | ✓    | rss 0MB, 3 jobs, none                              |
+| `managedAgents`     | fork     | standard | restart | ✗       | ✓        | ✓    | rss 0MB, 1 jobs, none                              |
+| `settingsPolicy`    | fork     | minimal  | hot     | ✓       | ✓        | ✓    | rss 0MB, 0 jobs, perRequest                        |
+| `branding`          | fork     | minimal  | hot     | ✓       | ✓        | ✓    | rss 6MB, 1 jobs, none, s3                          |
+| `databaseIdp`       | fork     | minimal  | restart | ✓       | ✓        | ✓    | rss 0MB, 2 jobs, none                              |
+| `audit`             | fork     | standard | restart | ✗       | ✓        | ✓    | rss 0MB, 2 jobs, perRequest, s3                    |
+| `moderation`        | fork     | standard | restart | ✗       | ✓        | ✓    | rss 0MB, 0 jobs, perMessage, load-sensitive, redis |
+| `networkProxy`      | fork     | standard | restart | ✗       | ✓        | ✓    | rss 8MB, 3 jobs, perFetch, subprocess              |
+| `platformStats`     | fork     | minimal  | hot     | ✓       | ✓        | ✓    | rss 0MB, 0 jobs, onUse                             |
+| `taskTemplates`     | fork     | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, none                              |
+| `dingtalk`          | fork     | full     | restart | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `dingtalkChat`      | fork     | full     | restart | ✗       | ✗        | ✓    | rss 0MB, 1 jobs, onUse, externalService            |
+| `dingtalkNotify`    | fork     | full     | restart | ✗       | ✗        | ✓    | rss 0MB, 1 jobs, onUse, externalService            |
+| `dingtalkWorkspace` | fork     | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `dingtalkApproval`  | fork     | full     | restart | ✗       | ✗        | ✓    | rss 0MB, 1 jobs, onUse, externalService            |
+| `dingtalkPersonal`  | fork     | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `dingtalkDocs`      | fork     | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `enterpriseLookup`  | fork     | full     | hot     | ✗       | ✗        | ✓    | rss 0MB, 0 jobs, onUse, externalService            |
+| `fileOrphanGc`      | fork     | minimal  | restart | ✓       | ✓        | ✓    | rss 0MB, 1 jobs, none                              |
 
 <!-- END MODULE TABLE -->
 
@@ -126,11 +160,11 @@ configured_) are not modules and cannot be turned off.
 
 ## Presets & sizing
 
-| Preset     | Typical box       | `LOBE_NODE_HEAP_MB` | Sidecars      | What you keep                                                                                          |
-| ---------- | ----------------- | ------------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
-| `minimal`  | 1–2 CPU / 2–4 GiB | **1024**            | ParadeDB only | Chat + admin skeleton + managed AI/skills, settings policy, branding, stats, DB identity               |
-| `standard` | 2–4 CPU / 4–8 GiB | **1536** (default)  | + Redis + S3  | Above + audit / moderation / network proxy / managed agents & connectors / image / memory / web search |
-| `full`     | 4+ CPU / 8+ GiB   | **2048**            | + SearXNG     | Everything. This is the default and today's behaviour.                                                 |
+| Preset     | Typical box       | `LOBE_NODE_HEAP_MB` | Sidecars      | What you keep                                                                                            |
+| ---------- | ----------------- | ------------------- | ------------- | -------------------------------------------------------------------------------------------------------- |
+| `minimal`  | 1–2 CPU / 2–4 GiB | **1024**            | ParadeDB only | Chat + admin skeleton + managed AI/skills, settings policy, branding, stats, DB identity, orphan-file GC |
+| `standard` | 2–4 CPU / 4–8 GiB | **1536** (default)  | + Redis + S3  | Above + audit / moderation / network proxy / managed agents & connectors / image / memory / web search   |
+| `full`     | 4+ CPU / 8+ GiB   | **2048**            | + SearXNG     | Everything. This is the default and today's behaviour.                                                   |
 
 ### Measured (reference build, arm64, standalone server, 2026-08-17)
 
@@ -215,31 +249,42 @@ A disabled module does **not** unmount its router.
 { "error": "PLATFORM_MODULE_DISABLED", "moduleId": "<id>" }
 ```
 
-| Module              | Hidden from the user                                  | Still there            | Extra boot cost if left on             |
-| ------------------- | ----------------------------------------------------- | ---------------------- | -------------------------------------- |
-| `knowledgeBase`     | KB / RAG / chunk / ragEval UI (`knowledge_base` flag) | pgvector tables        | file-loader / canvas on first parse    |
-| `imageGen`          | Image / video / ComfyUI (`ai_image` flag)             | —                      | `sharp` / `ffmpeg-static` on first use |
-| `speech`            | TTS / STT (`speech_to_text` flag)                     | —                      | —                                      |
-| `webSearch`         | Built-in search / web-browsing tool                   | Other search providers | 11 search-provider imports             |
-| `market`            | Agent / plugin market (`market` flag)                 | —                      | —                                      |
-| `memory`            | User-memory extraction                                | tables                 | per-message extractor                  |
-| `bots`              | Messenger / gateway                                   | —                      | GatewayService + 9 adapters (restart)  |
-| `agentSignal`       | Agent-signal workflows                                | —                      | eager graph (restart)                  |
-| `workflows`         | Upstash workflow routes                               | —                      | needs QStash                           |
-| `sandbox`           | Python / cloud sandbox tools                          | —                      | needs sandbox service                  |
-| `deviceGateway`     | Remote-device routes                                  | —                      | needs `DEVICE_GATEWAY_URL`             |
-| `managedAi`         | Platform AI catalog                                   | BYOK providers         | per-message catalog lookup             |
-| `managedSkills`     | Platform skill catalog                                | user skills            | —                                      |
-| `managedConnectors` | Connector admin + 3 workers                           | —                      | restart                                |
-| `managedAgents`     | Platform assistants + rollout worker                  | user agents            | restart                                |
-| `settingsPolicy`    | Platform default / lock policy                        | user settings          | per-request resolve                    |
-| `branding`          | Runtime brand assets                                  | build-time brand       | S3 cleanup job                         |
-| `databaseIdp`       | DB identity providers + 2 workers                     | env SSO                | restart                                |
-| `audit`             | Audit UI + 2 workers                                  | —                      | restart; export needs S3               |
-| `moderation`        | Content-moderation wrapper                            | —                      | per-message, load-sensitive            |
-| `networkProxy`      | mihomo subprocess + egress wrap                       | direct egress          | restart + subprocess                   |
-| `platformStats`     | Global stats page                                     | —                      | heavy on-demand queries                |
-| `taskTemplates`     | Task-template admin / home                            | —                      | —                                      |
+`/api/agent/webhooks/bot-callback` is gated from the JSON body (`platform`, `platformThreadId`, or `messengerInstallationKey`: `dingtalk` → module `dingtalk`, anything else → `bots`). `subagent-callback` and `group-member-callback` are not module-gated. Other `/api/agent/webhooks/*` paths stay on `bots`.
+
+| Module              | Hidden from the user                                  | Still there            | Extra boot cost if left on                  |
+| ------------------- | ----------------------------------------------------- | ---------------------- | ------------------------------------------- |
+| `knowledgeBase`     | KB / RAG / chunk / ragEval UI (`knowledge_base` flag) | pgvector tables        | file-loader / canvas on first parse         |
+| `imageGen`          | Image / video / ComfyUI (`ai_image` flag)             | —                      | `sharp` / `ffmpeg-static` on first use      |
+| `speech`            | TTS / STT (`speech_to_text` flag)                     | —                      | —                                           |
+| `webSearch`         | Built-in search / web-browsing tool                   | Other search providers | 11 search-provider imports                  |
+| `market`            | Agent / plugin market (`market` flag)                 | —                      | —                                           |
+| `memory`            | User-memory extraction                                | tables                 | per-message extractor                       |
+| `bots`              | Discord / Slack / Telegram gateway                    | DingTalk (own modules) | GatewayService (restart)                    |
+| `dingtalk`          | IM connector admin                                    | stored connector row   | restart; children follow the tree           |
+| `dingtalkChat`      | Robot chat stream worker                              | connector credentials  | restart                                     |
+| `dingtalkNotify`    | Directory sync + `lobe-reminder`                      | reminder worker (core) | restart                                     |
+| `dingtalkWorkspace` | Todo / calendar tool                                  | —                      | needs notify                                |
+| `dingtalkApproval`  | Approval tool, rules page, rule worker                | stored rules           | restart; needs notify                       |
+| `dingtalkPersonal`  | Personal-data tool                                    | authorizations         | needs aihub-dws                             |
+| `dingtalkDocs`      | Docs / sheets tool                                    | —                      | needs personal + aihub-dws                  |
+| `enterpriseLookup`  | Enterprise-lookup tool                                | infra credentials      | —                                           |
+| `fileOrphanGc`      | Daily orphan `global_files` sweep                     | the files themselves   | restart; falsy `GLOBAL_FILE_ORPHAN_GC` wins |
+| `agentSignal`       | Agent-signal workflows                                | —                      | eager graph (restart)                       |
+| `workflows`         | Upstash workflow routes                               | —                      | needs QStash                                |
+| `sandbox`           | Python / cloud sandbox tools                          | —                      | needs sandbox service                       |
+| `deviceGateway`     | Remote-device routes                                  | —                      | needs `DEVICE_GATEWAY_URL`                  |
+| `managedAi`         | Platform AI catalog                                   | BYOK providers         | per-message catalog lookup                  |
+| `managedSkills`     | Platform skill catalog                                | user skills            | —                                           |
+| `managedConnectors` | Connector admin + 3 workers                           | —                      | restart                                     |
+| `managedAgents`     | Platform assistants + rollout worker                  | user agents            | restart                                     |
+| `settingsPolicy`    | Platform default / lock policy                        | user settings          | per-request resolve                         |
+| `branding`          | Runtime brand assets                                  | build-time brand       | S3 cleanup job                              |
+| `databaseIdp`       | DB identity providers + 2 workers                     | env SSO                | restart                                     |
+| `audit`             | Audit UI + 2 workers                                  | —                      | restart; export needs S3                    |
+| `moderation`        | Content-moderation wrapper                            | —                      | per-message, load-sensitive                 |
+| `networkProxy`      | mihomo subprocess + egress wrap                       | direct egress          | restart + subprocess                        |
+| `platformStats`     | Global stats page                                     | —                      | heavy on-demand queries                     |
+| `taskTemplates`     | Task-template admin / home                            | —                      | —                                           |
 
 Permissions are orthogonal: turning a module off never revokes RBAC.
 
@@ -254,29 +299,31 @@ tRPC / OIDC / `/webapi` surface as upstream. Do not fork the CLI.
   one-line JSON in compose `.env` as `JWKS_KEY`. Alternative:
   `LOBEHUB_SERVER` + `LOBEHUB_CLI_API_KEY` (tRPC + `/api/v1`; chat/TTS over
   `/webapi` also accept `X-API-Key` on this fork).
+
 - **Preset**: keep `LOBE_MODULE_PRESET=full` (default) on hosts that must
   support the official CLI. Disabled modules return `FORBIDDEN` /
   `PLATFORM_MODULE_DISABLED`, never `NOT_FOUND`.
+
 - **Module → CLI command** (off in `minimal` unless noted):
 
-  | Module          | CLI commands                                  |
-  | --------------- | --------------------------------------------- |
-  | `knowledgeBase` | `lh kb *`                                     |
-  | `imageGen`      | `lh generate image/video`                     |
-  | `speech`        | `lh generate asr`                             |
-  | `webSearch`     | `lh search` web/crawl                         |
-  | `market`        | `lh skill import` from market                 |
-  | `memory`        | `lh memory *`                                 |
-  | `bots`          | `lh bot *`                                    |
-  | `agentSignal`   | `lh agent-signal`                             |
+  | Module          | CLI commands                  |
+  | --------------- | ----------------------------- |
+  | `knowledgeBase` | `lh kb *`                     |
+  | `imageGen`      | `lh generate image/video`     |
+  | `speech`        | `lh generate asr`             |
+  | `webSearch`     | `lh search` web/crawl         |
+  | `market`        | `lh skill import` from market |
+  | `memory`        | `lh memory *`                 |
+  | `bots`          | `lh bot *`                    |
+  | `agentSignal`   | `lh agent-signal`             |
 
   Core (`agent` / `user` / `file` / `topic` / `message` / `task` / `device` /
   `aiProvider` reads) is not a module and stays on.
+
 - **平台托管 (takeover)**: when an admin publishes enforced managed agents /
   AI / skills, `lh agent|provider|skill` **CRUD is denied by design**
   (`FORBIDDEN`). List/view still work against the published catalog
   (`platform-agent:` ids). This is policy, not a missing endpoint.
-
 
 ## Background workers
 
@@ -288,9 +335,17 @@ whose module is on in the boot view (plus the Vault predicate for
 `secretRewrap`), then dispatches each row to the existing per-type handler.
 Disabled modules are never claimed; the registry still logs
 `[modules] worker <name> skipped: module <id> disabled` for those names so the
-modules page listing stays unchanged. Advisory-lock cleanups, branding GC,
-shared-OAuth keepalive, the mihomo supervisor, GatewayService, and readiness
-probes stay on their own loops.
+modules page listing stays unchanged. The same skip applies to
+`dingtalkStreamWorker` (`dingtalkChat`), `dingtalkDirectorySyncWorker`
+(`dingtalkNotify`), `dingtalkApprovalRuleWorker` (`dingtalkApproval`), and
+`globalFileOrphanGc` (`fileOrphanGc`). A `fileOrphanGc` job already queued is
+not claimed when that module is off in the boot view. If it is turned off
+while the process is up, the handler completes the claimed row as
+`skipped: module_disabled` and does not delete files. `reminderWorker` has no
+`moduleId` and always starts. Worker health uses the boot view, so a worker
+whose module was off at process start is not reported as down. Advisory-lock
+cleanups, branding GC, shared-OAuth keepalive, the mihomo supervisor,
+GatewayService, and readiness probes stay on their own loops.
 
 ## Restart semantics
 

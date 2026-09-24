@@ -1,6 +1,7 @@
 import debug from 'debug';
 
 import type { LobeChatDatabase } from '@/database/type';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 
 const log = debug('lobe-server:messenger:push');
 
@@ -8,8 +9,9 @@ const log = debug('lobe-server:messenger:push');
  * Proactive (non-reply) message delivery to a user's linked IM account.
  *
  * Consumers (task reminders via `TaskNotificationService`) call `MessengerPushService.pushToUser`;
- * platform owners register a `MessengerPushProvider` (DingTalk registers itself from
- * `services/messenger/platforms/dingtalk`). Keeping the registry here means the notification
+ * platform owners register a `MessengerPushProvider`. DingTalk registers on demand from
+ * this service (so task push does not depend on the chat stream worker) when
+ * `dingtalkNotify` is on. Keeping the registry here means the notification
  * dispatcher compiles and degrades gracefully (`skipped: platform_unavailable`) before a
  * platform is wired in.
  */
@@ -32,7 +34,8 @@ export type MessengerPushSkipReason =
   | 'platform_disabled'
   | 'push_disabled'
   | 'channel_disabled'
-  | 'user_not_mapped';
+  | 'user_not_mapped'
+  | 'module_disabled';
 
 export type MessengerPushResult =
   | { providerMessageId?: string; status: 'sent' }
@@ -60,6 +63,17 @@ export const registerMessengerPushProvider = (provider: MessengerPushProvider): 
   providers.set(provider.platform, provider);
 };
 
+/**
+ * Load the DingTalk provider without importing the stream worker. The module's
+ * register function is idempotent, so a reset of this map can register again.
+ */
+const ensureDingTalkPushProvider = async (): Promise<void> => {
+  if (providers.has('dingtalk')) return;
+  const { registerDingTalkMessengerPushProvider } =
+    await import('@/server/services/messenger/platforms/dingtalk/push');
+  registerDingTalkMessengerPushProvider();
+};
+
 export const getMessengerPushProvider = (
   platform: MessengerPushPlatform,
 ): MessengerPushProvider | undefined => providers.get(platform);
@@ -77,6 +91,16 @@ export class MessengerPushService {
     platform: MessengerPushPlatform;
     userId: string;
   }): Promise<MessengerPushResult> {
+    if (params.platform === 'dingtalk') {
+      if (!(await isModuleEnabled('dingtalkNotify'))) {
+        return { reason: 'module_disabled', status: 'skipped' };
+      }
+      try {
+        await ensureDingTalkPushProvider();
+      } catch (error) {
+        log('pushToUser: failed to register dingtalk provider: %O', error);
+      }
+    }
     const provider = providers.get(params.platform);
     if (!provider) {
       log('pushToUser: no provider registered for %s', params.platform);

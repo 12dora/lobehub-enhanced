@@ -8,6 +8,8 @@ import { readWorkerBeats, type WorkerBeat } from './workerHeartbeat';
  * Expected in-process workers. Predicates match the workers' own runtime
  * guards. DingTalk stream also requires chat to be enabled, and directory
  * sync requires a complete notify app — an unconfigured connector is omitted.
+ * Module flags are the boot view: a worker whose module is off is not expected,
+ * even when its connector config would otherwise start it. `reminder` stays core.
  */
 export const WORKER_INTERVAL_MS = {
   approval_worker: 600_000,
@@ -53,9 +55,19 @@ export interface DingtalkWorkerConfig {
 }
 
 export interface WorkerExpectationFlags {
+  /** Boot view of `dingtalkApproval`. Off ⇒ do not expect `approval_worker`. */
+  dingtalkApproval: boolean;
+  /** Boot view of `dingtalkChat`. Off ⇒ do not expect `dingtalk_stream`. */
+  dingtalkChat: boolean;
+  /** Boot view of `dingtalkNotify`. Off ⇒ do not expect `directory_sync`. */
+  dingtalkNotify: boolean;
+  /** Connector config: credentials present and chat enabled. */
   dingtalkStream: boolean;
+  /** Connector config: notify-app triple complete. */
   directorySync: boolean;
   documentRender: boolean;
+  /** Boot view of `fileOrphanGc`. Off ⇒ do not expect `global_file_orphan_gc`. */
+  fileOrphanGc: boolean;
 }
 
 const persistentCore = (env: Partial<NodeJS.ProcessEnv>): boolean =>
@@ -99,21 +111,24 @@ export const expectedWorkersFromEnv = (
   };
   if (persistentCore(env)) {
     push('reminder');
-    push('approval_worker');
-    if (modules.directorySync) push('directory_sync');
+    if (modules.dingtalkApproval) push('approval_worker');
+    if (modules.directorySync && modules.dingtalkNotify) push('directory_sync');
   }
   if (taskSchedulerExpected(env)) {
     push('task_scheduler');
     push('task_sweep');
     push('task_watchdog');
   }
-  if (dingtalkStreamExpected(env) && modules.dingtalkStream) push('dingtalk_stream');
+  if (dingtalkStreamExpected(env) && modules.dingtalkStream && modules.dingtalkChat) {
+    push('dingtalk_stream');
+  }
   if (modules.documentRender && isPersistentEnterpriseWorkerRuntime(env)) push('document_render');
   // Same gate as the orphan-gc scheduler: persistent production runtime, unless
   // GLOBAL_FILE_ORPHAN_GC is 0/false/no/off. The tick is the enqueue loop.
   if (
     isPersistentEnterpriseWorkerRuntime(env) &&
-    !isGlobalFileOrphanGcDisabled(env.GLOBAL_FILE_ORPHAN_GC)
+    !isGlobalFileOrphanGcDisabled(env.GLOBAL_FILE_ORPHAN_GC) &&
+    modules.fileOrphanGc
   ) {
     push('global_file_orphan_gc');
   }
@@ -197,7 +212,11 @@ export const loadWorkerHealth = async (params?: {
     const expected = expectedWorkersFromEnv(env, {
       directorySync,
       documentRender,
+      dingtalkApproval: isBootModuleEnabled('dingtalkApproval'),
+      dingtalkChat: isBootModuleEnabled('dingtalkChat'),
+      dingtalkNotify: isBootModuleEnabled('dingtalkNotify'),
       dingtalkStream,
+      fileOrphanGc: isBootModuleEnabled('fileOrphanGc'),
     });
     const beats = await readWorkerBeats();
     return projectWorkerHealth(expected, beats, now);

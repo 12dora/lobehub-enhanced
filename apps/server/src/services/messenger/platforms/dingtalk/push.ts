@@ -4,6 +4,7 @@ import debug from 'debug';
 import { getMessengerDingTalkConfig } from '@/config/messenger';
 import type { LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 import type { MessengerPushMessage, MessengerPushProvider, MessengerPushResult } from '../../push';
@@ -217,6 +218,9 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
     message: MessengerPushMessage;
     userId: string;
   }): Promise<MessengerPushResult> {
+    if (!(await isModuleEnabled('dingtalkNotify'))) {
+      return { reason: 'module_disabled', status: 'skipped' };
+    }
     const config = await getMessengerDingTalkConfig();
     if (!config) return { reason: 'platform_disabled', status: 'skipped' };
     if (!config.pushEnabled) return { reason: 'push_disabled', status: 'skipped' };

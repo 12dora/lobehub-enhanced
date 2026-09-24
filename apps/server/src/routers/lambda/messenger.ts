@@ -12,6 +12,7 @@ import {
   getMessengerTelegramConfig,
   isMessengerPlatformEnabled,
 } from '@/config/messenger';
+import type { PlatformModuleId } from '@/const/platform';
 import {
   MessengerAccountLinkConflictError,
   MessengerAccountLinkModel,
@@ -25,6 +26,7 @@ import { agents, topics, users } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 import { authedProcedure, publicProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { assertModuleEnabled, isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { getServerFeatureFlagsStateFromRuntimeConfig } from '@/server/featureFlags';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import { AgentService } from '@/server/services/agent';
@@ -62,6 +64,26 @@ const extractSlackAuthErrorCode = (error: unknown): string | null => {
 
   const match = error.message.match(/Slack API auth\.test failed: ([a-z_]+)/);
   return match?.[1] ?? null;
+};
+
+const moduleIdForMessengerPlatform = (platform: string): PlatformModuleId =>
+  platform === 'dingtalk' ? 'dingtalk' : 'bots';
+
+const assertMessengerPlatformModule = async (platform: string): Promise<void> => {
+  await assertModuleEnabled(moduleIdForMessengerPlatform(platform));
+};
+
+const messengerPlatformModuleEnabled = async (platform: string): Promise<boolean> =>
+  isModuleEnabled(moduleIdForMessengerPlatform(platform));
+
+/** Shared binding helpers stay available when either IM module is on. */
+const assertAnyMessengerModule = async (): Promise<void> => {
+  const [dingtalkOn, botsOn] = await Promise.all([
+    isModuleEnabled('dingtalk'),
+    isModuleEnabled('bots'),
+  ]);
+  if (dingtalkOn || botsOn) return;
+  await assertModuleEnabled('bots');
 };
 
 const WORKSPACE_FEATURE_DISABLED_MESSAGE = 'Workspace feature is not enabled for this user';
@@ -211,8 +233,16 @@ export const messengerRouter = router({
    *   LinkModal's OAuth2 install URL.
    */
   availablePlatforms: publicProcedure.use(serverDatabase).query(async ({ ctx }) => {
-    const enabled = await getEnabledMessengerPlatforms();
-    const enabledSet = new Set<string>(enabled);
+    const [enabled, dingtalkOn, botsOn, dingtalkChatOn, dingtalkNotifyOn] = await Promise.all([
+      getEnabledMessengerPlatforms(),
+      isModuleEnabled('dingtalk'),
+      isModuleEnabled('bots'),
+      isModuleEnabled('dingtalkChat'),
+      isModuleEnabled('dingtalkNotify'),
+    ]);
+    const enabledSet = new Set<string>(
+      enabled.filter((id) => (id === 'dingtalk' ? dingtalkOn : botsOn)),
+    );
     const definitions = messengerPlatformRegistry
       .listSerializedPlatforms()
       .filter((def) => enabledSet.has(def.id));
@@ -254,8 +284,8 @@ export const messengerRouter = router({
       capabilities:
         def.id === 'dingtalk'
           ? {
-              chat: dingtalkConfig?.chatEnabled ?? false,
-              push: dingtalkConfig?.pushEnabled ?? false,
+              chat: Boolean(dingtalkConfig?.chatEnabled) && dingtalkChatOn,
+              push: Boolean(dingtalkConfig?.pushEnabled) && dingtalkNotifyOn,
             }
           : { chat: true, push: false },
       enabled: true,
@@ -294,6 +324,7 @@ export const messengerRouter = router({
       if (!payload) {
         const consumed = await peekConsumedLinkToken(input.randomId);
         if (consumed) {
+          await assertMessengerPlatformModule(consumed.platform);
           return {
             platform: consumed.platform,
             status: 'consumed' as const,
@@ -302,6 +333,8 @@ export const messengerRouter = router({
         }
         return { status: 'expired' as const };
       }
+
+      await assertMessengerPlatformModule(payload.platform);
 
       const existingLink = await MessengerAccountLinkModel.findByPlatformUser(
         ctx.serverDB,
@@ -361,6 +394,8 @@ export const messengerRouter = router({
           message: 'verify.error.expired',
         });
       }
+
+      await assertMessengerPlatformModule(peeked.platform);
 
       // Cross-user conflict: the (platform, tenant, platformUserId) tuple is
       // already bound to a different LobeHub account. The DB unique index
@@ -473,6 +508,7 @@ export const messengerRouter = router({
   listAgentsForBinding: messengerProcedure
     .input(z.object({ workspaceId: z.string().nullish() }).optional())
     .query(async ({ ctx, input }) => {
+      await assertAnyMessengerModule();
       const { serverDB, userId } = ctx;
       // Cascading scope: the caller picks a scope (personal or one of the
       // workspaces they belong to) and we return just that scope's agents.
@@ -506,6 +542,7 @@ export const messengerRouter = router({
    * OSS / personal-only deployments it's simply an empty array.
    */
   listBindingScopes: messengerProcedure.query(async ({ ctx }) => {
+    await assertAnyMessengerModule();
     if (!(await isWorkspaceFeatureEnabledForUser(ctx.userId))) return [];
 
     const workspaces = await new WorkspaceModel(ctx.serverDB, ctx.userId).listUserWorkspaces();
@@ -519,12 +556,18 @@ export const messengerRouter = router({
   getMyLink: messengerProcedure
     .input(z.object({ platform: platformEnum, tenantId: z.string().optional() }))
     .query(async ({ input, ctx }) => {
+      await assertMessengerPlatformModule(input.platform);
       return (await ctx.messengerLinkModel.findByPlatform(input.platform, input.tenantId)) ?? null;
     }),
 
   /** List all the current user's links across platforms (and tenants). */
   listMyLinks: messengerProcedure.query(async ({ ctx }) => {
-    return ctx.messengerLinkModel.list();
+    const links = await ctx.messengerLinkModel.list();
+    const visible: typeof links = [];
+    for (const link of links) {
+      if (await messengerPlatformModuleEnabled(link.platform)) visible.push(link);
+    }
+    return visible;
   }),
 
   /**
@@ -533,7 +576,13 @@ export const messengerRouter = router({
    * caller's topic row (`id` + `userId`) in any workspace — never the ambient
    * `X-Workspace-Id`. The service no-ops for non-DingTalk / group / inbound.
    */
-  mirrorWebTurn: messengerProcedure
+  mirrorWebTurn: authedProcedure
+    .use(async (opts) => {
+      // Before the DB middleware: a disabled robot must not open a connection.
+      await assertModuleEnabled('dingtalkChat');
+      return opts.next();
+    })
+    .use(serverDatabase)
     .input(
       z.object({
         assistantMessage: z.string().optional(),
@@ -584,6 +633,7 @@ export const messengerRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await assertMessengerPlatformModule(input.platform);
       // Authorize the target agent against its own workspace and derive the
       // active scope (personal → null). Clearing (`agentId: null`) resets to
       // personal scope.
@@ -612,6 +662,7 @@ export const messengerRouter = router({
   unlink: messengerWriteProcedure
     .input(z.object({ platform: platformEnum, tenantId: z.string().optional() }))
     .mutation(async ({ input, ctx }) => {
+      await assertMessengerPlatformModule(input.platform);
       if (!(await isMessengerPlatformEnabled(input.platform))) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -635,8 +686,16 @@ export const messengerRouter = router({
       ctx.userId,
       gateKeeper,
     );
+    // Module filter first so a disabled platform does not call Slack (or any
+    // other external API) for rows that will not be shown.
+    const visibleCandidates: typeof rows = [];
+    for (const row of rows) {
+      if (await messengerPlatformModuleEnabled(row.platform)) visibleCandidates.push(row);
+    }
     const activeRows = (
-      await Promise.all(rows.map((row) => reconcileSlackInstallation(ctx.serverDB, row)))
+      await Promise.all(
+        visibleCandidates.map((row) => reconcileSlackInstallation(ctx.serverDB, row)),
+      )
     ).filter((row): row is DecryptedMessengerInstallation => row !== null);
 
     return activeRows.map((row) => ({
@@ -687,6 +746,7 @@ export const messengerRouter = router({
           message: 'messenger.error.installationNotFound',
         });
       }
+      await assertMessengerPlatformModule(row.platform);
       // Authorization: only the user who initiated the install can disconnect
       // it. Workspace admins who installed via a different LobeHub account
       // can disconnect through their own settings page.

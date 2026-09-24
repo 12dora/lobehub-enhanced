@@ -22,6 +22,7 @@ import type {
 } from '@/database/schemas/reminder';
 import { reminderRecipients } from '@/database/schemas/reminder';
 import type { LobeChatDatabase } from '@/database/type';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
 import {
   markWorkerFailed,
@@ -64,6 +65,7 @@ export const REMINDER_SWEEP_LOCK_TTL_SECONDS = 5 * 60;
 export const REMINDER_SWEEP_INTERVAL_MS = 60_000;
 export const REMINDER_SWEEP_DUE_LIMIT = 50;
 export const NOTIFY_APP_NOT_CONFIGURED = 'notify_app_not_configured';
+export const NOTIFY_MODULE_DISABLED = 'module_disabled';
 export const CHANNEL_DISABLED = NOTIFY_CHANNEL_DISABLED;
 export const INACTIVE_DELIVERY_REASON = 'inactive';
 /** Push / task-name summary cap (tool `title` and content fallback). */
@@ -162,6 +164,8 @@ export interface ReminderSweepDeps {
   }) => Promise<void>;
   getUsers?: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
   isNotifyAppConfigured?: () => Promise<boolean>;
+  /** Hot dingtalkNotify check. Defaults to `isModuleEnabled`. */
+  isNotifyModuleEnabled?: () => Promise<boolean>;
   isNotifyRobotEnabled?: () => Promise<boolean>;
   isWorkNoticeEnabled?: () => Promise<boolean>;
   listDue?: typeof ReminderModel.listDue;
@@ -246,6 +250,7 @@ interface ReminderFireRuntime {
   getUsers: (staffIds: string[]) => Promise<Array<{ active: boolean; staffId: string }>>;
   headText: string;
   notifyConfigured: boolean;
+  notifyModuleEnabled: boolean;
   now: Date;
   persistMode: 'cas' | 'deliveries';
   recordFire: typeof ReminderModel.recordFire;
@@ -262,6 +267,9 @@ const resolveFireRuntime = async (
   deps: ReminderSweepDeps,
 ): Promise<ReminderFireRuntime> => {
   const directory = new DingTalkDirectoryModel(db);
+  const notifyModuleEnabled = await (
+    deps.isNotifyModuleEnabled ?? (() => isModuleEnabled('dingtalkNotify'))
+  )();
   const channels = await resolveNotifyChannels(deps);
   const notifyConfigured = channels.configured;
   const headText = notifyConfigured
@@ -290,6 +298,7 @@ const resolveFireRuntime = async (
     headText,
     now: deps.now ?? new Date(),
     notifyConfigured,
+    notifyModuleEnabled,
     persistMode: deps.persistMode ?? 'cas',
     recordFire: deps.recordFire ?? ReminderModel.recordFire,
     resolveUserId:
@@ -578,7 +587,16 @@ const fireOneReminder = async (
     return { deliveries, reminder: updated };
   }
 
-  if (!deps.notifyConfigured) {
+  if (!deps.notifyModuleEnabled) {
+    for (const staffId of staffIds) {
+      deliveries.push({
+        ...skippedChannel(NOTIFY_MODULE_DISABLED),
+        staffId,
+        status: 'skipped',
+        userId: userIds.get(staffId) ?? null,
+      });
+    }
+  } else if (!deps.notifyConfigured) {
     for (const staffId of staffIds) {
       deliveries.push({
         ...skippedChannel(NOTIFY_APP_NOT_CONFIGURED),
@@ -673,7 +691,9 @@ const fireOneReminder = async (
 
   const dedupeKey = `reminder:${reminder.id}:${firedAt.toISOString()}`;
   for (const delivery of deliveries) {
-    const delivered = delivery.status === 'sent' || delivery.robotStatus === 'sent';
+    const delivered = deps.notifyModuleEnabled
+      ? delivery.status === 'sent' || delivery.robotStatus === 'sent'
+      : Boolean(delivery.userId) && delivery.failedReason !== INACTIVE_DELIVERY_REASON;
     if (!delivered || !delivery.userId) continue;
     try {
       await deps.createInbox({

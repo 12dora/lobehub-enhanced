@@ -12,6 +12,7 @@ import {
   type PlatformModuleId,
   type PlatformModulePreset,
   type PlatformModuleStateMap,
+  resolveModuleTree,
 } from '@/const/platform/modules';
 import { deriveAdminSystemPermissions } from '@/enterprise/client/features/admin/system/controller';
 import { useAdminAccess } from '@/enterprise/client/providers/AdminAccessProvider';
@@ -28,6 +29,7 @@ import {
   setModuleInDraft,
 } from './moduleDraft';
 import ModuleGroupList, { CoreModulesFooter } from './ModuleGroupList';
+import ModuleHelp from './ModuleHelp';
 import ModulePresetRow from './ModulePresetRow';
 import ModuleRestartBanner from './ModuleRestartBanner';
 import ModuleSummaryBar from './ModuleSummaryBar';
@@ -101,18 +103,30 @@ const ModulesPage = memo(() => {
   const [saving, setSaving] = useState(false);
   const [wizardStep, setWizardStep] = useState<ModuleWizardStep>(1);
 
-  const effective = data?.snapshot.effective ?? ALL_MODULES_ENABLED;
-  const current = draft ?? effective;
-  const diff = useMemo(() => diffModuleDraft(effective, current), [current, effective]);
-  const preset = useMemo(() => draftPreset(current), [current]);
+  // The draft is the *requested* map — every switch's own choice, which is what gets saved.
+  // What the deployment will actually run is that map resolved through the module tree.
+  const requested = data?.snapshot.requested ?? ALL_MODULES_ENABLED;
+  const current = draft ?? requested;
+  const savedEffective = useMemo(() => resolveModuleTree(requested), [requested]);
+  const currentEffective = useMemo(() => resolveModuleTree(current), [current]);
+  /** What a save writes: the operator's own switch changes. */
+  const diff = useMemo(() => diffModuleDraft(requested, current), [current, requested]);
+  /** What a save really starts / stops, children switched off by their parent included. */
+  const effectiveDiff = useMemo(
+    () => diffModuleDraft(savedEffective, currentEffective),
+    [currentEffective, savedEffective],
+  );
+  // Env-pinned modules cannot follow a preset, so they must not stop one from matching.
+  const envDisabled = data?.snapshot.envDisabled;
+  const preset = useMemo(() => draftPreset(current, envDisabled), [current, envDisabled]);
 
   const wizard = params.get('wizard') === '1';
 
   const onToggle = useCallback(
     (id: PlatformModuleId, next: boolean) => {
-      setDraft((previous) => setModuleInDraft(previous ?? effective, id, next));
+      setDraft((previous) => setModuleInDraft(previous ?? requested, id, next));
     },
-    [effective],
+    [requested],
   );
 
   /** Drop `?wizard=1`, keeping every other query param a concurrent navigation may have added. */
@@ -138,7 +152,14 @@ const ModulesPage = memo(() => {
     async (next: PlatformModuleStateMap, setupCompleted?: boolean) => {
       if (!data) return;
       setSaving(true);
-      const changed = diffModuleDraft(effective, next);
+      // The counts name the switches the operator flipped; the restart figure is what will
+      // actually start or stop (tree-resolved before vs after) — flipping a child whose parent
+      // is off restarts nothing, and switching 钉钉 off stops its restart-kind children too.
+      const changed = diffModuleDraft(requested, next);
+      const { restartRequired } = diffModuleDraft(
+        resolveModuleTree(requested),
+        resolveModuleTree(next),
+      );
       let failure: unknown;
       const ok = await runAdminMutation({
         authMethod,
@@ -148,7 +169,7 @@ const ModulesPage = memo(() => {
           try {
             const updated = await adminModulesService.update({
               expectedRevision: data.snapshot.revision,
-              modules: draftToUpdatePayload(effective, next),
+              modules: draftToUpdatePayload(requested, next),
               ...(setupCompleted ? { setupCompleted: true } : {}),
             });
             await mutate(updated, { revalidate: false });
@@ -177,11 +198,11 @@ const ModulesPage = memo(() => {
       if (setupCompleted) exitWizard();
       await refreshAdminModules();
       toast.success(
-        changed.restartRequired.length > 0
+        restartRequired.length > 0
           ? t('modules.saved.withRestart', {
               disabled: changed.disabled.length,
               enabled: changed.enabled.length,
-              restart: changed.restartRequired.length,
+              restart: restartRequired.length,
             })
           : t('modules.saved.hot', {
               disabled: changed.disabled.length,
@@ -189,7 +210,7 @@ const ModulesPage = memo(() => {
             }),
       );
     },
-    [authMethod, data, effective, exitWizard, mutate, t],
+    [authMethod, data, exitWizard, mutate, requested, t],
   );
 
   /**
@@ -198,7 +219,9 @@ const ModulesPage = memo(() => {
    */
   const onSave = useCallback(
     (setupCompleted?: boolean) => {
-      const compliance = diff.disabled.filter((id) => CONFIRM_ON_DISABLE.includes(id));
+      // Read off what will actually stop, not only the switches flipped: a compliance module
+      // switched off through a parent must be confirmed just the same.
+      const compliance = effectiveDiff.disabled.filter((id) => CONFIRM_ON_DISABLE.includes(id));
       if (compliance.length > 0) {
         openDangerConfirm({
           content: t('modules.danger.desc'),
@@ -213,7 +236,15 @@ const ModulesPage = memo(() => {
       }
       void commit(current, setupCompleted);
     },
-    [commit, current, diff.disabled, t],
+    [commit, current, effectiveDiff.disabled, t],
+  );
+
+  // One short line; the restart nuance lives behind the "?" rather than in a paragraph.
+  const description = (
+    <>
+      {t('modules.description')}
+      <ModuleHelp field={t('modules.title')} title={t('modules.descriptionHint')} />
+    </>
   );
 
   if (!canRead) {
@@ -229,7 +260,7 @@ const ModulesPage = memo(() => {
   // read, and Save would then no-op — the worst possible answer to "did that work?".
   if (error && !data) {
     return (
-      <AdminPageTemplate description={t('modules.description')} title={t('modules.title')}>
+      <AdminPageTemplate description={description} title={t('modules.title')}>
         <Flexbox horizontal align="center" gap={12} role="alert">
           <Text type="danger">{t('modules.errors.loadFailed')}</Text>
           <Button size="small" onClick={() => void mutate()}>
@@ -241,7 +272,7 @@ const ModulesPage = memo(() => {
   }
 
   return (
-    <AdminPageTemplate description={t('modules.description')} title={t('modules.title')}>
+    <AdminPageTemplate description={description} title={t('modules.title')}>
       {wizard ? (
         <ModuleWizard
           canOperate={canOperate}
@@ -278,10 +309,15 @@ const ModulesPage = memo(() => {
 
           <ModulePresetRow activePreset={preset} disabled={!canOperate} onSelect={onSelectPreset} />
 
-          <ModuleSummaryBar draft={current} restartRequiredCount={diff.restartRequired.length} />
+          <ModuleSummaryBar
+            draft={currentEffective}
+            restartRequiredCount={effectiveDiff.restartRequired.length}
+          />
 
+          {/* The wizard's first step is this same tree — one component, one set of rules. */}
           <ModuleGroupList
             draft={current}
+            effective={currentEffective}
             envDisabledBy={data?.snapshot.envDisabledBy ?? {}}
             pendingRestart={data?.pendingRestart ?? []}
             readOnly={!canOperate}

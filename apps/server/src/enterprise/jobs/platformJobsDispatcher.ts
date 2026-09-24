@@ -110,11 +110,13 @@ export const PLATFORM_JOB_DISPATCH_SPECS = [
     workerName: 'documentRenderGc',
   },
   {
-    // Core lane. The 15 min claim lease is the single-runner lock.
+    // Boot-gated like the audit lanes. A hot off is skipped in the handler
+    // (deletion must not run after the module is turned off).
     batchLimit: 1,
     intervalMs: 60_000,
     jobType: 'platform.global_file.orphan_gc.v1',
     leaseMs: 15 * 60_000,
+    moduleId: 'fileOrphanGc',
     workerName: 'globalFileOrphanGc',
   },
 ] as const satisfies readonly PlatformJobDispatchSpec[];

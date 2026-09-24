@@ -7,6 +7,10 @@ import { getServerDB } from '@/database/core/db-adaptor';
 import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
 import { dingtalkDirectoryUsers } from '@/database/schemas';
 import { dingTalkConnectorSettingsSchema } from '@/server/enterprise/contracts/adminImConnectors';
+import {
+  currentModuleSettingsInvalidationEpoch,
+  isModuleEnabled,
+} from '@/server/enterprise/services/moduleSettings';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 import {
   readNotifyAppFromProviderRow,
@@ -30,7 +34,8 @@ export interface DingtalkWorkspaceCapabilities {
   todo: boolean;
 }
 
-export type DingtalkPermissionProbeReason = 'forbidden' | 'not_configured' | 'unreachable';
+export type DingtalkPermissionProbeReason =
+  'forbidden' | 'not_configured' | 'skipped' | 'unreachable';
 
 export interface DingtalkPermissionProbe {
   /** https://open-dev.dingtalk.com apply link, when DingTalk returned one. */
@@ -66,6 +71,7 @@ const MAX_PROBE_MISSING_SCOPES = 16;
 
 interface CapabilitiesSnapshot extends DingtalkWorkspaceCapabilities {
   fetchedAt: number;
+  moduleEpoch?: string;
   notifyConfigured: boolean;
 }
 
@@ -111,13 +117,21 @@ const parseWorkspaceSwitches = (
 
 const loadSnapshot = async (): Promise<CapabilitiesSnapshot> => {
   const now = Date.now();
-  if (cache && cache.fetchedAt + DINGTALK_WORKSPACE_CAPABILITIES_CACHE_MS > now) return cache;
+  const moduleEpoch = await currentModuleSettingsInvalidationEpoch();
+  if (
+    cache &&
+    cache.fetchedAt + DINGTALK_WORKSPACE_CAPABILITIES_CACHE_MS > now &&
+    (moduleEpoch === undefined || cache.moduleEpoch === moduleEpoch)
+  ) {
+    return cache;
+  }
 
   const empty: CapabilitiesSnapshot = {
     approval: false,
     automationTier: DEFAULT_TIER,
     calendar: false,
     fetchedAt: now,
+    moduleEpoch,
     notifyConfigured: false,
     todo: false,
   };
@@ -135,14 +149,22 @@ const loadSnapshot = async (): Promise<CapabilitiesSnapshot> => {
     const switches = parseWorkspaceSwitches(
       isRecord(row?.settings) ? (row?.settings as Record<string, unknown>) : undefined,
     );
-    const notifyConfigured = Boolean(notify);
+    const [notifyModule, approvalModule, workspaceModule] = await Promise.all([
+      isModuleEnabled('dingtalkNotify'),
+      isModuleEnabled('dingtalkApproval'),
+      isModuleEnabled('dingtalkWorkspace'),
+    ]);
+    // Notify-app availability follows dingtalkNotify. Approval and todo/calendar
+    // follow their own modules (a child is already off when its parent is).
+    const notifyConfigured = Boolean(notify) && notifyModule;
     cache = {
-      approval: notifyConfigured && switches.approval,
+      approval: notifyConfigured && switches.approval && approvalModule,
       automationTier: switches.automationTier,
-      calendar: notifyConfigured && switches.calendar,
+      calendar: notifyConfigured && switches.calendar && workspaceModule,
       fetchedAt: now,
+      moduleEpoch,
       notifyConfigured,
-      todo: notifyConfigured && switches.todo,
+      todo: notifyConfigured && switches.todo && workspaceModule,
     };
     return cache;
   } catch (error) {
@@ -181,6 +203,9 @@ export const assertDingtalkFeature = async (feature: DingtalkWorkspaceFeature): 
 };
 
 const notConfigured = (): DingtalkPermissionProbe => ({ ok: false, reason: 'not_configured' });
+
+/** Module effectively off. Distinct from a missing notify app (`not_configured`). */
+const moduleSkipped = (): DingtalkPermissionProbe => ({ ok: false, reason: 'skipped' });
 
 type SubProbeOutcome =
   | { kind: 'ignore' }
@@ -468,24 +493,42 @@ const probeCalendar = async (unionId: string): Promise<DingtalkPermissionProbe> 
  * never creates a resource).
  */
 export const probeWorkspacePermissions = async (): Promise<DingtalkWorkspacePermissionProbe> => {
+  // Effective bits: a child is already off when its parent or hard dependency is.
+  const [approvalOn, workspaceOn] = await Promise.all([
+    isModuleEnabled('dingtalkApproval'),
+    isModuleEnabled('dingtalkWorkspace'),
+  ]);
+  if (!approvalOn && !workspaceOn) {
+    return {
+      approval: moduleSkipped(),
+      calendar: moduleSkipped(),
+      todo: moduleSkipped(),
+    };
+  }
+
   const notify = await resolveNotifyAppConfig();
   if (!notify) {
+    const missing = notConfigured();
     return {
-      approval: notConfigured(),
-      calendar: notConfigured(),
-      todo: notConfigured(),
+      approval: approvalOn ? missing : moduleSkipped(),
+      calendar: workspaceOn ? missing : moduleSkipped(),
+      todo: workspaceOn ? missing : moduleSkipped(),
     };
   }
 
   const probeUser = await firstActiveDirectoryProbeUser();
   const unreachable: DingtalkPermissionProbe = { ok: false, reason: 'unreachable' };
   if (!probeUser) {
-    return { approval: unreachable, calendar: unreachable, todo: unreachable };
+    return {
+      approval: approvalOn ? unreachable : moduleSkipped(),
+      calendar: workspaceOn ? unreachable : moduleSkipped(),
+      todo: workspaceOn ? unreachable : moduleSkipped(),
+    };
   }
   const [approval, todo, calendar] = await Promise.all([
-    probeApproval(probeUser.staffId),
-    probeTodo(probeUser.unionId),
-    probeCalendar(probeUser.unionId),
+    approvalOn ? probeApproval(probeUser.staffId) : Promise.resolve(moduleSkipped()),
+    workspaceOn ? probeTodo(probeUser.unionId) : Promise.resolve(moduleSkipped()),
+    workspaceOn ? probeCalendar(probeUser.unionId) : Promise.resolve(moduleSkipped()),
   ]);
   return { approval, calendar, todo };
 };

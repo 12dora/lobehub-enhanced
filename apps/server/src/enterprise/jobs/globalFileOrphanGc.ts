@@ -13,6 +13,7 @@ import {
   readGlobalFileOrphanGcConfig,
   runGlobalFileOrphanGc,
 } from '../services/globalFileOrphanGc/run';
+import { isModuleEnabled } from '../services/moduleSettings';
 import { WORKER_INTERVAL_MS } from '../services/platformSystem/workerHealth';
 import { markWorkerTick } from '../services/platformSystem/workerHeartbeat';
 import { isPersistentEnterpriseWorkerRuntime } from './persistentWorkerRuntime';
@@ -122,6 +123,18 @@ export const handleClaimedGlobalFileOrphanGcJob = async (
     const completed = await jobs.complete({
       jobId: ctx.job.id,
       resultSummary: { skipped: 'disabled' },
+      workerId: ctx.workerId,
+    });
+    if (!completed) log('lost ownership on complete jobId=%s', ctx.job.id);
+    return;
+  }
+
+  // Hot off: the dispatcher still claims rows queued under the boot view.
+  // Complete without deleting so a restart is not required to stop GC.
+  if (!(await isModuleEnabled('fileOrphanGc'))) {
+    const completed = await jobs.complete({
+      jobId: ctx.job.id,
+      resultSummary: { skipped: 'module_disabled' },
       workerId: ctx.workerId,
     });
     if (!completed) log('lost ownership on complete jobId=%s', ctx.job.id);

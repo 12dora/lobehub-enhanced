@@ -4,6 +4,10 @@ import debug from 'debug';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
 import { dingtalkPersonalEnv } from '@/envs/dingtalkPersonal';
+import {
+  currentModuleSettingsInvalidationEpoch,
+  isModuleEnabled,
+} from '@/server/enterprise/services/moduleSettings';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
 
 const log = debug('lobe-server:dingtalk-personal:config');
@@ -15,7 +19,7 @@ export type DingtalkPersonalFeature = 'todo' | 'chat' | 'report' | 'write' | 'do
 export interface DingtalkPersonalConfig {
   /** URL and token env vars are both present. */
   brokerConfigured: boolean;
-  /** personalDataEnabled && brokerConfigured. Fail closed. */
+  /** personalDataEnabled && brokerConfigured && the dingtalkPersonal module. Fail closed. */
   enabled: boolean;
   features: Record<DingtalkPersonalFeature, boolean>;
 }
@@ -119,6 +123,7 @@ const FEATURES_OFF: Record<DingtalkPersonalFeature, boolean> = {
 
 interface ConfigSnapshot extends DingtalkPersonalConfig {
   fetchedAt: number;
+  moduleEpoch?: string;
 }
 
 let cache: ConfigSnapshot | null = null;
@@ -153,7 +158,14 @@ const readSwitches = (raw: Record<string, unknown> | undefined) => ({
 
 const loadSnapshot = async (): Promise<ConfigSnapshot> => {
   const now = Date.now();
-  if (cache && cache.fetchedAt + DINGTALK_PERSONAL_CONFIG_CACHE_MS > now) return cache;
+  const moduleEpoch = await currentModuleSettingsInvalidationEpoch();
+  if (
+    cache &&
+    cache.fetchedAt + DINGTALK_PERSONAL_CONFIG_CACHE_MS > now &&
+    (moduleEpoch === undefined || cache.moduleEpoch === moduleEpoch)
+  ) {
+    return cache;
+  }
 
   const configured = readBrokerConfigured();
   const closed: ConfigSnapshot = {
@@ -161,6 +173,7 @@ const loadSnapshot = async (): Promise<ConfigSnapshot> => {
     enabled: false,
     features: { ...FEATURES_OFF },
     fetchedAt: now,
+    moduleEpoch,
   };
 
   try {
@@ -168,19 +181,24 @@ const loadSnapshot = async (): Promise<ConfigSnapshot> => {
     const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey().catch(() => undefined);
     const row = await SystemBotProviderModel.findByPlatform(db, 'dingtalk', gateKeeper);
     const switches = readSwitches(isRecord(row?.settings) ? row.settings : undefined);
-    const enabled = configured && switches.data;
+    const [personalModule, docsModule] = await Promise.all([
+      isModuleEnabled('dingtalkPersonal'),
+      isModuleEnabled('dingtalkDocs'),
+    ]);
+    const enabled = configured && switches.data && personalModule;
     cache = {
       brokerConfigured: configured,
       enabled,
       features: {
         chat: enabled && switches.chat,
-        docs: enabled && switches.docs,
+        docs: enabled && switches.docs && docsModule,
         report: enabled && switches.report,
-        sheets: enabled && switches.sheets,
+        sheets: enabled && switches.sheets && docsModule,
         todo: enabled && switches.todo,
         write: enabled && switches.write,
       },
       fetchedAt: now,
+      moduleEpoch,
     };
     return cache;
   } catch (error) {

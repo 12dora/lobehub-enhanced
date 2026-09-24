@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
+
 import type * as TokenCacheModule from './tokenCache';
 
 const sendOtoMessage = vi.hoisted(() => vi.fn());
@@ -14,6 +16,15 @@ const mockResolveDingTalkBrandingDisplayName = vi.fn();
 const mockSendWorkNotice = vi.fn();
 const mockSendRobotMessage = vi.fn();
 const mockResolveWorkNoticeHeadText = vi.fn();
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
@@ -69,7 +80,8 @@ vi.mock('./notifyApp', async (importOriginal) => {
 });
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
-const { resetMessengerPushProvidersForTest } = await import('../../push');
+const { MessengerPushService, getMessengerPushProvider, resetMessengerPushProvidersForTest } =
+  await import('../../push');
 const {
   buildDingTalkOpenAppUrl,
   dingtalkMessengerPushProvider,
@@ -89,6 +101,7 @@ const VALID_CONFIG = {
 };
 
 beforeEach(() => {
+  mockIsModuleEnabled.mockImplementation(async () => true);
   resetMessengerPushProvidersForTest();
   registerDingTalkMessengerPushProvider();
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(VALID_CONFIG as any);
@@ -108,7 +121,51 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe('MessengerPushService DingTalk registration', () => {
+  it('registers the provider on push when the stream worker was not loaded', async () => {
+    resetMessengerPushProvidersForTest();
+    expect(getMessengerPushProvider('dingtalk')).toBeUndefined();
+
+    const result = await new MessengerPushService({} as any).pushToUser({
+      message: { markdown: 'hi', title: 't' },
+      platform: 'dingtalk',
+      userId: 'user_1',
+    });
+
+    expect(getMessengerPushProvider('dingtalk')?.platform).toBe('dingtalk');
+    expect(result).toEqual({ status: 'sent' });
+    expect(sendOtoMessage).toHaveBeenCalledOnce();
+  });
+
+  it('skips with module_disabled and does not register when dingtalkNotify is off', async () => {
+    resetMessengerPushProvidersForTest();
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkNotify');
+
+    const result = await new MessengerPushService({} as any).pushToUser({
+      message: { markdown: 'hi', title: 't' },
+      platform: 'dingtalk',
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ reason: 'module_disabled', status: 'skipped' });
+    expect(getMessengerPushProvider('dingtalk')).toBeUndefined();
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe('DingTalkMessengerPushProvider', () => {
+  it('skips DingTalk delivery when dingtalkNotify is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkNotify');
+    const result = await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'hi', title: 't' },
+      userId: 'user_1',
+    });
+    expect(result).toEqual({ reason: 'module_disabled', status: 'skipped' });
+    expect(mockSendWorkNotice).not.toHaveBeenCalled();
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
   it('skips when the connector is disabled', async () => {
     vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce(null);
     const result = await dingtalkMessengerPushProvider.pushToUser({

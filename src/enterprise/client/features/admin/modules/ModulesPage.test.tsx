@@ -2,10 +2,25 @@ import { toast } from '@lobehub/ui/base-ui';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ALL_MODULES_ENABLED, type PlatformModuleStateMap } from '@/const/platform/modules';
+import {
+  ALL_MODULES_ENABLED,
+  PLATFORM_MODULE_IDS,
+  PLATFORM_MODULES,
+  type PlatformModuleId,
+  type PlatformModuleStateMap,
+  resolveModuleTree,
+} from '@/const/platform/modules';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import type { AdminModulesState } from '@/enterprise/client/services/adminModules';
 
+import {
+  applyPresetToDraft,
+  comparePresets,
+  diffModuleDraft,
+  moduleChildren,
+  presetStateMap,
+  setModuleInDraft,
+} from './moduleDraft';
 import ModulesPage from './ModulesPage';
 import { refreshAdminModules } from './useAdminModules';
 
@@ -196,12 +211,35 @@ const buildState = (overrides: Partial<AdminModulesState> = {}): AdminModulesSta
     envDisabledBy: {},
     preset: 'full',
     presetFromEnv: 'full',
+    requested: ALL_MODULES_ENABLED as PlatformModuleStateMap,
     revision: 3,
     setupCompletedAt: '2026-08-17T00:00:00.000Z',
     ...overrides.snapshot,
   },
   ...overrides,
 });
+
+/** A snapshot whose stored choices are `requested`, with `effective` resolved like the server. */
+const withRequested = (requested: PlatformModuleStateMap): AdminModulesState =>
+  buildState({
+    snapshot: {
+      ...buildState().snapshot,
+      effective: resolveModuleTree(requested),
+      preset: null,
+      requested,
+    },
+  });
+
+const withOff = (...ids: PlatformModuleId[]): PlatformModuleStateMap =>
+  Object.freeze({
+    ...ALL_MODULES_ENABLED,
+    ...Object.fromEntries(ids.map((id) => [id, false])),
+  }) as PlatformModuleStateMap;
+
+/** Modules the constant table carries no resident-memory measurement for. */
+const UNMEASURED_IDS = PLATFORM_MODULE_IDS.filter(
+  (id) => PLATFORM_MODULES[id].cost.idleRssMb === null,
+);
 
 /** Every module row carries a stable `data-module`, so tests never depend on row order. */
 const moduleSwitch = (id: string): HTMLElement =>
@@ -266,6 +304,7 @@ describe('ModulesPage', () => {
         envDisabled: ['audit'],
         envDisabledBy: { audit: 'LOBE_MODULES_DISABLED' },
         preset: null,
+        requested: { ...ALL_MODULES_ENABLED, audit: false } as PlatformModuleStateMap,
       },
     });
     render(<ModulesPage />);
@@ -548,15 +587,42 @@ describe('ModulesPage', () => {
     expect(screen.getByText('modules.wizard.finish')).toBeTruthy();
   });
 
-  it('shows the measured resident-memory figure and the memory half of the preset comparison', () => {
+  it('states an exact resident-memory figure once every enabled module is measured', () => {
+    // Switch off whatever the constant table has not measured yet, so the rest is exact.
+    const measuredOnly = withRequested(withOff(...UNMEASURED_IDS));
+    state.data = measuredOnly;
     render(<ModulesPage />);
-    // Every module in the constant table now carries a measured `idleRssMb` (0 for on-demand
-    // modules), so the summary shows a real value — never the 未测量 fallback or a "≥" hedge.
+
     expect(screen.queryByText('modules.summary.unmeasured')).toBeNull();
     expect(screen.queryByText(/modules\.summary\.idleRssAtLeast/)).toBeNull();
     expect(screen.getByText(/modules\.summary\.idleRssValue/)).toBeTruthy();
-    expect(screen.getByText(/modules\.summary\.compareStandard(?!Jobs)/)).toBeTruthy();
+    // The memory half of the comparison needs the Standard side measured too.
+    const standard = comparePresets(measuredOnly.snapshot.effective).find(
+      (entry) => entry.preset === 'standard',
+    )!;
+    expect(
+      screen.getByText(
+        standard.idleRssComparable
+          ? /modules\.summary\.compareStandard(?!Jobs)/
+          : /modules\.summary\.compareStandardJobs/,
+      ),
+    ).toBeTruthy();
   });
+
+  it.skipIf(UNMEASURED_IDS.length === 0)(
+    'hedges the memory figure while an enabled module is still unmeasured',
+    () => {
+      render(<ModulesPage />);
+
+      // A partial sum is a floor, not a total — and never a precise-looking comparison.
+      expect(screen.queryByText(/modules\.summary\.idleRssValue/)).toBeNull();
+      expect(
+        screen.queryByText(/modules\.summary\.idleRssAtLeast/) ??
+          screen.queryByText('modules.summary.unmeasured'),
+      ).toBeTruthy();
+      expect(screen.getByText(/modules\.summary\.compareStandardJobs/)).toBeTruthy();
+    },
+  );
 
   it('offers a retry and a way past a failed infrastructure probe', () => {
     searchParams = new URLSearchParams('wizard=1');
@@ -609,5 +675,198 @@ describe('ModulesPage', () => {
       screen.getByText('modules.restart.unsupportedBecause(reason=modules.restart.reason.unknown)'),
     ).toBeTruthy();
     expect(screen.queryByText(/modules\.restart\.envHint/)).toBeNull();
+  });
+});
+
+describe('ModulesPage module tree', () => {
+  const family: PlatformModuleId[] = ['dingtalk', ...moduleChildren('dingtalk')];
+  const backgroundJobs = () =>
+    Number(screen.getByText('modules.summary.backgroundJobs').nextElementSibling!.textContent);
+
+  it('shows the DingTalk capabilities nested under 钉钉 in the integrations card', () => {
+    render(<ModulesPage />);
+
+    const integration = document.querySelector('[data-module-group="integration"]')!;
+    const children = integration.querySelector('[data-children-of="dingtalk"]')!;
+    expect(children).toBeTruthy();
+    for (const id of moduleChildren('dingtalk')) {
+      expect(children.querySelector(`[data-module="${id}"]`)).toBeTruthy();
+    }
+    expect(document.querySelector('[data-module="enterpriseLookup"]')).toBeTruthy();
+    expect(document.querySelector('[data-module="fileOrphanGc"]')).toBeTruthy();
+  });
+
+  it('greys the children when 钉钉 goes off and saves only the parent', async () => {
+    render(<ModulesPage />);
+    const before = backgroundJobs();
+
+    fireEvent.click(moduleSwitch('dingtalk'));
+
+    // Children keep their own "on" but cannot run and cannot be flipped until 钉钉 is back.
+    expect(moduleSwitch('dingtalkChat').getAttribute('aria-checked')).toBe('true');
+    expect(moduleSwitch('dingtalkChat').getAttribute('disabled')).not.toBeNull();
+    expect(
+      document.querySelector('[data-module="dingtalkDocs"]')!.getAttribute('data-blocked'),
+    ).toBe('true');
+
+    // The summary counts what runs: the whole family's background jobs are gone.
+    const familyJobs = family.reduce(
+      (sum, id) => sum + PLATFORM_MODULES[id].cost.backgroundJobs,
+      0,
+    );
+    expect(before - backgroundJobs()).toBe(familyJobs);
+
+    // What the operator changed is one switch, and that is all the save writes.
+    expect(screen.getByText('modules.pendingChanges(disabled=1,enabled=0)')).toBeTruthy();
+    fireEvent.click(screen.getByText('modules.save'));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0]).toEqual({ expectedRevision: 3, modules: { dingtalk: false } });
+  });
+
+  it('builds the draft from the stored choices, not from what runs', async () => {
+    // Stored: 钉钉 off, every child left on (so the server reports them all off as effective).
+    state.data = withRequested(withOff('dingtalk'));
+    render(<ModulesPage />);
+
+    // Loaded state is clean — the greyed children are not a pending change.
+    expect(screen.queryByText('modules.save')).toBeNull();
+    expect(moduleSwitch('dingtalkChat').getAttribute('aria-checked')).toBe('true');
+    expect(moduleSwitch('dingtalkChat').getAttribute('disabled')).not.toBeNull();
+
+    fireEvent.click(moduleSwitch('dingtalk'));
+
+    // Turning the parent back on restores each child exactly as it was stored.
+    expect(moduleSwitch('dingtalkChat').getAttribute('disabled')).toBeNull();
+    expect(moduleSwitch('dingtalkChat').getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByText('modules.save'));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    // Diffed against `requested`: the children were already "on" there, so only 钉钉 is sent.
+    expect(update.mock.calls[0][0]).toEqual({ expectedRevision: 3, modules: { dingtalk: true } });
+  });
+
+  it('matches the preset card on what runs, ignoring choices a parent overrides', () => {
+    // Standard leaves 钉钉 off; a stored "on" for one of its children changes nothing that runs.
+    state.data = withRequested(setModuleInDraft(presetStateMap('standard'), 'dingtalkChat', true));
+    render(<ModulesPage />);
+
+    const standardCard = screen.getByText('modules.presets.standard.title').closest('button')!;
+    expect(standardCard.dataset.active).toBe('true');
+  });
+
+  it('counts restarts in the toast from what actually starts or stops', async () => {
+    render(<ModulesPage />);
+    fireEvent.click(moduleSwitch('dingtalk'));
+    fireEvent.click(screen.getByText('modules.save'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+
+    // One switch flipped, but every restart-kind module under 钉钉 stops with it.
+    const restartKind = family.filter((id) => PLATFORM_MODULES[id].kind === 'restart');
+    expect(restartKind.length).toBeGreaterThan(1);
+    expect(toast.success).toHaveBeenCalledWith(
+      `modules.saved.withRestart(disabled=1,enabled=0,restart=${restartKind.length})`,
+    );
+  });
+
+  it('does not count children that were already off under their parent as restarts', async () => {
+    // 钉钉 is off, its children still "on" by their own switches. Standard switches those
+    // switches off too — a real change to what is stored, but nothing starts or stops for them.
+    const requested = withOff('dingtalk');
+    state.data = withRequested(requested);
+    render(<ModulesPage />);
+
+    fireEvent.click(screen.getByText('modules.presets.standard.title'));
+    fireEvent.click(screen.getByText('modules.save'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+
+    const next = applyPresetToDraft('standard', []);
+    const flipped = diffModuleDraft(requested, next);
+    const effect = diffModuleDraft(resolveModuleTree(requested), resolveModuleTree(next));
+    // Proves the case is real: the raw flips name DingTalk restart-kind children, the effect
+    // does not.
+    expect(flipped.restartRequired).toContain('dingtalkChat');
+    expect(effect.restartRequired).not.toContain('dingtalkChat');
+
+    expect(toast.success).toHaveBeenCalledWith(
+      `modules.saved.withRestart(disabled=${flipped.disabled.length},enabled=${flipped.enabled.length},restart=${effect.restartRequired.length})`,
+    );
+  });
+
+  it('locks 孤儿文件清理 when GLOBAL_FILE_ORPHAN_GC switches it off', () => {
+    const requested = withOff('fileOrphanGc');
+    state.data = buildState({
+      snapshot: {
+        ...buildState().snapshot,
+        effective: resolveModuleTree(requested),
+        envDisabled: ['fileOrphanGc'],
+        envDisabledBy: { fileOrphanGc: 'GLOBAL_FILE_ORPHAN_GC' },
+        preset: null,
+        requested,
+      },
+    });
+    render(<ModulesPage />);
+
+    const toggle = moduleSwitch('fileOrphanGc');
+    expect(toggle.getAttribute('disabled')).not.toBeNull();
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    const row = document.querySelector('[data-module="fileOrphanGc"]')!;
+    expect(row.textContent).toContain('modules.status.env');
+    expect(row.textContent).not.toContain('modules.status.running');
+
+    // A preset cannot switch it back on either: applying 完整配置 changes nothing to save.
+    fireEvent.click(screen.getByText('modules.presets.full.title'));
+    expect(moduleSwitch('fileOrphanGc').getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByText('modules.save')).toBeNull();
+  });
+
+  it('still matches presets while an env variable pins a module off', () => {
+    // GLOBAL_FILE_ORPHAN_GC=0: 孤儿文件清理 is off in every preset the page can apply here.
+    const requested = withOff('fileOrphanGc');
+    state.data = buildState({
+      snapshot: {
+        ...buildState().snapshot,
+        effective: resolveModuleTree(requested),
+        envDisabled: ['fileOrphanGc'],
+        envDisabledBy: { fileOrphanGc: 'GLOBAL_FILE_ORPHAN_GC' },
+        preset: null,
+        requested,
+      },
+    });
+    render(<ModulesPage />);
+
+    const card = (preset: string) =>
+      screen.getByText(`modules.presets.${preset}.title`).closest('button')!;
+    const custom = () => screen.getByText('modules.presets.custom.title').parentElement!;
+
+    // Everything else is on, so this is 完整配置 — not 自定义.
+    expect(card('full').dataset.active).toBe('true');
+    expect(custom().dataset.active).toBe('false');
+
+    // Right after clicking a preset, that preset is the one selected.
+    fireEvent.click(card('standard'));
+    expect(card('standard').dataset.active).toBe('true');
+    expect(custom().dataset.active).toBe('false');
+
+    // A real deviation from the preset is still 自定义.
+    fireEvent.click(moduleSwitch('audit'));
+    expect(custom().dataset.active).toBe('true');
+  });
+
+  it('shows the same tree in the first wizard step', () => {
+    searchParams = new URLSearchParams('wizard=1');
+    render(<ModulesPage />);
+
+    expect(screen.getByText('modules.wizard.step1')).toBeTruthy();
+    expect(document.querySelector('[data-children-of="dingtalk"]')).toBeTruthy();
+    expect(moduleSwitch('dingtalkChat')).toBeTruthy();
+  });
+
+  it('keeps the page description to one line, with the restart detail behind a help button', () => {
+    render(<ModulesPage />);
+
+    expect(screen.getByText('modules.description')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'modules.helpFor(field=modules.title)' }),
+    ).toBeTruthy();
   });
 });

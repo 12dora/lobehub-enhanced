@@ -71,7 +71,7 @@ export const lambdaRouter = router({
   ),
   market: moduleRouter('market', () => import('./market').then((m) => m.marketRouter)),
   message: lazyRouter(() => import('./message').then((m) => m.messageRouter)),
-  messenger: moduleRouter('bots', () => import('./messenger').then((m) => m.messengerRouter)),
+  messenger: lazyRouter(() => import('./messenger').then((m) => m.messengerRouter)),
   notebook: lazyRouter(() => import('./notebook').then((m) => m.notebookRouter)),
   notification: lazyRouter(() => import('./notification').then((m) => m.notificationRouter)),
   oauthDeviceFlow: lazyRouter(() =>

@@ -102,10 +102,26 @@ describe('admin.modules', () => {
     expect(view.snapshot.db).toBeNull();
     expect(view.snapshot.revision).toBe(0);
     expect(view.snapshot.effective.audit).toBe(true);
+    expect(view.snapshot.requested).toEqual(view.snapshot.effective);
     expect(view.snapshot.preset).toBe('full');
     expect(view.restart.supported).toBe(false);
     expect(view.instanceId).toMatch(/^pinst_/);
     expect(Array.isArray(view.pendingRestart)).toBe(true);
+  });
+
+  it('returns requested bits separately from the tree-resolved effective map', async () => {
+    const caller = await callerFor();
+    const next = await caller.update({
+      expectedRevision: 0,
+      modules: { dingtalk: false, dingtalkChat: true, dingtalkNotify: false },
+    });
+    expect(next.snapshot.requested.dingtalk).toBe(false);
+    expect(next.snapshot.requested.dingtalkChat).toBe(true);
+    expect(next.snapshot.requested.dingtalkWorkspace).toBe(true);
+    expect(next.snapshot.effective.dingtalkChat).toBe(false);
+    expect(next.snapshot.effective.dingtalkWorkspace).toBe(false);
+    expect(next.snapshot.effective.dingtalkApproval).toBe(false);
+    expect(next.snapshot.effective.enterpriseLookup).toBe(true);
   });
 
   it('update persists a non-compliance patch without reauth and writes an audit row', async () => {
@@ -116,6 +132,7 @@ describe('admin.modules', () => {
     });
     expect(next.snapshot.revision).toBe(1);
     expect(next.snapshot.effective.branding).toBe(false);
+    expect(next.snapshot.requested.branding).toBe(false);
     expect(next.snapshot.effective.audit).toBe(true);
     expect(appendSpy).toHaveBeenCalledWith(
       expect.objectContaining({

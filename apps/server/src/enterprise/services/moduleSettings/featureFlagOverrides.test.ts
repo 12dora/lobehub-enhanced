@@ -26,6 +26,7 @@ describe('applyDisabledModuleFeatureFlagOverrides', () => {
       envDisabledBy: { knowledgeBase: 'LOBE_MODULES_DISABLED' },
       preset: null,
       presetFromEnv: 'full',
+      requested: effective,
       revision: 0,
       setupCompletedAt: null,
     });
@@ -47,6 +48,7 @@ describe('applyDisabledModuleFeatureFlagOverrides', () => {
       envDisabledBy: {},
       preset: 'full',
       presetFromEnv: 'full',
+      requested: ALL_MODULES_ENABLED,
       revision: 0,
       setupCompletedAt: null,
     });

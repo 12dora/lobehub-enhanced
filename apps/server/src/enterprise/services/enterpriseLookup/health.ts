@@ -32,6 +32,11 @@ export const noteEnterpriseLookupConfigured = (value: boolean): void => {
   configuredPeek = value;
 };
 
+/** Drop the sync peek so a module toggle cannot keep a stale configured bit. */
+export const clearEnterpriseLookupConfiguredPeek = (): void => {
+  configuredPeek = undefined;
+};
+
 export const clearEnterpriseLookupUnhealthy = (): void => {
   unhealthyUntil.clear();
 };

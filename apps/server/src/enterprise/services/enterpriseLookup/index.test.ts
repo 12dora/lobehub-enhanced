@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
+
 import type * as EnterpriseLookupMcpClient from './mcpClient';
 
 const mockGetRuntimeConfig = vi.fn();
@@ -11,6 +13,15 @@ const mockRelease = vi.fn();
 const mockAuditAppend = vi.fn();
 const mockListProviderTools = vi.fn();
 const mockCallProviderTool = vi.fn();
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 vi.mock('./settings', () => ({
   getEnterpriseLookupRuntimeConfig: (...args: unknown[]) => mockGetRuntimeConfig(...args),
@@ -72,6 +83,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mockIsModuleEnabled.mockImplementation(async () => true);
   mockGetRuntimeConfig.mockResolvedValue(qccConfig);
   mockGetDailyTotal.mockResolvedValue(0);
   mockIncrement.mockResolvedValue(1);
@@ -98,6 +110,17 @@ describe('shanghaiUsageDate', () => {
 
 describe('EnterpriseLookupService', () => {
   const service = () => new EnterpriseLookupService({} as never, 'user-1');
+
+  it('isConfigured is false and skips the runtime config when the module is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'enterpriseLookup');
+    await expect(isConfigured()).resolves.toBe(false);
+    expect(mockGetRuntimeConfig).not.toHaveBeenCalled();
+    await expect(service().status()).resolves.toEqual({ configured: false });
+    await expect(service().listCapabilities()).rejects.toMatchObject({
+      code: ENTERPRISE_LOOKUP_NOT_CONFIGURED,
+    });
+    expect(mockGetRuntimeConfig).not.toHaveBeenCalled();
+  });
 
   it('isConfigured is false when runtime config is null', async () => {
     mockGetRuntimeConfig.mockResolvedValueOnce(null);

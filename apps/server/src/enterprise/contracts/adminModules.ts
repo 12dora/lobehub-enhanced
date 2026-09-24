@@ -24,6 +24,7 @@ const moduleSettingsSnapshotSchema = z
     envDisabledBy: z.record(platformModuleIdSchema, z.string()),
     preset: z.enum(PLATFORM_MODULE_PRESETS).nullable(),
     presetFromEnv: z.enum(PLATFORM_MODULE_PRESETS),
+    requested: moduleStateMapSchema,
     revision: z.number().int().nonnegative(),
     setupCompletedAt: z.string().nullable(),
   })

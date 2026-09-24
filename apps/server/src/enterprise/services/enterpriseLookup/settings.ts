@@ -33,7 +33,12 @@ import {
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
 import { resolveInfraSecretCiphertext } from '../infraSettings/resolveSecretAction';
 import { openInfraSecret, sealInfraSecret } from '../infraSettings/secrets';
-import { clearEnterpriseLookupUnhealthy, noteEnterpriseLookupConfigured } from './health';
+import { currentModuleSettingsInvalidationEpoch } from '../moduleSettings';
+import {
+  clearEnterpriseLookupConfiguredPeek,
+  clearEnterpriseLookupUnhealthy,
+  noteEnterpriseLookupConfigured,
+} from './health';
 import { invalidateEnterpriseLookupToolsCache, probeProvider } from './mcpClient';
 
 const RUNTIME_CACHE_TTL_MS = 30_000;
@@ -46,6 +51,7 @@ type EnterpriseLookupSettingsRow = {
 
 type RuntimeCache = {
   expiresAt: number;
+  moduleEpoch?: string;
   value: EnterpriseLookupRuntimeConfig | null;
 };
 
@@ -374,10 +380,20 @@ const loadRuntimeConfig = async (): Promise<EnterpriseLookupRuntimeConfig | null
   return toRuntimeConfig(row.config);
 };
 
-export const invalidateEnterpriseLookupRuntimeConfig = (): void => {
+/**
+ * Module-toggle path. Drops the decrypted runtime snapshot and the configured
+ * peek only. A failing provider's cooldown and the tools/list cache stay.
+ */
+export const invalidateEnterpriseLookupModuleCaches = (): void => {
   runtimeCache = null;
   runtimeInflight = null;
   runtimeGeneration += 1;
+  clearEnterpriseLookupConfiguredPeek();
+};
+
+/** Lookup-settings writes. Also resets provider cooldown and the tools/list cache. */
+export const invalidateEnterpriseLookupRuntimeConfig = (): void => {
+  invalidateEnterpriseLookupModuleCaches();
   clearEnterpriseLookupUnhealthy();
   invalidateEnterpriseLookupToolsCache();
 };
@@ -385,7 +401,12 @@ export const invalidateEnterpriseLookupRuntimeConfig = (): void => {
 export const getEnterpriseLookupRuntimeConfig =
   async (): Promise<EnterpriseLookupRuntimeConfig | null> => {
     const now = Date.now();
-    if (runtimeCache && runtimeCache.expiresAt > now) {
+    const moduleEpoch = await currentModuleSettingsInvalidationEpoch();
+    if (
+      runtimeCache &&
+      runtimeCache.expiresAt > now &&
+      (moduleEpoch === undefined || runtimeCache.moduleEpoch === moduleEpoch)
+    ) {
       return cloneRuntimeConfig(runtimeCache.value);
     }
     if (runtimeInflight) return cloneRuntimeConfig(await runtimeInflight);
@@ -394,7 +415,7 @@ export const getEnterpriseLookupRuntimeConfig =
     runtimeInflight = loadRuntimeConfig()
       .then((value) => {
         if (generation === runtimeGeneration) {
-          runtimeCache = { expiresAt: Date.now() + RUNTIME_CACHE_TTL_MS, value };
+          runtimeCache = { expiresAt: Date.now() + RUNTIME_CACHE_TTL_MS, moduleEpoch, value };
         }
         return value;
       })

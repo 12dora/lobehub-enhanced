@@ -1,18 +1,29 @@
 import {
-  matchPreset,
+  MODULE_CHILDREN,
+  moduleBlockers,
   modulesForPreset,
   PLATFORM_MODULE_IDS,
   PLATFORM_MODULE_PRESETS,
   PLATFORM_MODULES,
   type PlatformModuleExternalDep,
+  type PlatformModuleGroup,
   type PlatformModuleId,
   type PlatformModulePreset,
   type PlatformModuleStateMap,
+  resolveModuleTree,
 } from '@/const/platform/modules';
 
 /**
  * Pure draft/summary maths for the 模块配置 page. Kept out of the components so the numbers the
  * operator makes a deployment decision on are directly testable.
+ *
+ * Two views of the same selection run through this file:
+ *  - the **draft** is the *requested* map — each switch's own choice, exactly what gets saved;
+ *  - the **effective** map is `resolveModuleTree(draft)` — what actually runs once parents and
+ *    hard dependencies are applied. A child whose parent is off keeps its own choice in the
+ *    draft but is off here.
+ * Saving diffs the draft against the stored `requested` map; anything that talks about cost or
+ * presets reads the effective map, because that is what the deployment will really run.
  */
 
 export interface ModuleCostSummary {
@@ -34,7 +45,10 @@ export interface ModuleCostSummary {
   workPerRequest: number;
 }
 
-/** Aggregate the constant-table costs of everything switched on in `state`. */
+/**
+ * Aggregate the constant-table costs of everything switched on in `state`. Pass the effective
+ * (tree-resolved) map: a child whose parent is off costs nothing, whatever its own switch says.
+ */
 export const summarizeModules = (state: PlatformModuleStateMap): ModuleCostSummary => {
   const deps = new Set<PlatformModuleExternalDep>();
   let backgroundJobs = 0;
@@ -86,11 +100,14 @@ export interface PresetComparison {
   preset: PlatformModulePreset;
 }
 
-/** Compare a draft against every preset, so the bar can say "比标准配置少 N 个后台任务". */
-export const comparePresets = (draft: PlatformModuleStateMap): PresetComparison[] => {
-  const summary = summarizeModules(draft);
+/**
+ * Compare an effective (tree-resolved) selection against every preset, so the bar can say
+ * "比标准配置少 N 个后台任务".
+ */
+export const comparePresets = (effective: PlatformModuleStateMap): PresetComparison[] => {
+  const summary = summarizeModules(effective);
   return PLATFORM_MODULE_PRESETS.map((preset) => {
-    const base = summarizeModules(presetStateMap(preset));
+    const base = summarizeModules(resolveModuleTree(presetStateMap(preset)));
     return {
       backgroundJobsDelta: summary.backgroundJobs - base.backgroundJobs,
       idleRssComparable: summary.unmeasured === 0 && base.unmeasured === 0,
@@ -110,9 +127,12 @@ export interface ModuleDraftDiff {
   restartRequired: PlatformModuleId[];
 }
 
-/** What a save would actually change, relative to the currently effective state. */
+/**
+ * What changes between two state maps of the same kind: stored `requested` vs the draft for
+ * what a save writes, or the two tree-resolved maps for what will actually start / stop.
+ */
 export const diffModuleDraft = (
-  effective: PlatformModuleStateMap,
+  base: PlatformModuleStateMap,
   draft: PlatformModuleStateMap,
 ): ModuleDraftDiff => {
   const enabled: PlatformModuleId[] = [];
@@ -120,7 +140,7 @@ export const diffModuleDraft = (
   const restartRequired: PlatformModuleId[] = [];
 
   for (const id of PLATFORM_MODULE_IDS) {
-    if (effective[id] === draft[id]) continue;
+    if (base[id] === draft[id]) continue;
     if (draft[id]) enabled.push(id);
     else disabled.push(id);
     if (PLATFORM_MODULES[id].kind === 'restart') restartRequired.push(id);
@@ -134,14 +154,20 @@ export const diffModuleDraft = (
   };
 };
 
-/** Only send what changed — a partial map keeps another admin's concurrent edit intact. */
+/**
+ * Only send what changed — a partial map keeps another admin's concurrent edit intact.
+ *
+ * Diffed against the stored `requested` map, never the effective one: a child greyed out by its
+ * parent is already off in the effective map, so diffing there would silently drop the operator's
+ * own choice for it (and, worse, write `false` for children the tree merely switched off).
+ */
 export const draftToUpdatePayload = (
-  effective: PlatformModuleStateMap,
+  requested: PlatformModuleStateMap,
   draft: PlatformModuleStateMap,
 ): Partial<Record<PlatformModuleId, boolean>> => {
   const payload: Partial<Record<PlatformModuleId, boolean>> = {};
   for (const id of PLATFORM_MODULE_IDS) {
-    if (effective[id] !== draft[id]) payload[id] = draft[id];
+    if (requested[id] !== draft[id]) payload[id] = draft[id];
   }
   return payload;
 };
@@ -163,28 +189,102 @@ export const applyPresetToDraft = (
   ) as PlatformModuleStateMap;
 };
 
-/** Preset the draft currently equals, or null = 自定义. */
-export const draftPreset = (draft: PlatformModuleStateMap): PlatformModulePreset | null =>
-  matchPreset(draft);
+/**
+ * Preset the draft currently amounts to, or null = 自定义.
+ *
+ * A preset matches when the draft runs exactly what *applying that preset here* would run:
+ * both sides tree-resolved, and the preset applied with the env pins (`applyPresetToDraft`).
+ * - With 钉钉 off, its children's own choices do not change what runs, so they must not
+ *   change which preset the page says is selected either.
+ * - Env-pinned modules (and the children they switch off) are the same on both sides, so they
+ *   never break a match. Comparing against the bare preset instead made a deployment with
+ *   `GLOBAL_FILE_ORPHAN_GC=0` read 自定义 forever — even right after clicking a preset.
+ *
+ * When env pins make several presets equivalent (e.g. `LOBE_MODULE_PRESET=standard` leaves
+ * 标准 and 完整 identical), the smallest one wins — the order of `PLATFORM_MODULE_PRESETS`.
+ */
+export const draftPreset = (
+  draft: PlatformModuleStateMap,
+  envDisabled: readonly PlatformModuleId[] = [],
+): PlatformModulePreset | null => {
+  const effective = resolveModuleTree(draft);
+  return (
+    PLATFORM_MODULE_PRESETS.find((preset) => {
+      const target = resolveModuleTree(applyPresetToDraft(preset, envDisabled));
+      return PLATFORM_MODULE_IDS.every((id) => effective[id] === target[id]);
+    }) ?? null
+  );
+};
 
-/** Toggle one module in a draft (returns a new frozen map). */
+/**
+ * Toggle one module in a draft (returns a new frozen map). Only that module's own choice moves:
+ * switching a parent off leaves every child's choice where the operator put it, so switching the
+ * parent back on restores the selection instead of resetting it.
+ */
 export const setModuleInDraft = (
   draft: PlatformModuleStateMap,
   id: PlatformModuleId,
   value: boolean,
 ): PlatformModuleStateMap => Object.freeze({ ...draft, [id]: value }) as PlatformModuleStateMap;
 
-/** Modules a given module depends on that the draft leaves off (soft dependency warning). */
+/**
+ * The switches the operator has to turn on before `id` can take effect — its parent and hard
+ * dependencies, followed up the tree. A blocker whose own switch is already on is only off
+ * because of something above it, so that ancestor is named instead: with 钉钉 off and
+ * 工作通知与提醒 left on, 日程与待办 needs 钉钉, not both. Empty ⇒ nothing blocks it.
+ */
 export const unmetDependencies = (
   id: PlatformModuleId,
   draft: PlatformModuleStateMap,
-): PlatformModuleId[] => PLATFORM_MODULES[id].dependsOn.filter((dep) => !draft[dep]);
+  effective: PlatformModuleStateMap = resolveModuleTree(draft),
+): PlatformModuleId[] => {
+  const out: PlatformModuleId[] = [];
+  const seen = new Set<PlatformModuleId>([id]);
 
-/** Enterprise (fork) modules first, then upstream; both keep the constant table's order. */
-export const groupModuleIds = (): {
-  fork: PlatformModuleId[];
-  upstream: PlatformModuleId[];
-} => ({
-  fork: PLATFORM_MODULE_IDS.filter((id) => PLATFORM_MODULES[id].origin === 'fork'),
-  upstream: PLATFORM_MODULE_IDS.filter((id) => PLATFORM_MODULES[id].origin === 'upstream'),
-});
+  const visit = (blockers: readonly PlatformModuleId[]) => {
+    for (const blocker of blockers) {
+      if (seen.has(blocker)) continue;
+      seen.add(blocker);
+      const above = draft[blocker] ? moduleBlockers(blocker, effective) : [];
+      if (above.length > 0) visit(above);
+      else out.push(blocker);
+    }
+  };
+
+  visit(moduleBlockers(id, effective));
+  return out;
+};
+
+/** Page order: what an operator came to size down first, then integrations, then app features. */
+export const MODULE_GROUP_ORDER: readonly PlatformModuleGroup[] = [
+  'platform',
+  'integration',
+  'app',
+];
+
+/** Direct children of a module in the tree (constant-table order); empty for a leaf. */
+export const moduleChildren = (id: PlatformModuleId): readonly PlatformModuleId[] =>
+  MODULE_CHILDREN[id] ?? [];
+
+/** Modules that head a subtree — the rows that get an expand / collapse control. */
+export const PARENT_MODULE_IDS: readonly PlatformModuleId[] = PLATFORM_MODULE_IDS.filter(
+  (id) => moduleChildren(id).length > 0,
+);
+
+/**
+ * Top-level rows per group, each keeping the constant table's order. Children are not listed
+ * here — they render under their parent (`moduleChildren`), wherever that parent is grouped.
+ */
+export const groupModuleIds = (): Record<PlatformModuleGroup, PlatformModuleId[]> => {
+  const groups: Record<PlatformModuleGroup, PlatformModuleId[]> = {
+    app: [],
+    integration: [],
+    platform: [],
+  };
+  for (const id of PLATFORM_MODULE_IDS) {
+    const { group, parent } = PLATFORM_MODULES[id];
+    if (parent) continue;
+    groups[group].push(id);
+  }
+  return groups;
+};

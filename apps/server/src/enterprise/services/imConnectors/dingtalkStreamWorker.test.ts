@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
 import type * as TokenCacheModule from '@/server/services/messenger/platforms/dingtalk/tokenCache';
 
 const mockConnect = vi.fn().mockResolvedValue(undefined);
@@ -23,6 +24,15 @@ vi.mock('@/server/services/messenger/platforms/dingtalk/tokenCache', async (impo
 
 const mockWebhookHandler = vi.fn();
 const mockGetWebhookHandler = vi.fn(() => mockWebhookHandler);
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, any>;
@@ -87,6 +97,7 @@ const readRequest = async (request: Request) => {
 };
 
 beforeEach(() => {
+  mockIsModuleEnabled.mockImplementation(async () => true);
   capturedOptions = undefined;
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(VALID_CONFIG as any);
   mockConnect.mockReset();
@@ -204,6 +215,18 @@ describe('DingTalkStreamWorker', () => {
 
     expect(mockDisconnect).toHaveBeenCalled();
     expect(mockConnect).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops the connection when dingtalkChat turns off and writes disabled', async () => {
+    const worker = new DingTalkStreamWorker();
+    await worker.tickForTest();
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkChat');
+    await worker.tickForTest();
+
+    expect(mockDisconnect).toHaveBeenCalled();
+    expect(writeDingTalkStreamStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'disabled' }),
+    );
   });
 
   it('stops the connection when chatEnabled becomes false and writes disabled', async () => {

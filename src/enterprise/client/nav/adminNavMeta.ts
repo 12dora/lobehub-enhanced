@@ -329,13 +329,16 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
       },
       {
         // Sits right below 通用设置, where the DingTalk connector and its automation
-        // tier are configured: this is the data those switches govern. Like the IM
-        // connector surfaces it is a core SYSTEM_* page, so it carries no `moduleId`
-        // — but it is hidden where the deployment has no DingTalk approval at all,
-        // exactly as the owner-facing settings tab is.
+        // tier are configured: this is the data those switches govern. Two gates:
+        // the `dingtalkApproval` module (审批与自动审批, under 钉钉 on 模块配置) — off,
+        // and the page is gone, a deep link lands on the module-disabled surface — and
+        // the capability, which hides it where the deployment has no DingTalk approval
+        // configured, exactly as the owner-facing settings tab is. (The IM connector
+        // tab itself is gated in-page, not here.)
         capabilityId: 'dingtalkApproval',
         id: 'dingtalk-approval-rules',
         labelKey: 'nav.dingtalkApprovalRules',
+        moduleId: 'dingtalkApproval',
         path: '/admin/system/dingtalk-approval-rules',
         requiredPermissions: [PLATFORM_PERMISSIONS.SYSTEM_READ],
       },

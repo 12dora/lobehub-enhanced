@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
+
 const mockFindByPlatform = vi.hoisted(() => vi.fn());
 const mockInitWithEnvKey = vi.hoisted(() => vi.fn());
 const mockGetServerDB = vi.hoisted(() => vi.fn());
@@ -8,6 +10,8 @@ const mockResolveNotifyAppConfig = vi.hoisted(() => vi.fn());
 const mockReadNotifyAppFromProviderRow = vi.hoisted(() => vi.fn());
 const mockRequest = vi.hoisted(() => vi.fn());
 const mockPeekOrgTodoReadGate = vi.hoisted(() => vi.fn());
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+const mockModuleEpoch = vi.hoisted(() => vi.fn(async () => 'epoch-1' as string | undefined));
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: mockGetServerDB,
@@ -30,6 +34,15 @@ vi.mock('./client', () => ({
   dingtalkWorkspaceRequest: (...args: unknown[]) => mockRequest(...args),
 }));
 
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    currentModuleSettingsInvalidationEpoch: () => mockModuleEpoch(),
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
+
 vi.mock('./todo/orgReadGate', () => ({
   CUSTOM_TODO_READ_SCOPE: 'Custom.Todo.Read',
   peekOrgTodoReadGate: (...args: unknown[]) => mockPeekOrgTodoReadGate(...args),
@@ -48,6 +61,8 @@ const { DingtalkWorkspaceError } = await import('./errors');
 describe('dingtalk workspace capabilities', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsModuleEnabled.mockImplementation(async () => true);
+    mockModuleEpoch.mockResolvedValue('epoch-1');
     resetDingtalkWorkspaceCapabilitiesCacheForTest();
     mockGetServerDB.mockResolvedValue({
       select: () => ({
@@ -101,6 +116,50 @@ describe('dingtalk workspace capabilities', () => {
     const caps = await getDingtalkWorkspaceCapabilities();
     expect(caps.approval).toBe(false);
     expect(caps.todo).toBe(false);
+    await expect(assertDingtalkFeature('approval')).rejects.toMatchObject({
+      code: 'DINGTALK_NOT_CONFIGURED',
+    });
+  });
+
+  it('treats dingtalkApproval off like the approval switch', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkApproval');
+    const caps = await getDingtalkWorkspaceCapabilities();
+    expect(caps.approval).toBe(false);
+    expect(caps.todo).toBe(true);
+    expect(peekDingtalkWorkspaceCapabilities()?.approval).toBe(false);
+    await expect(assertDingtalkFeature('approval')).rejects.toMatchObject({
+      code: 'DINGTALK_FEATURE_DISABLED',
+    });
+  });
+
+  it('treats dingtalkWorkspace off like the todo and calendar switches', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkWorkspace');
+    const caps = await getDingtalkWorkspaceCapabilities();
+    expect(caps.approval).toBe(true);
+    expect(caps.todo).toBe(false);
+    expect(caps.calendar).toBe(false);
+    await expect(assertDingtalkFeature('todo')).rejects.toMatchObject({
+      code: 'DINGTALK_FEATURE_DISABLED',
+    });
+  });
+
+  it('reloads when the modules invalidation epoch changes', async () => {
+    await getDingtalkWorkspaceCapabilities();
+    expect(mockFindByPlatform).toHaveBeenCalledTimes(1);
+    mockModuleEpoch.mockResolvedValue('epoch-2');
+    await getDingtalkWorkspaceCapabilities();
+    expect(mockFindByPlatform).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats dingtalkNotify off like a missing notify app', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkNotify');
+    const caps = await getDingtalkWorkspaceCapabilities();
+    expect(caps).toEqual({
+      approval: false,
+      automationTier: 'strict',
+      calendar: false,
+      todo: false,
+    });
     await expect(assertDingtalkFeature('approval')).rejects.toMatchObject({
       code: 'DINGTALK_NOT_CONFIGURED',
     });
@@ -423,5 +482,47 @@ describe('dingtalk workspace capabilities', () => {
     const unknown = await probeWorkspacePermissions();
     expect(unknown.todo.missingScopes).toBeUndefined();
     expect(unknown.todo.ok).toBe(true);
+  });
+
+  it('skips approval when dingtalkApproval is off and does not call its endpoints', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkApproval');
+    mockRequest.mockResolvedValue({});
+    const result = await probeWorkspacePermissions();
+    expect(result.approval).toEqual({ ok: false, reason: 'skipped' });
+    expect(result.todo.ok).toBe(true);
+    expect(result.calendar.ok).toBe(true);
+    expect(mockRequest.mock.calls.some((call) => String(call[0].path).includes('workflow'))).toBe(
+      false,
+    );
+  });
+
+  it('skips todo and calendar when dingtalkWorkspace is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkWorkspace');
+    mockRequest.mockResolvedValue({});
+    const result = await probeWorkspacePermissions();
+    expect(result.todo).toEqual({ ok: false, reason: 'skipped' });
+    expect(result.calendar).toEqual({ ok: false, reason: 'skipped' });
+    expect(result.approval.ok).toBe(true);
+    expect(
+      mockRequest.mock.calls.some(
+        (call) =>
+          String(call[0].path).includes('/todo/') || String(call[0].path).includes('/calendar/'),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not call DingTalk when every probed module is off', async () => {
+    mockIsModuleEnabled.mockImplementation(
+      async (id: string) => id !== 'dingtalkApproval' && id !== 'dingtalkWorkspace',
+    );
+    const result = await probeWorkspacePermissions();
+    expect(result).toEqual({
+      approval: { ok: false, reason: 'skipped' },
+      calendar: { ok: false, reason: 'skipped' },
+      todo: { ok: false, reason: 'skipped' },
+    });
+    expect(mockResolveNotifyAppConfig).not.toHaveBeenCalled();
+    expect(mockRequest).not.toHaveBeenCalled();
+    expect(mockGetServerDB).not.toHaveBeenCalled();
   });
 });

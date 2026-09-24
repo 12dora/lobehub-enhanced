@@ -17,7 +17,11 @@ const env = (extra: Partial<NodeJS.ProcessEnv> = {}): Partial<NodeJS.ProcessEnv>
 const flags = (patch: Partial<WorkerExpectationFlags> = {}): WorkerExpectationFlags => ({
   directorySync: true,
   documentRender: true,
+  dingtalkApproval: true,
+  dingtalkChat: true,
+  dingtalkNotify: true,
   dingtalkStream: true,
+  fileOrphanGc: true,
   ...patch,
 });
 
@@ -100,6 +104,24 @@ describe('expectedWorkersFromEnv', () => {
     expect(names).not.toContain('directory_sync');
     expect(names).toContain('reminder');
     expect(names).toContain('approval_worker');
+  });
+
+  it('omits a worker whose module is off and still expects the core reminder worker', () => {
+    const names = (patch: Partial<WorkerExpectationFlags>) =>
+      expectedWorkersFromEnv(env(), flags(patch)).map((item) => item.name);
+
+    expect(names({ dingtalkApproval: false })).not.toContain('approval_worker');
+    expect(names({ dingtalkApproval: false })).toContain('reminder');
+
+    expect(names({ dingtalkNotify: false })).not.toContain('directory_sync');
+    expect(names({ directorySync: true, dingtalkNotify: false })).not.toContain('directory_sync');
+
+    expect(names({ dingtalkChat: false })).not.toContain('dingtalk_stream');
+    expect(names({ dingtalkChat: false, dingtalkStream: true })).not.toContain('dingtalk_stream');
+
+    expect(names({ fileOrphanGc: false })).not.toContain('global_file_orphan_gc');
+    expect(names({ fileOrphanGc: false })).toContain('reminder');
+    expect(names({ fileOrphanGc: true })).toContain('global_file_orphan_gc');
   });
 
   it('expects orphan file cleanup on the persistent runtime unless the flag is off', () => {

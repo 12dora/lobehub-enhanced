@@ -171,9 +171,10 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
-    // Core: no moduleId. Daily orphan global_files sweep. Enqueue is gated to
-    // 03:30 Asia/Shanghai (later boots catch up the same day). The claim lease
-    // is the single-runner lock.
+    // Daily orphan global_files sweep. Enqueue is gated to 03:30 Asia/Shanghai
+    // (later boots catch up the same day). The claim lease is the single-runner
+    // lock. `GLOBAL_FILE_ORPHAN_GC=0` stays a hard off inside the scheduler.
+    moduleId: 'fileOrphanGc',
     name: 'globalFileOrphanGc',
     start: async () => {
       const { ensureGlobalFileOrphanGcStarted } = await import('../jobs/globalFileOrphanGc');
@@ -299,8 +300,9 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
-    // Core: no moduleId. In-process DingTalk auto-approval rule sweep.
-    // Internal predicate skips Vercel / Lambda / missing DATABASE_URL.
+    // In-process DingTalk auto-approval rule sweep. Internal predicate skips
+    // Vercel / Lambda / missing DATABASE_URL.
+    moduleId: 'dingtalkApproval',
     name: 'dingtalkApprovalRuleWorker',
     start: async () => {
       const { ensureDingtalkApprovalRuleWorkerStarted } =
@@ -343,16 +345,17 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     start: startGatewayService,
   },
   {
-    // Core-adjacent: same runtime guards as gatewayService (DATABASE_URL,
-    // not Vercel, production or ENABLE_BOT_IN_DEV). No moduleId so we don't
-    // have to extend PLATFORM_MODULES.bots.workers in this unit.
+    // Same runtime guards as gatewayService (DATABASE_URL, not Vercel,
+    // production or ENABLE_BOT_IN_DEV). Skipped at boot when dingtalkChat is off.
+    moduleId: 'dingtalkChat',
     name: 'dingtalkStreamWorker',
     start: startDingTalkStreamWorker,
   },
   {
-    // Core: DingTalk org directory sync via the notify app (服务号), every 12 h.
+    // DingTalk org directory sync via the notify app, every 12 h.
     // Internal predicate skips serverless hosts; ticks skip when notify app
     // is not configured. First run is delayed 60 s after boot.
+    moduleId: 'dingtalkNotify',
     name: 'dingtalkDirectorySyncWorker',
     start: startDingTalkDirectorySyncWorker,
   },

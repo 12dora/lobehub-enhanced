@@ -20,6 +20,21 @@ const mocks = vi.hoisted(() => ({
   upsertWithCas: vi.fn(),
   publish: vi.fn(async () => undefined),
   getScopeVersion: vi.fn(async () => '0'),
+  invalidateWorkspace: vi.fn(),
+  invalidatePersonal: vi.fn(),
+  invalidateLookup: vi.fn(),
+}));
+
+vi.mock('../dingtalkWorkspace/capabilities', () => ({
+  invalidateDingtalkWorkspaceCapabilities: mocks.invalidateWorkspace,
+}));
+
+vi.mock('../dingtalkPersonal/config', () => ({
+  invalidateDingtalkPersonalConfig: mocks.invalidatePersonal,
+}));
+
+vi.mock('../enterpriseLookup/settings', () => ({
+  invalidateEnterpriseLookupModuleCaches: mocks.invalidateLookup,
 }));
 
 vi.mock('@/database/core/db-adaptor', () => ({
@@ -47,6 +62,9 @@ beforeEach(() => {
   mocks.get.mockReset();
   mocks.upsertWithCas.mockReset();
   mocks.publish.mockClear();
+  mocks.invalidateWorkspace.mockClear();
+  mocks.invalidatePersonal.mockClear();
+  mocks.invalidateLookup.mockClear();
   mocks.getScopeVersion.mockReset();
   mocks.getScopeVersion.mockResolvedValue('0');
   vi.unstubAllEnvs();
@@ -89,6 +107,62 @@ describe('getModuleSettingsSnapshot', () => {
     expect(snapshot.effective.branding).toBe(true);
     expect(snapshot.setupCompletedAt).toBe('2026-08-01T00:00:00.000Z');
     expect(snapshot.preset).toBeNull();
+  });
+
+  it('keeps a child requested when the parent is off and reports it effective off', async () => {
+    mocks.get.mockResolvedValue({
+      modules: { dingtalk: false, dingtalkChat: true },
+      revision: 3,
+      setupCompletedAt: null,
+    });
+    const snapshot = await getModuleSettingsSnapshot();
+    expect(snapshot.requested.dingtalk).toBe(false);
+    expect(snapshot.requested.dingtalkChat).toBe(true);
+    expect(snapshot.effective.dingtalk).toBe(false);
+    expect(snapshot.effective.dingtalkChat).toBe(false);
+    expect(snapshot.effective.enterpriseLookup).toBe(true);
+  });
+
+  it('turns dependents off when a hard dependency is off', async () => {
+    mocks.get.mockResolvedValue({
+      modules: { dingtalkNotify: false },
+      revision: 1,
+      setupCompletedAt: null,
+    });
+    const snapshot = await getModuleSettingsSnapshot();
+    expect(snapshot.requested.dingtalkWorkspace).toBe(true);
+    expect(snapshot.effective.dingtalk).toBe(true);
+    expect(snapshot.effective.dingtalkNotify).toBe(false);
+    expect(snapshot.effective.dingtalkWorkspace).toBe(false);
+    expect(snapshot.effective.dingtalkApproval).toBe(false);
+    expect(snapshot.effective.dingtalkDocs).toBe(true);
+  });
+
+  it('turns children off when the parent is env-disabled and keeps their requested bits', async () => {
+    vi.stubEnv('LOBE_MODULES_DISABLED', 'dingtalk');
+    mocks.get.mockResolvedValue({
+      modules: { dingtalkChat: true },
+      revision: 2,
+      setupCompletedAt: null,
+    });
+    const snapshot = await getModuleSettingsSnapshot();
+    expect(snapshot.requested.dingtalk).toBe(false);
+    expect(snapshot.requested.dingtalkChat).toBe(true);
+    expect(snapshot.effective.dingtalkChat).toBe(false);
+    expect(snapshot.effective.dingtalkDocs).toBe(false);
+  });
+
+  it('keeps a db-false child off when the parent is on', async () => {
+    mocks.get.mockResolvedValue({
+      modules: { dingtalkChat: false },
+      revision: 1,
+      setupCompletedAt: null,
+    });
+    const snapshot = await getModuleSettingsSnapshot();
+    expect(snapshot.requested.dingtalk).toBe(true);
+    expect(snapshot.requested.dingtalkChat).toBe(false);
+    expect(snapshot.effective.dingtalk).toBe(true);
+    expect(snapshot.effective.dingtalkChat).toBe(false);
   });
 
   it('lets env-forced-off win over a db true', async () => {
@@ -141,11 +215,27 @@ describe('getModuleSettingsSnapshot', () => {
         scopes: ['modules'],
       }),
     );
+    expect(mocks.invalidateWorkspace).toHaveBeenCalledOnce();
+    expect(mocks.invalidatePersonal).toHaveBeenCalledOnce();
+    expect(mocks.invalidateLookup).toHaveBeenCalledOnce();
     expect(mocks.get.mock.calls.length).toBeGreaterThan(1);
   });
 });
 
 describe('boot freeze', () => {
+  it('freezes the tree-resolved view, so a child of an off parent stays off', async () => {
+    mocks.get.mockResolvedValue({
+      modules: { dingtalk: false, dingtalkChat: true },
+      revision: 1,
+      setupCompletedAt: null,
+    });
+    const frozen = await initBootModules();
+    expect(frozen.dingtalk).toBe(false);
+    expect(frozen.dingtalkChat).toBe(false);
+    expect(isBootModuleEnabled('dingtalkNotify')).toBe(false);
+    expect(isBootModuleEnabled('fileOrphanGc')).toBe(true);
+  });
+
   it('does not change getBootModules after init when the hot snapshot flips', async () => {
     mocks.get.mockResolvedValue(null);
     const frozen = await initBootModules();

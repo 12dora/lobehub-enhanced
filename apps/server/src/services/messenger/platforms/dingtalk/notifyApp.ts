@@ -5,6 +5,7 @@ import { getMessengerDingTalkConfig } from '@/config/messenger';
 import { pinyinFieldsFromFullName } from '@/database/utils/pinyin';
 import { resolveServerRuntimeBranding } from '@/server/enterprise/services/branding/runtimeBranding';
 import { recordDingtalkHttpCall } from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 import {
@@ -346,6 +347,7 @@ export const readNotifyAppFromProviderRow = (row: {
 };
 
 export const resolveNotifyAppConfig = async (): Promise<DingTalkNotifyAppConfig | null> => {
+  if (!(await isModuleEnabled('dingtalkNotify'))) return null;
   const config = await getMessengerDingTalkConfig();
   return readNotifyAppFromMessengerConfig(config);
 };

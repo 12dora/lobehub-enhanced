@@ -5,6 +5,7 @@ import debug from 'debug';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { DingTalkDirectoryModel } from '@/database/models/dingtalkDirectory';
 import type { LobeChatDatabase } from '@/database/type';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { recordRuntimeError } from '@/server/enterprise/services/platformSystem/runtimeErrors';
 import {
   markWorkerFailed,
@@ -72,6 +73,8 @@ export interface DingTalkDirectorySyncDeps {
   createDirectoryModel?: (db: LobeChatDatabase) => Promise<DingTalkDirectoryModelLike>;
   fetchDirectory?: typeof fetchDirectoryReplaceAllInput;
   getNotifyApp?: typeof resolveNotifyAppConfig;
+  /** Hot dingtalkNotify check. Defaults to `isModuleEnabled`. */
+  isNotifyModuleEnabled?: () => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -380,6 +383,13 @@ export const directorySyncPeriodicTickIsDue = (
 
 const tickDirectorySync = async (deps: DingTalkDirectorySyncDeps = {}): Promise<void> => {
   markWorkerTick('directory_sync', DINGTALK_DIRECTORY_SYNC_INTERVAL_MS);
+  const notifyModuleOn = await (
+    deps.isNotifyModuleEnabled ?? (() => isModuleEnabled('dingtalkNotify'))
+  )();
+  if (!notifyModuleOn) {
+    log('skip: dingtalkNotify module off');
+    return;
+  }
   const getNotifyApp = deps.getNotifyApp ?? resolveNotifyAppConfig;
   if (!(await getNotifyApp())) {
     log('skip: notify app not configured');

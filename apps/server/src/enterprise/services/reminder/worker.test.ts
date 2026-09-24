@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ReminderModel } from '@/database/models/reminder';
 import type { ReminderItem, ReminderRecipientItem } from '@/database/schemas/reminder';
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
 
 import {
   CHANNEL_DISABLED,
@@ -10,9 +11,20 @@ import {
   formatReminderOaBodyTitle,
   INACTIVE_DELIVERY_REASON,
   NOTIFY_APP_NOT_CONFIGURED,
+  NOTIFY_MODULE_DISABLED,
   reminderTitleFromContent,
   runReminderSweep,
 } from './worker';
+
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 const acquired = {
   release: vi.fn(async () => {}),
@@ -89,6 +101,7 @@ describe('runReminderSweep', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsModuleEnabled.mockImplementation(async () => true);
     acquired.release.mockClear();
     listDue.mockResolvedValue([reminder()]);
     recordFire.mockResolvedValue(reminder({ status: 'sent' }));
@@ -101,6 +114,39 @@ describe('runReminderSweep', () => {
     loadRecipients.mockResolvedValue(new Map([['rem_1', [recipient({})]]]));
     isNotifyAppConfigured.mockResolvedValue(true);
     resolveHeadText.mockResolvedValue('AI平台');
+  });
+
+  it('skips DingTalk delivery and still creates an inbox when dingtalkNotify is off', async () => {
+    resolveUserId.mockResolvedValue('user_mapped');
+    await runReminderSweep({} as any, {
+      acquireLock: async () => acquired,
+      createInboxNotification: createInbox,
+      getUsers,
+      isNotifyAppConfigured,
+      isNotifyModuleEnabled: async () => false,
+      listDue,
+      loadRecipients,
+      now: new Date('2026-09-16T01:00:00.000Z'),
+      recordFire,
+      resolveHeadText,
+      resolveUserId,
+      sendRobotMessage: sendRobot,
+      sendWorkNotice: send,
+      subtreeMemberStaffIds,
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(sendRobot).not.toHaveBeenCalled();
+    expect(createInbox).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_mapped' }));
+    expect(recordFire.mock.calls[0][1].deliveries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failedReason: NOTIFY_MODULE_DISABLED,
+          status: 'skipped',
+          userId: 'user_mapped',
+        }),
+      ]),
+    );
   });
 
   it('fans out a department, dedupes staffIds, and skips inactive users', async () => {
@@ -530,7 +576,9 @@ describe('formatReminderOaBodyTitle', () => {
   });
 
   it('truncates a legacy content fallback to 12 chars', () => {
-    expect(reminderTitleFromContent('这是超过十二字的提醒正文内容')).toBe('这是超过十二字的提醒正文');
+    expect(reminderTitleFromContent('这是超过十二字的提醒正文内容')).toBe(
+      '这是超过十二字的提醒正文',
+    );
     expect(
       formatReminderOaBodyTitle(
         'AI平台',

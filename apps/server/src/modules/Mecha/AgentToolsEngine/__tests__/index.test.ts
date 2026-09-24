@@ -403,6 +403,25 @@ describe('createServerAgentToolsEngine', () => {
     expect(result.enabledToolIds).toContain(ReminderManifest.identifier);
   });
 
+  it('drops lobe-reminder from the pool when dingtalkNotify is off', () => {
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      agentConfig: { plugins: [ReminderManifest.identifier] },
+      dingtalkNotifyEnabled: false,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [ReminderManifest.identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(ReminderManifest.identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(ReminderManifest.identifier);
+  });
+
   it('does not enable lobe-reminder in chat mode', () => {
     const context = createMockContext();
     const engine = createServerAgentToolsEngine(context, {

@@ -31,9 +31,9 @@ describe('DingTalk approval rules nav registration', () => {
     expect(item?.path).toBe('/admin/system/dingtalk-approval-rules');
     expect(item?.labelKey).toBe('nav.dingtalkApprovalRules');
     expect(item?.requiredPermissions).toEqual([PLATFORM_PERMISSIONS.SYSTEM_READ]);
-    // IM connector surfaces are core SYSTEM_* pages — no deployment module gate.
-    expect(item?.moduleId).toBeUndefined();
-    // …but there is nothing to govern where the deployment has no DingTalk approval.
+    // Owned by the 审批与自动审批 module (a child of 钉钉 on 模块配置)…
+    expect(item?.moduleId).toBe('dingtalkApproval');
+    // …and there is nothing to govern where the deployment has no DingTalk approval.
     expect(item?.capabilityId).toBe('dingtalkApproval');
   });
 

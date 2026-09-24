@@ -43,7 +43,13 @@ describe('admin nav module annotations', () => {
   it('resolves the module owning a path', () => {
     expect(findAdminNavModuleId('/admin/audit/logs')).toBe('audit');
     expect(findAdminNavModuleId('/admin/audit/content-moderation')).toBe('moderation');
+    expect(findAdminNavModuleId('/admin/system/dingtalk-approval-rules')).toBe('dingtalkApproval');
     expect(findAdminNavModuleId('/admin/users')).toBeUndefined();
+  });
+
+  it('leaves the IM connector settings to in-page gating, not the nav', () => {
+    // 通用设置 hosts far more than the DingTalk connector; its tabs self-gate on their modules.
+    expect(findAdminNavModuleId('/admin/system/general')).toBeUndefined();
   });
 });
 
@@ -62,6 +68,27 @@ describe('filterAdminNavByPermissions with disabled modules', () => {
     );
     expect(ids).not.toContain('branding');
     expect(ids).toContain('users');
+  });
+
+  it('hides 自动审批规则 when the DingTalk approval module is off', () => {
+    const capabilities = { dingtalkApproval: true };
+    const visible = flatten(
+      filterAdminNavByPermissions(ADMIN_NAV_ITEMS, ALL_PERMISSIONS, undefined, capabilities),
+    );
+    expect(visible).toContain('dingtalk-approval-rules');
+
+    // The client receives the tree-resolved (effective) map, so 钉钉 off arrives as
+    // dingtalkApproval off as well.
+    const ids = flatten(
+      filterAdminNavByPermissions(
+        ADMIN_NAV_ITEMS,
+        ALL_PERMISSIONS,
+        new Set<PlatformModuleId>(['dingtalkApproval']),
+        capabilities,
+      ),
+    );
+    expect(ids).not.toContain('dingtalk-approval-rules');
+    expect(ids).toContain('system-general');
   });
 
   it('keeps the audit group visible for 内容审计 when only 审计 is off', () => {

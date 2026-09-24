@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALL_MODULES_ENABLED,
   computeEffectiveModules,
+  computeRequestedModules,
   DEFAULT_PLATFORM_MODULE_PRESET,
   isPlatformModuleId,
   matchPreset,
@@ -15,6 +16,8 @@ import {
   MODULE_BY_LAMBDA_ROUTER_KEY,
   MODULE_BY_TOOLS_ROUTER_KEY,
   MODULE_BY_WORKER_NAME,
+  MODULE_CHILDREN,
+  moduleBlockers,
   modulesForPreset,
   parseDisabledModulesList,
   PLATFORM_MODULE_IDS,
@@ -23,6 +26,7 @@ import {
   PLATFORM_MODULES,
   PLATFORM_MODULES_DISABLED_ENV,
   resolveModulesFromEnv,
+  resolveModuleTree,
   RESTART_MODULE_IDS,
 } from './modules';
 
@@ -60,6 +64,10 @@ describe('platform modules contract', () => {
       ['async', (id: (typeof PLATFORM_MODULE_IDS)[number]) => PLATFORM_MODULES[id].asyncRouterKeys],
       ['tools', (id: (typeof PLATFORM_MODULE_IDS)[number]) => PLATFORM_MODULES[id].toolsRouterKeys],
       ['workers', (id: (typeof PLATFORM_MODULE_IDS)[number]) => PLATFORM_MODULES[id].workers],
+      [
+        'toolIdentifiers',
+        (id: (typeof PLATFORM_MODULE_IDS)[number]) => PLATFORM_MODULES[id].toolIdentifiers ?? [],
+      ],
     ] as const;
 
     for (const [label, pick] of pairs) {
@@ -84,9 +92,48 @@ describe('platform modules contract', () => {
     );
   });
 
-  it('gates admin.imConnectors through the bots module', () => {
-    expect(PLATFORM_MODULES.bots.adminRouterKeys).toEqual(['imConnectors']);
-    expect(MODULE_BY_ADMIN_ROUTER_KEY.imConnectors).toBe('bots');
+  it('gates admin.imConnectors through dingtalk, not bots', () => {
+    expect(PLATFORM_MODULES.bots.adminRouterKeys).toEqual([]);
+    expect(PLATFORM_MODULES.bots.lambdaRouterKeys).toEqual(['agentBotProvider', 'botMessage']);
+    expect(PLATFORM_MODULES.bots.lambdaRouterKeys).not.toContain('messenger');
+    expect(MODULE_BY_LAMBDA_ROUTER_KEY.messenger).toBeUndefined();
+    expect(PLATFORM_MODULES.dingtalk.adminRouterKeys).toEqual(['imConnectors']);
+    expect(MODULE_BY_ADMIN_ROUTER_KEY.imConnectors).toBe('dingtalk');
+    expect(MODULE_BY_ADMIN_ROUTER_KEY.dingtalkApprovalRules).toBe('dingtalkApproval');
+  });
+
+  it('groups existing rows by origin, with bots in integration', () => {
+    for (const id of PLATFORM_MODULE_IDS) {
+      const module = PLATFORM_MODULES[id];
+      if (id === 'bots' || id === 'enterpriseLookup' || id.startsWith('dingtalk')) {
+        expect(module.group, id).toBe('integration');
+      } else if (module.origin === 'fork') {
+        expect(module.group, id).toBe('platform');
+      } else {
+        expect(module.group, id).toBe('app');
+      }
+    }
+  });
+
+  it('lists the v1.12 modules with their workers and tools', () => {
+    expect(PLATFORM_MODULES.dingtalkChat.workers).toEqual(['dingtalkStreamWorker']);
+    expect(PLATFORM_MODULES.dingtalkNotify.workers).toEqual(['dingtalkDirectorySyncWorker']);
+    expect(PLATFORM_MODULES.dingtalkNotify.toolIdentifiers).toEqual(['lobe-reminder']);
+    expect(PLATFORM_MODULES.dingtalkApproval.workers).toEqual(['dingtalkApprovalRuleWorker']);
+    expect(PLATFORM_MODULES.fileOrphanGc.workers).toEqual(['globalFileOrphanGc']);
+    expect(PLATFORM_MODULES.fileOrphanGc.tier).toBe('minimal');
+    expect(PLATFORM_MODULES.fileOrphanGc.kind).toBe('restart');
+    expect(MODULE_CHILDREN.dingtalk).toEqual([
+      'dingtalkChat',
+      'dingtalkNotify',
+      'dingtalkWorkspace',
+      'dingtalkApproval',
+      'dingtalkPersonal',
+      'dingtalkDocs',
+    ]);
+    expect(PLATFORM_MODULES.dingtalkWorkspace.dependsOn).toEqual(['dingtalkNotify']);
+    expect(PLATFORM_MODULES.dingtalkApproval.dependsOn).toEqual(['dingtalkNotify']);
+    expect(PLATFORM_MODULES.dingtalkDocs.dependsOn).toEqual(['dingtalkPersonal']);
   });
 
   it('every workers name is unique across modules', () => {
@@ -240,6 +287,25 @@ describe('resolveModulesFromEnv', () => {
     expect(resolved.envDisabledBy.branding).toBe('ENABLE_RUNTIME_BRANDING');
     expect(resolved.envDisabled.has('audit')).toBe(false);
   });
+
+  it('env-disables fileOrphanGc when GLOBAL_FILE_ORPHAN_GC is falsy', () => {
+    expect(resolveModulesFromEnv({}).envDisabled.has('fileOrphanGc')).toBe(false);
+    expect(
+      resolveModulesFromEnv({ GLOBAL_FILE_ORPHAN_GC: '1' }).envDisabled.has('fileOrphanGc'),
+    ).toBe(false);
+
+    for (const value of ['0', 'false', 'no', 'off', ' OFF ', 'False']) {
+      const resolved = resolveModulesFromEnv({ GLOBAL_FILE_ORPHAN_GC: value });
+      expect(resolved.envDisabled.has('fileOrphanGc')).toBe(true);
+      expect(resolved.envDisabledBy.fileOrphanGc).toBe('GLOBAL_FILE_ORPHAN_GC');
+    }
+
+    const both = resolveModulesFromEnv({
+      GLOBAL_FILE_ORPHAN_GC: '0',
+      [PLATFORM_MODULES_DISABLED_ENV]: 'fileOrphanGc',
+    });
+    expect(both.envDisabledBy.fileOrphanGc).toBe('GLOBAL_FILE_ORPHAN_GC');
+  });
 });
 
 describe('computeEffectiveModules', () => {
@@ -260,6 +326,59 @@ describe('computeEffectiveModules', () => {
     const effective = computeEffectiveModules(new Set(['audit']), { audit: true, branding: false });
     expect(effective.audit).toBe(false);
     expect(effective.branding).toBe(false);
+  });
+
+  it('turns children off when the parent is off, without rewriting a db-false child', () => {
+    const parentOff = computeEffectiveModules(new Set(), { dingtalk: false });
+    expect(parentOff.dingtalk).toBe(false);
+    expect(parentOff.dingtalkChat).toBe(false);
+    expect(parentOff.dingtalkDocs).toBe(false);
+    expect(parentOff.enterpriseLookup).toBe(true);
+
+    const requested = computeRequestedModules(new Set(), { dingtalk: false, dingtalkChat: true });
+    expect(requested.dingtalkChat).toBe(true);
+    expect(resolveModuleTree(requested).dingtalkChat).toBe(false);
+  });
+
+  it('turns a dependent off when its hard dependency is off', () => {
+    const effective = computeEffectiveModules(new Set(), { dingtalkNotify: false });
+    expect(effective.dingtalk).toBe(true);
+    expect(effective.dingtalkNotify).toBe(false);
+    expect(effective.dingtalkWorkspace).toBe(false);
+    expect(effective.dingtalkApproval).toBe(false);
+    expect(effective.dingtalkPersonal).toBe(true);
+    expect(effective.dingtalkDocs).toBe(true);
+    expect(moduleBlockers('dingtalkWorkspace', effective)).toEqual(['dingtalkNotify']);
+  });
+
+  it('turns children off when the parent is env-disabled', () => {
+    const effective = computeEffectiveModules(new Set(['dingtalk']), {
+      dingtalk: true,
+      dingtalkChat: true,
+    });
+    expect(effective.dingtalk).toBe(false);
+    expect(effective.dingtalkChat).toBe(false);
+    expect(effective.dingtalkPersonal).toBe(false);
+    expect(
+      computeRequestedModules(new Set(['dingtalk']), { dingtalkChat: true }).dingtalkChat,
+    ).toBe(true);
+  });
+
+  it('keeps a db-false child off when the parent is on', () => {
+    const effective = computeEffectiveModules(new Set(), { dingtalkChat: false });
+    expect(effective.dingtalk).toBe(true);
+    expect(effective.dingtalkChat).toBe(false);
+    expect(effective.dingtalkNotify).toBe(true);
+    expect(moduleBlockers('dingtalkChat', effective)).toEqual([]);
+  });
+
+  it('names the parent and the hard dependency when both are off', () => {
+    const requested = computeRequestedModules(new Set(), {
+      dingtalk: false,
+      dingtalkPersonal: false,
+    });
+    const effective = resolveModuleTree(requested);
+    expect(moduleBlockers('dingtalkDocs', effective)).toEqual(['dingtalk', 'dingtalkPersonal']);
   });
 
   it('ignores a leftover chatgptWeb key from a stored DB map', () => {

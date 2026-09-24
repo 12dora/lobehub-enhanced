@@ -133,6 +133,7 @@ import { getDingtalkWorkspaceCapabilities } from '@/server/enterprise/services/d
 import { isEnterpriseLookupConfigured } from '@/server/enterprise/services/enterpriseLookup';
 import { getManagedSkillRuntimeModeSnapshot } from '@/server/enterprise/services/managedResourceCapabilities';
 import { getLatestPersonaDocumentMemo } from '@/server/enterprise/services/memory/personaReadMemo';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import type { UserSettingsReadMemo } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
 import {
   getEffectiveMemorySettings,
@@ -3208,6 +3209,12 @@ export class AiAgentService {
 
       // Live capability read (30 s cache) so a cold peek never hides enabled DingTalk tools.
       const dingtalkCapabilities = await getDingtalkWorkspaceCapabilities();
+      let dingtalkNotifyEnabled = false;
+      try {
+        dingtalkNotifyEnabled = await isModuleEnabled('dingtalkNotify');
+      } catch (error) {
+        log('execAgent: dingtalkNotify module read failed, failing closed: %O', error);
+      }
       // Fail closed: a missing broker config or a thrown read must not advertise the tool.
       let dingtalkPersonal = false;
       let dingtalkDocs = false;
@@ -3270,6 +3277,7 @@ export class AiAgentService {
         }),
         dingtalkApprovalEnabled: dingtalkCapabilities.approval,
         dingtalkDocs,
+        dingtalkNotifyEnabled,
         dingtalkPersonal,
         dingtalkWorkspaceEnabled: dingtalkCapabilities.todo || dingtalkCapabilities.calendar,
         // Context-aware builtin manifests: inside a sub-agent (or group) run,

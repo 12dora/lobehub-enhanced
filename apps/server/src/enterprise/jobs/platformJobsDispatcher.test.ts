@@ -68,11 +68,7 @@ describe('resolveEnabledPlatformJobTypes', () => {
       ...productionEnv,
       PLATFORM_KEY_PROVIDER: 'env',
     });
-    expect(off.map((item) => item.workerName)).toEqual([
-      'documentRender',
-      'documentRenderGc',
-      'globalFileOrphanGc',
-    ]);
+    expect(off.map((item) => item.workerName)).toEqual(['documentRender', 'documentRenderGc']);
 
     const on = resolveEnabledPlatformJobTypes(() => false, {
       ...productionEnv,
@@ -82,19 +78,24 @@ describe('resolveEnabledPlatformJobTypes', () => {
       'secretRewrap',
       'documentRender',
       'documentRenderGc',
-      'globalFileOrphanGc',
     ]);
   });
 
-  it('keeps orphan global-file gc as a single-runner core lane', () => {
+  it('gates orphan global-file gc on fileOrphanGc', () => {
     expect(spec('globalFileOrphanGc')).toMatchObject({
       batchLimit: 1,
       intervalMs: 60_000,
       jobType: GLOBAL_FILE_ORPHAN_GC_JOB_TYPE,
       leaseMs: 15 * 60_000,
+      moduleId: 'fileOrphanGc',
       workerName: 'globalFileOrphanGc',
     });
-    expect(spec('globalFileOrphanGc')).not.toHaveProperty('moduleId');
+
+    const enabled = resolveEnabledPlatformJobTypes((id) => id !== 'fileOrphanGc', {
+      ...productionEnv,
+      PLATFORM_KEY_PROVIDER: 'env',
+    });
+    expect(enabled.map((item) => item.workerName)).not.toContain('globalFileOrphanGc');
   });
 });
 

@@ -1,6 +1,7 @@
 import { EnterpriseLookupUsageModel } from '@/database/models/enterpriseLookupUsage';
 import type { LobeChatDatabase } from '@/database/type';
 import { AUDIT_ACTION } from '@/server/enterprise/services/audit/auditActionCatalog';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { PlatformAuditService } from '@/server/enterprise/services/platformAudit';
 import type {
   EnterpriseLookupProvider,
@@ -48,6 +49,7 @@ export {
   parseEnterpriseLookupClientError,
 } from './errors';
 export {
+  clearEnterpriseLookupConfiguredPeek,
   clearEnterpriseLookupUnhealthy,
   ENTERPRISE_LOOKUP_UNHEALTHY_TTL_MS,
   isProviderUnhealthy,
@@ -774,21 +776,30 @@ const assertPlainArguments = (value: unknown): Record<string, unknown> => {
 export const getRuntimeConfig = (): Promise<EnterpriseLookupRuntimeConfig | null> =>
   getEnterpriseLookupRuntimeConfig();
 
-export const isEnterpriseLookupConfigured = async (): Promise<boolean> => {
+const loadEnterpriseLookupAvailability = async (): Promise<{
+  config: EnterpriseLookupRuntimeConfig | null;
+  configured: boolean;
+}> => {
+  if (!(await isModuleEnabled('enterpriseLookup'))) {
+    noteEnterpriseLookupConfigured(false);
+    return { config: null, configured: false };
+  }
   const config = await getEnterpriseLookupRuntimeConfig();
   const configured =
     !!config && (isEnabledProvider(config, 'qcc') || isEnabledProvider(config, 'tianyancha'));
   noteEnterpriseLookupConfigured(configured);
+  return { config, configured };
+};
+
+export const isEnterpriseLookupConfigured = async (): Promise<boolean> => {
+  const { configured } = await loadEnterpriseLookupAvailability();
   return configured;
 };
 
 export const isConfigured = isEnterpriseLookupConfigured;
 
 const requireConfig = async (): Promise<EnterpriseLookupRuntimeConfig> => {
-  const config = await getEnterpriseLookupRuntimeConfig();
-  const configured =
-    !!config && (isEnabledProvider(config, 'qcc') || isEnabledProvider(config, 'tianyancha'));
-  noteEnterpriseLookupConfigured(configured);
+  const { config, configured } = await loadEnterpriseLookupAvailability();
   if (!config || !configured) {
     throw new EnterpriseLookupServiceError(ENTERPRISE_LOOKUP_NOT_CONFIGURED);
   }
@@ -890,10 +901,7 @@ export class EnterpriseLookupService {
   }
 
   status = async (): Promise<EnterpriseLookupStatus> => {
-    const config = await getEnterpriseLookupRuntimeConfig();
-    const configured =
-      !!config && (isEnabledProvider(config, 'qcc') || isEnabledProvider(config, 'tianyancha'));
-    noteEnterpriseLookupConfigured(configured);
+    const { config, configured } = await loadEnterpriseLookupAvailability();
     if (!config || !configured) return { configured: false };
 
     const usedToday = await this.usage.getDailyTotal(this.userId, shanghaiUsageDate());

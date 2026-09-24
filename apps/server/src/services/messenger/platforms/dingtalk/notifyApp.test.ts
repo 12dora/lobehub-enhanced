@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
+
 const mockRedisGet = vi.fn();
 const mockRedisSet = vi.fn();
 const mockRedisDel = vi.fn();
@@ -22,6 +24,15 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
 }));
 
 const recordDingtalkHttpCall = vi.hoisted(() => vi.fn());
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/apiCallStats', () => ({
   recordDingtalkHttpCall,
@@ -59,6 +70,7 @@ const {
   readNotifyAppFromMessengerConfig,
   readNotifyAppFromProviderRow,
   resetNotifyAppStateForTest,
+  resolveNotifyAppConfig,
   resolveWorkNoticeHeadText,
   sendRobotMessage,
   sendWorkNotice,
@@ -84,6 +96,7 @@ const tokenFetch = vi.fn(async (_input: string | URL, _init?: RequestInit) =>
 );
 
 beforeEach(() => {
+  mockIsModuleEnabled.mockImplementation(async () => true);
   resetNotifyAppStateForTest();
   recordDingtalkHttpCall.mockReset();
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({ notifyApp: NOTIFY_APP } as never);
@@ -99,6 +112,19 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+describe('resolveNotifyAppConfig', () => {
+  it('returns null without reading config when dingtalkNotify is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkNotify');
+    await expect(resolveNotifyAppConfig()).resolves.toBeNull();
+    expect(getMessengerDingTalkConfig).not.toHaveBeenCalled();
+  });
+
+  it('returns the notify app when the module is on', async () => {
+    await expect(resolveNotifyAppConfig()).resolves.toEqual(NOTIFY_APP);
+    expect(getMessengerDingTalkConfig).toHaveBeenCalledOnce();
+  });
 });
 
 describe('readNotifyAppFromMessengerConfig', () => {

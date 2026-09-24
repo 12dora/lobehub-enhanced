@@ -124,6 +124,11 @@ export interface ServerCreateAgentToolsEngineParams {
    */
   dingtalkDocs?: boolean;
   /**
+   * DingTalk notify-app module. `false` drops `lobe-reminder` from the pool.
+   * Omit to keep the always-on reminder (callers that have not read module state).
+   */
+  dingtalkNotifyEnabled?: boolean;
+  /**
    * DingTalk personal-data master switch (`getDingtalkPersonalConfig().enabled`).
    * Omitted stays off: the config read is async, so this engine does not peek.
    */

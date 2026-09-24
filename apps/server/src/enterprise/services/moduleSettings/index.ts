@@ -9,14 +9,15 @@
  *     freezes the *boot* view used by boot-time facilities (workers, gateway, subprocess).
  *   - `getBootModules()` / `isBootModuleEnabled(id)` — sync; before `initBootModules()`
  *     resolves they reflect env only (never fail closed).
- *   - `getPendingRestartModules()` — restart-kind modules whose effective state differs from
- *     the boot view of *this* process.
+ *   - `getPendingRestartModules()` — restart-kind modules whose tree-resolved effective
+ *     state differs from the boot view of *this* process.
  */
 import type { EnterpriseCacheDomain } from '@lobechat/observability-otel/modules/enterprise-platform';
 
 import {
   ALL_MODULES_ENABLED,
   computeEffectiveModules,
+  computeRequestedModules,
   matchPreset,
   MODULE_SETTINGS_INVALIDATION_SCOPE,
   MODULE_SETTINGS_SNAPSHOT_TTL_MS,
@@ -48,6 +49,7 @@ import {
 export interface ModuleSettingsSnapshot {
   /** DB overrides (partial); null when the row does not exist. */
   db: Partial<Record<PlatformModuleId, boolean>> | null;
+  /** Tree-resolved state (parent + hard dependencies applied). */
   effective: PlatformModuleStateMap;
   envDisabled: PlatformModuleId[];
   envDisabledBy: Partial<Record<PlatformModuleId, string>>;
@@ -55,6 +57,8 @@ export interface ModuleSettingsSnapshot {
   preset: PlatformModulePreset | null;
   /** Preset selected by env (`LOBE_MODULE_PRESET`), always defined. */
   presetFromEnv: PlatformModulePreset;
+  /** Pre-tree choice: env off, else the DB bit, else on. */
+  requested: PlatformModuleStateMap;
   /** CAS revision of the DB row; 0 when the row does not exist. */
   revision: number;
   /** ISO timestamp when the first-run guide was completed; null = show the guide. */
@@ -105,6 +109,7 @@ const buildSnapshot = (
   revision: number,
   setupCompletedAt: string | null,
 ): ModuleSettingsSnapshot => {
+  const requested = computeRequestedModules(env.envDisabled, dbModules);
   const effective = computeEffectiveModules(env.envDisabled, dbModules);
   return {
     db: dbModules,
@@ -113,6 +118,7 @@ const buildSnapshot = (
     envDisabledBy: env.envDisabledBy,
     preset: matchPreset(effective),
     presetFromEnv: env.preset,
+    requested,
     revision,
     setupCompletedAt,
   };
@@ -231,6 +237,41 @@ const invalidateModuleSettingsSnapshot = (): void => {
   invalidateDomainConfigCacheNamespace(CACHE_NAMESPACE);
 };
 
+/** Scope version of the modules invalidation event. `undefined` when the reader fails. */
+export const currentModuleSettingsInvalidationEpoch = async (): Promise<string | undefined> => {
+  try {
+    return await getPlatformConfigScopeVersion(MODULE_SETTINGS_INVALIDATION_SCOPE);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Approval, workspace, personal (including docs/sheets), and enterprise-lookup
+ * snapshots bake the module bit. Drop them on the modules invalidation event
+ * so a hot toggle does not wait out the 30s capability TTL.
+ */
+const invalidateModuleCapabilityCaches = async (): Promise<void> => {
+  try {
+    const [
+      { invalidateDingtalkWorkspaceCapabilities },
+      { invalidateDingtalkPersonalConfig },
+      { invalidateEnterpriseLookupModuleCaches },
+    ] = await Promise.all([
+      import('../dingtalkWorkspace/capabilities'),
+      import('../dingtalkPersonal/config'),
+      import('../enterpriseLookup/settings'),
+    ]);
+    invalidateDingtalkWorkspaceCapabilities();
+    invalidateDingtalkPersonalConfig();
+    invalidateEnterpriseLookupModuleCaches();
+  } catch (error) {
+    console.error('[module-settings] capability cache invalidation failed', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
+};
+
 export const publishModuleSettingsInvalidation = async (revision: number): Promise<void> => {
   await getPlatformConfigInvalidationPublisher().publish({
     at: new Date().toISOString(),
@@ -240,6 +281,7 @@ export const publishModuleSettingsInvalidation = async (revision: number): Promi
     scopes: [MODULE_SETTINGS_INVALIDATION_SCOPE],
   });
   invalidateModuleSettingsSnapshot();
+  await invalidateModuleCapabilityCaches();
 };
 
 const throwRevisionConflict = (error: PlatformRevisionConflictError, expectedRevision: number) =>

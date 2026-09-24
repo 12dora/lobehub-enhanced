@@ -7,6 +7,7 @@ import { platformJobs } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { GlobalFileOrphanGcAbortedError } from '../services/globalFileOrphanGc/run';
+import type * as ModuleSettingsModule from '../services/moduleSettings';
 import {
   readWorkerHeartbeatMemory,
   resetWorkerHeartbeatForTest,
@@ -33,6 +34,16 @@ vi.mock('./persistentWorkerScheduler', () => ({
 vi.mock('./platformJobsDispatcher', () => ({
   ensurePlatformJobsDispatcherStarted: vi.fn(),
 }));
+
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+
+vi.mock('../services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 const db: LobeChatDatabase = await getTestDB();
 
@@ -62,6 +73,7 @@ const emptySummary = {
 
 beforeEach(() => {
   setWorkerHeartbeatStoreForTest(null);
+  mockIsModuleEnabled.mockImplementation(async () => true);
 });
 
 afterEach(async () => {
@@ -265,5 +277,20 @@ describe('handleClaimedGlobalFileOrphanGcJob', () => {
     const row = await db.query.platformJobs.findFirst({ where: eq(platformJobs.id, ctx.job.id) });
     expect(row?.status).toBe('succeeded');
     expect(row?.resultSummary).toEqual({ skipped: 'disabled' });
+  });
+
+  it('completes a claimed job without sweeping when fileOrphanGc is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'fileOrphanGc');
+    const ctx = await claim(afternoon);
+    const run = vi.fn(async () => emptySummary);
+    await handleClaimedGlobalFileOrphanGcJob(ctx, {
+      env: productionEnv,
+      run,
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    const row = await db.query.platformJobs.findFirst({ where: eq(platformJobs.id, ctx.job.id) });
+    expect(row?.status).toBe('succeeded');
+    expect(row?.resultSummary).toEqual({ skipped: 'module_disabled' });
   });
 });

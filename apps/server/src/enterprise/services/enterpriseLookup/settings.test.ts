@@ -11,6 +11,7 @@ import {
   applyEnterpriseLookupUpdate,
   enterpriseLookupSecretChanged,
   fingerprintEnterpriseLookupApiKey,
+  invalidateEnterpriseLookupModuleCaches,
   invalidateEnterpriseLookupRuntimeConfig,
   summarizeEnterpriseLookupAfterDiff,
   testEnterpriseLookupProvider,
@@ -203,6 +204,30 @@ describe('view + afterDiff redaction', () => {
     expect(JSON.stringify(diff)).not.toContain('sealed');
     expect(JSON.stringify(diff)).not.toContain('qcc-secret');
     expect(JSON.stringify(diff)).not.toContain('fingerprint');
+  });
+});
+
+describe('invalidateEnterpriseLookupModuleCaches', () => {
+  it('drops the configured peek and leaves the provider cooldown and tools cache', async () => {
+    const { invalidateEnterpriseLookupToolsCache } = await import('./mcpClient');
+    vi.mocked(invalidateEnterpriseLookupToolsCache).mockClear();
+    const {
+      isProviderUnhealthy,
+      markProviderUnhealthy,
+      noteEnterpriseLookupConfigured,
+      peekEnterpriseLookupConfigured,
+      resetEnterpriseLookupHealthForTest,
+    } = await import('./health');
+
+    markProviderUnhealthy('qcc');
+    noteEnterpriseLookupConfigured(true);
+
+    invalidateEnterpriseLookupModuleCaches();
+
+    expect(isProviderUnhealthy('qcc')).toBe(true);
+    expect(peekEnterpriseLookupConfigured()).toBeUndefined();
+    expect(invalidateEnterpriseLookupToolsCache).not.toHaveBeenCalled();
+    resetEnterpriseLookupHealthForTest();
   });
 });
 

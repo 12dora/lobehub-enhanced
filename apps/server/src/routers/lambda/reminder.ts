@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
+import { withModule } from '@/server/enterprise/guards/moduleGuard';
 import {
   REMINDER_NOT_FOUND,
   REMINDER_SCHEDULE_INVALID,
@@ -28,6 +29,24 @@ const reminderProcedure = authedProcedure.use(serverDatabase).use(async (opts) =
     },
   });
 });
+
+/** create / fireNow / saveTask schedule or send a DingTalk delivery. */
+const reminderDeliveryProcedure = authedProcedure
+  .use(serverDatabase)
+  .use(withModule('dingtalkNotify'))
+  .use(async (opts) => {
+    const { ctx } = opts;
+    return opts.next({
+      ctx: {
+        reminderService: new ReminderService(ctx.serverDB, ctx.userId),
+        reminderTaskService: new ReminderTaskService(
+          ctx.serverDB,
+          ctx.userId,
+          ctx.workspaceId ?? undefined,
+        ),
+      },
+    });
+  });
 
 const EDITOR_DATA_MAX_BYTES = 256 * 1024;
 
@@ -99,7 +118,7 @@ export const reminderRouter = router({
       }
     }),
 
-  create: reminderProcedure
+  create: reminderDeliveryProcedure
     .input(
       z
         .object({
@@ -121,7 +140,7 @@ export const reminderRouter = router({
       }
     }),
 
-  fireNow: reminderProcedure
+  fireNow: reminderDeliveryProcedure
     .input(z.object({ taskId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -175,7 +194,7 @@ export const reminderRouter = router({
       }
     }),
 
-  saveTask: reminderProcedure
+  saveTask: reminderDeliveryProcedure
     .input(
       z
         .object({

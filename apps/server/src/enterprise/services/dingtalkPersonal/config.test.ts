@@ -1,11 +1,15 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ModuleSettingsModule from '@/server/enterprise/services/moduleSettings';
+
 const envBag = vi.hoisted(() => ({
   DINGTALK_PERSONAL_BROKER_TOKEN: 't'.repeat(32) as string | undefined,
   DINGTALK_PERSONAL_BROKER_URL: 'http://aihub-dws:8080' as string | undefined,
 }));
 const findByPlatform = vi.hoisted(() => vi.fn());
+const mockIsModuleEnabled = vi.hoisted(() => vi.fn(async (_id: string) => true));
+const mockModuleEpoch = vi.hoisted(() => vi.fn(async () => 'epoch-1' as string | undefined));
 
 vi.mock('@/envs/dingtalkPersonal', () => ({
   dingtalkPersonalEnv: envBag,
@@ -18,6 +22,15 @@ vi.mock('@/database/core/db-adaptor', () => ({
 vi.mock('@/database/models/systemBotProvider', () => ({
   SystemBotProviderModel: { findByPlatform: (...args: unknown[]) => findByPlatform(...args) },
 }));
+
+vi.mock('@/server/enterprise/services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    currentModuleSettingsInvalidationEpoch: () => mockModuleEpoch(),
+    isModuleEnabled: (id: string) => mockIsModuleEnabled(id),
+  };
+});
 
 vi.mock('@/server/modules/KeyVaultsEncrypt', () => ({
   KeyVaultsGateKeeper: { initWithEnvKey: async () => undefined },
@@ -50,6 +63,8 @@ const switches = (patch: Record<string, unknown> = {}) => ({
 describe('dingtalk personal config', () => {
   beforeEach(() => {
     resetDingtalkPersonalConfigForTest();
+    mockIsModuleEnabled.mockImplementation(async () => true);
+    mockModuleEpoch.mockResolvedValue('epoch-1');
     findByPlatform.mockReset();
     envBag.DINGTALK_PERSONAL_BROKER_URL = 'http://aihub-dws:8080';
     envBag.DINGTALK_PERSONAL_BROKER_TOKEN = 't'.repeat(32);
@@ -65,6 +80,39 @@ describe('dingtalk personal config', () => {
     });
     await getDingtalkPersonalConfig();
     expect(findByPlatform).toHaveBeenCalledTimes(1);
+
+    mockModuleEpoch.mockResolvedValue('epoch-2');
+    await getDingtalkPersonalConfig();
+    expect(findByPlatform).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails closed when the dingtalkPersonal module is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkPersonal');
+    const config = await getDingtalkPersonalConfig();
+    expect(config.brokerConfigured).toBe(true);
+    expect(config.enabled).toBe(false);
+    expect(config.features).toEqual({
+      chat: false,
+      docs: false,
+      report: false,
+      sheets: false,
+      todo: false,
+      write: false,
+    });
+  });
+
+  it('turns docs and sheets off when the dingtalkDocs module is off', async () => {
+    mockIsModuleEnabled.mockImplementation(async (id: string) => id !== 'dingtalkDocs');
+    const config = await getDingtalkPersonalConfig();
+    expect(config.enabled).toBe(true);
+    expect(config.features).toEqual({
+      chat: true,
+      docs: false,
+      report: true,
+      sheets: false,
+      todo: true,
+      write: true,
+    });
   });
 
   it('accepts only boolean true and ignores the sub-switches when the master is off', async () => {

@@ -7,6 +7,7 @@ import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
 import { KnowledgeBaseManifest } from '@lobechat/builtin-tool-knowledge-base';
 import { LocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import { MemoryManifest } from '@lobechat/builtin-tool-memory';
+import { ReminderIdentifier } from '@lobechat/builtin-tool-reminder';
 import { WebBrowsingManifest } from '@lobechat/builtin-tool-web-browsing';
 import { alwaysOnToolIds, chatModeAllowedToolIds, defaultToolIds } from '@lobechat/builtin-tools';
 import { createEnableChecker, type PluginEnableChecker } from '@lobechat/context-engine';
@@ -19,6 +20,11 @@ import {
   type WorkingModel,
 } from '@lobechat/types';
 
+import {
+  PLATFORM_MODULE_IDS,
+  type PlatformModuleStateMap,
+  resolveModuleTree,
+} from '@/const/platform/modules';
 import type { ConnectorToolPermission } from '@/database/schemas';
 import { isToolAvailableInCurrentEnv } from '@/helpers/toolAvailability';
 import { patchManifestWithPermissions } from '@/libs/mcp/patchManifestPermissions';
@@ -47,20 +53,47 @@ const DINGTALK_PERSONAL_TOOL_IDENTIFIER = 'lobe-dingtalk-personal';
 const ENTERPRISE_LOOKUP_TOOL_IDENTIFIER = 'lobe-enterprise-lookup';
 
 /**
+ * Effective platform modules from server config (`enterprise.modules` — the payload
+ * `useModuleEnabled` and the boot view read). Fail-open like them: a missing payload or id
+ * means on; the server is the real gate. Resolved through the module tree so a child never
+ * reads as on while its parent (e.g. 钉钉) is off, even from a partial payload.
+ */
+const readEnterpriseModules = (): PlatformModuleStateMap => {
+  const raw = getServerConfigStoreState()?.serverConfig.enterprise?.modules;
+  return resolveModuleTree(
+    Object.fromEntries(
+      PLATFORM_MODULE_IDS.map((id) => [id, raw?.[id] !== false]),
+    ) as PlatformModuleStateMap,
+  );
+};
+
+/**
  * Capability flags from server config. Missing / unknown is fail-closed (off).
  * Approval and workspace are NOT always-on: they join `defaultToolIds` + the
  * enable rule only when the matching flag is on, same as enterprise-lookup.
+ *
+ * Each flag is also ANDed with its platform module. The server already folds the module into
+ * the capability, but the capability snapshots are cached independently of the module
+ * snapshot, so one config payload can briefly report a capability on for a module it also
+ * reports off — the module wins.
  */
 const readEnterpriseToolFlags = () => {
   const caps = getServerConfigStoreState()?.serverConfig.enterprise?.capabilities;
+  const modules = readEnterpriseModules();
+  const dingtalkPersonal = !!caps?.dingtalkPersonal && modules.dingtalkPersonal;
   return {
-    dingtalkApproval: !!caps?.dingtalkApproval,
+    dingtalkApproval: !!caps?.dingtalkApproval && modules.dingtalkApproval,
     // Runs on the member's own 钉钉个人数据 authorization, so it can never be on without personal
     // data (the server flag already implies it; AND again so a stale config fails closed).
-    dingtalkDocs: !!caps?.dingtalkPersonal && !!caps?.dingtalkDocs,
-    dingtalkPersonal: !!caps?.dingtalkPersonal,
-    dingtalkWorkspace: !!(caps?.dingtalkTodo || caps?.dingtalkCalendar),
-    enterpriseLookup: !!caps?.enterpriseLookup,
+    dingtalkDocs: dingtalkPersonal && !!caps?.dingtalkDocs && modules.dingtalkDocs,
+    // `lobe-reminder` delivers through the DingTalk notify app: it is always-on in agent mode
+    // unless the deployment switched `dingtalkNotify` (or 钉钉 itself) off. Mirrors the server
+    // `dingtalkNotifyEnabled` gate in Mecha/AgentToolsEngine.
+    dingtalkNotify: modules.dingtalkNotify,
+    dingtalkPersonal,
+    dingtalkWorkspace:
+      !!(caps?.dingtalkTodo || caps?.dingtalkCalendar) && modules.dingtalkWorkspace,
+    enterpriseLookup: !!caps?.enterpriseLookup && modules.enterpriseLookup,
   };
 };
 
@@ -262,12 +295,19 @@ export const createAgentToolsEngine = (
       settingsSelectors.memoryEnabled(useUserStore.getState())) &&
     memoryEmbeddingAvailable !== false;
   const webBrowsingEnabled = searchConfig.useApplicationBuiltinSearchTool;
-  const { dingtalkApproval, dingtalkDocs, dingtalkPersonal, dingtalkWorkspace, enterpriseLookup } =
-    readEnterpriseToolFlags();
+  const {
+    dingtalkApproval,
+    dingtalkDocs,
+    dingtalkNotify,
+    dingtalkPersonal,
+    dingtalkWorkspace,
+    enterpriseLookup,
+  } = readEnterpriseToolFlags();
   // Native search and the platform browsing tool must not stack. Drop the
   // web-browsing manifest from the pool so `allowExplicitActivation` cannot
   // re-enable it after lobe-activator. DingTalk / enterprise-lookup are
-  // dropped the same way when their capability flag is off or unknown, and
+  // dropped the same way when their capability flag is off or unknown, the
+  // always-on reminder when the `dingtalkNotify` module is off, and
   // user-memory when no embedding model is configured (every call would fail).
   const disabledIds = [
     ...(webBrowsingEnabled
@@ -278,6 +318,7 @@ export const createAgentToolsEngine = (
     ...(!dingtalkPersonal ? [DINGTALK_PERSONAL_TOOL_IDENTIFIER] : []),
     ...(!dingtalkDocs ? [DingtalkDocsIdentifier] : []),
     ...(!enterpriseLookup ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
+    ...(!dingtalkNotify ? [ReminderIdentifier] : []),
     ...(memoryEmbeddingAvailable === false ? [MemoryManifest.identifier] : []),
   ];
 
@@ -310,6 +351,8 @@ export const createAgentToolsEngine = (
     [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: dingtalkWorkspace,
     [DINGTALK_PERSONAL_TOOL_IDENTIFIER]: dingtalkPersonal,
     [DingtalkDocsIdentifier]: dingtalkDocs,
+    // Overrides the always-on entry above: no notify app, no reminder delivery.
+    [ReminderIdentifier]: dingtalkNotify,
   };
 
   return createToolsEngine({

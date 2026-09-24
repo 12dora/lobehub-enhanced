@@ -52,7 +52,11 @@ const styles = createStaticStyles(({ css }) => ({
 }));
 
 export interface ModuleSummaryBarProps {
-  /** The local draft — the numbers must move as the operator flips switches, not after saving. */
+  /**
+   * The local draft resolved through the module tree (`resolveModuleTree`) — what would really
+   * run. The numbers must move as the operator flips switches, not after saving, and a child
+   * greyed out by its parent must not be counted.
+   */
   draft: PlatformModuleStateMap;
   /** Modules whose change only frees resources after a process restart. */
   restartRequiredCount: number;
