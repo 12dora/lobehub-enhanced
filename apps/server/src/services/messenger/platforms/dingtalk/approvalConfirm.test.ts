@@ -22,6 +22,7 @@ const todoPreview = vi.fn();
 const todoCtor = vi.fn();
 const calendarPreview = vi.fn();
 const calendarCtor = vi.fn();
+const personalPreview = vi.fn();
 
 vi.mock('./approvalStore', () => ({
   claimDingTalkApprovalNotice: (...args: unknown[]) => claimNotice(...args),
@@ -107,6 +108,10 @@ vi.mock('@/server/enterprise/services/dingtalkWorkspace/todo', () => ({
     ['createTodo', 'updateTodo', 'completeTodo', 'deleteTodo'].includes(value),
 }));
 
+vi.mock('@/server/enterprise/services/dingtalkPersonal/tool', () => ({
+  previewDingtalkPersonalWrite: (...args: unknown[]) => personalPreview(...args),
+}));
+
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/calendar', () => ({
   DingtalkCalendarService: class {
     constructor(db: unknown, userId: string) {
@@ -173,6 +178,7 @@ beforeEach(() => {
   approvalPreview.mockReset();
   todoPreview.mockReset();
   calendarPreview.mockReset();
+  personalPreview.mockReset();
   vi.mocked(getMessengerDingTalkConfig).mockReset();
   delete process.env.DINGTALK_CONFIRM_RESUME_SETTLE_MS;
 });
@@ -694,6 +700,54 @@ describe('forwardDingTalkWaitingHuman preview', () => {
     expect(card.content).toContain('付款单');
     expect(card.content).toContain('同意结案');
     expect(card.content).not.toContain('99887766');
+  });
+
+  it('resolves a lobe-dingtalk-personal write through previewDingtalkPersonalWrite', async () => {
+    personalPreview.mockResolvedValue({
+      danger: true,
+      lines: ['标题：测试待办 123', '操作：标记完成'],
+      title: '完成待办「测试待办 123」',
+      warnings: ['完成后不可撤销'],
+    });
+    await sendWaiting({
+      apiName: 'completeTodo',
+      args: { taskId: 'task-secret' },
+      identifier: 'lobe-dingtalk-personal',
+    });
+    expect(personalPreview).toHaveBeenCalledTimes(1);
+    expect(personalPreview).toHaveBeenCalledWith({}, 'user_1', 'completeTodo', {
+      taskId: 'task-secret',
+    });
+    expect(approvalPreview).not.toHaveBeenCalled();
+    expect(todoPreview).not.toHaveBeenCalled();
+    expect(calendarPreview).not.toHaveBeenCalled();
+    const card = sentCard();
+    expect(card.allowApprove).toBe(true);
+    expect(card.title).toBe('完成待办「测试待办 123」');
+    expect(card.content.startsWith('⚠️ 高风险操作\n标题：测试待办 123')).toBe(true);
+    expect(card.content).toContain('操作：标记完成');
+    expect(card.content).toContain('⚠️ 完成后不可撤销');
+    expect(card.content).not.toContain('task-secret');
+  });
+
+  it('disables 批准 when the personal preview throws and keeps the web link', async () => {
+    personalPreview.mockRejectedValue(
+      Object.assign(new Error('not authorized'), { code: 'DINGTALK_PERSONAL_UNAUTHORIZED' }),
+    );
+    await sendWaiting({
+      apiName: 'updateTodo',
+      args: { taskId: 'task-secret', title: '改标题' },
+      identifier: 'lobe-dingtalk-personal',
+    });
+    const card = sentCard();
+    expect(card.allowApprove).toBe(false);
+    expect(card.statusText).toBe('请到网页端确认');
+    expect(card.content).toBe('无法解析操作对象（DINGTALK_PERSONAL_UNAUTHORIZED）');
+    expect(card.note).toContain('请到网页端确认');
+    expect(card.note).toContain(topicLink());
+    expect(card.content).not.toContain('task-secret');
+    expect(card.note).not.toContain('task-secret');
+    expect(savedRecord().approveOnCard).toBe(false);
   });
 
   it('does not call a preview when the card cannot be sent', async () => {

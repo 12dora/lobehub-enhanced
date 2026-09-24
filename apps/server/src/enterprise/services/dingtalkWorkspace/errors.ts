@@ -61,4 +61,5 @@ export class DingtalkWorkspaceError extends Error {
 }
 
 export const DINGTALK_APPROVAL_TOOL_IDENTIFIER = 'lobe-dingtalk-approval';
+export const DINGTALK_PERSONAL_TOOL_IDENTIFIER = 'lobe-dingtalk-personal';
 export const DINGTALK_WORKSPACE_TOOL_IDENTIFIER = 'lobe-dingtalk-workspace';

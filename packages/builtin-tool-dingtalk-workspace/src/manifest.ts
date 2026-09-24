@@ -49,7 +49,7 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
     },
     {
       description:
-        '我的钉钉待办：待我审批 + 本助手创建的待办（钉钉客户端自建待办不可见，原因见返回说明）',
+        '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 若提示授权，请原样转告',
       humanIntervention: 'never',
       name: DingtalkWorkspaceApiName.listTodos,
       parameters: {
@@ -61,7 +61,7 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
           },
           refresh: {
             description:
-              'When true, bypass the 5-minute cache and reload. Does not retry client-created todos when that read permission is unavailable.',
+              'When true, bypass the 5-minute cache and reload personalTodos when 钉钉个人数据 is authorized. Does not retry the org client-todo read when that permission is unavailable.',
             type: 'boolean',
           },
         },

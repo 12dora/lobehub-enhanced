@@ -12,6 +12,9 @@ export {
 export type { MaskIdentifiersOptions } from './displayText';
 export { maskIdentifiers } from './displayText';
 export { default as ErrorNotice } from './ErrorNotice';
+export { default as LinkedText } from './LinkedText';
+export type { LinkTextSegment } from './linkText';
+export { splitMarkdownLinks, toInAppPath, toSafeLinkHref } from './linkText';
 export type { DingtalkErrorCode } from './previewError';
 export { DINGTALK_ERROR_CODES, resolveDingtalkErrorCode } from './previewError';
 export { ResultCard, ResultField, ResultRow } from './ResultCard';

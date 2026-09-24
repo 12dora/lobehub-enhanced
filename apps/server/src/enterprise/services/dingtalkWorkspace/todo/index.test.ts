@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { appEnv } from '@/envs/app';
+
 const mockAssertFeature = vi.fn();
 const mockRequireIdentity = vi.fn();
 const mockRequest = vi.fn();
@@ -60,9 +62,32 @@ vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: () => redisState.client,
 }));
 
+const mockGetPersonalConfig = vi.fn();
+const mockPersonalGetStatus = vi.fn();
+const mockPersonalExec = vi.fn();
+
+vi.mock('@/server/enterprise/services/dingtalkPersonal', () => ({
+  DingtalkPersonalService: class {
+    constructor(_db: unknown, _userId: string) {}
+
+    exec(...args: unknown[]) {
+      return mockPersonalExec(...args);
+    }
+
+    getStatus() {
+      return mockPersonalGetStatus();
+    }
+  },
+  getDingtalkPersonalConfig: (...args: unknown[]) => mockGetPersonalConfig(...args),
+}));
+
 const {
   DingtalkTodoService,
+  invalidateDingtalkTodoListCache,
   ORG_TODO_UNAVAILABLE_NOTE,
+  PERSONAL_TODO_ERROR_NOTE,
+  PERSONAL_TODO_MERGED_NOTE,
+  personalTodoAuthNote,
   resetOrgTodoReadGateForTest,
   resetTodoListCacheForTest,
 } = await import('./index');
@@ -75,6 +100,20 @@ const {
 const { DingtalkWorkspaceError } = await import('../errors');
 
 const identity = { name: '张三', staffId: 'staff-me', unionId: 'union-me' };
+
+describe('personalTodoAuthNote', () => {
+  it('includes the web deep link and drops a trailing slash on APP_URL', () => {
+    expect(personalTodoAuthNote('https://aihub.example.com/')).toBe(
+      '授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：[点此前往授权](https://aihub.example.com/settings/connector?dingtalkPersonal=authorize)',
+    );
+    expect(personalTodoAuthNote('')).toBe(
+      '授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：[点此前往授权](/settings/connector?dingtalkPersonal=authorize)',
+    );
+    expect(personalTodoAuthNote(null)).toContain(
+      '[点此前往授权](/settings/connector?dingtalkPersonal=authorize)',
+    );
+  });
+});
 
 describe('DingtalkTodoService', () => {
   const service = new DingtalkTodoService({} as never, 'user-1');
@@ -89,6 +128,13 @@ describe('DingtalkTodoService', () => {
     mockAssertFeature.mockResolvedValue(undefined);
     mockRequireIdentity.mockResolvedValue(identity);
     mockAppend.mockResolvedValue({});
+    mockGetPersonalConfig.mockResolvedValue({
+      brokerConfigured: false,
+      enabled: false,
+      features: { chat: false, report: false, todo: false, write: false },
+    });
+    mockPersonalGetStatus.mockReset();
+    mockPersonalExec.mockReset();
     mockResolveStaff.mockResolvedValue({
       deptPath: '研发',
       name: '张三',
@@ -360,6 +406,50 @@ describe('DingtalkTodoService', () => {
     expect(cached.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
   });
 
+  it('drops one user merged cache when personal todo writes invalidate it', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest
+      .mockResolvedValueOnce({ todoCards: [{ subject: '旧', taskId: 't0' }] })
+      .mockResolvedValueOnce({ todoCards: [{ subject: '新', taskId: 't0' }] });
+
+    await service.listTodos();
+    invalidateDingtalkTodoListCache('someone-else');
+    const kept = await service.listTodos();
+    expect(kept.appTodos[0]?.subject).toBe('旧');
+
+    invalidateDingtalkTodoListCache('user-1');
+    const again = await service.listTodos();
+    expect(again.appTodos[0]?.subject).toBe('新');
+    expect(
+      mockRequest.mock.calls.filter((call) => String(call[0].path).includes('/org/tasks/query')),
+    ).toHaveLength(2);
+  });
+
+  it('does not cache a merged list that overlapped an invalidation', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockRequest.mockImplementation(async () => {
+      await hold;
+      return { todoCards: [{ subject: '旧', taskId: 't0' }] };
+    });
+
+    const pending = service.listTodos();
+    await vi.waitFor(() => expect(mockRequest).toHaveBeenCalled());
+    invalidateDingtalkTodoListCache('user-1');
+    release();
+    const first = await pending;
+    expect(first.appTodos[0]?.taskId).toBe('t0');
+
+    mockRequest.mockReset();
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '新', taskId: 't1' }] });
+    const second = await service.listTodos();
+    expect(mockRequest).toHaveBeenCalled();
+    expect(second.appTodos.map((item) => item.taskId)).toEqual(['t1']);
+  });
+
   it('drops the merged cache after a todo is created', async () => {
     redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
     mockRequest
@@ -577,5 +667,306 @@ describe('DingtalkTodoService', () => {
     await expect(service.preview({ apiName: 'listTodos', args: {} })).rejects.toBeInstanceOf(
       DingtalkWorkspaceError,
     );
+  });
+
+  const enablePersonalTodo = () => {
+    mockGetPersonalConfig.mockResolvedValue({
+      brokerConfigured: true,
+      enabled: true,
+      features: { chat: false, report: false, todo: true, write: false },
+    });
+  };
+
+  const personalList = (todos: unknown[], hasMore = false) => ({
+    data: { count: todos.length, hasMore, page: 1, size: 20, todos },
+    ok: true,
+    outcome: 'success',
+  });
+
+  it('leaves the org note in place when personal todos are off', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    const result = await service.listTodos({ done: false });
+    expect(result.personalTodos).toBeUndefined();
+    expect(result.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+    expect(mockPersonalGetStatus).not.toHaveBeenCalled();
+    expect(mockPersonalExec).not.toHaveBeenCalled();
+  });
+
+  it('merges personal todos, keeps the assistant copy, and drops the org note', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+    mockRequest.mockResolvedValue({
+      todoCards: [{ isDone: false, subject: '写周报', taskId: 't1' }],
+    });
+    mockPersonalExec.mockResolvedValue(
+      personalList(
+        [
+          {
+            dueTime: 1790326800000,
+            finalStatusStage: 0,
+            priority: 20,
+            subject: '个人侧重复',
+            taskId: 't1',
+          },
+          {
+            dueTime: null,
+            finalStatusStage: 0,
+            priority: null,
+            subject: '无截止',
+            taskId: 't-open',
+          },
+          {
+            dueTime: 1790129842237,
+            finalStatusStage: 2,
+            priority: 40,
+            subject: '测试待办 123',
+            taskId: 't-personal',
+          },
+          {
+            dueTime: 1790129842237,
+            finalStatusStage: 2,
+            priority: 40,
+            subject: '重复个人待办',
+            taskId: 't-personal',
+          },
+        ],
+        true,
+      ),
+    );
+
+    const result = await service.listTodos({ done: false });
+
+    expect(mockPersonalExec).toHaveBeenCalledTimes(1);
+    expect(mockPersonalExec).toHaveBeenCalledWith('todo.list', {
+      page: 1,
+      size: 20,
+      status: 'open',
+    });
+    expect(result.appTodos).toEqual([
+      expect.objectContaining({ source: 'assistant', subject: '写周报', taskId: 't1' }),
+    ]);
+    expect(result.personalTodos).toEqual([
+      expect.objectContaining({
+        done: false,
+        source: 'personal',
+        stage: 0,
+        subject: '无截止',
+        taskId: 't-open',
+      }),
+      expect.objectContaining({
+        done: false,
+        dueTime: 1790129842237,
+        priority: 40,
+        source: 'personal',
+        stage: 2,
+        subject: '测试待办 123',
+        taskId: 't-personal',
+      }),
+    ]);
+    expect(result.personalTodos?.[0]).not.toHaveProperty('dueTime');
+    expect(result.personalTodos?.[0]).not.toHaveProperty('priority');
+    expect(result.notes).toEqual([PERSONAL_TODO_MERGED_NOTE]);
+    expect(result.truncated).toBe(true);
+    expect(result.orgTodos).toBeUndefined();
+  });
+
+  it('keeps an org todo that shares a taskId with a personal todo', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'available');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+    mockRequest.mockImplementation(async (req: { path?: string }) => {
+      if (String(req.path).includes('/organizations/tasks/query')) {
+        return { todoCards: [{ isDone: false, subject: '组织里的', taskId: 't-org' }] };
+      }
+      return { todoCards: [{ isDone: false, subject: '助手', taskId: 't1' }] };
+    });
+    mockPersonalExec.mockResolvedValue(
+      personalList([
+        { finalStatusStage: 0, priority: 20, subject: '组织里的个人副本', taskId: 't-org' },
+        { finalStatusStage: 0, priority: 20, subject: '只在个人', taskId: 't-only' },
+      ]),
+    );
+
+    const result = await service.listTodos({ done: false });
+
+    expect(result.orgTodos).toEqual([
+      expect.objectContaining({ source: 'org', subject: '组织里的', taskId: 't-org' }),
+    ]);
+    expect(result.personalTodos?.map((item) => item.taskId)).toEqual(['t-org', 't-only']);
+    expect(result.notes).toEqual([PERSONAL_TODO_MERGED_NOTE]);
+  });
+
+  it('asks dws for done todos when done is true', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+    mockRequest.mockResolvedValue({ todoCards: [] });
+    mockPersonalExec.mockResolvedValue({
+      hasMore: false,
+      todos: [{ finalStatusStage: 1, isDone: true, subject: '已完成', taskId: 't-done' }],
+    });
+
+    const result = await service.listTodos({ done: true });
+
+    expect(mockPersonalExec).toHaveBeenCalledWith('todo.list', {
+      page: 1,
+      size: 20,
+      status: 'done',
+    });
+    expect(result.personalTodos).toEqual([
+      expect.objectContaining({
+        done: true,
+        source: 'personal',
+        subject: '已完成',
+        taskId: 't-done',
+      }),
+    ]);
+  });
+
+  it('replaces the org note when personal todos are unauthorized or expired', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    enablePersonalTodo();
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+
+    mockPersonalGetStatus.mockResolvedValue({ state: 'unauthorized' });
+    const unauthorized = await service.listTodos({ done: false });
+    expect(unauthorized.notes).toEqual([personalTodoAuthNote(appEnv.APP_URL)]);
+    expect(unauthorized.personalTodos).toBeUndefined();
+    expect(mockPersonalExec).not.toHaveBeenCalled();
+
+    resetTodoListCacheForTest();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'expired' });
+    const expired = await service.listTodos({ done: false });
+    expect(expired.notes).toEqual([personalTodoAuthNote(appEnv.APP_URL)]);
+    expect(mockPersonalExec).not.toHaveBeenCalled();
+  });
+
+  it('does not add an authorize note when org todos are already visible', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'available');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'unauthorized' });
+    mockRequest.mockImplementation(async (req: { path?: string }) => {
+      if (String(req.path).includes('/organizations/tasks/query')) {
+        return { todoCards: [{ subject: '客户端待办', taskId: 't2' }] };
+      }
+      return { todoCards: [{ subject: '写周报', taskId: 't1' }] };
+    });
+
+    const result = await service.listTodos({ done: false });
+
+    expect(result.notes).toEqual([]);
+    expect(result.orgTodos?.map((item) => item.taskId)).toEqual(['t2']);
+    expect(result.personalTodos).toBeUndefined();
+    expect(mockPersonalExec).not.toHaveBeenCalled();
+  });
+
+  it('keeps assistant todos when the personal read fails', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    mockPersonalExec.mockRejectedValue(
+      Object.assign(new Error('upstream'), { code: 'DINGTALK_PERSONAL_UPSTREAM' }),
+    );
+
+    const result = await service.listTodos();
+
+    expect(result.appTodos).toHaveLength(1);
+    expect(result.personalTodos).toBeUndefined();
+    expect(result.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE, PERSONAL_TODO_ERROR_NOTE]);
+  });
+
+  it('swaps the org note when an authorized read comes back unauthorized', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    mockPersonalExec.mockRejectedValue(
+      Object.assign(new Error('expired'), { code: 'DINGTALK_PERSONAL_EXPIRED' }),
+    );
+
+    const result = await service.listTodos();
+
+    expect(result.personalTodos).toBeUndefined();
+    expect(result.notes).toEqual([personalTodoAuthNote(appEnv.APP_URL)]);
+  });
+
+  it('adds a note when personal status cannot be read and still returns todos', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockRejectedValue(new Error('db down'));
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+
+    const result = await service.listTodos();
+
+    expect(result.appTodos).toHaveLength(1);
+    expect(result.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE, PERSONAL_TODO_ERROR_NOTE]);
+    expect(mockPersonalExec).not.toHaveBeenCalled();
+  });
+
+  it('stays on the legacy list when personal config cannot be loaded', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockGetPersonalConfig.mockRejectedValue(new Error('connector down'));
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+
+    const result = await service.listTodos();
+
+    expect(result.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+    expect(result.personalTodos).toBeUndefined();
+    expect(mockPersonalGetStatus).not.toHaveBeenCalled();
+    expect(mockPersonalExec).not.toHaveBeenCalled();
+  });
+
+  it('does not serve a feature-off cache after the caller authorizes personal todos', async () => {
+    redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+    mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    const first = await service.listTodos({ done: false });
+    expect(first.notes).toEqual([ORG_TODO_UNAVAILABLE_NOTE]);
+
+    enablePersonalTodo();
+    mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+    mockPersonalExec.mockResolvedValue(
+      personalList([{ finalStatusStage: 0, priority: 20, subject: '测试待办 123', taskId: 'tp' }]),
+    );
+    const second = await service.listTodos({ done: false });
+
+    expect(mockPersonalExec).toHaveBeenCalledTimes(1);
+    expect(second.personalTodos?.map((item) => item.taskId)).toEqual(['tp']);
+    expect(second.notes).toEqual([PERSONAL_TODO_MERGED_NOTE]);
+  });
+
+  it('reuses a merged personal list for 5 minutes unless refresh is set', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-24T08:00:00.000Z'));
+    try {
+      redisState.store.set(ORG_TODO_READ_GATE_REDIS_KEY, 'unavailable');
+      enablePersonalTodo();
+      mockPersonalGetStatus.mockResolvedValue({ state: 'authorized' });
+      mockRequest.mockResolvedValue({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+      mockPersonalExec.mockResolvedValue(
+        personalList([
+          { finalStatusStage: 0, priority: 20, subject: '测试待办 123', taskId: 'tp' },
+        ]),
+      );
+
+      await service.listTodos({ done: false });
+      vi.advanceTimersByTime(5 * 60_000 - 1000);
+      const cached = await service.listTodos({ done: false });
+      expect(cached.personalTodos?.map((item) => item.taskId)).toEqual(['tp']);
+      expect(mockPersonalExec).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1000);
+      await service.listTodos({ done: false });
+      expect(mockPersonalExec).toHaveBeenCalledTimes(2);
+
+      const refreshed = await service.listTodos({ done: false, refresh: true });
+      expect(refreshed.notes).toEqual([PERSONAL_TODO_MERGED_NOTE]);
+      expect(mockPersonalExec).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

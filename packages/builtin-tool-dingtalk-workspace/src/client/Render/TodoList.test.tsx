@@ -70,7 +70,7 @@ const appTodo = (subject: string, overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('TodoList (merged listTodos)', () => {
-  it('renders approvals and assistant todos with the note once and the merged total', () => {
+  it('renders approvals and assistant todos with every note once and the merged total', () => {
     const { container } = render(
       <TodoList
         {...props({
@@ -104,9 +104,9 @@ describe('TodoList (merged listTodos)', () => {
     expect(screen.getByText('待完成')).toBeTruthy();
     expect(screen.queryByText('组织待办')).toBeNull();
 
-    // Only the first note, exactly once.
+    // Every note, each exactly once.
     expect(text.split(ORG_NOTE)).toHaveLength(2);
-    expect(text).not.toContain('第二条说明');
+    expect(text.split('第二条说明')).toHaveLength(2);
 
     // Names only: approval and todo ids never reach the card.
     expect(text).not.toContain(APPROVAL_TASK_ID);
@@ -204,6 +204,128 @@ describe('TodoList (merged listTodos)', () => {
   });
 });
 
+const PERSONAL_MERGED_NOTE = '已包含你在钉钉里的全部待办（经你授权读取）';
+const PERSONAL_AUTH_NOTE =
+  '授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办（设置 → 连接器 → 钉钉个人数据）';
+
+const personalTodo = (subject: string, overrides: Record<string, unknown> = {}) => ({
+  done: false,
+  source: 'personal',
+  subject,
+  taskId: '57475254077',
+  ...overrides,
+});
+
+describe('TodoList (personal todos)', () => {
+  it('shows the read-only 我的钉钉待办 section with due date, priority and overdue flag', () => {
+    const { container } = render(
+      <TodoList
+        {...props({
+          appTodos: [appTodo('写周报')],
+          approvals: { count: 0, items: [], truncated: false },
+          notes: [PERSONAL_MERGED_NOTE],
+          personalTodos: [
+            personalTodo('交库存日报', { dueTime: Date.now() - 2 * HOUR, priority: 40 }),
+            personalTodo('测试待办 123', {
+              dueTime: Date.now() + 48 * HOUR,
+              priority: 20,
+              taskId: '57475254078',
+            }),
+            personalTodo('已办完的事', {
+              done: true,
+              dueTime: Date.now() - 48 * HOUR,
+              taskId: '57475254079',
+            }),
+          ],
+          success: true,
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    expect(screen.getByText('共 4 项')).toBeTruthy();
+    expect(screen.getByText('我的钉钉待办')).toBeTruthy();
+    expect(screen.getByText('本助手创建的待办')).toBeTruthy();
+    expect(screen.getByText('交库存日报')).toBeTruthy();
+    expect(screen.getByText(/^已逾期 · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · 紧急$/)).toBeTruthy();
+    // Only the open, past-due row is flagged.
+    expect(text.split('已逾期')).toHaveLength(2);
+    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(text).toContain(PERSONAL_MERGED_NOTE);
+    expect(text).not.toContain('57475254077');
+  });
+
+  it('puts the personal section before the assistant todos', () => {
+    const { container } = render(
+      <TodoList
+        {...props({
+          appTodos: [appTodo('写周报')],
+          approvals: { count: 0, items: [] },
+          notes: [],
+          personalTodos: [personalTodo('客户端里的待办')],
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    expect(text.indexOf('我的钉钉待办')).toBeLessThan(text.indexOf('本助手创建的待办'));
+  });
+
+  it('renders a personal-only result as merged', () => {
+    render(<TodoList {...props({ notes: [], personalTodos: [personalTodo('只有个人待办')] })} />);
+
+    expect(screen.getByText('共 1 项')).toBeTruthy();
+    expect(screen.getByText('我的钉钉待办')).toBeTruthy();
+    expect(screen.getByText('只有个人待办')).toBeTruthy();
+  });
+
+  it('shows the authorize hint next to the other notes', () => {
+    const { container } = render(
+      <TodoList
+        {...props({
+          appTodos: [],
+          approvals: { count: 0, items: [] },
+          notes: [ORG_NOTE, PERSONAL_AUTH_NOTE, ORG_NOTE, '  '],
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    expect(text.split(ORG_NOTE)).toHaveLength(2);
+    expect(text.split(PERSONAL_AUTH_NOTE)).toHaveLength(2);
+    expect(screen.queryByText('我的钉钉待办')).toBeNull();
+    expect(screen.getByText('暂无待办')).toBeTruthy();
+  });
+});
+
+describe('TodoList (note links)', () => {
+  it('renders the markdown link in the authorize note as a real link', () => {
+    const href = 'https://chat.example.com/settings/connector?dingtalkPersonal=authorize';
+    const { container } = render(
+      <TodoList
+        {...props({
+          appTodos: [],
+          approvals: { count: 0, items: [] },
+          notes: [
+            `授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：[点此前往授权](${href})`,
+            '[坏链接](javascript:alert(1))',
+          ],
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    const link = screen.getByText('点此前往授权').closest('a');
+    expect(link?.getAttribute('href')).toBe(href);
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(text).toContain('授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：点此前往授权');
+    expect(text).not.toContain(`](${href})`);
+    // An unsafe target stays readable text, never a link.
+    expect(text).toContain('[坏链接](javascript:alert(1))');
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+  });
+});
+
 describe('TodoList (legacy { items, count } history)', () => {
   it('still renders the old shape', () => {
     render(
@@ -218,7 +340,8 @@ describe('TodoList (legacy { items, count } history)', () => {
 
     expect(screen.getByText('共 1 项')).toBeTruthy();
     expect(screen.getByText('旧待办')).toBeTruthy();
-    expect(screen.getByText('2026-09-21 09:30')).toBeTruthy();
+    // Past due and still open.
+    expect(screen.getByText('已逾期 · 2026-09-21 09:30')).toBeTruthy();
     expect(screen.queryByText('本助手创建的待办')).toBeNull();
   });
 

@@ -343,7 +343,10 @@ const normalizeResult = (data: unknown): unknown => {
   const record = asRecord(data);
   if (!record) return data;
   const hasTodoBuckets =
-    Array.isArray(record.items) || Array.isArray(record.appTodos) || Array.isArray(record.orgTodos);
+    Array.isArray(record.items) ||
+    Array.isArray(record.appTodos) ||
+    Array.isArray(record.orgTodos) ||
+    Array.isArray(record.personalTodos);
   if (hasTodoBuckets) {
     const next: Record<string, unknown> = { ...record };
     if (Array.isArray(record.items)) {
@@ -358,6 +361,9 @@ const normalizeResult = (data: unknown): unknown => {
     }
     if (Array.isArray(record.appTodos)) next.appTodos = flattenTodoList(record.appTodos);
     if (Array.isArray(record.orgTodos)) next.orgTodos = flattenTodoList(record.orgTodos);
+    if (Array.isArray(record.personalTodos)) {
+      next.personalTodos = flattenTodoList(record.personalTodos);
+    }
     return next;
   }
   if (Array.isArray(record.people)) {
@@ -372,6 +378,7 @@ const LIST_KEYS = [
   'items',
   'appTodos',
   'orgTodos',
+  'personalTodos',
   'people',
   'users',
   'departments',

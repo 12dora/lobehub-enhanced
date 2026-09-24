@@ -19,6 +19,7 @@ import { getServerDB } from '@/database/core/db-adaptor';
 import { MessageModel } from '@/database/models/message';
 import {
   DINGTALK_APPROVAL_TOOL_IDENTIFIER,
+  DINGTALK_PERSONAL_TOOL_IDENTIFIER,
   DINGTALK_WORKSPACE_TOOL_IDENTIFIER,
   DingtalkWorkspaceError,
 } from '@/server/enterprise/services/dingtalkWorkspace/errors';
@@ -538,6 +539,23 @@ const loadDingTalkToolPreview = async (
     return new DingtalkApprovalService(db, userId).preview({ apiName, args });
   }
 
+  if (identifier === DINGTALK_PERSONAL_TOOL_IDENTIFIER) {
+    const { previewDingtalkPersonalWrite } =
+      await import('@/server/enterprise/services/dingtalkPersonal/tool');
+    const preview = await previewDingtalkPersonalWrite(
+      db,
+      userId,
+      apiName as Parameters<typeof previewDingtalkPersonalWrite>[2],
+      args,
+    );
+    return {
+      danger: preview.danger,
+      lines: preview.lines.map((line) => ({ value: line })),
+      title: preview.title,
+      warnings: preview.warnings,
+    };
+  }
+
   const [
     { DingtalkTodoService, isTodoWriteApiName },
     { DingtalkCalendarService, isCalendarWriteApiName },
@@ -562,6 +580,7 @@ const renderDingTalkConfirmCard = async (
   const identifier = tool.identifier;
   if (
     identifier !== DINGTALK_APPROVAL_TOOL_IDENTIFIER &&
+    identifier !== DINGTALK_PERSONAL_TOOL_IDENTIFIER &&
     identifier !== DINGTALK_WORKSPACE_TOOL_IDENTIFIER
   ) {
     return formatDingTalkConfirmSummary(tool);

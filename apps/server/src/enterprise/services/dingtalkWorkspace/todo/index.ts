@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import debug from 'debug';
+
 import type { LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
 import {
@@ -39,7 +41,15 @@ import type {
   DingtalkTodoUpdateInput,
   DingtalkWorkspacePreview,
 } from './types';
-import { isTodoWriteApiName, ORG_TODO_UNAVAILABLE_NOTE } from './types';
+import {
+  isTodoWriteApiName,
+  ORG_TODO_UNAVAILABLE_NOTE,
+  PERSONAL_TODO_ERROR_NOTE,
+  PERSONAL_TODO_MERGED_NOTE,
+  personalTodoAuthNote,
+} from './types';
+
+const log = debug('lobe-server:dingtalk-workspace:todo');
 
 export { resetOrgTodoReadGateForTest } from './orgReadGate';
 export type { DingtalkStaffCandidate, DingtalkStaffRef } from './staffTokens';
@@ -58,7 +68,14 @@ export type {
   DingtalkWorkspacePreviewLine,
   TodoWriteApiName,
 } from './types';
-export { isTodoWriteApiName, ORG_TODO_UNAVAILABLE_NOTE, TODO_WRITE_API_NAMES } from './types';
+export {
+  isTodoWriteApiName,
+  ORG_TODO_UNAVAILABLE_NOTE,
+  PERSONAL_TODO_ERROR_NOTE,
+  PERSONAL_TODO_MERGED_NOTE,
+  personalTodoAuthNote,
+  TODO_WRITE_API_NAMES,
+} from './types';
 
 const MAX_CREATE_EXECUTORS = 100;
 const MAX_UPDATE_EXECUTORS = 1000;
@@ -69,16 +86,27 @@ const TODO_LIST_CACHE_MS = 60_000;
 const MERGED_TODO_CACHE_MS = 5 * 60_000;
 /** One page. A merged read is billed as a single organizations/tasks/query. */
 const ORG_TODO_PAGE_SIZE = 20;
+/** One page of the caller's own dws todos. Same size as the org page. */
+const PERSONAL_TODO_PAGE_SIZE = 20;
+
+/**
+ * Cache segment for whether this result merged 钉钉个人数据 todos.
+ * `merged` is not reused for an unauthorized or feature-off result.
+ */
+type PersonalTodoCacheFlag = 'off' | 'merged' | 'auth' | 'error';
 
 type CachedTodoList = { expiresAt: number; items: DingtalkTodoCard[] };
 const todoListCache = new Map<string, CachedTodoList>();
 
 type CachedMergedList = { expiresAt: number; value: DingtalkTodoListResult };
 const mergedTodoCache = new Map<string, CachedMergedList>();
+/** Bumped with every merged-list invalidation, including personal todo writes. */
+const mergedTodoGeneration = new Map<string, number>();
 
 export const resetTodoListCacheForTest = (): void => {
   todoListCache.clear();
   mergedTodoCache.clear();
+  mergedTodoGeneration.clear();
 };
 
 /** userId + verified staff/union id, so a rebound DingTalk identity cannot reuse the old list. */
@@ -86,9 +114,10 @@ const mergedCacheKey = (
   userId: string,
   identity: { staffId: string; unionId: string },
   done: boolean | undefined,
+  personal: PersonalTodoCacheFlag,
 ): string => {
   const doneFlag = done === true ? '1' : done === false ? '0' : '*';
-  return `${userId}:${identity.staffId}:${identity.unionId}:${doneFlag}`;
+  return `${userId}:${identity.staffId}:${identity.unionId}:${doneFlag}:${personal}`;
 };
 
 const readMergedCache = (key: string): DingtalkTodoListResult | undefined => {
@@ -102,6 +131,12 @@ const invalidateMergedCache = (userId: string): void => {
   for (const key of mergedTodoCache.keys()) {
     if (key.startsWith(prefix)) mergedTodoCache.delete(key);
   }
+  mergedTodoGeneration.set(userId, (mergedTodoGeneration.get(userId) ?? 0) + 1);
+};
+
+/** Drop this user's merged listTodos cache. Personal todo writes call this. */
+export const invalidateDingtalkTodoListCache = (userId: string): void => {
+  invalidateMergedCache(userId);
 };
 
 const emptyApprovals = (): DingtalkMergedApprovals => ({
@@ -218,6 +253,147 @@ const mapTodoCards = (value: unknown): DingtalkTodoCard[] => {
     if (mapped) cards.push(mapped);
   }
   return cards;
+};
+
+const personalErrorCode = (error: unknown): string | undefined => {
+  if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+};
+
+const isPersonalAuthError = (error: unknown): boolean => {
+  const code = personalErrorCode(error);
+  return code === 'DINGTALK_PERSONAL_UNAUTHORIZED' || code === 'DINGTALK_PERSONAL_EXPIRED';
+};
+
+const parsePersonalTodoPayload = (
+  payload: unknown,
+): { hasMore: boolean; rows: unknown[] } | undefined => {
+  const root = asRecord(payload);
+  if (root.ok === false) return undefined;
+  const nested = asRecord(root.data);
+  if (Array.isArray(nested.todos)) {
+    return { hasMore: nested.hasMore === true, rows: nested.todos };
+  }
+  if (Array.isArray(root.todos)) {
+    return { hasMore: root.hasMore === true, rows: root.todos };
+  }
+  return undefined;
+};
+
+const mapPersonalTodoCard = (value: unknown, done: boolean): DingtalkMergedTodoCard | null => {
+  const row = asRecord(value);
+  const taskId = asString(row.taskId);
+  const subject = asString(row.subject);
+  if (!taskId || !subject) return null;
+  const dueTime = asNumber(row.dueTime);
+  const priority = asNumber(row.priority);
+  const stage = asNumber(row.finalStatusStage) ?? asNumber(row.stage);
+  const cardDone = asBoolean(row.isDone) ?? asBoolean(row.done) ?? done;
+  return {
+    done: cardDone,
+    ...(dueTime !== undefined ? { dueTime } : {}),
+    ...(priority !== undefined ? { priority } : {}),
+    source: 'personal',
+    ...(stage !== undefined ? { stage } : {}),
+    subject,
+    taskId,
+  };
+};
+
+const replaceOrgUnavailableNote = (notes: string[], replacement: string): string[] => {
+  const index = notes.indexOf(ORG_TODO_UNAVAILABLE_NOTE);
+  if (index < 0) return notes;
+  const next = notes.slice();
+  next[index] = replacement;
+  return next;
+};
+
+const pushNote = (notes: string[], note: string): string[] =>
+  notes.includes(note) ? notes : [...notes, note];
+
+/**
+ * Feature off (or config unreadable) stays on the legacy list. Authorized users
+ * merge; unauthorized/expired only swap the org note; other failures add a note.
+ */
+const resolvePersonalTodoFlag = async (
+  db: LobeChatDatabase,
+  userId: string,
+): Promise<PersonalTodoCacheFlag> => {
+  try {
+    const { DingtalkPersonalService, getDingtalkPersonalConfig } =
+      await import('@/server/enterprise/services/dingtalkPersonal');
+    const config = await getDingtalkPersonalConfig();
+    if (!config?.features?.todo) return 'off';
+    try {
+      const status = await new DingtalkPersonalService(db, userId).getStatus();
+      if (status.state === 'authorized') return 'merged';
+      if (status.state === 'unauthorized' || status.state === 'expired') return 'auth';
+      if (status.state === 'disabled') return 'off';
+      return 'error';
+    } catch (error) {
+      log('personal todo status failed user=%s: %O', userId, error);
+      return 'error';
+    }
+  } catch (error) {
+    log('personal todo config failed user=%s: %O', userId, error);
+    return 'off';
+  }
+};
+
+const applyPersonalTodos = async (
+  db: LobeChatDatabase,
+  userId: string,
+  input: DingtalkTodoListInput,
+  result: DingtalkTodoListResult,
+  flag: PersonalTodoCacheFlag,
+): Promise<void> => {
+  if (flag === 'off') return;
+  if (flag === 'auth') {
+    result.notes = replaceOrgUnavailableNote(result.notes, personalTodoAuthNote(appEnv.APP_URL));
+    return;
+  }
+  if (flag === 'error') {
+    result.notes = pushNote(result.notes, PERSONAL_TODO_ERROR_NOTE);
+    return;
+  }
+
+  try {
+    const { DingtalkPersonalService } =
+      await import('@/server/enterprise/services/dingtalkPersonal');
+    const payload = await new DingtalkPersonalService(db, userId).exec('todo.list', {
+      page: 1,
+      size: PERSONAL_TODO_PAGE_SIZE,
+      status: input.done === true ? 'done' : 'open',
+    });
+    const parsed = parsePersonalTodoPayload(payload);
+    if (!parsed) {
+      result.notes = pushNote(result.notes, PERSONAL_TODO_ERROR_NOTE);
+      return;
+    }
+    const appIds = new Set(result.appTodos.map((item) => item.taskId));
+    const personalTodos: DingtalkMergedTodoCard[] = [];
+    const seen = new Set<string>();
+    for (const row of parsed.rows) {
+      const card = mapPersonalTodoCard(row, input.done === true);
+      if (!card || appIds.has(card.taskId) || seen.has(card.taskId)) continue;
+      seen.add(card.taskId);
+      personalTodos.push(card);
+    }
+    result.personalTodos = personalTodos;
+    result.notes = pushNote(
+      result.notes.filter((note) => note !== ORG_TODO_UNAVAILABLE_NOTE),
+      PERSONAL_TODO_MERGED_NOTE,
+    );
+    if (parsed.hasMore) result.truncated = true;
+  } catch (error) {
+    log('personal todo.list failed user=%s code=%s: %O', userId, personalErrorCode(error), error);
+    if (isPersonalAuthError(error)) {
+      result.notes = replaceOrgUnavailableNote(result.notes, personalTodoAuthNote(appEnv.APP_URL));
+      return;
+    }
+    result.notes = pushNote(result.notes, PERSONAL_TODO_ERROR_NOTE);
+  }
 };
 
 const parseCreateInput = (args: Record<string, unknown>): DingtalkTodoCreateInput => {
@@ -517,11 +693,13 @@ export class DingtalkTodoService {
     // Identity first. A cache hit must not skip verification, and the key includes
     // the verified staff/union id so a changed binding is a miss.
     const identity = await this.actor();
-    const cacheKey = mergedCacheKey(this.userId, identity, input.done);
+    const personal = await resolvePersonalTodoFlag(this.db, this.userId);
+    const cacheKey = mergedCacheKey(this.userId, identity, input.done, personal);
     if (!input.refresh) {
       const cached = readMergedCache(cacheKey);
       if (cached) return cached;
     }
+    const mergedGeneration = mergedTodoGeneration.get(this.userId) ?? 0;
 
     const appPage = await this.queryAppTodoPage(identity.unionId, input);
     const [approvals, org] = await Promise.all([
@@ -548,6 +726,8 @@ export class DingtalkTodoService {
       truncated: Boolean(appPage.nextToken) || orgTruncated,
     };
     if (orgTodos) result.orgTodos = orgTodos;
+    await applyPersonalTodos(this.db, this.userId, input, result, personal);
+    if ((mergedTodoGeneration.get(this.userId) ?? 0) !== mergedGeneration) return result;
     mergedTodoCache.set(cacheKey, { expiresAt: Date.now() + MERGED_TODO_CACHE_MS, value: result });
     return result;
   };

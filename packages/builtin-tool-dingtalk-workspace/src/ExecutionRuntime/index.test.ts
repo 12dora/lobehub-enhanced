@@ -311,6 +311,46 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
     expect(todos.content).toContain('请假');
   });
 
+  it('flattens personalTodos the same way as org and assistant todos', async () => {
+    const listTodos = vi.fn().mockResolvedValue({
+      personalTodos: [{ done: true, source: 'personal', subject: '客户端待办', taskId: 'tp-1' }],
+      truncated: false,
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ listTodos }));
+
+    const todos = await runtime.listTodos({});
+
+    expect(todos.content).toContain('"source":"personal"');
+    expect(todos.content).toContain('"isDone":true');
+    expect(todos.content).toContain('tp-1');
+    expect(todos.state).toMatchObject({
+      personalTodos: [
+        expect.objectContaining({ isDone: true, source: 'personal', taskId: 'tp-1' }),
+      ],
+    });
+  });
+
+  it('trims an oversized personalTodos list under the content cap', async () => {
+    const personalTodos = Array.from({ length: 150 }, (_, index) => ({
+      done: false,
+      source: 'personal',
+      subject: `待办${index}${'详'.repeat(200)}`,
+      taskId: `tp-${index}`,
+    }));
+    const listTodos = vi.fn().mockResolvedValue({ personalTodos, truncated: false });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ listTodos }));
+
+    const result = await runtime.listTodos({});
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('"truncated":true');
+    expect(result.content.length).toBeLessThanOrEqual(DINGTALK_WORKSPACE_CONTENT_LIMIT);
+    expect(result.content).toContain('tp-0');
+    const state = result.state as { personalTodos?: unknown[] };
+    expect(state.personalTodos?.length ?? 0).toBeGreaterThan(0);
+    expect(state.personalTodos?.length ?? 0).toBeLessThan(150);
+  });
+
   it('reads DINGTALK_AMBIGUOUS candidates from a TRPC cause payload', async () => {
     const runtime = createDingtalkWorkspaceRuntime(
       makeService({

@@ -64,6 +64,18 @@ describe('DingtalkWorkspaceManifest', () => {
     expect(freeBusy?.description).toContain('busy/free');
   });
 
+  it('describes personalTodos on listTodos as read-only', () => {
+    const listTodos = DingtalkWorkspaceManifest.api.find(
+      (item) => item.name === DingtalkWorkspaceApiName.listTodos,
+    );
+
+    expect(listTodos?.description).toContain('personalTodos');
+    expect(listTodos?.description).toContain('lobe-dingtalk-personal');
+    expect(listTodos?.description).toContain('updateTodo/completeTodo');
+    expect(listTodos?.description).toContain('请原样转告');
+    expect(listTodos?.parameters.properties.refresh.description).toContain('personalTodos');
+  });
+
   it('lets updateTodo clear dueTime and send up to 1000 executors', () => {
     const updateTodo = DingtalkWorkspaceManifest.api.find(
       (item) => item.name === DingtalkWorkspaceApiName.updateTodo,

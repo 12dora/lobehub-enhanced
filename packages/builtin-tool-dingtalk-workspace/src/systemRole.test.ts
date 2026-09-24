@@ -34,8 +34,11 @@ describe('dingtalk workspace systemRole', () => {
     expect(systemPrompt).toContain('refresh=true');
     const listTodos = DingtalkWorkspaceManifest.api.find((api) => api.name === 'listTodos');
     expect(listTodos?.description).toBe(
-      '我的钉钉待办：待我审批 + 本助手创建的待办（钉钉客户端自建待办不可见，原因见返回说明）',
+      '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 若提示授权，请原样转告',
     );
+    expect(systemPrompt).toContain('personalTodos');
+    expect(systemPrompt).toContain('lobe-dingtalk-personal updateTodo/completeTodo');
+    expect(systemPrompt).toContain('If notes say to authorize, relay that note');
     expect(listTodos?.parameters.properties).toHaveProperty('refresh');
     expect(systemPrompt).toContain('confirm card');
     expect(systemPrompt).toContain('never parallelize');
@@ -46,6 +49,12 @@ describe('dingtalk workspace systemRole', () => {
     expect(systemPrompt).toContain('DINGTALK_FEATURE_DISABLED');
     expect(systemPrompt).toContain('sign in with DingTalk');
     expect(systemPrompt).toContain('admins cannot bind');
+  });
+
+  it('requires the model to repeat an authorization markdown link verbatim', () => {
+    expect(systemPrompt).toContain(
+      '工具结果里有授权链接时，回复中必须原样给出该 markdown 链接（不要改写、截断或省略 URL），并用一句话说明授权后再问一次即可。',
+    );
   });
 
   it('keeps free/busy titles stripped and organizer-only updates', () => {

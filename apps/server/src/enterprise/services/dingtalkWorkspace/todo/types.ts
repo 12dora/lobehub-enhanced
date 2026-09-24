@@ -58,10 +58,12 @@ export interface DingtalkTodoCard {
   todoType?: string;
 }
 
-export type DingtalkMergedTodoSource = 'assistant' | 'org';
+export type DingtalkMergedTodoSource = 'assistant' | 'org' | 'personal';
 
 export interface DingtalkMergedTodoCard extends DingtalkTodoCard {
   source: DingtalkMergedTodoSource;
+  /** dws `finalStatusStage`. Set on source `personal`. */
+  stage?: number;
 }
 
 export interface DingtalkMergedApprovalItem {
@@ -88,12 +90,38 @@ export interface DingtalkMergedApprovals {
 export const ORG_TODO_UNAVAILABLE_NOTE =
   '你在钉钉客户端里自己创建的待办，以及其他应用推送的待办，钉钉未向本系统开放读取（需专属钉钉的待办读权限），这里只包含：待我审批的流程、由本助手创建的待办。';
 
+/** Personal todo.list was merged. Replaces {@link ORG_TODO_UNAVAILABLE_NOTE}. */
+export const PERSONAL_TODO_MERGED_NOTE = '已包含你在钉钉里的全部待办（经你授权读取）';
+
+/** Settings deep link. Joined with APP_URL at runtime; a blank base stays relative. */
+export const DINGTALK_PERSONAL_AUTHORIZE_PATH = '/settings/connector?dingtalkPersonal=authorize';
+
+export const dingtalkPersonalAuthorizeUrl = (appUrl?: string | null): string => {
+  const base = typeof appUrl === 'string' ? appUrl.trim().replace(/\/+$/, '') : '';
+  return base ? `${base}${DINGTALK_PERSONAL_AUTHORIZE_PATH}` : DINGTALK_PERSONAL_AUTHORIZE_PATH;
+};
+
+/**
+ * Shown instead of {@link ORG_TODO_UNAVAILABLE_NOTE} when personal todos are
+ * enabled but the caller has not authorized (or the authorization expired).
+ */
+export const personalTodoAuthNote = (appUrl?: string | null): string =>
+  `授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：[点此前往授权](${dingtalkPersonalAuthorizeUrl(appUrl)})`;
+
+/** Personal read failed. The rest of listTodos is still returned. */
+export const PERSONAL_TODO_ERROR_NOTE = '暂时无法读取你在钉钉客户端里的待办，本次结果不含这部分。';
+
 export interface DingtalkTodoListResult {
   approvals: DingtalkMergedApprovals;
   appTodos: DingtalkMergedTodoCard[];
   notes: string[];
   /** Present only when Custom.Todo.Read is available. Omitted when the gate is closed. */
   orgTodos?: DingtalkMergedTodoCard[];
+  /**
+   * Todos from the caller's 钉钉个人数据 authorization.
+   * Omitted unless that read was merged. Same taskId as an assistant todo is dropped.
+   */
+  personalTodos?: DingtalkMergedTodoCard[];
   truncated: boolean;
 }
 
