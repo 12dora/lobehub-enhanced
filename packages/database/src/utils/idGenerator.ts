@@ -69,6 +69,7 @@ const prefixes = {
   platformUserAgentMaterializationTombstones: 'puat',
   dingtalkApprovalRuleRuns: 'darr',
   dingtalkApprovalRules: 'dar',
+  dingtalkPersonalAuthorizations: 'dpa',
   reminderDeliveries: 'rmdl',
   reminderRecipients: 'rmr',
   reminders: 'rmd',

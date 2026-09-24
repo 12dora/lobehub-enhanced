@@ -204,6 +204,13 @@
       "when": 1789580000000,
       "tag": "0036_enterprise_lookup_dingtalk_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0037_dingtalk_personal_authorizations",
+      "breakpoints": true
     }
   ]
 }

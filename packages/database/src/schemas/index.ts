@@ -15,6 +15,7 @@ export * from './connector';
 export * from './device';
 export * from './dingtalkApprovalRule';
 export * from './dingtalkDirectory';
+export * from './dingtalkPersonal';
 export * from './documentHistory';
 export * from './documentShare';
 export * from './enterpriseLookup';
