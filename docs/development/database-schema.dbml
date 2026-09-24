@@ -947,7 +947,7 @@ table global_files {
   size integer [not null]
   url text [not null]
   metadata jsonb
-  creator text [not null]
+  creator text
   created_at "timestamp with time zone" [not null, default: `now()`]
   accessed_at "timestamp with time zone" [not null, default: `now()`]
 

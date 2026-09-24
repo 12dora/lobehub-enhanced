@@ -211,6 +211,13 @@
       "when": 1789600000000,
       "tag": "0037_dingtalk_personal_authorizations",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789620000000,
+      "tag": "0038_global_files_creator_nullable",
+      "breakpoints": true
     }
   ]
 }

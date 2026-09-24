@@ -51,9 +51,8 @@ export const globalFiles = pgTable(
     size: integer('size').notNull(),
     url: text('url').notNull(),
     metadata: jsonb('metadata'),
-    creator: text('creator')
-      .references(() => users.id, { onDelete: 'set null' })
-      .notNull(),
+    // Nullable: the FK is ON DELETE SET NULL, so a deleted uploader must not block user deletion.
+    creator: text('creator').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     accessedAt: accessedAt(),
   },

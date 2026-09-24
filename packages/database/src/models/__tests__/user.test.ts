@@ -3,7 +3,15 @@ import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { messages, nextauthAccounts, topics, users, userSettings } from '../../schemas';
+import {
+  files,
+  globalFiles,
+  messages,
+  nextauthAccounts,
+  topics,
+  users,
+  userSettings,
+} from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import type { ListUsersForMemoryExtractorCursor } from '../user';
 import { UserModel, UserNotFoundError } from '../user';
@@ -694,6 +702,55 @@ describe('UserModel', () => {
         });
 
         expect(user).toBeUndefined();
+      });
+
+      it('deletes an uploader and keeps a blob another user still references', async () => {
+        const otherUserId = `${userId}-other`;
+        await serverDB.insert(users).values({ id: otherUserId });
+        await serverDB.insert(globalFiles).values({
+          creator: userId,
+          fileType: 'text/plain',
+          hashId: 'hash-shared-by-two-users',
+          size: 1,
+          url: 'files/shared.txt',
+        });
+        await serverDB.insert(files).values([
+          {
+            fileHash: 'hash-shared-by-two-users',
+            fileType: 'text/plain',
+            name: 'mine.txt',
+            size: 1,
+            url: 'files/shared.txt',
+            userId,
+          },
+          {
+            fileHash: 'hash-shared-by-two-users',
+            fileType: 'text/plain',
+            name: 'theirs.txt',
+            size: 1,
+            url: 'files/shared.txt',
+            userId: otherUserId,
+          },
+        ]);
+
+        // global_files.creator is ON DELETE SET NULL; it used to be NOT NULL too,
+        // which made deleting any uploader fail.
+        await UserModel.deleteUser(serverDB, userId);
+
+        const blob = await serverDB.query.globalFiles.findFirst({
+          where: eq(globalFiles.hashId, 'hash-shared-by-two-users'),
+        });
+        expect(blob?.creator).toBeNull();
+        const remaining = await serverDB.query.files.findMany({
+          where: eq(files.fileHash, 'hash-shared-by-two-users'),
+        });
+        expect(remaining.map((file) => file.userId)).toEqual([otherUserId]);
+
+        await serverDB.delete(files).where(eq(files.userId, otherUserId));
+        await serverDB
+          .delete(globalFiles)
+          .where(eq(globalFiles.hashId, 'hash-shared-by-two-users'));
+        await serverDB.delete(users).where(eq(users.id, otherUserId));
       });
     });
 
