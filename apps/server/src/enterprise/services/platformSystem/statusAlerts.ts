@@ -85,6 +85,7 @@ const WORKER_LABELS: Record<string, string> = {
 
 const CAPABILITY_LABELS: Record<string, string> = {
   dingtalk_connector: '钉钉连接器',
+  dingtalk_personal: '钉钉个人数据',
   memory_embedding: '记忆向量',
   sandbox: '沙箱',
   system_agent_models: '系统助手模型',

@@ -89,6 +89,7 @@ export const adminSystemRuntimeErrorSchema = z
 
 export const adminSystemCapabilityKeySchema = z.enum([
   'dingtalk_connector',
+  'dingtalk_personal',
   'memory_embedding',
   'sandbox',
   'system_agent_models',

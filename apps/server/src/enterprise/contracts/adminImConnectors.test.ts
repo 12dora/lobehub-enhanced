@@ -35,8 +35,26 @@ describe('dingTalkConnectorSettingsSchema', () => {
     expect(settings.workspaceApprovalEnabled).toBe(false);
     expect(settings.workspaceTodoEnabled).toBe(false);
     expect(settings.workspaceCalendarEnabled).toBe(false);
+    expect(settings.personalDataEnabled).toBe(false);
+    expect(settings.personalTodoEnabled).toBe(false);
+    expect(settings.personalChatEnabled).toBe(false);
+    expect(settings.personalReportEnabled).toBe(false);
+    expect(settings.personalWriteEnabled).toBe(false);
     expect(settings.approvalAutomationTier).toBe('moderate');
     expect(settings.robotDisplayName).toBe('');
+  });
+
+  it('keeps an explicit personal-data switch', () => {
+    const settings = dingTalkConnectorSettingsSchema.parse({
+      personalDataEnabled: true,
+      personalTodoEnabled: true,
+      personalWriteEnabled: false,
+      robotCode: 'ding-robot',
+    });
+    expect(settings.personalDataEnabled).toBe(true);
+    expect(settings.personalTodoEnabled).toBe(true);
+    expect(settings.personalChatEnabled).toBe(false);
+    expect(settings.personalWriteEnabled).toBe(false);
   });
 
   it('trims robotDisplayName and rejects names longer than 32', () => {
@@ -78,6 +96,15 @@ describe('adminImConnectorUpsertInputSchema', () => {
       robotDisplayName: null,
     });
     expect(input.robotDisplayName).toBeNull();
+  });
+
+  it('defaults omitted personal-data switches to false', () => {
+    const input = adminImConnectorUpsertInputSchema.parse(UPSERT_BASE);
+    expect(input.personalDataEnabled).toBe(false);
+    expect(input.personalTodoEnabled).toBe(false);
+    expect(input.personalChatEnabled).toBe(false);
+    expect(input.personalReportEnabled).toBe(false);
+    expect(input.personalWriteEnabled).toBe(false);
   });
 
   it('accepts false for both notify-app channel switches', () => {
@@ -168,6 +195,12 @@ describe('adminImConnectorViewSchema', () => {
         state: 'unknown',
       },
       updatedAt: null,
+      personal: { authorizedCount: 2, brokerConfigured: true },
+      personalChatEnabled: false,
+      personalDataEnabled: true,
+      personalReportEnabled: false,
+      personalTodoEnabled: true,
+      personalWriteEnabled: false,
       workspaceApprovalEnabled: false,
       workspaceCalendarEnabled: false,
       workspaceTodoEnabled: false,
@@ -176,5 +209,7 @@ describe('adminImConnectorViewSchema', () => {
     expect(withFlags.notifyRobotEnabled).toBe(true);
     expect(withFlags.workspaceApprovalEnabled).toBe(false);
     expect(withFlags.approvalAutomationTier).toBe('moderate');
+    expect(withFlags.personalDataEnabled).toBe(true);
+    expect(withFlags.personal).toEqual({ authorizedCount: 2, brokerConfigured: true });
   });
 });

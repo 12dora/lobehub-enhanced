@@ -23,6 +23,9 @@ const probeNotifyAppToken = vi.hoisted(() => vi.fn());
 const readNotifyAppFromProviderRow = vi.hoisted(() => vi.fn());
 const invalidateNotifyAppToken = vi.hoisted(() => vi.fn());
 const invalidateDingtalkWorkspaceCapabilities = vi.hoisted(() => vi.fn());
+const getDingtalkPersonalConfig = vi.hoisted(() => vi.fn());
+const invalidateDingtalkPersonalConfig = vi.hoisted(() => vi.fn());
+const countActiveDingtalkPersonal = vi.hoisted(() => vi.fn());
 const probeWorkspacePermissions = vi.hoisted(() => vi.fn());
 const applyAutomationTierChange = vi.hoisted(() => vi.fn());
 const notifyAutomationTierTruncation = vi.hoisted(() => vi.fn());
@@ -100,6 +103,15 @@ vi.mock('@/server/services/messenger/platforms/dingtalk/notifyApp', () => ({
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/capabilities', () => ({
   invalidateDingtalkWorkspaceCapabilities,
   probeWorkspacePermissions,
+}));
+
+vi.mock('@/server/enterprise/services/dingtalkPersonal', () => ({
+  getDingtalkPersonalConfig,
+  invalidateDingtalkPersonalConfig,
+}));
+
+vi.mock('@/database/models/dingtalkPersonalAuthorization', () => ({
+  DingtalkPersonalAuthorizationModel: { countActive: countActiveDingtalkPersonal },
 }));
 
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/approvalRules', () => ({
@@ -199,6 +211,13 @@ describe('ImConnectorsAdminService', () => {
     runGuardedDirectorySync.mockResolvedValue({ departments: 2, durationMs: 12, users: 9 });
     invalidateNotifyAppToken.mockResolvedValue(undefined);
     invalidateDingtalkWorkspaceCapabilities.mockReset();
+    invalidateDingtalkPersonalConfig.mockReset();
+    getDingtalkPersonalConfig.mockReset().mockResolvedValue({
+      brokerConfigured: true,
+      enabled: false,
+      features: { chat: false, report: false, todo: false, write: false },
+    });
+    countActiveDingtalkPersonal.mockReset().mockResolvedValue(4);
     applyAutomationTierChange.mockResolvedValue({ rows: [], truncated: 0 });
     notifyAutomationTierTruncation.mockResolvedValue(undefined);
     probeWorkspacePermissions.mockResolvedValue({
@@ -258,6 +277,7 @@ describe('ImConnectorsAdminService', () => {
     expect(invalidateMessengerConfigCache).toHaveBeenCalledWith('dingtalk');
     expect(invalidateNotifyAppToken).toHaveBeenCalled();
     expect(invalidateDingtalkWorkspaceCapabilities).toHaveBeenCalled();
+    expect(invalidateDingtalkPersonalConfig).toHaveBeenCalled();
   });
 
   it('replaces the secret through upsertByPlatform', async () => {
@@ -845,6 +865,65 @@ describe('ImConnectorsAdminService', () => {
       robotName: null,
     });
     expect(probeNotifyAppToken).not.toHaveBeenCalled();
+  });
+
+  it('reads the personal-data summary and defaults the switches off', async () => {
+    const view = await new ImConnectorsAdminService(createDb()).get('dingtalk');
+    expect(view.personal).toEqual({ authorizedCount: 4, brokerConfigured: true });
+    expect(view.personalDataEnabled).toBe(false);
+    expect(view.personalTodoEnabled).toBe(false);
+    expect(view.personalChatEnabled).toBe(false);
+    expect(view.personalReportEnabled).toBe(false);
+    expect(view.personalWriteEnabled).toBe(false);
+    expect(countActiveDingtalkPersonal).toHaveBeenCalled();
+  });
+
+  it('fails closed when the personal-data summary cannot be read', async () => {
+    getDingtalkPersonalConfig.mockRejectedValue(new Error('broker'));
+    countActiveDingtalkPersonal.mockRejectedValue(new Error('db'));
+    const view = await new ImConnectorsAdminService(createDb()).get('dingtalk');
+    expect(view.personal).toEqual({ authorizedCount: 0, brokerConfigured: false });
+  });
+
+  it('persists personal-data switches', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: {
+        ...upsertInput,
+        personalChatEnabled: true,
+        personalDataEnabled: true,
+        personalReportEnabled: false,
+        personalTodoEnabled: true,
+        personalWriteEnabled: true,
+      },
+    });
+
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          personalChatEnabled: true,
+          personalDataEnabled: true,
+          personalReportEnabled: false,
+          personalTodoEnabled: true,
+          personalWriteEnabled: true,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterDiff: expect.objectContaining({
+          personalChatEnabled: true,
+          personalDataEnabled: true,
+          personalWriteEnabled: true,
+        }),
+      }),
+    );
+    expect(invalidateDingtalkPersonalConfig).toHaveBeenCalled();
   });
 
   it('persists workspace switches and the automation tier', async () => {

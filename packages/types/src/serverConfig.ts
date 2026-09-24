@@ -64,6 +64,8 @@ export interface EnterprisePublicServerConfig {
   capabilities?: {
     dingtalkApproval?: boolean;
     dingtalkCalendar?: boolean;
+    /** `lobe-dingtalk-personal` is on: admin switch and aihub-dws broker are both configured. */
+    dingtalkPersonal?: boolean;
     dingtalkTodo?: boolean;
     enterpriseLookup?: boolean;
   };

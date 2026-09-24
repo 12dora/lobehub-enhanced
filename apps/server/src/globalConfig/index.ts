@@ -129,6 +129,7 @@ export const getServerGlobalConfig = async () => {
   }
   let dingtalkApproval = false;
   let dingtalkCalendar = false;
+  let dingtalkPersonal = false;
   let dingtalkTodo = false;
   try {
     const { getDingtalkWorkspaceCapabilities } =
@@ -139,6 +140,13 @@ export const getServerGlobalConfig = async () => {
     dingtalkTodo = caps.todo;
   } catch {
     // Fail closed: workspace capability flags stay false.
+  }
+  try {
+    const { getDingtalkPersonalConfig } =
+      await import('@/server/enterprise/services/dingtalkPersonal');
+    dingtalkPersonal = (await getDingtalkPersonalConfig()).enabled === true;
+  } catch {
+    // Fail closed: the personal-data capability flag stays false.
   }
 
   const config: GlobalServerConfig = {
@@ -156,6 +164,7 @@ export const getServerGlobalConfig = async () => {
       capabilities: {
         dingtalkApproval,
         dingtalkCalendar,
+        dingtalkPersonal,
         dingtalkTodo,
         enterpriseLookup: enterpriseLookupConfigured,
       },

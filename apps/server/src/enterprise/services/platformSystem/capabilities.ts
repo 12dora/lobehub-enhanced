@@ -12,6 +12,7 @@ import type { RuntimeErrorSummaryItem } from './runtimeErrors';
 
 export const CAPABILITY_KEYS = [
   'dingtalk_connector',
+  'dingtalk_personal',
   'memory_embedding',
   'sandbox',
   'system_agent_models',
@@ -256,6 +257,147 @@ export const projectDingtalkCapability = (input: {
   return report('dingtalk_connector', 'healthy', { detail: calls });
 };
 
+export const DINGTALK_PERSONAL_BROKER_HEALTH_TIMEOUT_MS = 3_000;
+
+/**
+ * Raw DingTalk connector switch `personalDataEnabled`.
+ * This is not `getDingtalkPersonalConfig().enabled`, which is already false when
+ * the broker env is missing.
+ */
+export const readDingtalkPersonalDataEnabled = (settings: unknown): boolean => {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+  return (settings as { personalDataEnabled?: unknown }).personalDataEnabled === true;
+};
+
+/** Reads the raw switch from the DingTalk connector row. Missing row → off. */
+export const loadDingtalkPersonalDataEnabled = async (db: LobeChatDatabase): Promise<boolean> => {
+  const { SystemBotProviderModel } = await import('@/database/models/systemBotProvider');
+  const { KeyVaultsGateKeeper } = await import('@/server/modules/KeyVaultsEncrypt');
+  const gateKeeper = await KeyVaultsGateKeeper.initWithEnvKey().catch(() => undefined);
+  const row = await SystemBotProviderModel.findByPlatform(db, 'dingtalk', gateKeeper);
+  return readDingtalkPersonalDataEnabled(row?.settings);
+};
+
+/**
+ * `disabled` when the admin switch is off, even if the broker env is missing
+ * (`disabled` does not raise a status alert). Only when the switch is on:
+ * broker env missing → `unavailable` (未检测到 aihub-dws 服务), `/healthz` failure
+ * → `unavailable`, otherwise `healthy` with `已授权 N 人`.
+ * `enabled` is the raw `personalDataEnabled` switch.
+ */
+export const projectDingtalkPersonalCapability = (input: {
+  authorizedCount: number;
+  brokerConfigured: boolean;
+  enabled: boolean;
+  healthOk: boolean;
+  readFailed?: boolean;
+}): CapabilityReport => {
+  if (input.readFailed) {
+    return report('dingtalk_personal', 'unknown', { reason: '无法读取钉钉个人数据配置' });
+  }
+  if (!input.enabled) {
+    return report('dingtalk_personal', 'disabled', { reason: '未启用钉钉个人数据' });
+  }
+  if (!input.brokerConfigured) {
+    return report('dingtalk_personal', 'unavailable', { reason: '未检测到 aihub-dws 服务' });
+  }
+  if (!input.healthOk) {
+    return report('dingtalk_personal', 'unavailable', { reason: 'aihub-dws 健康检查失败' });
+  }
+  const count = Number.isFinite(input.authorizedCount)
+    ? Math.max(0, Math.trunc(input.authorizedCount))
+    : 0;
+  return report('dingtalk_personal', 'healthy', { detail: `已授权 ${count} 人` });
+};
+
+/** Internal aihub-dws probe. No auth header. Missing URL or any failure is not healthy. */
+export const probeDingtalkPersonalBroker = async (
+  env: { DINGTALK_PERSONAL_BROKER_URL?: string } = {
+    DINGTALK_PERSONAL_BROKER_URL: process.env.DINGTALK_PERSONAL_BROKER_URL,
+  },
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<'down' | 'missing' | 'ok'> => {
+  const base = env.DINGTALK_PERSONAL_BROKER_URL?.trim().replace(/\/+$/, '');
+  if (!base) return 'missing';
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    return 'missing';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'missing';
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DINGTALK_PERSONAL_BROKER_HEALTH_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(`${base}/healthz`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    if (!response.ok) return 'down';
+    const body = (await response.json()) as { ok?: unknown };
+    return body?.ok === true ? 'ok' : 'down';
+  } catch {
+    return 'down';
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const loadDingtalkPersonalCapability = async (
+  db: LobeChatDatabase,
+  env: Record<string, string | undefined>,
+): Promise<CapabilityReport> => {
+  try {
+    const personalDataEnabled = await loadDingtalkPersonalDataEnabled(db);
+    if (!personalDataEnabled) {
+      return projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: false,
+        enabled: false,
+        healthOk: false,
+      });
+    }
+    const { getDingtalkPersonalConfig } =
+      await import('@/server/enterprise/services/dingtalkPersonal');
+    const config = await getDingtalkPersonalConfig();
+    if (!config?.brokerConfigured) {
+      return projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: false,
+        enabled: true,
+        healthOk: false,
+      });
+    }
+    const health = await probeDingtalkPersonalBroker(env);
+    if (health !== 'ok') {
+      return projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: health !== 'missing',
+        enabled: true,
+        healthOk: false,
+      });
+    }
+    const { DingtalkPersonalAuthorizationModel } =
+      await import('@/database/models/dingtalkPersonalAuthorization');
+    const authorizedCount = await DingtalkPersonalAuthorizationModel.countActive(db);
+    return projectDingtalkPersonalCapability({
+      authorizedCount,
+      brokerConfigured: true,
+      enabled: true,
+      healthOk: true,
+    });
+  } catch {
+    return projectDingtalkPersonalCapability({
+      authorizedCount: 0,
+      brokerConfigured: false,
+      enabled: false,
+      healthOk: false,
+      readFailed: true,
+    });
+  }
+};
+
 const stringValue = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
@@ -390,8 +532,10 @@ export const loadCapabilities = async (params: {
     });
   }
 
+  const personal = await loadDingtalkPersonalCapability(params.db, env);
+
   // Stable order for the status page.
-  return [memory, systemAgent, dingtalk, sandbox];
+  return [memory, systemAgent, dingtalk, personal, sandbox];
 };
 
 /** Used when the readiness read itself throws — sandbox still reflects the probe. */
@@ -401,5 +545,12 @@ export const fallbackCapabilities = (
   projectMemoryCapability({ missing: true }),
   report('system_agent_models', 'unknown', { reason: '无法读取系统助手模型配置' }),
   projectDingtalkCapability({ callsToday: 0, configured: false, errors10m: 0, readFailed: true }),
+  projectDingtalkPersonalCapability({
+    authorizedCount: 0,
+    brokerConfigured: false,
+    enabled: false,
+    healthOk: false,
+    readFailed: true,
+  }),
   projectSandboxCapability(sandbox),
 ];

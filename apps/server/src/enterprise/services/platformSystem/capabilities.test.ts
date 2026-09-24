@@ -1,11 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { adminSystemCapabilityKeySchema } from '../../contracts/adminSystem/status';
 import {
+  CAPABILITY_KEYS,
+  DINGTALK_PERSONAL_BROKER_HEALTH_TIMEOUT_MS,
+  fallbackCapabilities,
   findSystemAgentProblems,
+  probeDingtalkPersonalBroker,
   projectDingtalkCapability,
+  projectDingtalkPersonalCapability,
   projectMemoryCapability,
   projectSandboxCapability,
   projectSystemAgentCapability,
+  readDingtalkPersonalDataEnabled,
 } from './capabilities';
 
 describe('capability readiness', () => {
@@ -95,5 +102,142 @@ describe('capability readiness', () => {
     expect(
       projectDingtalkCapability({ callsToday: 2, configured: true, errors10m: 0 }).detail,
     ).toBe('今日 API 调用 2 次');
+  });
+
+  it('keeps the DingTalk personal-data status key inside the status array cap', () => {
+    expect(adminSystemCapabilityKeySchema.options).toEqual([...CAPABILITY_KEYS]);
+    expect(CAPABILITY_KEYS).toContain('dingtalk_personal');
+    expect(CAPABILITY_KEYS.length).toBeLessThanOrEqual(8);
+    expect(fallbackCapabilities(null).map((item) => item.key)).toContain('dingtalk_personal');
+    expect(
+      fallbackCapabilities(null).find((item) => item.key === 'dingtalk_personal')?.status,
+    ).toBe('unknown');
+  });
+
+  it('reads the raw personalDataEnabled switch and ignores non-booleans', () => {
+    expect(readDingtalkPersonalDataEnabled({ personalDataEnabled: true })).toBe(true);
+    expect(readDingtalkPersonalDataEnabled({ personalDataEnabled: false })).toBe(false);
+    expect(readDingtalkPersonalDataEnabled({ personalDataEnabled: 'true' })).toBe(false);
+    expect(readDingtalkPersonalDataEnabled({ personalDataEnabled: 1 })).toBe(false);
+    expect(readDingtalkPersonalDataEnabled({})).toBe(false);
+    expect(readDingtalkPersonalDataEnabled(null)).toBe(false);
+    expect(readDingtalkPersonalDataEnabled([])).toBe(false);
+  });
+
+  it('projects DingTalk personal data as disabled, unavailable, or an authorization count', () => {
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 3,
+        brokerConfigured: true,
+        enabled: false,
+        healthOk: false,
+      }),
+    ).toMatchObject({
+      key: 'dingtalk_personal',
+      reason: '未启用钉钉个人数据',
+      status: 'disabled',
+    });
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: false,
+        enabled: false,
+        healthOk: false,
+      }),
+    ).toMatchObject({ status: 'disabled', reason: '未启用钉钉个人数据' });
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: false,
+        enabled: true,
+        healthOk: false,
+      }),
+    ).toMatchObject({ status: 'unavailable', reason: '未检测到 aihub-dws 服务' });
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: true,
+        enabled: true,
+        healthOk: false,
+      }),
+    ).toMatchObject({ status: 'unavailable', reason: 'aihub-dws 健康检查失败' });
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 12,
+        brokerConfigured: true,
+        enabled: true,
+        healthOk: true,
+      }).detail,
+    ).toBe('已授权 12 人');
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 0,
+        brokerConfigured: false,
+        enabled: false,
+        healthOk: false,
+        readFailed: true,
+      }).status,
+    ).toBe('unknown');
+  });
+
+  it('probes aihub-dws /healthz with no auth header and a 3s timeout', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    await expect(
+      probeDingtalkPersonalBroker(
+        { DINGTALK_PERSONAL_BROKER_URL: 'http://aihub-dws:8080/' },
+        fetchImpl as typeof fetch,
+      ),
+    ).resolves.toBe('ok');
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://aihub-dws:8080/healthz',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect((fetchImpl.mock.calls[0] as unknown[] | undefined)?.[1]).not.toHaveProperty('headers');
+
+    await expect(probeDingtalkPersonalBroker({ DINGTALK_PERSONAL_BROKER_URL: '' })).resolves.toBe(
+      'missing',
+    );
+    await expect(
+      probeDingtalkPersonalBroker({ DINGTALK_PERSONAL_BROKER_URL: 'ftp://aihub-dws' }),
+    ).resolves.toBe('missing');
+
+    const down = vi.fn(async () => new Response(JSON.stringify({ ok: false }), { status: 200 }));
+    await expect(
+      probeDingtalkPersonalBroker(
+        { DINGTALK_PERSONAL_BROKER_URL: 'http://aihub-dws:8080' },
+        down as typeof fetch,
+      ),
+    ).resolves.toBe('down');
+    const refused = vi.fn(async () => new Response('no', { status: 503 }));
+    await expect(
+      probeDingtalkPersonalBroker(
+        { DINGTALK_PERSONAL_BROKER_URL: 'http://aihub-dws:8080' },
+        refused as typeof fetch,
+      ),
+    ).resolves.toBe('down');
+  });
+
+  it('treats a broker health check that exceeds 3 seconds as down', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted', 'AbortError'));
+            });
+          }),
+      );
+      const pending = probeDingtalkPersonalBroker(
+        { DINGTALK_PERSONAL_BROKER_URL: 'http://aihub-dws:8080' },
+        fetchImpl as typeof fetch,
+      );
+      await vi.advanceTimersByTimeAsync(DINGTALK_PERSONAL_BROKER_HEALTH_TIMEOUT_MS);
+      await expect(pending).resolves.toBe('down');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

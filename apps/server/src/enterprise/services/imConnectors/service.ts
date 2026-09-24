@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto';
 
 import { invalidateMessengerConfigCache } from '@/config/messenger';
+import { DingtalkPersonalAuthorizationModel } from '@/database/models/dingtalkPersonalAuthorization';
 import type { DecryptedSystemBotProvider } from '@/database/models/systemBotProvider';
 import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
 import type { LobeChatDatabase, Transaction } from '@/database/type';
+import {
+  getDingtalkPersonalConfig,
+  invalidateDingtalkPersonalConfig,
+} from '@/server/enterprise/services/dingtalkPersonal';
 import {
   applyAutomationTierChange,
   notifyAutomationTierTruncation,
@@ -77,6 +82,11 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   robotCode: '',
   robotDisplayName: '',
   selectCardTemplateId: null,
+  personalChatEnabled: false,
+  personalDataEnabled: false,
+  personalReportEnabled: false,
+  personalTodoEnabled: false,
+  personalWriteEnabled: false,
   workspaceApprovalEnabled: false,
   workspaceCalendarEnabled: false,
   workspaceTodoEnabled: false,
@@ -166,6 +176,26 @@ const parseDingTalkSettings = (
     selectCardTemplateId: emptyToNull(
       typeof raw?.selectCardTemplateId === 'string' ? raw.selectCardTemplateId : null,
     ),
+    personalChatEnabled:
+      typeof raw?.personalChatEnabled === 'boolean'
+        ? raw.personalChatEnabled
+        : DEFAULT_SETTINGS.personalChatEnabled,
+    personalDataEnabled:
+      typeof raw?.personalDataEnabled === 'boolean'
+        ? raw.personalDataEnabled
+        : DEFAULT_SETTINGS.personalDataEnabled,
+    personalReportEnabled:
+      typeof raw?.personalReportEnabled === 'boolean'
+        ? raw.personalReportEnabled
+        : DEFAULT_SETTINGS.personalReportEnabled,
+    personalTodoEnabled:
+      typeof raw?.personalTodoEnabled === 'boolean'
+        ? raw.personalTodoEnabled
+        : DEFAULT_SETTINGS.personalTodoEnabled,
+    personalWriteEnabled:
+      typeof raw?.personalWriteEnabled === 'boolean'
+        ? raw.personalWriteEnabled
+        : DEFAULT_SETTINGS.personalWriteEnabled,
     workspaceApprovalEnabled:
       typeof raw?.workspaceApprovalEnabled === 'boolean'
         ? raw.workspaceApprovalEnabled
@@ -206,6 +236,11 @@ const settingsFromUpsert = (
         ? (previous?.robotDisplayName ?? '')
         : (input.robotDisplayName ?? '').trim(),
     selectCardTemplateId: emptyToNull(input.selectCardTemplateId),
+    personalChatEnabled: input.personalChatEnabled ?? false,
+    personalDataEnabled: input.personalDataEnabled ?? false,
+    personalReportEnabled: input.personalReportEnabled ?? false,
+    personalTodoEnabled: input.personalTodoEnabled ?? false,
+    personalWriteEnabled: input.personalWriteEnabled ?? false,
     workspaceApprovalEnabled: input.workspaceApprovalEnabled ?? false,
     workspaceCalendarEnabled: input.workspaceCalendarEnabled ?? false,
     workspaceTodoEnabled: input.workspaceTodoEnabled ?? false,
@@ -213,13 +248,29 @@ const settingsFromUpsert = (
 
 const redisClient = () => getAgentRuntimeRedisClient();
 
+/** Fail closed: a missing broker module or authorization table must not blank the connector page. */
+const loadDingtalkPersonalSummary = async (
+  db: LobeChatDatabase | Transaction,
+): Promise<AdminImConnectorView['personal']> => {
+  const [brokerConfigured, authorizedCount] = await Promise.all([
+    getDingtalkPersonalConfig()
+      .then((config) => config.brokerConfigured === true)
+      .catch(() => false),
+    DingtalkPersonalAuthorizationModel.countActive(db as LobeChatDatabase)
+      .then((count) => (Number.isInteger(count) && count >= 0 ? count : 0))
+      .catch(() => 0),
+  ]);
+  return { authorizedCount, brokerConfigured };
+};
+
 const unconfiguredView = async (
   db: LobeChatDatabase | Transaction,
   platform: ImConnectorPlatform,
 ): Promise<AdminImConnectorView> => {
-  const [stats, status] = await Promise.all([
+  const [stats, status, personal] = await Promise.all([
     getImConnectorStats({ db, platform, redis: redisClient() }),
     readImConnectorStatus({ platform, redis: redisClient(), rowDisabled: false }),
+    loadDingtalkPersonalSummary(db),
   ]);
   return {
     approvalAutomationTier: DEFAULT_SETTINGS.approvalAutomationTier,
@@ -240,6 +291,12 @@ const unconfiguredView = async (
     notifyRobotEnabled: DEFAULT_SETTINGS.notifyRobotEnabled,
     notifyWorkNoticeEnabled: DEFAULT_SETTINGS.notifyWorkNoticeEnabled,
     platform,
+    personal,
+    personalChatEnabled: DEFAULT_SETTINGS.personalChatEnabled,
+    personalDataEnabled: DEFAULT_SETTINGS.personalDataEnabled,
+    personalReportEnabled: DEFAULT_SETTINGS.personalReportEnabled,
+    personalTodoEnabled: DEFAULT_SETTINGS.personalTodoEnabled,
+    personalWriteEnabled: DEFAULT_SETTINGS.personalWriteEnabled,
     pushEnabled: DEFAULT_SETTINGS.pushEnabled,
     robotCode: null,
     robotDisplayName: DEFAULT_SETTINGS.robotDisplayName,
@@ -263,9 +320,10 @@ const toView = async (
   const settings = parseDingTalkSettings(row.settings);
   const secret = pickClientSecret(row.credentials);
   const rowDisabled = !row.enabled;
-  const [stats, status] = await Promise.all([
+  const [stats, status, personal] = await Promise.all([
     getImConnectorStats({ db, platform, redis: redisClient() }),
     readImConnectorStatus({ platform, redis: redisClient(), rowDisabled }),
+    loadDingtalkPersonalSummary(db),
   ]);
 
   return {
@@ -287,6 +345,12 @@ const toView = async (
     notifyRobotEnabled: settings.notifyRobotEnabled,
     notifyWorkNoticeEnabled: settings.notifyWorkNoticeEnabled,
     platform,
+    personal,
+    personalChatEnabled: settings.personalChatEnabled,
+    personalDataEnabled: settings.personalDataEnabled,
+    personalReportEnabled: settings.personalReportEnabled,
+    personalTodoEnabled: settings.personalTodoEnabled,
+    personalWriteEnabled: settings.personalWriteEnabled,
     pushEnabled: settings.pushEnabled,
     robotCode: emptyToNull(settings.robotCode),
     robotDisplayName: settings.robotDisplayName,
@@ -414,6 +478,11 @@ export class ImConnectorsAdminService {
           robotDisplayName: settings.robotDisplayName,
           rotation: replacing ? 'replaced' : 'kept',
           selectCardTemplateId: settings.selectCardTemplateId,
+          personalChatEnabled: settings.personalChatEnabled,
+          personalDataEnabled: settings.personalDataEnabled,
+          personalReportEnabled: settings.personalReportEnabled,
+          personalTodoEnabled: settings.personalTodoEnabled,
+          personalWriteEnabled: settings.personalWriteEnabled,
           workspaceApprovalEnabled: settings.workspaceApprovalEnabled,
           workspaceCalendarEnabled: settings.workspaceCalendarEnabled,
           workspaceTodoEnabled: settings.workspaceTodoEnabled,
@@ -439,6 +508,7 @@ export class ImConnectorsAdminService {
 
     invalidateMessengerConfigCache('dingtalk');
     invalidateDingtalkWorkspaceCapabilities();
+    invalidateDingtalkPersonalConfig();
     await invalidateNotifyAppToken();
     if (truncationNotify.length > 0) {
       await notifyAutomationTierTruncation(truncationNotify);

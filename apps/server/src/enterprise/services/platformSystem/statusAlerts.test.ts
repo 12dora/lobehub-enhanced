@@ -162,6 +162,38 @@ describe('status alerts', () => {
     ).toContain('沙箱已恢复');
   });
 
+  it('labels a DingTalk personal-data outage and stays quiet when the feature is off', () => {
+    const down = deriveAlertComponents(
+      baseSnapshot({
+        capabilities: [
+          healthyCapability('memory_embedding'),
+          healthyCapability('system_agent_models'),
+          healthyCapability('dingtalk_connector'),
+          {
+            key: 'dingtalk_personal',
+            reason: 'aihub-dws 健康检查失败',
+            status: 'unavailable',
+          },
+          healthyCapability('sandbox'),
+        ],
+      }),
+    );
+    expect(down.find((item) => item.id === 'capability:dingtalk_personal')).toMatchObject({
+      label: '钉钉个人数据',
+      status: 'unavailable',
+    });
+
+    const off = deriveAlertComponents(
+      baseSnapshot({
+        capabilities: [
+          healthyCapability('memory_embedding'),
+          { key: 'dingtalk_personal', reason: '未启用钉钉个人数据', status: 'disabled' },
+        ],
+      }),
+    );
+    expect(off.some((item) => item.id === 'capability:dingtalk_personal')).toBe(false);
+  });
+
   it('does not alert a spike that the sandbox tile already covers', () => {
     const components = deriveAlertComponents(
       baseSnapshot({

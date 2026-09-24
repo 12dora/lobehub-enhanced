@@ -154,6 +154,15 @@ const mockGlobalConfigDependencies = (
   vi.doMock('@/server/enterprise/services/enterpriseLookup', () => ({
     isEnterpriseLookupConfigured: async () => false,
   }));
+
+  vi.doMock('@/server/enterprise/services/dingtalkPersonal', () => ({
+    getDingtalkPersonalConfig: async () => ({
+      brokerConfigured: false,
+      enabled: false,
+      features: { chat: false, report: false, todo: false, write: false },
+    }),
+    invalidateDingtalkPersonalConfig: () => undefined,
+  }));
 };
 
 const loadCapturedProviderConfig = async (enableBusinessFeatures: boolean) => {
@@ -265,6 +274,42 @@ describe('getServerGlobalConfig', () => {
   it('defaults enterprise.capabilities.enterpriseLookup to false', async () => {
     const config = await loadServerConfig(false);
     expect(config.enterprise?.capabilities?.enterpriseLookup).toBe(false);
+  });
+
+  it('defaults enterprise.capabilities.dingtalkPersonal to false', async () => {
+    const config = await loadServerConfig(false);
+    expect(config.enterprise?.capabilities?.dingtalkPersonal).toBe(false);
+  });
+
+  it('exposes enterprise.capabilities.dingtalkPersonal when personal data is enabled', async () => {
+    vi.resetModules();
+    mocks.genServerAiProvidersConfig.mockClear();
+    mockGlobalConfigDependencies(false);
+    vi.doMock('@/server/enterprise/services/dingtalkPersonal', () => ({
+      getDingtalkPersonalConfig: async () => ({
+        brokerConfigured: true,
+        enabled: true,
+        features: { chat: true, report: false, todo: true, write: false },
+      }),
+      invalidateDingtalkPersonalConfig: () => undefined,
+    }));
+    const { getServerGlobalConfig } = await import('./index');
+    const config = await getServerGlobalConfig();
+    expect(config.enterprise?.capabilities?.dingtalkPersonal).toBe(true);
+  });
+
+  it('fails closed when the personal-data config cannot be read', async () => {
+    vi.resetModules();
+    mocks.genServerAiProvidersConfig.mockClear();
+    mockGlobalConfigDependencies(false);
+    vi.doMock('@/server/enterprise/services/dingtalkPersonal', () => ({
+      getDingtalkPersonalConfig: async () => {
+        throw new Error('db down');
+      },
+    }));
+    const { getServerGlobalConfig } = await import('./index');
+    const config = await getServerGlobalConfig();
+    expect(config.enterprise?.capabilities?.dingtalkPersonal).toBe(false);
   });
 
   it('exposes enterprise.capabilities.enterpriseLookup from runtime config', async () => {

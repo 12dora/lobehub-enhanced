@@ -82,6 +82,19 @@ export const dingTalkConnectorSettingsSchema = z
     robotDisplayName: z.string().trim().max(DINGTALK_ROBOT_DISPLAY_NAME_MAX).default(''),
     /** Optional interactive "select" card template id (助手/会话选择卡片). Empty = ActionCard fallback. */
     selectCardTemplateId: z.string().trim().max(200).nullable().default(null),
+    /** Group-message reads of `lobe-dingtalk-personal`. Requires `personalDataEnabled`. */
+    personalChatEnabled: z.boolean().default(false),
+    /** Master switch for `lobe-dingtalk-personal` (员工授权的钉钉个人数据). Default off. */
+    personalDataEnabled: z.boolean().default(false),
+    /** Work-report reads of `lobe-dingtalk-personal`. Requires `personalDataEnabled`. */
+    personalReportEnabled: z.boolean().default(false),
+    /** Todo reads of `lobe-dingtalk-personal`. Requires `personalDataEnabled`. */
+    personalTodoEnabled: z.boolean().default(false),
+    /**
+     * Writes of `lobe-dingtalk-personal` (update/complete todo, submit report).
+     * Requires `personalDataEnabled`. Each write still asks the employee to confirm.
+     */
+    personalWriteEnabled: z.boolean().default(false),
     /** Workspace approval tool (`lobe-dingtalk-approval`). */
     workspaceApprovalEnabled: z.boolean().default(false),
     /** Workspace calendar APIs of `lobe-dingtalk-workspace`. */
@@ -161,6 +174,26 @@ export const adminImConnectorViewSchema = z
     /** Notify-app work-notification (工作通知) channel. Default on. */
     notifyWorkNoticeEnabled: z.boolean(),
     platform: imConnectorPlatformSchema,
+    /**
+     * Live summary for the 钉钉个人数据 section. Not stored in connector settings.
+     * `brokerConfigured` is true only when both broker env vars are present.
+     */
+    personal: z
+      .object({
+        authorizedCount: z.number().int().nonnegative(),
+        brokerConfigured: z.boolean(),
+      })
+      .strict(),
+    /** Group-message reads of `lobe-dingtalk-personal`. */
+    personalChatEnabled: z.boolean(),
+    /** Master switch for `lobe-dingtalk-personal`. */
+    personalDataEnabled: z.boolean(),
+    /** Work-report reads of `lobe-dingtalk-personal`. */
+    personalReportEnabled: z.boolean(),
+    /** Todo reads of `lobe-dingtalk-personal`. */
+    personalTodoEnabled: z.boolean(),
+    /** Writes of `lobe-dingtalk-personal`. */
+    personalWriteEnabled: z.boolean(),
     pushEnabled: z.boolean(),
     robotCode: z.string().nullable(),
     /**
@@ -238,6 +271,11 @@ export const adminImConnectorUpsertInputSchema = z
      */
     robotDisplayName: z.string().trim().max(DINGTALK_ROBOT_DISPLAY_NAME_MAX).nullable().optional(),
     selectCardTemplateId: z.string().trim().max(200).nullable(),
+    personalChatEnabled: z.boolean().optional().default(false),
+    personalDataEnabled: z.boolean().optional().default(false),
+    personalReportEnabled: z.boolean().optional().default(false),
+    personalTodoEnabled: z.boolean().optional().default(false),
+    personalWriteEnabled: z.boolean().optional().default(false),
     workspaceApprovalEnabled: z.boolean().optional().default(false),
     workspaceCalendarEnabled: z.boolean().optional().default(false),
     workspaceTodoEnabled: z.boolean().optional().default(false),

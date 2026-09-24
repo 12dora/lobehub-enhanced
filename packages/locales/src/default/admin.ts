@@ -2143,6 +2143,7 @@ export default {
   'system.actions.retry': 'Retry',
   'system.build.title': 'Build',
   'system.capabilities.dingtalk_connector': 'DingTalk connector',
+  'system.capabilities.dingtalk_personal': 'DingTalk personal data',
   'system.capabilities.memory_embedding': 'Memory embeddings',
   'system.capabilities.sandbox': 'Sandbox',
   'system.capabilities.system_agent_models': 'System assistant models',
@@ -2152,6 +2153,8 @@ export default {
   'system.capabilities.empty': 'No readiness data was reported.',
   'system.capabilities.hint.dingtalk_connector':
     'Check the DingTalk settings in Admin → General settings → IM connectors.',
+  'system.capabilities.hint.dingtalk_personal':
+    'Check DingTalk personal data in Admin → General settings → IM connectors, and confirm aihub-dws is running.',
   'system.capabilities.hint.memory_embedding':
     'Set an embedding model in Admin → Service models → Memory Embedding.',
   'system.capabilities.hint.sandbox':
@@ -2502,6 +2505,20 @@ export default {
   'systemGeneral.imConnectors.notifyApp.directory.error': 'Last sync failed: {{message}}',
   'systemGeneral.imConnectors.notifyApp.directory.loadFailed':
     'Could not load directory status. Try again.',
+  // 钉钉个人数据 — employee-authorized reads of their own to-dos, group chats and reports.
+  'systemGeneral.imConnectors.personal.title': 'DingTalk personal data (employee authorization)',
+  'systemGeneral.imConnectors.personal.description':
+    'After an employee authorizes it, the AI assistant can read that employee\'s own DingTalk to-dos, group messages, and work reports. Deploy the aihub-dws service first, and in the DingTalk developer console → Basic information → CLI settings turn on "Allow members to access personal data through the CLI".',
+  'systemGeneral.imConnectors.personal.fields.enabled': 'Enable DingTalk personal data',
+  'systemGeneral.imConnectors.personal.fields.todo': 'To-dos',
+  'systemGeneral.imConnectors.personal.fields.chat': 'Group messages',
+  'systemGeneral.imConnectors.personal.fields.report': 'Work reports',
+  'systemGeneral.imConnectors.personal.fields.write': 'Allow write actions',
+  'systemGeneral.imConnectors.personal.hints.write':
+    "Update a to-do, complete a to-do, or submit a report. Each action needs the employee's approval on a confirmation card.",
+  'systemGeneral.imConnectors.personal.brokerMissing':
+    'aihub-dws was not detected (DINGTALK_PERSONAL_BROKER_URL / DINGTALK_PERSONAL_BROKER_TOKEN). Turning this on has no effect until the service is configured.',
+  'systemGeneral.imConnectors.personal.authorizedCount': '{{count}} employees authorized',
   // 工作台能力 — approval, to-dos and calendar handled as the member's own DingTalk identity. They
   // run on the notification app, which is why the block sits under it.
   'systemGeneral.imConnectors.workspace.title': 'Workbench capabilities',
@@ -3213,6 +3230,11 @@ export default {
   'audit.logs.action.dingtalk.calendar.delete': 'Delete DingTalk calendar event',
   'audit.logs.action.dingtalk.calendar.respond': 'Respond to DingTalk calendar event',
   'audit.logs.action.dingtalk.calendar.update': 'Update DingTalk calendar event',
+  'audit.logs.action.dingtalk.personal.authorize': 'Authorize DingTalk personal data',
+  'audit.logs.action.dingtalk.personal.report.submit': 'Submit DingTalk personal report',
+  'audit.logs.action.dingtalk.personal.revoke': 'Revoke DingTalk personal data access',
+  'audit.logs.action.dingtalk.personal.todo.complete': 'Complete DingTalk personal to-do',
+  'audit.logs.action.dingtalk.personal.todo.update': 'Update DingTalk personal to-do',
   'audit.logs.action.dingtalk.todo.complete': 'Complete DingTalk to-do',
   'audit.logs.action.dingtalk.todo.create': 'Create DingTalk to-do',
   'audit.logs.action.dingtalk.todo.delete': 'Delete DingTalk to-do',
@@ -3262,6 +3284,7 @@ export default {
   'audit.logs.targetType.content_moderation_settings': 'Content moderation settings',
   'audit.logs.targetType.dingtalk_approval': 'DingTalk approval',
   'audit.logs.targetType.dingtalk_calendar': 'DingTalk calendar event',
+  'audit.logs.targetType.dingtalk_personal': 'DingTalk personal data',
   'audit.logs.targetType.dingtalk_todo': 'DingTalk to-do',
   'audit.logs.targetType.email_delivery': 'Email delivery',
   'audit.logs.targetType.file': 'File',
