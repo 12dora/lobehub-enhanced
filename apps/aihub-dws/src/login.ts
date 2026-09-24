@@ -28,8 +28,10 @@ const LOGIN_ARGV = ['auth', 'login', '--device', '--no-browser', '--format=json'
 export function parseLoginStderr(
   text: string,
 ): { expiresInSec: number; userCode: string; verificationUrl: string } | undefined {
-  const code = text.match(/authorization code:\s*(\S+)/);
-  const expires = text.match(/expire in\s*(\d+)\s*seconds/i);
+  // dws localizes this prompt (English on some hosts, Chinese in the container).
+  const code = text.match(/(?:authorization code|授权码)\s*[:：]\s*(\S+)/i);
+  const expires =
+    text.match(/expire in\s*(\d+)\s*seconds/i) ?? text.match(/将在\s*(\d+)\s*秒后过期/);
   const url = text.match(/https:\/\/login\.dingtalk\.com\/\S*user_code=\S+/);
   if (!code?.[1] || !expires?.[1] || !url?.[0]) return undefined;
   const expiresInSec = Number(expires[1]);

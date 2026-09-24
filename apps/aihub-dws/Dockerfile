@@ -7,6 +7,13 @@ ARG HTTPS_PROXY
 ARG http_proxy
 ARG https_proxy
 
+# dws is a Go binary and verifies TLS against the system CA bundle, which the
+# slim Node image does not ship (x509: certificate signed by unknown authority).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -s /etc/ssl/certs/ca-certificates.crt
+
 COPY vendor/dws-linux-amd64.tar.gz /tmp/dws.tar.gz
 RUN echo "${DWS_SHA256}  /tmp/dws.tar.gz" | sha256sum -c - \
  && mkdir -p /tmp/dws-extract \

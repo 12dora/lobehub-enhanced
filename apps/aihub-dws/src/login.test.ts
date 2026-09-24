@@ -33,7 +33,30 @@ const SAMPLE = [
   '● Step 2: Waiting for user authorization...',
 ].join('\n');
 
+const SAMPLE_ZH = [
+  '● Step 1: 请求设备授权码...',
+  '',
+  '  授权码: CLWM-LVQL',
+  '  授权码将在 900 秒后过期。',
+  '',
+  '  授权链接（已填入授权码）：',
+  'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=CLWM-LVQL',
+  '',
+  '  手动输入授权码的链接：',
+  'https://login.dingtalk.com/oauth2/device/verify.htm',
+  '',
+  '● Step 2: 等待用户授权...',
+].join('\n');
+
 describe('login parsing', () => {
+  it('reads the Chinese device-code prompt dws prints in the container', () => {
+    expect(parseLoginStderr(SAMPLE_ZH)).toEqual({
+      expiresInSec: 900,
+      userCode: 'CLWM-LVQL',
+      verificationUrl: 'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=CLWM-LVQL',
+    });
+  });
+
   it('reads the device-code stderr and the success stdout', () => {
     const parsed = parseLoginStderr(SAMPLE);
     expect(parsed?.userCode).toBe('JCHB-KBXF');
