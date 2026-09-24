@@ -128,6 +128,7 @@ import {
   buildPinnedManagedConnectorManifests,
 } from '@/server/enterprise/services/connectorCatalog/runtimeIntegration';
 import { resolveConnectorGovernance } from '@/server/enterprise/services/connectorGovernance/resolve';
+import { getDingtalkPersonalConfig } from '@/server/enterprise/services/dingtalkPersonal';
 import { getDingtalkWorkspaceCapabilities } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { isEnterpriseLookupConfigured } from '@/server/enterprise/services/enterpriseLookup';
 import { getManagedSkillRuntimeModeSnapshot } from '@/server/enterprise/services/managedResourceCapabilities';
@@ -3188,6 +3189,13 @@ export class AiAgentService {
 
       // Live capability read (30 s cache) so a cold peek never hides enabled DingTalk tools.
       const dingtalkCapabilities = await getDingtalkWorkspaceCapabilities();
+      // Fail closed: a missing broker config or a thrown read must not advertise the tool.
+      let dingtalkPersonal = false;
+      try {
+        dingtalkPersonal = (await getDingtalkPersonalConfig()).enabled === true;
+      } catch (error) {
+        log('execAgent: dingtalk personal config read failed, failing closed: %O', error);
+      }
       // Only a definitive `{ available: false }` hides memory. A thrown probe
       // is not that answer — fail open so a db/settings blip keeps the tool.
       let memoryEmbeddingAvailable: boolean;
@@ -3237,6 +3245,7 @@ export class AiAgentService {
           return false;
         }),
         dingtalkApprovalEnabled: dingtalkCapabilities.approval,
+        dingtalkPersonal,
         dingtalkWorkspaceEnabled: dingtalkCapabilities.todo || dingtalkCapabilities.calendar,
         // Context-aware builtin manifests: inside a sub-agent (or group) run,
         // lobe-agent drops `callSubAgent` so the model can't recurse into nested

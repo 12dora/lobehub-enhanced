@@ -43,6 +43,12 @@ import {
   DingtalkApprovalRenders,
 } from '@lobechat/builtin-tool-dingtalk-approval/client';
 import {
+  DingtalkPersonalIdentifier,
+  DingtalkPersonalInspectors,
+  DingtalkPersonalInterventions,
+  DingtalkPersonalRenders,
+} from '@lobechat/builtin-tool-dingtalk-personal/client';
+import {
   DingtalkWorkspaceInspectors,
   DingtalkWorkspaceInterventions,
   DingtalkWorkspaceManifest,
@@ -214,6 +220,7 @@ export const registerBuiltinToolSurfaces = (): void => {
       string,
       BuiltinRender
     >,
+    [DingtalkPersonalIdentifier]: DingtalkPersonalRenders as Record<string, BuiltinRender>,
     [DingtalkApprovalManifest.identifier]: DingtalkApprovalRenders as Record<string, BuiltinRender>,
     [EnterpriseLookupManifest.identifier]: EnterpriseLookupRenders as Record<string, BuiltinRender>,
     [RemoteDeviceManifest.identifier]: RemoteDeviceRenders as Record<string, BuiltinRender>,
@@ -273,6 +280,7 @@ export const registerBuiltinToolSurfaces = (): void => {
       string,
       BuiltinInspector
     >,
+    [DingtalkPersonalIdentifier]: DingtalkPersonalInspectors as Record<string, BuiltinInspector>,
     [DingtalkApprovalManifest.identifier]: DingtalkApprovalInspectors as Record<
       string,
       BuiltinInspector
@@ -319,6 +327,10 @@ export const registerBuiltinToolSurfaces = (): void => {
 
   registerBuiltinInterventions({
     [DingtalkWorkspaceManifest.identifier]: DingtalkWorkspaceInterventions as Record<
+      string,
+      BuiltinIntervention
+    >,
+    [DingtalkPersonalIdentifier]: DingtalkPersonalInterventions as Record<
       string,
       BuiltinIntervention
     >,

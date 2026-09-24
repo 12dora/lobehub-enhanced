@@ -1534,6 +1534,7 @@ describe('createServerAgentToolsEngine', () => {
       ],
       agentConfig: { chatConfig: { enableAgentMode: false }, plugins: [] },
       dingtalkApprovalEnabled: true,
+      dingtalkPersonal: true,
       dingtalkWorkspaceEnabled: true,
       model: 'gpt-4',
       provider: 'openai',
@@ -1546,5 +1547,142 @@ describe('createServerAgentToolsEngine', () => {
     });
 
     expect(result.enabledToolIds).not.toContain(approval);
+    expect(result.enabledToolIds).not.toContain('lobe-dingtalk-personal');
+  });
+
+  it('physically drops lobe-dingtalk-personal when the switch is off', () => {
+    const identifier = 'lobe-dingtalk-personal';
+    const manifest = {
+      api: [{ description: 'list', name: 'listMyTodos', parameters: { type: 'object' } }],
+      identifier,
+      meta: { title: '钉钉个人数据' },
+      type: 'builtin',
+    } as LobeToolManifest;
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [manifest],
+      agentConfig: { plugins: [identifier] },
+      dingtalkApprovalEnabled: true,
+      dingtalkPersonal: false,
+      dingtalkWorkspaceEnabled: true,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(identifier);
+  });
+
+  it('fails closed for lobe-dingtalk-personal when dingtalkPersonal is omitted', () => {
+    const identifier = 'lobe-dingtalk-personal';
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [
+        {
+          api: [{ description: 'list', name: 'listMyTodos', parameters: { type: 'object' } }],
+          identifier,
+          meta: { title: '钉钉个人数据' },
+          type: 'builtin',
+        } as LobeToolManifest,
+      ],
+      agentConfig: { plugins: [identifier] },
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+    expect(engine.getAvailablePlugins()).not.toContain(identifier);
+  });
+
+  it('exposes lobe-dingtalk-personal in agent mode when the switch is on', () => {
+    const identifier = 'lobe-dingtalk-personal';
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      agentConfig: { plugins: [] },
+      dingtalkPersonal: true,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [],
+    });
+
+    expect(result.enabledToolIds).toContain(identifier);
+  });
+
+  it('does not expose lobe-dingtalk-personal in chat mode even when the switch is on', () => {
+    const identifier = 'lobe-dingtalk-personal';
+    const engine = createServerAgentToolsEngine(createMockContext(), {
+      agentConfig: { chatConfig: { enableAgentMode: false }, plugins: [] },
+      dingtalkPersonal: true,
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+
+    const result = engine.generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [],
+    });
+
+    expect(result.enabledToolIds).not.toContain(identifier);
+  });
+
+  it('drops lobe-dingtalk-personal from an exact builtin allowlist unless the switch is on', () => {
+    const identifier = 'lobe-dingtalk-personal';
+    const off = createServerAgentToolsEngine(createMockContext(), {
+      additionalManifests: [
+        {
+          api: [{ description: 'list', name: 'listMyTodos', parameters: { type: 'object' } }],
+          identifier,
+          meta: { title: '钉钉个人数据' },
+          type: 'builtin',
+        } as LobeToolManifest,
+      ],
+      agentConfig: { plugins: [identifier] },
+      dingtalkPersonal: false,
+      exactBuiltinToolIds: [identifier, SkillsManifest.identifier],
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+    const offResult = off.generateToolsDetailed({
+      context: { isExplicitActivation: true },
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier, SkillsManifest.identifier],
+    });
+
+    expect(offResult.enabledToolIds).not.toContain(identifier);
+    expect(off.getAvailablePlugins()).not.toContain(identifier);
+    expect(offResult.enabledToolIds).toContain(SkillsManifest.identifier);
+
+    const on = createServerAgentToolsEngine(createMockContext(), {
+      agentConfig: { plugins: [] },
+      dingtalkPersonal: true,
+      exactBuiltinToolIds: [identifier],
+      model: 'gpt-4',
+      provider: 'openai',
+    });
+    const onResult = on.generateToolsDetailed({
+      model: 'gpt-4',
+      provider: 'openai',
+      toolIds: [identifier],
+    });
+
+    expect(onResult.enabledToolIds).toContain(identifier);
   });
 });

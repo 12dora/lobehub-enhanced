@@ -39,6 +39,14 @@ const readOnlineDeviceCount = (metadata: { onlineDeviceCount?: unknown } | undef
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 };
 
+/** `state.metadata.botContext` is untyped. Only a string `platform` is forwarded. */
+const readBotPlatform = (botContext: unknown): string | undefined => {
+  if (typeof botContext !== 'object' || botContext === null) return undefined;
+  if (!('platform' in botContext)) return undefined;
+  const platform = (botContext as { platform?: unknown }).platform;
+  return typeof platform === 'string' ? platform : undefined;
+};
+
 export class ServerToolTransport implements ToolTransport {
   maxRetries = TOOL_MAX_RETRIES;
 
@@ -210,6 +218,7 @@ export class ServerToolTransport implements ToolTransport {
               toolCallId: chatToolPayload.id,
               toolManifestMap: context.effectiveManifestMap,
               toolResultMaxLength: context.toolResultMaxLength,
+              botPlatform: readBotPlatform(context.state.metadata?.botContext),
               topicId: this.ctx.topicId,
               userId,
               workingDirectory: context.state.metadata?.deviceSystemInfo?.workingDirectory,

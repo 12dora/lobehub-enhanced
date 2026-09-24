@@ -29,6 +29,7 @@
     "@lobechat/builtin-tool-cloud-sandbox": "workspace:*",
     "@lobechat/builtin-tool-creds": "workspace:*",
     "@lobechat/builtin-tool-dingtalk-approval": "workspace:*",
+    "@lobechat/builtin-tool-dingtalk-personal": "workspace:*",
     "@lobechat/builtin-tool-dingtalk-workspace": "workspace:*",
     "@lobechat/builtin-tool-document-pages": "workspace:*",
     "@lobechat/builtin-tool-enterprise-lookup": "workspace:*",

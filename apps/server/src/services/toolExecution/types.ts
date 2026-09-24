@@ -153,6 +153,11 @@ export interface ToolExecutionContext {
    * `messageId`.
    */
   assistantMessageId?: string;
+  /**
+   * Messenger platform of this turn (`dingtalk`, `feishu`, …), copied from
+   * `state.metadata.botContext.platform`. Unset for web chat.
+   */
+  botPlatform?: string;
   /** Server-signed receipt restored from the persisted pending tool row. */
   connectorApprovalReceipt?: Record<string, unknown>;
   /**

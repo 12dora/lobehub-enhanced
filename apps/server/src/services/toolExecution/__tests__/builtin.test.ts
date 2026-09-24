@@ -1,4 +1,5 @@
 import type { ChatToolPayload } from '@lobechat/types';
+import debug from 'debug';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BuiltinToolsExecutor } from '../builtin';
@@ -237,5 +238,107 @@ describe('BuiltinToolsExecutor reminder error backstop', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('BuiltinToolsExecutor dingtalk personal logs', () => {
+  const executor = new BuiltinToolsExecutor({} as any, 'user-1');
+  const secret = '今日完成了机密项目代号星海';
+
+  const captureLogs = async (run: () => Promise<void>) => {
+    const lines: string[] = [];
+    const previousLog = debug.log;
+    const previousDebug = process.env.DEBUG;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((item) => String(item)).join(' '));
+    });
+    debug.enable('lobe-server:builtin-tools-executor');
+    debug.log = (...args: unknown[]) => {
+      lines.push(args.map((item) => String(item)).join(' '));
+    };
+    try {
+      await run();
+      return lines.join('\n');
+    } finally {
+      debug.log = previousLog;
+      errorSpy.mockRestore();
+      debug.disable();
+      if (previousDebug !== undefined) {
+        process.env.DEBUG = previousDebug;
+        debug.enable(previousDebug);
+      }
+    }
+  };
+
+  it('logs only the identifier and api name, not the arguments', async () => {
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      listMyTodos: async () => ({ content: 'ok', success: true }),
+    } as any);
+
+    const logged = await captureLogs(async () => {
+      const result = await executor.execute(
+        {
+          apiName: 'listMyTodos',
+          arguments: JSON.stringify({ status: 'open', note: secret }),
+          id: 't1',
+          identifier: 'lobe-dingtalk-personal',
+          type: 'default' as any,
+        },
+        context,
+      );
+      expect(result.success).toBe(true);
+    });
+
+    expect(logged).toContain('lobe-dingtalk-personal');
+    expect(logged).toContain('listMyTodos');
+    expect(logged).not.toContain(secret);
+    expect(logged).not.toContain('with args');
+  });
+
+  it('does not log a raw invalid argument string or a thrown error body', async () => {
+    const invalid = `{"note":"${secret}"`;
+    const rejected = await captureLogs(async () => {
+      const result = await executor.execute(
+        {
+          apiName: 'listMyTodos',
+          arguments: invalid,
+          id: 't1',
+          identifier: 'lobe-dingtalk-personal',
+          type: 'default' as any,
+        },
+        context,
+      );
+      expect(result.error?.code).toBe('TRUNCATED_ARGUMENTS');
+      expect(result.content).toContain(invalid);
+    });
+    expect(rejected).toContain('lobe-dingtalk-personal');
+    expect(rejected).toContain('listMyTodos');
+    expect(rejected).not.toContain(secret);
+
+    const { getServerRuntime } = await import('../serverRuntimes');
+    vi.mocked(getServerRuntime).mockResolvedValueOnce({
+      listMyTodos: async () => {
+        throw new Error(`payload ${secret}`);
+      },
+    } as any);
+    const thrown = await captureLogs(async () => {
+      const result = await executor.execute(
+        {
+          apiName: 'listMyTodos',
+          arguments: JSON.stringify({ note: secret }),
+          id: 't1',
+          identifier: 'lobe-dingtalk-personal',
+          type: 'default' as any,
+        },
+        context,
+      );
+      expect(result.success).toBe(false);
+      expect(result.content).not.toContain(secret);
+    });
+    expect(thrown).toContain('lobe-dingtalk-personal');
+    expect(thrown).toContain('listMyTodos');
+    expect(thrown).not.toContain(secret);
+    expect(thrown).not.toContain('payload');
   });
 });

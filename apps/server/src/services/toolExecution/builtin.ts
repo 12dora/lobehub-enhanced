@@ -1,5 +1,7 @@
 import { DINGTALK_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-approval/executionRuntime';
 import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DINGTALK_PERSONAL_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-personal/executionRuntime';
+import { DingtalkPersonalIdentifier } from '@lobechat/builtin-tool-dingtalk-personal/manifest';
 import { DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-dingtalk-workspace/executionRuntime';
 import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
 import { ENTERPRISE_LOOKUP_INTERNAL_TOOL_CONTENT } from '@lobechat/builtin-tool-enterprise-lookup/executionRuntime';
@@ -60,6 +62,10 @@ const SANITIZED_TOOL_FAILURES: Record<string, { code: string; content: string }>
   [DingtalkWorkspaceIdentifier]: {
     code: 'DINGTALK_INTERNAL',
     content: DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT,
+  },
+  [DingtalkPersonalIdentifier]: {
+    code: 'DINGTALK_PERSONAL_INTERNAL',
+    content: DINGTALK_PERSONAL_INTERNAL_TOOL_CONTENT,
   },
   [EnterpriseLookupIdentifier]: {
     code: 'ENTERPRISE_LOOKUP_INTERNAL',
@@ -143,7 +149,11 @@ export class BuiltinToolsExecutor implements IToolExecutor {
           `so the tool was not invoked. Fix the JSON syntax and try again.`;
       const content = `${explanation}\n\nThe received arguments string was:\n${argsStr}`;
       const code = truncationReason ? 'TRUNCATED_ARGUMENTS' : 'INVALID_JSON_ARGUMENTS';
-      log('Rejected invalid arguments for %s:%s (%s): %s', identifier, apiName, code, argsStr);
+      if (identifier === DingtalkPersonalIdentifier) {
+        log('Rejected invalid arguments for %s:%s (%s)', identifier, apiName, code);
+      } else {
+        log('Rejected invalid arguments for %s:%s (%s): %s', identifier, apiName, code, argsStr);
+      }
       return {
         content,
         error: { code, message: explanation },
@@ -153,13 +163,17 @@ export class BuiltinToolsExecutor implements IToolExecutor {
 
     const args = parsed || {};
 
-    log(
-      'Executing builtin tool: %s:%s (source: %s) with args: %O',
-      identifier,
-      apiName,
-      source,
-      args,
-    );
+    if (identifier === DingtalkPersonalIdentifier) {
+      log('Executing builtin tool: %s:%s', identifier, apiName);
+    } else {
+      log(
+        'Executing builtin tool: %s:%s (source: %s) with args: %O',
+        identifier,
+        apiName,
+        source,
+        args,
+      );
+    }
 
     // Route LobeHub Skills to MarketService (under the governance-effective identity)
     if (source === 'lobehubSkill') {
@@ -223,7 +237,11 @@ export class BuiltinToolsExecutor implements IToolExecutor {
       return await runtime[apiName](args, context);
     } catch (e) {
       const error = e as Error;
-      console.error('Error executing builtin tool %s:%s: %O', identifier, apiName, error);
+      if (identifier === DingtalkPersonalIdentifier) {
+        console.error('Error executing builtin tool %s:%s', identifier, apiName);
+      } else {
+        console.error('Error executing builtin tool %s:%s: %O', identifier, apiName, error);
+      }
 
       // Reminder-scoped backstop: anything thrown outside ExecutionRuntime
       // must not reach the model as raw SQL / drizzle text.

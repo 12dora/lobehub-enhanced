@@ -13,7 +13,11 @@ import { BriefIdentifier } from '@lobechat/builtin-tool-brief/manifest';
 import { CalculatorIdentifier } from '@lobechat/builtin-tool-calculator/manifest';
 import { CloudSandboxIdentifier } from '@lobechat/builtin-tool-cloud-sandbox/manifest';
 import { CredsIdentifier } from '@lobechat/builtin-tool-creds/manifest';
+import { DingtalkApprovalIdentifier } from '@lobechat/builtin-tool-dingtalk-approval/manifest';
+import { DingtalkPersonalIdentifier } from '@lobechat/builtin-tool-dingtalk-personal/manifest';
+import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
 import { DocumentPagesIdentifier } from '@lobechat/builtin-tool-document-pages/manifest';
+import { EnterpriseLookupIdentifier } from '@lobechat/builtin-tool-enterprise-lookup/manifest';
 import { GroupManagementIdentifier } from '@lobechat/builtin-tool-group-management/manifest';
 import { KnowledgeBaseIdentifier } from '@lobechat/builtin-tool-knowledge-base/manifest';
 import { LobeAgentIdentifier } from '@lobechat/builtin-tool-lobe-agent/manifest';
@@ -111,6 +115,18 @@ vi.mock('../brief', async () => {
 });
 vi.mock('../task', () => mockRuntime('taskRuntime', 'lobe-task', { id: 'task' }));
 vi.mock('../reminder', () => mockRuntime('reminderRuntime', 'lobe-reminder', { id: 'reminder' }));
+vi.mock('../dingtalkWorkspace', () =>
+  mockRuntime('dingtalkWorkspaceRuntime', 'lobe-dingtalk-workspace', { id: 'dingtalkWorkspace' }),
+);
+vi.mock('../dingtalkPersonal', () =>
+  mockRuntime('dingtalkPersonalRuntime', 'lobe-dingtalk-personal', { id: 'dingtalkPersonal' }),
+);
+vi.mock('../dingtalkApproval', () =>
+  mockRuntime('dingtalkApprovalRuntime', 'lobe-dingtalk-approval', { id: 'dingtalkApproval' }),
+);
+vi.mock('../enterpriseLookup', () =>
+  mockRuntime('enterpriseLookupRuntime', 'lobe-enterprise-lookup', { id: 'enterpriseLookup' }),
+);
 vi.mock('../topicReference', () =>
   mockRuntime('topicReferenceRuntime', 'lobe-topic-reference', { id: 'topicReference' }),
 );
@@ -187,6 +203,10 @@ const STATIC_IDENTIFIERS = [
   BriefIdentifier,
   TaskIdentifier,
   ReminderIdentifier,
+  DingtalkWorkspaceIdentifier,
+  DingtalkPersonalIdentifier,
+  DingtalkApprovalIdentifier,
+  EnterpriseLookupIdentifier,
   TopicReferenceIdentifier,
   UserInteractionIdentifier,
   CredsIdentifier,

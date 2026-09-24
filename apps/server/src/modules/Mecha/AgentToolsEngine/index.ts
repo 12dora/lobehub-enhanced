@@ -56,6 +56,7 @@ import {
 
 const ENTERPRISE_LOOKUP_TOOL_IDENTIFIER = 'lobe-enterprise-lookup';
 const DINGTALK_APPROVAL_TOOL_IDENTIFIER = 'lobe-dingtalk-approval';
+const DINGTALK_PERSONAL_TOOL_IDENTIFIER = 'lobe-dingtalk-personal';
 const DINGTALK_WORKSPACE_TOOL_IDENTIFIER = 'lobe-dingtalk-workspace';
 
 export type {
@@ -187,6 +188,7 @@ export const createServerAgentToolsEngine = (
     useApplicationBuiltinSearchTool,
     enterpriseLookupConfigured,
     dingtalkApprovalEnabled,
+    dingtalkPersonal,
     dingtalkWorkspaceEnabled,
   } = params;
 
@@ -197,6 +199,8 @@ export const createServerAgentToolsEngine = (
   const isDingtalkApprovalEnabled = dingtalkApprovalEnabled ?? dingtalkCaps?.approval ?? false;
   const isDingtalkWorkspaceEnabled =
     dingtalkWorkspaceEnabled ?? Boolean(dingtalkCaps?.todo || dingtalkCaps?.calendar);
+  // No sync peek: callers pass getDingtalkPersonalConfig().enabled. Omitted stays off.
+  const isDingtalkPersonalEnabled = dingtalkPersonal === true;
 
   if (exactBuiltinToolIds) {
     const exactIds = new Set([
@@ -208,12 +212,14 @@ export const createServerAgentToolsEngine = (
     if (!isEnterpriseLookupEnabled) exactIds.delete(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
     if (!isDingtalkApprovalEnabled) exactIds.delete(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
     if (!isDingtalkWorkspaceEnabled) exactIds.delete(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+    if (!isDingtalkPersonalEnabled) exactIds.delete(DINGTALK_PERSONAL_TOOL_IDENTIFIER);
     if (memoryEmbeddingAvailable === false) exactIds.delete(MemoryManifest.identifier);
     const exactExclude = new Set<string>();
     if (dropDocumentPages) exactExclude.add(DocumentPagesIdentifier);
     if (!isEnterpriseLookupEnabled) exactExclude.add(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
     if (!isDingtalkApprovalEnabled) exactExclude.add(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
     if (!isDingtalkWorkspaceEnabled) exactExclude.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+    if (!isDingtalkPersonalEnabled) exactExclude.add(DINGTALK_PERSONAL_TOOL_IDENTIFIER);
     if (memoryEmbeddingAvailable === false) exactExclude.add(MemoryManifest.identifier);
     return createServerToolsEngine(
       { ...context, installedPlugins: [] },
@@ -352,6 +358,7 @@ export const createServerAgentToolsEngine = (
     [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER]: isEnterpriseLookupEnabled,
     [DINGTALK_APPROVAL_TOOL_IDENTIFIER]: isDingtalkApprovalEnabled,
     [DINGTALK_WORKSPACE_TOOL_IDENTIFIER]: isDingtalkWorkspaceEnabled,
+    [DINGTALK_PERSONAL_TOOL_IDENTIFIER]: isDingtalkPersonalEnabled,
   };
 
   const excludeIdentifiers = new Set<string>(
@@ -362,6 +369,7 @@ export const createServerAgentToolsEngine = (
   if (!isEnterpriseLookupEnabled) excludeIdentifiers.add(ENTERPRISE_LOOKUP_TOOL_IDENTIFIER);
   if (!isDingtalkApprovalEnabled) excludeIdentifiers.add(DINGTALK_APPROVAL_TOOL_IDENTIFIER);
   if (!isDingtalkWorkspaceEnabled) excludeIdentifiers.add(DINGTALK_WORKSPACE_TOOL_IDENTIFIER);
+  if (!isDingtalkPersonalEnabled) excludeIdentifiers.add(DINGTALK_PERSONAL_TOOL_IDENTIFIER);
   if (memoryEmbeddingAvailable === false) excludeIdentifiers.add(MemoryManifest.identifier);
 
   return createServerToolsEngine(context, {
@@ -389,6 +397,7 @@ export const createServerAgentToolsEngine = (
             ...(isEnterpriseLookupEnabled ? [ENTERPRISE_LOOKUP_TOOL_IDENTIFIER] : []),
             ...(isDingtalkApprovalEnabled ? [DINGTALK_APPROVAL_TOOL_IDENTIFIER] : []),
             ...(isDingtalkWorkspaceEnabled ? [DINGTALK_WORKSPACE_TOOL_IDENTIFIER] : []),
+            ...(isDingtalkPersonalEnabled ? [DINGTALK_PERSONAL_TOOL_IDENTIFIER] : []),
           ],
     // Post-merge wall: a plugin or Skill/Composio manifest claiming a
     // device identifier survives `buildAllowedBuiltinTools` (which only

@@ -118,6 +118,11 @@ export interface ServerCreateAgentToolsEngineParams {
    * capabilities peek (fail-closed: drop when the cache is cold).
    */
   dingtalkApprovalEnabled?: boolean;
+  /**
+   * DingTalk personal-data master switch (`getDingtalkPersonalConfig().enabled`).
+   * Omitted stays off: the config read is async, so this engine does not peek.
+   */
+  dingtalkPersonal?: boolean;
   dingtalkWorkspaceEnabled?: boolean;
   /** Whether to suppress the local-system builtin while preserving other tools. */
   disableLocalSystem?: boolean;

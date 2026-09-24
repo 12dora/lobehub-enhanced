@@ -12,6 +12,7 @@ import { CalculatorManifest } from '@lobechat/builtin-tool-calculator';
 import { CloudSandboxManifest } from '@lobechat/builtin-tool-cloud-sandbox';
 import { CredsManifest } from '@lobechat/builtin-tool-creds';
 import { DingtalkApprovalManifest } from '@lobechat/builtin-tool-dingtalk-approval';
+import { DingtalkPersonalManifest } from '@lobechat/builtin-tool-dingtalk-personal';
 import { DingtalkWorkspaceManifest } from '@lobechat/builtin-tool-dingtalk-workspace';
 import { DocumentPagesManifest } from '@lobechat/builtin-tool-document-pages';
 import { EnterpriseLookupManifest } from '@lobechat/builtin-tool-enterprise-lookup';
@@ -51,6 +52,7 @@ export const builtinToolIdentifiers: string[] = [
   PageAgentManifest.identifier,
   ReminderManifest.identifier,
   DingtalkWorkspaceManifest.identifier,
+  DingtalkPersonalManifest.identifier,
   DingtalkApprovalManifest.identifier,
   EnterpriseLookupManifest.identifier,
   selfFeedbackIntentManifest.identifier,
