@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   AdminSystemJob,
-  AdminSystemJobs,
+  AdminSystemJobsPage,
   AdminSystemService,
 } from '@/enterprise/client/services/adminSystem';
 
@@ -15,55 +15,52 @@ import {
   useAdminSystemStatus,
 } from './useAdminSystem';
 
-interface PollConfig {
-  onSuccess?: (incoming: AdminSystemJobs) => void;
+interface SWRConfig {
+  keepPreviousData?: boolean;
+  onError?: (error: unknown) => void;
+  onSuccess?: (incoming: unknown) => void;
   refreshInterval?: number;
 }
 
-interface PollCall {
-  config: PollConfig;
-  key: readonly [string, number] | readonly [string] | null;
+type SWRKey = readonly unknown[] | null;
+
+interface SWRCall {
+  config: SWRConfig;
+  fetcher: () => Promise<unknown>;
+  key: SWRKey;
 }
 
-type JobsKeyLoader = (
-  index: number,
-  previous: AdminSystemJobs | null,
-) => readonly [string, { cursor?: string; limit: number }] | null;
-
 const mocks = vi.hoisted(() => ({
-  getKey: null as JobsKeyLoader | null,
-  infinite: {
-    data: [] as AdminSystemJobs[] | undefined,
+  calls: [] as SWRCall[],
+  globalMutate: vi.fn(async (_matcher: unknown) => [] as unknown[]),
+  jobs: {
+    data: undefined as unknown,
     error: undefined as Error | undefined,
+    isLoading: false,
     isValidating: false,
     mutate: vi.fn(),
-    setSize: vi.fn(),
-    size: 1,
   },
-  pollCalls: [] as PollCall[],
 }));
 
 vi.mock('swr/infinite', () => ({
-  default: (getKey: JobsKeyLoader) => {
-    mocks.getKey = getKey;
-    return mocks.infinite;
-  },
+  // Instances still page by cursor; these tests do not exercise that hook.
+  default: () => ({ data: [], isValidating: false, mutate: vi.fn(), setSize: vi.fn(), size: 1 }),
 }));
 
 vi.mock('@/libs/swr', () => ({
-  useClientDataSWR: (
-    key: readonly [string, number] | readonly [string] | null,
-    _fetcher: () => Promise<AdminSystemJobs>,
-    config: PollConfig,
-  ) => {
-    mocks.pollCalls.push({ config, key });
+  mutate: mocks.globalMutate,
+  useClientDataSWR: (key: SWRKey, fetcher: () => Promise<unknown>, config: SWRConfig) => {
+    mocks.calls.push({ config, fetcher, key });
+    if (key?.[0] === 'admin.system.jobs.list') return mocks.jobs;
     return { error: undefined };
   },
 }));
 
 vi.mock('@/enterprise/client/features/admin/reauth/requestAdminReauth', () => ({
-  withAdminReauthRetry: (operation: () => Promise<AdminSystemJob>) => operation(),
+  withAdminReauthRetry: (operation: () => Promise<unknown>) => operation(),
 }));
+
+const latest = (name: string) => [...mocks.calls].reverse().find((call) => call.key?.[0] === name);
 
 const job = (overrides: Partial<AdminSystemJob> = {}): AdminSystemJob => ({
   attempt: 1,
@@ -85,36 +82,77 @@ const job = (overrides: Partial<AdminSystemJob> = {}): AdminSystemJob => ({
   ...overrides,
 });
 
-const page = (items: AdminSystemJob[], nextCursor: string | null = null): AdminSystemJobs => ({
-  items,
-  nextCursor,
-});
+const page = (
+  items: AdminSystemJob[],
+  overrides: Partial<AdminSystemJobsPage> = {},
+): AdminSystemJobsPage =>
+  ({
+    clearedAt: null,
+    items,
+    page: 1,
+    pageSize: 20,
+    total: items.length,
+    ...overrides,
+  }) as AdminSystemJobsPage;
 
 const service = (overrides: Partial<AdminSystemService> = {}): AdminSystemService => ({
   cancelJob: vi.fn(),
+  clearJobs: vi.fn(),
   getInstanceRevisions: vi.fn(),
-  getJobs: vi.fn(),
   getStatus: vi.fn(),
+  listJobs: vi.fn(),
   retryJob: vi.fn(),
   ...overrides,
 });
 
-describe('useAdminSystemJobs polling authority', () => {
+describe('useAdminSystemJobs server pages', () => {
   beforeEach(() => {
     resetAdminSystemJobsStatusPollForTest();
-    mocks.infinite.data = [page([job({ status: 'succeeded' })])];
-    mocks.infinite.error = undefined;
-    mocks.infinite.isValidating = false;
-    mocks.infinite.size = 1;
-    mocks.infinite.mutate.mockReset().mockResolvedValue(mocks.infinite.data);
-    mocks.infinite.setSize.mockReset();
-    mocks.pollCalls.length = 0;
-    mocks.getKey = null;
+    mocks.calls.length = 0;
+    mocks.jobs.data = page([job({ status: 'succeeded' })], { total: 45 });
+    mocks.jobs.error = undefined;
+    mocks.jobs.isLoading = false;
+    mocks.jobs.isValidating = false;
+    mocks.jobs.mutate.mockReset().mockImplementation(async () => mocks.jobs.data);
   });
 
-  it('polls when the aggregate reports active work even if the first page is terminal', async () => {
+  it('loads page 1 with the default page size of 20 and exposes the exact total', async () => {
+    const listJobs = vi.fn().mockResolvedValue(mocks.jobs.data);
+    const { result } = renderHook(() =>
+      useAdminSystemJobs(true, service({ listJobs }), {
+        authoritativeActiveCount: 0,
+        refreshAuthority: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    const call = latest('admin.system.jobs.list')!;
+    expect(call.key).toEqual(['admin.system.jobs.list', 1, 20, 0]);
+    expect(call.config.keepPreviousData).toBe(true);
+    await call.fetcher();
+    expect(listJobs).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
+    expect(result.current).toMatchObject({ page: 1, pageSize: 20, total: 45 });
+    expect(result.current.jobs).toHaveLength(1);
+  });
+
+  it('requests a new server page when the table paginates', async () => {
+    const listJobs = vi.fn().mockResolvedValue(mocks.jobs.data);
+    const { result } = renderHook(() =>
+      useAdminSystemJobs(true, service({ listJobs }), {
+        authoritativeActiveCount: 0,
+        refreshAuthority: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    act(() => result.current.setPagination(3, 50));
+    const call = latest('admin.system.jobs.list')!;
+    expect(call.key).toEqual(['admin.system.jobs.list', 3, 50, 0]);
+    await call.fetcher();
+    expect(listJobs).toHaveBeenLastCalledWith({ page: 3, pageSize: 50 });
+  });
+
+  it('polls the current page every 3s while the aggregate reports active jobs', async () => {
     const refreshAuthority = vi.fn().mockResolvedValue(undefined);
-    const { rerender } = renderHook(
+    const { rerender, result } = renderHook(
       ({ activeCount }) =>
         useAdminSystemJobs(true, service(), {
           authoritativeActiveCount: activeCount,
@@ -123,20 +161,41 @@ describe('useAdminSystemJobs polling authority', () => {
       { initialProps: { activeCount: 2 } },
     );
 
-    const activeCall = mocks.pollCalls.at(-1)!;
-    expect(activeCall.key).toEqual(['admin.system.getJobs.poll', 50]);
-    expect(activeCall.config.refreshInterval).toBe(3000);
+    act(() => result.current.setPagination(2, 20));
+    const polling = latest('admin.system.jobs.list')!;
+    // The page the operator is looking at is the one that refreshes — no staged first page.
+    expect(polling.key).toEqual(['admin.system.jobs.list', 2, 20, 0]);
+    expect(polling.config.refreshInterval).toBe(3000);
 
     await act(async () => {
-      activeCall.config.onSuccess?.(page([job({ status: 'succeeded' })]));
+      polling.config.onSuccess?.(page([job({ status: 'succeeded' })]));
       await Promise.resolve();
     });
+    // Each tick re-reads the aggregate: it is the only authority that can stop the loop.
     expect(refreshAuthority).toHaveBeenCalledTimes(1);
 
     rerender({ activeCount: 0 });
-    const stoppedCall = mocks.pollCalls.at(-1)!;
-    expect(stoppedCall.key).toBeNull();
-    expect(stoppedCall.config.refreshInterval).toBe(0);
+    const stopped = latest('admin.system.jobs.list')!;
+    expect(stopped.key).toEqual(['admin.system.jobs.list', 2, 20, 0]);
+    expect(stopped.config.refreshInterval).toBe(0);
+
+    await act(async () => {
+      stopped.config.onSuccess?.(page([]));
+      await Promise.resolve();
+    });
+    expect(refreshAuthority).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not poll when the aggregate is unavailable, even with active rows visible', () => {
+    mocks.jobs.data = page([job({ status: 'running' })]);
+    renderHook(() =>
+      useAdminSystemJobs(true, service(), {
+        authoritativeActiveCount: null,
+        refreshAuthority: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    expect(latest('admin.system.jobs.list')?.config.refreshInterval).toBe(0);
   });
 
   it('stops the active-job poll while the tab is hidden', () => {
@@ -149,10 +208,9 @@ describe('useAdminSystemJobs polling authority', () => {
         }),
       );
 
-      // The key stays live (the list still renders); only the 3s cadence — and the authority
-      // refresh it drags along — goes quiet until the operator comes back.
-      expect(mocks.pollCalls.at(-1)?.key).toEqual(['admin.system.getJobs.poll', 50]);
-      expect(mocks.pollCalls.at(-1)?.config.refreshInterval).toBe(0);
+      // The key stays live (the list still renders); only the 3s cadence goes quiet.
+      expect(latest('admin.system.jobs.list')?.key).toEqual(['admin.system.jobs.list', 1, 20, 0]);
+      expect(latest('admin.system.jobs.list')?.config.refreshInterval).toBe(0);
     } finally {
       Object.defineProperty(document, 'visibilityState', {
         configurable: true,
@@ -161,39 +219,7 @@ describe('useAdminSystemJobs polling authority', () => {
     }
   });
 
-  it('uses visible active rows only while the aggregate is unavailable', () => {
-    mocks.infinite.data = [page([job({ status: 'running' })])];
-    renderHook(() =>
-      useAdminSystemJobs(true, service(), {
-        authoritativeActiveCount: null,
-        refreshAuthority: vi.fn().mockResolvedValue(undefined),
-      }),
-    );
-
-    expect(mocks.pollCalls.at(-1)?.key).toEqual(['admin.system.getJobs.poll', 50]);
-  });
-
-  it('clears a staged banner when a later poll matches the visible first page', async () => {
-    const { result } = renderHook(() =>
-      useAdminSystemJobs(true, service(), {
-        authoritativeActiveCount: 1,
-        refreshAuthority: vi.fn().mockResolvedValue(undefined),
-      }),
-    );
-    const pollCall = mocks.pollCalls.at(-1)!;
-
-    await act(async () => {
-      pollCall.config.onSuccess?.(page([job({ progress: { done: 1, total: 1 } })]));
-    });
-    expect(result.current.hasStagedUpdate).toBe(true);
-
-    await act(async () => {
-      pollCall.config.onSuccess?.(mocks.infinite.data![0]);
-    });
-    expect(result.current.hasStagedUpdate).toBe(false);
-  });
-
-  it('returns null list and poll keys without read permission', () => {
+  it('returns a null key without read permission', () => {
     renderHook(() =>
       useAdminSystemJobs(false, service(), {
         authoritativeActiveCount: 1,
@@ -201,32 +227,54 @@ describe('useAdminSystemJobs polling authority', () => {
       }),
     );
 
-    expect(mocks.getKey?.(0, null)).toBeNull();
-    expect(mocks.pollCalls.at(-1)?.key).toBeNull();
+    expect(mocks.calls.at(-1)?.key).toBeNull();
+    expect(mocks.calls.at(-1)?.config.refreshInterval).toBe(0);
   });
 
-  it('reports a failed requested page separately from background revalidation', () => {
-    mocks.infinite.error = new Error('page unavailable');
-    mocks.infinite.size = 2;
+  it('separates an initial load failure from a background refresh failure', () => {
+    mocks.jobs.data = undefined;
+    mocks.jobs.error = new Error('offline');
     const { rerender, result } = renderHook(() =>
       useAdminSystemJobs(true, service(), {
         authoritativeActiveCount: 0,
         refreshAuthority: vi.fn().mockResolvedValue(undefined),
       }),
     );
-
-    expect(result.current.loadMoreError).toBe(true);
+    expect(result.current.initialError).toBeInstanceOf(Error);
     expect(result.current.backgroundError).toBeUndefined();
 
-    mocks.infinite.size = 1;
+    mocks.jobs.data = page([job({ status: 'succeeded' })]);
     rerender();
-    expect(result.current.loadMoreError).toBe(false);
+    expect(result.current.initialError).toBeUndefined();
     expect(result.current.backgroundError).toBeInstanceOf(Error);
   });
 
-  it('does not offer pagination before the first page has settled', () => {
-    mocks.infinite.data = undefined;
-    mocks.infinite.error = new Error('initial unavailable');
+  it('goes back to page 1 on a fresh key and refreshes the aggregate after 清除', async () => {
+    const refreshAuthority = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useAdminSystemJobs(true, service(), {
+        authoritativeActiveCount: 0,
+        refreshAuthority,
+      }),
+    );
+
+    act(() => result.current.setPagination(3, 20));
+    await act(async () => {
+      await result.current.goToFirstPage();
+    });
+    expect(result.current.page).toBe(1);
+    // Every page cached before the watermark moved is retired, page 1 included.
+    expect(latest('admin.system.jobs.list')?.key).toEqual(['admin.system.jobs.list', 1, 20, 1]);
+    expect(refreshAuthority).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.goToFirstPage();
+    });
+    expect(latest('admin.system.jobs.list')?.key).toEqual(['admin.system.jobs.list', 1, 20, 2]);
+  });
+
+  it('shows the table as loading while rows of another page stand in', () => {
+    mocks.jobs.isLoading = true;
     const { result } = renderHook(() =>
       useAdminSystemJobs(true, service(), {
         authoritativeActiveCount: 0,
@@ -234,29 +282,80 @@ describe('useAdminSystemJobs polling authority', () => {
       }),
     );
 
-    expect(result.current.initialError).toBeInstanceOf(Error);
-    expect(result.current.hasMore).toBe(false);
+    // `keepPreviousData` still hands back the old rows; they must not pass for the new page.
+    expect(result.current.jobs).toHaveLength(1);
+    expect(result.current.isLoadingPage).toBe(true);
+    expect(result.current.isLoadingInitial).toBe(false);
+
+    mocks.jobs.isLoading = false;
+    const { result: settled } = renderHook(() =>
+      useAdminSystemJobs(true, service(), {
+        authoritativeActiveCount: 0,
+        refreshAuthority: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+    expect(settled.current.isLoadingPage).toBe(false);
+  });
+
+  it('keeps the status cards refreshing while the jobs list fails', async () => {
+    const refreshAuthority = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = renderHook(() => {
+      useAdminSystemStatus(true, service());
+      useAdminSystemJobs(true, service(), {
+        authoritativeActiveCount: 2,
+        refreshAuthority,
+      });
+    });
+
+    // Healthy: the 3s jobs poll owns the status refresh.
+    expect(latest('admin.system.getStatus')?.config.refreshInterval).toBe(0);
+
+    await act(async () => {
+      latest('admin.system.jobs.list')!.config.onError?.(new Error('db down'));
+      await Promise.resolve();
+    });
+    // A failing tick still moves the aggregate…
+    expect(refreshAuthority).toHaveBeenCalledTimes(1);
+
+    // …and once the list is in error, the 30s status poll takes over again.
+    mocks.jobs.error = new Error('db down');
+    rerender();
+    expect(latest('admin.system.getStatus')?.config.refreshInterval).toBe(30_000);
+  });
+
+  it('snaps back to the last non-empty page when the current page empties', () => {
+    const { rerender, result } = renderHook(() =>
+      useAdminSystemJobs(true, service(), {
+        authoritativeActiveCount: 0,
+        refreshAuthority: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    act(() => result.current.setPagination(4, 20));
+    mocks.jobs.data = page([], { page: 4, total: 30 });
+    rerender();
+    expect(result.current.page).toBe(2);
   });
 });
 
 describe('useAdminSystemStatus polling', () => {
   beforeEach(() => {
     resetAdminSystemJobsStatusPollForTest();
-    mocks.pollCalls.length = 0;
+    mocks.calls.length = 0;
   });
 
   it('polls status on a visibility-gated interval', () => {
     renderHook(() => useAdminSystemStatus(true, service()));
-    expect(mocks.pollCalls.at(-1)?.key).toEqual(['admin.system.getStatus']);
-    expect(mocks.pollCalls.at(-1)?.config.refreshInterval).toBe(30_000);
+    expect(mocks.calls.at(-1)?.key).toEqual(['admin.system.getStatus']);
+    expect(mocks.calls.at(-1)?.config.refreshInterval).toBe(30_000);
   });
 
   it('stops the status poll while the tab is hidden', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     try {
       renderHook(() => useAdminSystemStatus(true, service()));
-      expect(mocks.pollCalls.at(-1)?.key).toEqual(['admin.system.getStatus']);
-      expect(mocks.pollCalls.at(-1)?.config.refreshInterval).toBe(0);
+      expect(mocks.calls.at(-1)?.key).toEqual(['admin.system.getStatus']);
+      expect(mocks.calls.at(-1)?.config.refreshInterval).toBe(0);
     } finally {
       Object.defineProperty(document, 'visibilityState', {
         configurable: true,
@@ -267,12 +366,12 @@ describe('useAdminSystemStatus polling', () => {
 
   it('does not poll status without read permission', () => {
     renderHook(() => useAdminSystemStatus(false, service()));
-    expect(mocks.pollCalls.at(-1)?.key).toBeNull();
-    expect(mocks.pollCalls.at(-1)?.config.refreshInterval).toBe(0);
+    expect(mocks.calls.at(-1)?.key).toBeNull();
+    expect(mocks.calls.at(-1)?.config.refreshInterval).toBe(0);
   });
 
   it('suppresses the 30s status cadence while the jobs poll owns refresh', () => {
-    mocks.infinite.data = [page([job({ status: 'succeeded' })])];
+    mocks.jobs.data = page([job({ status: 'succeeded' })]);
     const { rerender } = renderHook(
       ({ activeCount }) => {
         useAdminSystemStatus(true, service());
@@ -284,20 +383,17 @@ describe('useAdminSystemStatus polling', () => {
       { initialProps: { activeCount: 2 } },
     );
 
-    const latest = (name: string) =>
-      [...mocks.pollCalls].reverse().find((call) => call.key?.[0] === name);
-
-    expect(latest('admin.system.getJobs.poll')?.config.refreshInterval).toBe(3000);
+    expect(latest('admin.system.jobs.list')?.config.refreshInterval).toBe(3000);
     expect(latest('admin.system.getStatus')?.config.refreshInterval).toBe(0);
 
-    const beforeStop = mocks.pollCalls.length;
+    const beforeStop = mocks.calls.length;
     rerender({ activeCount: 0 });
-    const afterStop = mocks.pollCalls.slice(beforeStop);
+    const afterStop = mocks.calls.slice(beforeStop);
     expect(afterStop).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           config: expect.objectContaining({ refreshInterval: 0 }),
-          key: null,
+          key: ['admin.system.jobs.list', 1, 20, 0],
         }),
         expect.objectContaining({
           config: expect.objectContaining({ refreshInterval: 30_000 }),
@@ -313,7 +409,7 @@ describe('useAdminSystemJobMutations refresh lock', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
 
-  it('succeeds when the mutation response is authoritative even if list pages omit the job', async () => {
+  it('succeeds on an authoritative mutation response even if the page omits the job', async () => {
     const original = job();
     const committed = job({
       canCancel: false,
@@ -321,10 +417,10 @@ describe('useAdminSystemJobMutations refresh lock', () => {
       revision: 2,
       status: 'cancelled',
     });
-    // Pagination shift: cancelled job no longer on loaded page one.
+    // Pagination shift: the cancelled job is no longer on the current page.
     const onRefresh = vi
-      .fn<() => Promise<AdminSystemJobs[] | undefined>>()
-      .mockResolvedValue([page([job({ jobId: 'pjob_0000000000000099' })])]);
+      .fn<() => Promise<AdminSystemJobsPage | undefined>>()
+      .mockResolvedValue(page([job({ jobId: 'pjob_0000000000000099' })]));
     const client = service({ cancelJob: vi.fn().mockResolvedValue(committed) });
     const { result } = renderHook(() =>
       useAdminSystemJobMutations({ authMethod: null, onRefresh, service: client }),
@@ -336,7 +432,7 @@ describe('useAdminSystemJobMutations refresh lock', () => {
     expect(result.current.refreshPendingJobIds).toEqual([]);
   });
 
-  it('locks a committed row when a loaded page still shows a stale CAS snapshot', async () => {
+  it('locks a committed row when the current page still shows a stale CAS snapshot', async () => {
     const original = job();
     const committed = job({
       canCancel: false,
@@ -345,9 +441,9 @@ describe('useAdminSystemJobMutations refresh lock', () => {
       status: 'cancelled',
     });
     const onRefresh = vi
-      .fn<() => Promise<AdminSystemJobs[] | undefined>>()
-      .mockResolvedValueOnce([page([original])])
-      .mockResolvedValueOnce([page([committed])]);
+      .fn<() => Promise<AdminSystemJobsPage | undefined>>()
+      .mockResolvedValueOnce(page([original]))
+      .mockResolvedValueOnce(page([committed]));
     const client = service({ cancelJob: vi.fn().mockResolvedValue(committed) });
     const { result } = renderHook(() =>
       useAdminSystemJobMutations({ authMethod: null, onRefresh, service: client }),
@@ -376,7 +472,7 @@ describe('useAdminSystemJobMutations refresh lock', () => {
     const { result } = renderHook(() =>
       useAdminSystemJobMutations({
         authMethod: null,
-        onRefresh: vi.fn().mockResolvedValue([page([committed])]),
+        onRefresh: vi.fn().mockResolvedValue(page([committed])),
         service: client,
       }),
     );
@@ -393,5 +489,85 @@ describe('useAdminSystemJobMutations refresh lock', () => {
       await firstRequest;
     });
     expect(result.current.busyJobIds).toEqual([]);
+  });
+});
+
+describe('useAdminSystemJobMutations clear', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  it('clears finished jobs, then hands control back to reload page 1', async () => {
+    const clearJobs = vi
+      .fn()
+      .mockResolvedValue({ clearedAt: '2026-09-25T00:00:00.000Z', hidden: 7 });
+    const onCleared = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useAdminSystemJobMutations({
+        authMethod: null,
+        onCleared,
+        onRefresh: vi.fn().mockResolvedValue(page([])),
+        service: service({ clearJobs }),
+      }),
+    );
+
+    mocks.globalMutate.mockClear();
+    await act(async () => {
+      expect(await result.current.clear()).toEqual({ hidden: 7, ok: true });
+    });
+    expect(clearJobs).toHaveBeenCalledTimes(1);
+    expect(onCleared).toHaveBeenCalledTimes(1);
+    expect(result.current.clearing).toBe(false);
+    // 清除 writes the shared settings row: an open 告警设置 drawer re-reads its revision.
+    expect(mocks.globalMutate).toHaveBeenCalledTimes(1);
+    const matcher = mocks.globalMutate.mock.calls[0]?.[0] as (key: unknown) => boolean;
+    expect(matcher(['admin.system.alerts.get'])).toBe(true);
+    expect(matcher(['admin.system.jobs.list', 1, 20, 0])).toBe(false);
+  });
+
+  it('reports a failed clear without reloading', async () => {
+    const failure = new Error('forbidden');
+    const onCleared = vi.fn();
+    const { result } = renderHook(() =>
+      useAdminSystemJobMutations({
+        authMethod: null,
+        onCleared,
+        onRefresh: vi.fn().mockResolvedValue(page([])),
+        service: service({ clearJobs: vi.fn().mockRejectedValue(failure) }),
+      }),
+    );
+
+    await act(async () => {
+      expect(await result.current.clear()).toEqual({ error: failure, ok: false });
+    });
+    expect(onCleared).not.toHaveBeenCalled();
+  });
+
+  it('ignores a second clear while the first is still running', async () => {
+    let resolveClear: (value: { clearedAt: string; hidden: number }) => void = () => undefined;
+    const clearJobs = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveClear = resolve;
+      }),
+    );
+    const { result } = renderHook(() =>
+      useAdminSystemJobMutations({
+        authMethod: null,
+        onRefresh: vi.fn().mockResolvedValue(page([])),
+        service: service({ clearJobs }),
+      }),
+    );
+
+    let first: Promise<unknown> | undefined;
+    act(() => {
+      first = result.current.clear();
+    });
+    await expect(result.current.clear()).resolves.toMatchObject({ ok: false });
+    expect(clearJobs).toHaveBeenCalledTimes(1);
+
+    resolveClear({ clearedAt: '2026-09-25T00:00:00.000Z', hidden: 0 });
+    await act(async () => {
+      await first;
+    });
   });
 });

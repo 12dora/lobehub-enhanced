@@ -149,7 +149,7 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
   'admin.imConnectors.testNotifyApp': regularMutation(
     'admin.imConnectors.testNotifyApp',
     'low',
-    'Probe the DingTalk notify-app (服务号) token endpoints without sending a message.',
+    'Probe the DingTalk notify-app (通知应用) token endpoints without sending a message.',
     {
       audit: notApplicable(
         'The bounded live probe does not persist configuration or write an audit row.',
@@ -331,6 +331,25 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
     'Change the platform home-sidebar layout policy (user vs platform-managed).',
     { reason: noReason },
   ),
+  'admin.system.alerts.test': regularMutation(
+    'admin.system.alerts.test',
+    'low',
+    'Send a short status-alert test through one stored channel.',
+    {
+      outbound: enforced(
+        'The test posts to the stored DingTalk work-notice, group-robot webhook, or mail transport.',
+      ),
+      reason: notApplicable('The procedure input has no free-form reason field.'),
+    },
+  ),
+  'admin.system.alerts.update': regularMutation(
+    'admin.system.alerts.update',
+    'medium',
+    'Replace status-alert channels, rules, and the encrypted robot sign material with CAS.',
+    {
+      reason: notApplicable('The procedure input has no free-form reason field.'),
+    },
+  ),
   'admin.system.cancelDocumentRenderJob': regularMutation(
     'admin.system.cancelDocumentRenderJob',
     'low',
@@ -347,6 +366,12 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
     'high',
     'Cancel an eligible active platform job with atomic compare-and-set.',
     { reason: optionalReasonInput, reauth: recentReauth },
+  ),
+  'admin.system.jobs.clear': regularMutation(
+    'admin.system.jobs.clear',
+    'low',
+    'Advance the jobs-list watermark so finished rows drop out of the admin page without deleting them.',
+    { reason: notApplicable('The procedure input has no free-form reason field.') },
   ),
   'admin.system.prepareRestart': dangerousMutation(
     'admin.system.prepareRestart',
@@ -387,6 +412,18 @@ export const ADMIN_MUTATION_ENTRIES_PLATFORM = {
       ),
       reason: noReason,
     },
+  ),
+  'admin.system.statusApi.revoke': dangerousMutation(
+    'admin.system.statusApi.revoke',
+    'high',
+    'Revoke the stored status API access so previously issued copies stop authenticating.',
+    { reason: optionalReasonInput, reauth: recentReauth },
+  ),
+  'admin.system.statusApi.rotate': dangerousMutation(
+    'admin.system.statusApi.rotate',
+    'high',
+    'Replace the stored status API access and return the new value once.',
+    { reason: optionalReasonInput, reauth: recentReauth },
   ),
   'admin.system.testDependency': regularMutation(
     'admin.system.testDependency',

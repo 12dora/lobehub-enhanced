@@ -16,12 +16,11 @@ import type {
   adminSystemGetInfraSettingsOutputSchema,
   AdminSystemGetInstanceRevisionsInput,
   adminSystemGetInstanceRevisionsOutputSchema,
-  AdminSystemGetJobsInput,
-  adminSystemGetJobsOutputSchema,
   AdminSystemGetSandboxPackageStatsInput,
   adminSystemGetSandboxPackageStatsOutputSchema,
   adminSystemGetSandboxSettingsOutputSchema,
   adminSystemGetStatusOutputSchema,
+  adminSystemJobSchema,
   AdminSystemRetryJobInput,
   adminSystemRunDocumentRenderGcInputSchema,
   AdminSystemRunDocumentRenderGcOutput,
@@ -41,11 +40,41 @@ export type AdminSystemStatus = z.infer<typeof adminSystemGetStatusOutputSchema>
 export type AdminSystemInstanceRevisions = z.infer<
   typeof adminSystemGetInstanceRevisionsOutputSchema
 >;
-export type AdminSystemJobs = z.infer<typeof adminSystemGetJobsOutputSchema>;
-export type AdminSystemJob = AdminSystemJobs['items'][number];
+export type AdminSystemJob = z.infer<typeof adminSystemJobSchema>;
 export type AdminSystemInfraSettings = z.infer<typeof adminSystemGetInfraSettingsOutputSchema>;
 export type AdminSystemSandboxSettings = z.infer<typeof adminSystemGetSandboxSettingsOutputSchema>;
 export type AdminSystemTestDependencyResult = z.infer<typeof adminSystemTestDependencyOutputSchema>;
+
+/**
+ * v1.12 status-monitoring procedures (contract §3.2). Their I/O is read straight off the router
+ * type — the procedure paths are the contract, so the client can never drift from the DTOs even
+ * where the server names its Zod schemas differently.
+ */
+type AdminSystemRouterClient = typeof lambdaClient.admin.system;
+type AlertsClient = AdminSystemRouterClient['alerts'];
+type JobsClient = AdminSystemRouterClient['jobs'];
+type StatusApiClient = AdminSystemRouterClient['statusApi'];
+
+/** `admin.system.jobs.list` — one server page of 近期任务 plus the exact total. */
+export interface AdminSystemJobsListInput {
+  page: number;
+  pageSize: number;
+}
+export type AdminSystemJobsPage = Awaited<ReturnType<JobsClient['list']['query']>>;
+/** `admin.system.jobs.clear` — the non-destructive "hide finished rows" watermark. */
+export type AdminSystemJobsClearResult = Awaited<ReturnType<JobsClient['clear']['mutate']>>;
+
+/** `admin.system.alerts.get` / `.update` — the 告警设置 document (`AdminStatusAlertsView`). */
+export type AdminStatusAlertsView = Awaited<ReturnType<AlertsClient['get']['query']>>;
+export type AdminStatusAlertSettings = AdminStatusAlertsView['settings'];
+export type AdminStatusAlertsUpdateInput = Parameters<AlertsClient['update']['mutate']>[0];
+export type AdminStatusAlertChannel = Parameters<AlertsClient['test']['mutate']>[0]['channel'];
+export type AdminStatusAlertTestResult = Awaited<ReturnType<AlertsClient['test']['mutate']>>;
+
+/** `admin.system.statusApi.*` — endpoints + the one DB-stored bearer token. */
+export type AdminStatusApiView = Awaited<ReturnType<StatusApiClient['get']['query']>>;
+export type AdminStatusApiRotateResult = Awaited<ReturnType<StatusApiClient['rotate']['mutate']>>;
+export type AdminStatusApiRevokeResult = Awaited<ReturnType<StatusApiClient['revoke']['mutate']>>;
 
 /**
  * Contract-derived client boundary for Admin System/Jobs. Keeping the hook injectable makes the
@@ -53,12 +82,30 @@ export type AdminSystemTestDependencyResult = z.infer<typeof adminSystemTestDepe
  */
 export interface AdminSystemService {
   cancelJob: (input: AdminSystemCancelJobInput) => Promise<AdminSystemJob>;
+  /** Hides finished rows from 近期任务 (and the totals); active jobs stay visible. */
+  clearJobs: () => Promise<AdminSystemJobsClearResult>;
   getInstanceRevisions: (
     input?: AdminSystemGetInstanceRevisionsInput,
   ) => Promise<AdminSystemInstanceRevisions>;
-  getJobs: (input?: AdminSystemGetJobsInput) => Promise<AdminSystemJobs>;
   getStatus: () => Promise<AdminSystemStatus>;
+  listJobs: (input: AdminSystemJobsListInput) => Promise<AdminSystemJobsPage>;
   retryJob: (input: AdminSystemRetryJobInput) => Promise<AdminSystemJob>;
+}
+
+/** 告警设置 → 告警 tab. `testAlertChannel` always exercises the STORED settings. */
+export interface AdminStatusAlertsService {
+  getAlertSettings: () => Promise<AdminStatusAlertsView>;
+  testAlertChannel: (input: {
+    channel: AdminStatusAlertChannel;
+  }) => Promise<AdminStatusAlertTestResult>;
+  updateAlertSettings: (input: AdminStatusAlertsUpdateInput) => Promise<AdminStatusAlertsView>;
+}
+
+/** 告警设置 → 状态 API tab. Rotate / revoke go through the dangerous-reauth retry. */
+export interface AdminStatusApiService {
+  getStatusApi: () => Promise<AdminStatusApiView>;
+  revokeStatusApiToken: () => Promise<AdminStatusApiRevokeResult>;
+  rotateStatusApiToken: () => Promise<AdminStatusApiRotateResult>;
 }
 
 export interface AdminInfraSettingsService {
@@ -178,7 +225,9 @@ class AdminSystemServiceImpl
     AdminBrowserProfileService,
     AdminSandboxSettingsService,
     AdminDocumentRenderSettingsService,
-    AdminEnterpriseLookupSettingsService
+    AdminEnterpriseLookupSettingsService,
+    AdminStatusAlertsService,
+    AdminStatusApiService
 {
   cancelDocumentRenderJob = (input: AdminSystemDocumentRenderJobActionInput) =>
     lambdaClient.admin.system.cancelDocumentRenderJob.mutate(input);
@@ -220,7 +269,23 @@ class AdminSystemServiceImpl
   getInstanceRevisions = (input?: AdminSystemGetInstanceRevisionsInput) =>
     lambdaClient.admin.system.getInstanceRevisions.query(input);
 
-  getJobs = (input?: AdminSystemGetJobsInput) => lambdaClient.admin.system.getJobs.query(input);
+  listJobs = (input: AdminSystemJobsListInput) => lambdaClient.admin.system.jobs.list.query(input);
+
+  clearJobs = () => lambdaClient.admin.system.jobs.clear.mutate({});
+
+  getAlertSettings = () => lambdaClient.admin.system.alerts.get.query();
+
+  updateAlertSettings = (input: AdminStatusAlertsUpdateInput) =>
+    lambdaClient.admin.system.alerts.update.mutate(input);
+
+  testAlertChannel = (input: { channel: AdminStatusAlertChannel }) =>
+    lambdaClient.admin.system.alerts.test.mutate(input);
+
+  getStatusApi = () => lambdaClient.admin.system.statusApi.get.query();
+
+  rotateStatusApiToken = () => lambdaClient.admin.system.statusApi.rotate.mutate({});
+
+  revokeStatusApiToken = () => lambdaClient.admin.system.statusApi.revoke.mutate({});
 
   getSandboxPackageStats = (input?: AdminSystemGetSandboxPackageStatsInput) =>
     lambdaClient.admin.system.getSandboxPackageStats.query(input ?? {});
@@ -252,12 +317,13 @@ export const adminSystemService: AdminSystemService &
   AdminBrowserProfileService &
   AdminSandboxSettingsService &
   AdminDocumentRenderSettingsService &
-  AdminEnterpriseLookupSettingsService = new AdminSystemServiceImpl();
+  AdminEnterpriseLookupSettingsService &
+  AdminStatusAlertsService &
+  AdminStatusApiService = new AdminSystemServiceImpl();
 
 export type {
   AdminSystemCancelJobInput,
   AdminSystemGetInstanceRevisionsInput,
-  AdminSystemGetJobsInput,
   AdminSystemGetSandboxPackageStatsInput,
   AdminSystemRetryJobInput,
   AdminSystemTestDependencyInput,

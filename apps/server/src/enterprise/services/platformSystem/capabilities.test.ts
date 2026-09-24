@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { isPlatformModuleId } from '@/const/platform';
+import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
+
 import { adminSystemCapabilityKeySchema } from '../../contracts/adminSystem/status';
 import {
   CAPABILITY_KEYS,
+  capabilityModuleEnabled,
   DINGTALK_PERSONAL_BROKER_HEALTH_TIMEOUT_MS,
   fallbackCapabilities,
   findSystemAgentProblems,
@@ -14,6 +18,10 @@ import {
   projectSystemAgentCapability,
   readDingtalkPersonalDataEnabled,
 } from './capabilities';
+
+vi.mock('@/server/enterprise/services/moduleSettings', () => ({
+  isModuleEnabled: vi.fn(async () => true),
+}));
 
 describe('capability readiness', () => {
   it('maps a missing sandbox image to unavailable and a hidden tile to disabled', () => {
@@ -99,19 +107,25 @@ describe('capability readiness', () => {
         lastError: 'invalid access_token',
       }),
     ).toMatchObject({ status: 'unavailable', detail: 'invalid access_token' });
-    vi.stubEnv('DINGTALK_API_DAILY_ALERT_THRESHOLD', '5000');
     expect(
-      projectDingtalkCapability({ callsToday: 2, configured: true, errors10m: 0 }).detail,
-    ).toBe('今日 API 调用 2 次（告警阈值 5000）');
-    vi.unstubAllEnvs();
+      projectDingtalkCapability({
+        callsToday: 2,
+        configured: true,
+        dailyAlertThreshold: 20_000,
+        errors10m: 0,
+      }).detail,
+    ).toBe('今日 API 调用 2 次（告警阈值 20000）');
   });
 
   it('keeps the call-count line unchanged when the daily alert is disabled', () => {
-    vi.stubEnv('DINGTALK_API_DAILY_ALERT_THRESHOLD', '0');
     expect(
-      projectDingtalkCapability({ callsToday: 2, configured: true, errors10m: 0 }).detail,
+      projectDingtalkCapability({
+        callsToday: 2,
+        configured: true,
+        dailyAlertThreshold: 0,
+        errors10m: 0,
+      }).detail,
     ).toBe('今日 API 调用 2 次');
-    vi.unstubAllEnvs();
   });
 
   it('keeps the DingTalk personal-data status key inside the status array cap', () => {
@@ -162,7 +176,7 @@ describe('capability readiness', () => {
         enabled: true,
         healthOk: false,
       }),
-    ).toMatchObject({ status: 'unavailable', reason: '未检测到 aihub-dws 服务' });
+    ).toMatchObject({ status: 'unavailable', reason: '未检测到钉钉个人数据服务' });
     expect(
       projectDingtalkPersonalCapability({
         authorizedCount: 0,
@@ -170,7 +184,28 @@ describe('capability readiness', () => {
         enabled: true,
         healthOk: false,
       }),
-    ).toMatchObject({ status: 'unavailable', reason: 'aihub-dws 健康检查失败' });
+    ).toMatchObject({ status: 'unavailable', reason: '钉钉个人数据服务健康检查失败' });
+    expect(
+      projectDingtalkCapability({
+        callsToday: 4,
+        configured: true,
+        errors10m: 0,
+        moduleEnabled: false,
+      }),
+    ).toMatchObject({ key: 'dingtalk_connector', reason: '钉钉模块未启用', status: 'disabled' });
+    expect(
+      projectDingtalkPersonalCapability({
+        authorizedCount: 3,
+        brokerConfigured: true,
+        enabled: true,
+        healthOk: true,
+        moduleEnabled: false,
+      }),
+    ).toMatchObject({
+      key: 'dingtalk_personal',
+      reason: '钉钉个人数据模块未启用',
+      status: 'disabled',
+    });
     expect(
       projectDingtalkPersonalCapability({
         authorizedCount: 12,
@@ -190,7 +225,27 @@ describe('capability readiness', () => {
     ).toBe('unknown');
   });
 
-  it('probes aihub-dws /healthz with no auth header and a 3s timeout', async () => {
+  it('follows isModuleEnabled for known ids and stays on until a new id exists', async () => {
+    vi.mocked(isModuleEnabled).mockReset().mockResolvedValue(false);
+    await expect(capabilityModuleEnabled('sandbox')).resolves.toBe(false);
+    expect(isModuleEnabled).toHaveBeenCalledWith('sandbox');
+    vi.mocked(isModuleEnabled).mockClear();
+    if (isPlatformModuleId('dingtalk')) {
+      await expect(capabilityModuleEnabled('dingtalk')).resolves.toBe(false);
+      expect(isModuleEnabled).toHaveBeenCalledWith('dingtalk');
+    } else {
+      await expect(capabilityModuleEnabled('dingtalk')).resolves.toBe(true);
+      expect(isModuleEnabled).not.toHaveBeenCalled();
+    }
+    if (isPlatformModuleId('dingtalkPersonal')) {
+      await expect(capabilityModuleEnabled('dingtalkPersonal')).resolves.toBe(false);
+    } else {
+      await expect(capabilityModuleEnabled('dingtalkPersonal')).resolves.toBe(true);
+    }
+    vi.mocked(isModuleEnabled).mockResolvedValue(true);
+  });
+
+  it('probes the personal-data broker /healthz with no auth header and a 3s timeout', async () => {
     const fetchImpl = vi.fn(
       async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );

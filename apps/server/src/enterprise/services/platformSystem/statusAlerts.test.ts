@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_STATUS_ALERT_SETTINGS } from '@/types/platform/statusAlerts';
+
 import {
   dingtalkApiCallStatsRedisKey,
   formatDingtalkApiCallStatsDate,
   resetDingtalkApiCallStatsForTest,
 } from '../dingtalkWorkspace/apiCallStats';
 import type { CapabilityReport } from './capabilities';
+import { deliverStatusAlertChannels, signDingtalkRobotWebhook } from './statusAlertChannels';
 import {
   collectVerifiedAdminStaffIds,
   deriveAlertComponents,
@@ -15,10 +18,13 @@ import {
   nextAlertState,
   REDIS_UNAVAILABLE_WARN_MS,
   resetStatusAlertsForTest,
+  resolveStatusAlertSiteTitle,
   runStatusAlertEvaluation,
   selectAlertTransitions,
+  STATUS_ALERT_RECORD_WINDOW_MS,
   statusAlertLink,
   type StatusAlertSnapshot,
+  statusAlertTitleFor,
 } from './statusAlerts';
 
 const { redisBox } = vi.hoisted(() => ({
@@ -43,6 +49,8 @@ class FakeAlertRedis {
   failLock = false;
   hashes = new Map<string, Map<string, string>>();
   heldLock = false;
+  dedupTtl: number | undefined;
+  recordTtl: number | undefined;
   kv = new Map<string, string>();
 
   async set(key: string, value: string, ...args: unknown[]): Promise<'OK' | null> {
@@ -52,8 +60,19 @@ class FakeAlertRedis {
       this.kv.set(key, value);
       return 'OK';
     }
-    if (key.startsWith('platform:status-alert:dedup:')) {
-      if (this.failDedup) throw new Error('redis down');
+    if (
+      key.startsWith('platform:status-alert:dedup:') ||
+      key.startsWith('platform:status-alert:record:')
+    ) {
+      if (this.failDedup && key.startsWith('platform:status-alert:dedup:')) {
+        throw new Error('redis down');
+      }
+      const exAt = args.indexOf('EX');
+      if (exAt >= 0) {
+        const ttl = args[exAt + 1] as number;
+        if (key.startsWith('platform:status-alert:dedup:')) this.dedupTtl = ttl;
+        if (key.startsWith('platform:status-alert:record:')) this.recordTtl = ttl;
+      }
       if (args.includes('NX') && this.kv.has(key)) return null;
       this.kv.set(key, value);
       return 'OK';
@@ -154,13 +173,17 @@ describe('status alerts', () => {
       transitions,
       'https://aihub.example/admin/system/status',
     );
-    expect(message.title).toBe('AIHub 状态告警');
+    expect(message.title).toBe('AI 平台状态告警');
     expect(message.text).toContain(
       '沙箱不可用 — 沙箱镜像 aihub-sandbox:latest 不存在（拉取策略 never）',
     );
     expect(message.text).toContain('提醒任务不可用');
     expect(message.text).toContain('https://aihub.example/admin/system/status');
-    expect(message.text.startsWith('AIHub 状态告警：')).toBe(true);
+    expect(message.text.startsWith('AI 平台状态告警：')).toBe(true);
+    expect(
+      formatStatusAlertMessage(transitions, 'https://aihub.example/admin/system/status', '示例平台')
+        .title,
+    ).toBe('示例平台状态告警');
 
     const previous = nextAlertState(new Map(), broken);
     const back = selectAlertTransitions(previous, deriveAlertComponents(baseSnapshot()));
@@ -626,5 +649,256 @@ describe('status alert redis gate', () => {
     expect(redis.hashes.get('platform:status-alert:state')?.has(DINGTALK_API_BUDGET_ALERT_ID)).toBe(
       false,
     );
+  });
+
+  it('keeps state when alerts are disabled and filters rules, recovery, and dedup TTL', async () => {
+    const broken = baseSnapshot({
+      dependencies: {
+        database: { status: 'healthy' },
+        sandbox: { lastError: '沙箱镜像缺失', status: 'unavailable' },
+      },
+    });
+    const send = vi.fn();
+    const saveState = vi.fn();
+    const recorded: string[] = [];
+    const disabled = await runStatusAlertEvaluation({
+      acquireLock: async () => 'acquired',
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadPrevious: async () => new Map(),
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: { ...DEFAULT_STATUS_ALERT_SETTINGS, enabled: false },
+      }),
+      recordEvent: async (event) => {
+        recorded.push(event.message);
+      },
+      loadSnapshot: async () => broken,
+      saveState,
+      send,
+    });
+    expect(disabled).toEqual({ sent: false, transitions: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(recorded.some((message) => message.includes('沙箱'))).toBe(true);
+    expect(saveState.mock.calls[0]?.[0].get('dependency:sandbox')).toBe('unhealthy');
+
+    saveState.mockClear();
+    const filtered = await runStatusAlertEvaluation({
+      acquireLock: async () => 'acquired',
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadPrevious: async () => new Map(),
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: {
+          ...DEFAULT_STATUS_ALERT_SETTINGS,
+          rules: { ...DEFAULT_STATUS_ALERT_SETTINGS.rules, dependencies: false },
+        },
+      }),
+      loadSnapshot: async () => broken,
+      saveState,
+      send,
+    });
+    expect(filtered.sent).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    expect(saveState.mock.calls[0]?.[0].get('dependency:sandbox')).toBe('unhealthy');
+
+    saveState.mockClear();
+    const quietRecovery = await runStatusAlertEvaluation({
+      acquireLock: async () => 'acquired',
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadPrevious: async () => new Map([['dependency:sandbox', 'unhealthy']]),
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: { ...DEFAULT_STATUS_ALERT_SETTINGS, notifyOnRecovery: false },
+      }),
+      loadSnapshot: async () => baseSnapshot(),
+      saveState,
+      send,
+    });
+    expect(quietRecovery.sent).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    expect(saveState.mock.calls[0]?.[0].get('dependency:sandbox')).toBe('healthy');
+
+    await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: { ...DEFAULT_STATUS_ALERT_SETTINGS, repeatIntervalHours: 2 },
+      }),
+      loadSnapshot: async () => broken,
+      send,
+    });
+    expect(redis.dedupTtl).toBe(2 * 60 * 60);
+  });
+
+  it('records at most one event per component and health within 10 minutes', async () => {
+    const recorded: string[] = [];
+    const saveState = vi.fn();
+    const now = 1_700_000_000_000;
+    const deps = {
+      acquireLock: async () => 'acquired' as const,
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: { ...DEFAULT_STATUS_ALERT_SETTINGS, enabled: false },
+      }),
+      now: () => now,
+      recordEvent: async (event: { message: string }) => {
+        recorded.push(event.message);
+      },
+      saveState,
+      send: vi.fn(),
+    };
+
+    await runStatusAlertEvaluation({
+      ...deps,
+      loadPrevious: async () => new Map(),
+      loadSnapshot: async () => broken,
+    });
+    expect(recorded).toHaveLength(1);
+    expect(redis.recordTtl).toBe(STATUS_ALERT_RECORD_WINDOW_MS / 1000);
+    expect(saveState.mock.calls[0]?.[0].get('dependency:sandbox')).toBe('unhealthy');
+
+    recorded.length = 0;
+    saveState.mockClear();
+    await runStatusAlertEvaluation({
+      ...deps,
+      loadPrevious: async () => new Map([['dependency:sandbox', 'healthy']]),
+      loadSnapshot: async () => broken,
+    });
+    expect(recorded).toEqual([]);
+    expect(saveState.mock.calls[0]?.[0].get('dependency:sandbox')).toBe('unhealthy');
+
+    await runStatusAlertEvaluation({
+      ...deps,
+      loadPrevious: async () => new Map([['dependency:sandbox', 'unhealthy']]),
+      loadSnapshot: async () => baseSnapshot(),
+    });
+    expect(recorded.some((message) => message.includes('恢复'))).toBe(true);
+
+    const recordedAfterRecovery = recorded.length;
+    saveState.mockClear();
+    await runStatusAlertEvaluation({
+      ...deps,
+      loadPrevious: async () => new Map([['dependency:sandbox', 'unhealthy']]),
+      loadSnapshot: async () => baseSnapshot(),
+    });
+    expect(recorded).toHaveLength(recordedAfterRecovery);
+    expect(saveState.mock.calls[0]?.[0].get('dependency:sandbox')).toBe('healthy');
+  });
+
+  it('overrides the DingTalk API budget threshold from settings', async () => {
+    const key = dingtalkApiCallStatsRedisKey(formatDingtalkApiCallStatsDate(new Date()));
+    redis.hashes.set(key, new Map([['POST /a', '10']]));
+    const send = vi.fn();
+    const over = await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: { ...DEFAULT_STATUS_ALERT_SETTINGS, dingtalkApiDailyThreshold: 10 },
+      }),
+      loadSnapshot: async () => baseSnapshot(),
+      send,
+    });
+    expect(over.sent).toBe(true);
+    expect(String(send.mock.calls[0]?.[0]?.text)).toContain('超过告警阈值 10');
+
+    resetStatusAlertsForTest();
+    redis.hashes.clear();
+    redis.kv.clear();
+    redis.dedupTtl = undefined;
+    redis.hashes.set(key, new Map([['POST /a', '100']]));
+    const quiet = vi.fn();
+    const off = await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSettings: async () => ({
+        robotSecret: null,
+        robotWebhook: null,
+        settings: { ...DEFAULT_STATUS_ALERT_SETTINGS, dingtalkApiDailyThreshold: 0 },
+      }),
+      loadSnapshot: async () => baseSnapshot(),
+      send: quiet,
+    });
+    expect(off).toEqual({ sent: false, transitions: 0 });
+    expect(quiet).not.toHaveBeenCalled();
+  });
+});
+
+describe('status alert channels', () => {
+  it('uses the site title and falls back when the brand is a built-in Latin name', () => {
+    expect(resolveStatusAlertSiteTitle('示例平台')).toBe('示例平台');
+    expect(resolveStatusAlertSiteTitle('AIHub')).toBe('AI 平台');
+    expect(resolveStatusAlertSiteTitle('  ')).toBe('AI 平台');
+    expect(statusAlertTitleFor('AI 平台')).toBe('AI 平台状态告警');
+    expect(statusAlertTitleFor('Acme')).toBe('Acme 状态告警');
+  });
+
+  it('signs the DingTalk robot webhook and skips email when mail is not configured', async () => {
+    const secret = 'SEC123';
+    const timestamp = 1_700_000_000_000;
+    const webhook = 'https://oapi.dingtalk.com/robot/send?access_token=token';
+    const signed = signDingtalkRobotWebhook(webhook, secret, timestamp);
+    const { createHmac } = await import('node:crypto');
+    const expectedSign = encodeURIComponent(
+      createHmac('sha256', secret).update(`${timestamp}\n${secret}`).digest('base64'),
+    );
+    expect(signed).toBe(`${webhook}&timestamp=${timestamp}&sign=${expectedSign}`);
+    const swapped = encodeURIComponent(
+      createHmac('sha256', `${timestamp}\n${secret}`).update(secret).digest('base64'),
+    );
+    expect(signed).not.toContain(`sign=${swapped}`);
+
+    const sendEmail = vi.fn();
+    const fetchImpl = vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(JSON.stringify({ errcode: 0 }), { status: 200 }),
+    );
+    const sendWorkNotice = vi.fn(async () => {
+      throw new Error('work notice down');
+    });
+    const counts = await deliverStatusAlertChannels({
+      fetchImpl,
+      mailConfigured: false,
+      message: { text: '数据库不可用', title: '示例平台状态告警' },
+      now: timestamp,
+      sendEmail,
+      sendWorkNotice,
+      target: {
+        email: { enabled: true, recipients: ['ops@example.com'] },
+        robot: {
+          enabled: true,
+          keyword: '状态',
+          secret,
+          webhookUrl: webhook,
+        },
+        workNotice: { enabled: true, staffIds: ['staff-1'] },
+      },
+    });
+    expect(counts).toEqual({ email: 0, robot: 1, workNotice: 0 });
+    expect(sendEmail).not.toHaveBeenCalled();
+    const fetchCall = fetchImpl.mock.calls[0];
+    expect(String(fetchCall?.[0])).toBe(signed);
+    const body = JSON.parse(String(fetchCall?.[1]?.body));
+    expect(body.markdown.title).toBe('示例平台状态告警');
+    expect(body.markdown.text.startsWith('状态\n')).toBe(true);
+    expect(body.markdown.text).toContain('数据库不可用');
   });
 });

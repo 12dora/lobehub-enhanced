@@ -2,18 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
-import type { AdminSystemJob, AdminSystemJobs } from '@/enterprise/client/services/adminSystem';
+import type { AdminSystemJob } from '@/enterprise/client/services/adminSystem';
 
 import {
-  adminSystemJobsChanged,
   canRunAdminSystemJobAction,
   classifyAdminSystemJobsError,
-  collectAdminSystemJobs,
   deriveAdminSystemPermissions,
   deriveSsoPresentation,
   didAdminSystemJobRefreshConfirm,
   isAdminSystemInvalidInputError,
-  resetAdminSystemJobPages,
   shouldPollAdminSystemJobs,
   type SsoOidcStatus,
 } from './controller';
@@ -38,11 +35,6 @@ const job = (overrides: Partial<AdminSystemJob> = {}): AdminSystemJob => ({
   ...overrides,
 });
 
-const page = (items: AdminSystemJob[], nextCursor: string | null = null): AdminSystemJobs => ({
-  items,
-  nextCursor,
-});
-
 describe('Admin System permissions', () => {
   it('derives read and operate independently', () => {
     expect(deriveAdminSystemPermissions([])).toEqual({ canOperate: false, canRead: false });
@@ -60,22 +52,12 @@ describe('Admin System permissions', () => {
 });
 
 describe('Admin System job polling and errors', () => {
-  it('uses the aggregate active count as the polling authority', () => {
-    expect(
-      shouldPollAdminSystemJobs({ authoritativeActiveCount: 2, visibleHasActiveJobs: false }),
-    ).toBe(true);
-    expect(
-      shouldPollAdminSystemJobs({ authoritativeActiveCount: 0, visibleHasActiveJobs: true }),
-    ).toBe(false);
-    expect(
-      shouldPollAdminSystemJobs({ authoritativeActiveCount: null, visibleHasActiveJobs: true }),
-    ).toBe(true);
-    expect(
-      shouldPollAdminSystemJobs({
-        authoritativeActiveCount: undefined,
-        visibleHasActiveJobs: false,
-      }),
-    ).toBe(false);
+  it('polls only while the status aggregate reports active jobs', () => {
+    expect(shouldPollAdminSystemJobs(2)).toBe(true);
+    expect(shouldPollAdminSystemJobs(0)).toBe(false);
+    // An unhealthy / missing aggregate never starts the 3s loop.
+    expect(shouldPollAdminSystemJobs(null)).toBe(false);
+    expect(shouldPollAdminSystemJobs(undefined)).toBe(false);
   });
 
   it('separates initial, load-more, and background failures', () => {
@@ -109,47 +91,28 @@ describe('Admin System job polling and errors', () => {
   });
 });
 
-describe('Admin System job collection', () => {
-  it('stages progress and order changes instead of treating them as equal', () => {
-    const first = page([job()]);
-    expect(adminSystemJobsChanged(first, page([job({ progress: { done: 2, total: 3 } })]))).toBe(
-      true,
-    );
-    expect(
-      adminSystemJobsChanged(
-        page([job(), job({ jobId: 'pjob_0000000000000002' })]),
-        page([job({ jobId: 'pjob_0000000000000002' }), job()]),
-      ),
-    ).toBe(true);
-    expect(adminSystemJobsChanged(first, page([job()]))).toBe(false);
-  });
-
-  it('resets stale cursor pages when applying a staged first page', () => {
-    const repeated = job({ jobId: 'pjob_0000000000000002' });
-    const merged = resetAdminSystemJobPages(page([repeated], 'next'));
-
-    expect(collectAdminSystemJobs(merged).map(({ jobId }) => jobId)).toEqual([
-      'pjob_0000000000000002',
-    ]);
-    expect(merged).toHaveLength(1);
-  });
-
+describe('Admin System job refresh confirmation', () => {
   it('requires the refreshed row to match the committed revision and status when present', () => {
     const committed = job({ revision: 2, status: 'cancelled' });
-    expect(didAdminSystemJobRefreshConfirm([page([committed])], committed)).toBe(true);
-    expect(didAdminSystemJobRefreshConfirm([page([job()])], committed)).toBe(false);
+    expect(didAdminSystemJobRefreshConfirm([committed], committed)).toBe(true);
+    expect(didAdminSystemJobRefreshConfirm([job()], committed)).toBe(false);
   });
 
-  it('treats mutation as confirmed when pagination omits the committed job', () => {
+  it('treats mutation as confirmed when pagination moves the committed job off the page', () => {
     const committed = job({ revision: 2, status: 'cancelled' });
-    // Empty / other-page load: job pushed off page one after cancel — still confirmed.
     expect(didAdminSystemJobRefreshConfirm([], committed)).toBe(true);
+    expect(didAdminSystemJobRefreshConfirm(undefined, committed)).toBe(true);
     expect(
       didAdminSystemJobRefreshConfirm(
-        [page([job({ jobId: 'pjob_0000000000000099', revision: 1 })])],
+        [job({ jobId: 'pjob_0000000000000099', revision: 1 })],
         committed,
       ),
     ).toBe(true);
+  });
+
+  it('never confirms a committed DTO without a CAS revision', () => {
+    const committed = job({ revision: null, status: 'cancelled' });
+    expect(didAdminSystemJobRefreshConfirm([committed], committed)).toBe(false);
   });
 });
 

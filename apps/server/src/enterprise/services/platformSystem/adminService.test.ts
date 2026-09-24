@@ -36,6 +36,17 @@ import { PlatformSystemAdminService } from './adminService';
 import { PlatformSystemJobConflictError, PlatformSystemJobInvalidError } from './errors';
 import { resetInfraHealthMemoForTest } from './infraHealthMemo';
 
+const jobsWatermark = vi.hoisted(() => ({
+  readJobsClearedAt: vi.fn(
+    async (_db: unknown, _options?: { strict?: boolean }): Promise<Date | null> => null,
+  ),
+  writeJobsClearedAt: vi.fn(
+    async (_db: unknown, _params: { updatedBy: string }): Promise<Date> => new Date(0),
+  ),
+}));
+
+vi.mock('./jobsWatermark', () => jobsWatermark);
+
 const db: LobeChatDatabase = await getTestDB();
 
 const rolloutInput = (revision: number) => ({
@@ -65,6 +76,8 @@ const rewrapInput = (revision: number) => ({
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  jobsWatermark.readJobsClearedAt.mockReset().mockResolvedValue(null);
+  jobsWatermark.writeJobsClearedAt.mockReset().mockResolvedValue(new Date(0));
   resetInfraHealthMemoForTest();
   resetIdentityProviderStartupArtifactForTest();
   stopIdentityProviderHeartbeatForTest();
@@ -442,6 +455,90 @@ describe('PlatformSystemAdminService jobs', () => {
         }),
       ).rejects.toBeInstanceOf(PlatformSystemJobInvalidError);
     }
+  });
+
+  it('pages jobs behind the watermark and clears without deleting rows', async () => {
+    const older = new Date('2026-07-01T00:00:00.000Z');
+    const newer = new Date('2026-07-02T00:00:00.000Z');
+    const watermark = new Date('2026-07-01T12:00:00.000Z');
+    await db.insert(platformJobs).values([
+      {
+        createdAt: older,
+        finishedAt: older,
+        id: 'pjob_0000000000000061',
+        idempotencyKey: 'system-clear-hidden',
+        status: 'succeeded',
+        type: 'platform.agent.rollout.v1',
+        updatedAt: older,
+      },
+      {
+        createdAt: older,
+        id: 'pjob_0000000000000062',
+        idempotencyKey: 'system-clear-active',
+        status: 'pending',
+        type: 'platform.agent.rollout.v1',
+      },
+      {
+        createdAt: newer,
+        finishedAt: newer,
+        id: 'pjob_0000000000000063',
+        idempotencyKey: 'system-clear-visible',
+        status: 'failed',
+        type: 'platform.audit.export.v1',
+      },
+    ]);
+    jobsWatermark.readJobsClearedAt.mockResolvedValue(watermark);
+    const service = new PlatformSystemAdminService(db, { now: () => newer });
+    const page = await service.listJobs({ page: 1, pageSize: 20 });
+    expect(page).toMatchObject({
+      clearedAt: watermark.toISOString(),
+      page: 1,
+      pageSize: 20,
+      total: 2,
+    });
+    expect(page.items.map((item) => item.jobId)).toEqual([
+      'pjob_0000000000000063',
+      'pjob_0000000000000062',
+    ]);
+
+    jobsWatermark.readJobsClearedAt.mockImplementation(
+      async (_db: unknown, options?: { strict?: boolean }) => (options?.strict ? null : watermark),
+    );
+    jobsWatermark.writeJobsClearedAt.mockResolvedValue(newer);
+    const cleared = await service.clearJobs('admin-1');
+    expect(cleared).toEqual({ clearedAt: newer.toISOString(), hidden: 2 });
+    expect(jobsWatermark.writeJobsClearedAt).toHaveBeenCalledWith(expect.anything(), {
+      updatedBy: 'admin-1',
+    });
+    const rows = await db.select().from(platformJobs);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.idempotencyKey).sort()).toEqual([
+      'system-clear-active',
+      'system-clear-hidden',
+      'system-clear-visible',
+    ]);
+    const [audit] = await db
+      .select()
+      .from(platformAuditLogs)
+      .where(eq(platformAuditLogs.action, 'admin.system.jobs.clear'));
+    expect(audit).toMatchObject({
+      afterDiff: { clearedAt: newer.toISOString(), hidden: 2 },
+      result: 'success',
+      targetId: 'jobs',
+      targetType: 'system',
+    });
+
+    jobsWatermark.readJobsClearedAt.mockResolvedValue(watermark);
+    const status = await new PlatformSystemAdminService(db, {
+      env: { ENABLE_DATABASE_OIDC: '0' },
+    }).getStatus();
+    expect(status.jobs).toMatchObject({
+      active: 1,
+      completed: 0,
+      failed: 1,
+      status: 'healthy',
+      total: 2,
+    });
   });
 });
 

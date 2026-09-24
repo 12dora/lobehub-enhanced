@@ -122,14 +122,16 @@ describe('admin procedure authorization registry', () => {
     // +1 query / +2 mutations since: admin.system.{getEnterpriseLookupSettings,
     // testEnterpriseLookupProvider, updateEnterpriseLookupSettings}.
     // +1 query since: admin.imConnectors.apiCallStats (DingTalk billed-call counters).
-    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(263);
+    // +3 queries / +5 mutations since: admin.system.alerts.{get,update,test},
+    // admin.system.jobs.{list,clear}, admin.system.statusApi.{get,rotate,revoke}.
+    expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY).toHaveLength(271);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'query'),
-    ).toHaveLength(116);
+    ).toHaveLength(119);
     expect(
       ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ kind }) => kind === 'mutation'),
-    ).toHaveLength(147);
-    expect(mutationPaths).toHaveLength(147);
+    ).toHaveLength(152);
+    expect(mutationPaths).toHaveLength(152);
     expect(ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter((entry) => 'selfAccess' in entry)).toEqual(
       [{ kind: 'query', path: 'admin.auth.getMyAccess', selfAccess: true }],
     );
@@ -257,12 +259,15 @@ describe('admin procedure authorization registry', () => {
     const systemEntries = ADMIN_PROCEDURE_AUTHORIZATION_REGISTRY.filter(({ path }) =>
       path.startsWith('admin.system.'),
     );
-    expect(systemEntries).toHaveLength(23);
+    expect(systemEntries).toHaveLength(31);
     expect(
       systemEntries.map((entry) =>
         'permission' in entry ? [entry.path, entry.permission.permissions[0]] : [entry.path, null],
       ),
     ).toEqual([
+      ['admin.system.alerts.get', PLATFORM_PERMISSIONS.SYSTEM_READ],
+      ['admin.system.alerts.test', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
+      ['admin.system.alerts.update', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.cancelDocumentRenderJob', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.cancelJob', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.getAuthSnapshotStatus', PLATFORM_PERMISSIONS.OIDC_PUBLISH],
@@ -275,11 +280,16 @@ describe('admin procedure authorization registry', () => {
       ['admin.system.getSandboxPackageStats', PLATFORM_PERMISSIONS.SYSTEM_READ],
       ['admin.system.getSandboxSettings', PLATFORM_PERMISSIONS.SYSTEM_READ],
       ['admin.system.getStatus', PLATFORM_PERMISSIONS.SYSTEM_READ],
+      ['admin.system.jobs.clear', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
+      ['admin.system.jobs.list', PLATFORM_PERMISSIONS.SYSTEM_READ],
       ['admin.system.prepareRestart', PLATFORM_PERMISSIONS.OIDC_PUBLISH],
       ['admin.system.requestRestart', PLATFORM_PERMISSIONS.OIDC_PUBLISH],
       ['admin.system.retryDocumentRenderJob', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.retryJob', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.runDocumentRenderGc', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
+      ['admin.system.statusApi.get', PLATFORM_PERMISSIONS.SYSTEM_READ],
+      ['admin.system.statusApi.revoke', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
+      ['admin.system.statusApi.rotate', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.testDependency', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.testEnterpriseLookupProvider', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],
       ['admin.system.updateDocumentRenderSettings', PLATFORM_PERMISSIONS.SYSTEM_OPERATE],

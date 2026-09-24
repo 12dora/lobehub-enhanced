@@ -1,9 +1,9 @@
 'use client';
 
 import { Flexbox } from '@lobehub/ui';
-import { Alert, Button, Text } from '@lobehub/ui/base-ui';
+import { Alert, Button } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
-import type { ReactNode } from 'react';
+import { Bell } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -15,8 +15,14 @@ import type {
   AdminSystemJobMutations,
   AdminSystemJobsState,
 } from '@/enterprise/client/features/admin/system/hooks/useAdminSystem';
-import type { AdminSystemStatus } from '@/enterprise/client/services/adminSystem';
+import {
+  type AdminStatusAlertsService,
+  type AdminStatusApiService,
+  adminSystemService,
+  type AdminSystemStatus,
+} from '@/enterprise/client/services/adminSystem';
 
+import { AlertSettingsDrawer } from './alerts/AlertSettingsDrawer';
 import { InstancesTable } from './components/InstancesTable';
 import { JobsPanel } from './components/JobsPanel';
 import {
@@ -26,6 +32,7 @@ import {
   StatusSummaryBadge,
   WorkerHealthList,
 } from './components/RuntimeHealth';
+import { SectionHeader } from './components/SectionHeader';
 import {
   BuildSummary,
   DependencyGrid,
@@ -43,11 +50,6 @@ const styles = createStaticStyles(({ css }) => ({
     padding-block-start: 8px;
     border-block-start: 1px solid ${cssVar.colorBorderSecondary};
   `,
-  sectionTitle: css`
-    margin: 0;
-    font-size: ${cssVar.fontSizeLG};
-    font-weight: ${cssVar.fontWeightStrong};
-  `,
 }));
 
 interface AsyncSnapshot<T> {
@@ -57,32 +59,36 @@ interface AsyncSnapshot<T> {
 }
 
 export interface SystemPageViewProps {
+  alertSettingsOpen: boolean;
+  /** Injectable for tests; defaults to the tRPC-backed service. */
+  alertsService?: AdminStatusAlertsService & AdminStatusApiService;
   authSnapshot?: SsoAuthSnapshot | null;
   canOperate: boolean;
+  /** SYSTEM_READ granted and access resolved — gates the drawer's own queries. */
+  canRead: boolean;
   instances: AdminSystemInstancesState;
   isRefreshing: boolean;
   jobs: AdminSystemJobsState;
   mutations: AdminSystemJobMutations;
+  onAlertSettingsOpenChange: (open: boolean) => void;
   onRefresh: () => void;
   onShowOfflineInstancesChange: (showOffline: boolean) => void;
   showOfflineInstances: boolean;
   status: AsyncSnapshot<AdminSystemStatus> & { retry: () => void };
 }
 
-const SectionTitle = ({ children }: { children: ReactNode }) => (
-  <Text as="h2" className={styles.sectionTitle}>
-    {children}
-  </Text>
-);
-
 export const SystemPageView = memo<SystemPageViewProps>(
   ({
+    alertSettingsOpen,
+    alertsService = adminSystemService,
     authSnapshot,
     canOperate,
+    canRead,
     instances,
     isRefreshing,
     jobs,
     mutations,
+    onAlertSettingsOpenChange,
     onRefresh,
     onShowOfflineInstancesChange,
     showOfflineInstances,
@@ -92,13 +98,17 @@ export const SystemPageView = memo<SystemPageViewProps>(
 
     return (
       <AdminPageTemplate
-        description={t('system.description')}
         notice={status.data ? <StatusSummaryBadge status={status.data} /> : undefined}
         title={t('system.title')}
         actions={
-          <Button loading={isRefreshing} type="primary" onClick={onRefresh}>
-            {t('system.actions.refresh')}
-          </Button>
+          <>
+            <Button icon={Bell} onClick={() => onAlertSettingsOpenChange(true)}>
+              {t('system.actions.alertSettings')}
+            </Button>
+            <Button loading={isRefreshing} type="primary" onClick={onRefresh}>
+              {t('system.actions.refresh')}
+            </Button>
+          </>
         }
       >
         {status.error && status.data ? (
@@ -143,8 +153,7 @@ export const SystemPageView = memo<SystemPageViewProps>(
         ) : null}
 
         <div className={styles.section}>
-          <SectionTitle>{t('system.instances.title')}</SectionTitle>
-          <Text type="secondary">{t('system.instances.description')}</Text>
+          <SectionHeader help={t('system.instances.help')} title={t('system.instances.title')} />
           <InstancesTable
             showOffline={showOfflineInstances}
             state={instances}
@@ -153,10 +162,16 @@ export const SystemPageView = memo<SystemPageViewProps>(
         </div>
 
         <div className={styles.section}>
-          <SectionTitle>{t('system.jobs.title')}</SectionTitle>
-          <Text type="secondary">{t('system.jobs.description')}</Text>
           <JobsPanel canOperate={canOperate} mutations={mutations} state={jobs} />
         </div>
+
+        <AlertSettingsDrawer
+          canOperate={canOperate}
+          canRead={canRead}
+          open={alertSettingsOpen}
+          service={alertsService}
+          onClose={() => onAlertSettingsOpenChange(false)}
+        />
       </AdminPageTemplate>
     );
   },

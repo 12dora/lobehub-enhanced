@@ -216,6 +216,7 @@ export default {
   'agentCatalog.editor.tagsPlaceholder': 'Add a tag and press Enter',
   'agentCatalog.editor.thinkingEffort': 'Thinking effort',
   'agentCatalog.editor.thinkingEffortDefault': 'Model default',
+  'agentCatalog.editor.thinkingEffortDefaultLevel': 'Model default ({{level}})',
   'agentCatalog.editor.thinkingEffortDesc': 'Unset follows the model default.',
   'agentCatalog.editor.thinkingEffortDescDefaultInbox':
     'Unset follows the model default. Members can adjust it in chat.',
@@ -2139,7 +2140,9 @@ export default {
   'identityProviders.values.testStatus.pending': 'Waiting to start',
   'identityProviders.values.testStatus.processing': 'Checking callback',
   'identityProviders.values.testStatus.succeeded': 'Succeeded',
+  'system.actions.alertSettings': 'Alert settings',
   'system.actions.refresh': 'Refresh',
+  'system.actions.reauthCancelled': 'Re-authentication cancelled',
   'system.actions.retry': 'Retry',
   'system.build.title': 'Build',
   'system.capabilities.dingtalk_connector': 'DingTalk connector',
@@ -2148,13 +2151,12 @@ export default {
   'system.capabilities.sandbox': 'Sandbox',
   'system.capabilities.system_agent_models': 'System assistant models',
   'system.capabilities.title': 'Capability readiness',
-  'system.capabilities.description':
-    'Whether key features can run with the current configuration. Only configuration is checked; no model or DingTalk API is called.',
+  'system.capabilities.help': 'Checks configuration only; no model or DingTalk API is called.',
   'system.capabilities.empty': 'No readiness data was reported.',
   'system.capabilities.hint.dingtalk_connector':
     'Check the DingTalk settings in Admin → General settings → IM connectors.',
   'system.capabilities.hint.dingtalk_personal':
-    'Check DingTalk personal data in Admin → General settings → IM connectors, and confirm aihub-dws is running.',
+    'Check the personal data authorization settings in Admin → General settings → IM connectors.',
   'system.capabilities.hint.memory_embedding':
     'Set an embedding model in Admin → Service models → Memory Embedding.',
   'system.capabilities.hint.sandbox':
@@ -2179,7 +2181,6 @@ export default {
   'system.documentRender.notConfigured': 'Sidecar not configured',
   'system.documentRender.queue': 'Render jobs: {{pending}} waiting · {{running}} in progress',
   'system.recentEvents.title': 'Recent events',
-  'system.recentEvents.description': 'Alerts, recoveries, and runtime failures, newest first.',
   'system.recentEvents.empty': 'No events recorded yet.',
   'system.recentEvents.level.error': 'Error',
   'system.recentEvents.level.info': 'Recovered',
@@ -2190,8 +2191,6 @@ export default {
   'system.runtimeErrors.title': 'Runtime errors (24 hours)',
   'system.runtimeErrors.collapse': 'Show less',
   'system.runtimeErrors.count': '{{count}} in 24 h',
-  'system.runtimeErrors.description':
-    'Failures recorded by background work and tools, counted per subsystem over a rolling 24 hours.',
   'system.runtimeErrors.expand': 'Show more',
   'system.runtimeErrors.lastAt': 'Last {{time}}',
   'system.subsystems.approval_worker': 'DingTalk auto-approval',
@@ -2217,8 +2216,7 @@ export default {
   'system.workers.task_sweep': 'Schedule sweep',
   'system.workers.task_watchdog': 'Task watchdog',
   'system.workers.title': 'Background workers',
-  'system.workers.description':
-    'Background loops in the service instance that answered this request. No recent tick means the loop has stopped.',
+  'system.workers.help': 'Shows only the instance that served this request.',
   'system.workers.empty': 'No background workers are expected on this instance.',
   'system.workers.lastTick': 'Last tick {{time}}',
   'system.workers.noTick': 'No tick yet',
@@ -2231,14 +2229,12 @@ export default {
   'system.sandbox.imageNamedMissing': 'image {{image}} missing',
   'system.sandbox.imageNamedReady': 'image {{image}} ready',
   'system.sandbox.pullPolicy': 'pull policy: {{policy}}',
-  'system.description': 'Check platform health, sign-in, background tasks, and service instances.',
   'system.instances.columns.health': 'Instance state',
   'system.instances.columns.heartbeat': 'Last heartbeat',
   'system.instances.columns.instance': 'Instance',
   'system.instances.columns.startedAt': 'Started',
   'system.instances.counts': 'Live {{live}} · Offline {{offline}}',
-  'system.instances.description':
-    'Each running service process reports a heartbeat regularly; no heartbeat for 90 seconds means offline.',
+  'system.instances.help': 'An instance with no heartbeat for 90 seconds is considered offline.',
   'system.instances.empty': 'No live instances',
   'system.instances.emptyAll': 'No service instances recorded',
   'system.instances.emptyOffline': 'No offline instances',
@@ -2255,9 +2251,8 @@ export default {
     'Could not refresh service instances. Previously loaded rows are kept.',
   'system.instances.stale': 'Offline',
   'system.instances.title': 'Service instances',
-  'system.jobs.actions.applyUpdates': 'Apply updates',
   'system.jobs.actions.cancel': 'Cancel job',
-  'system.jobs.actions.loadMore': 'Load more',
+  'system.jobs.actions.clear': 'Clear',
   'system.jobs.actions.retry': 'Retry job',
   'system.jobs.attempt': '{{attempt}} / {{max}}',
   'system.jobs.columns.actions': 'Actions',
@@ -2268,41 +2263,38 @@ export default {
   'system.jobs.columns.updatedAt': 'Updated',
   'system.jobs.committedRefreshFailed':
     'Saved, but the latest status could not be reloaded. Click Refresh.',
-  'system.jobs.description':
-    'Review recent background work. Cancelling does not undo work that already finished.',
   'system.jobs.empty': 'No jobs recorded yet',
-  'system.jobs.end': 'All jobs shown',
   'system.jobs.failedCount': '{{count}} failed',
-  'system.jobs.loadMoreFailed': 'Could not load the next page of jobs.',
   'system.jobs.modal.cancel.completedItems': 'Work that already finished is kept.',
   'system.jobs.modal.cancel.description':
     'Cancel this job. A step already in progress may finish first.',
   'system.jobs.modal.cancel.title': 'Cancel this job?',
+  'system.jobs.modal.clear.description':
+    'Jobs in progress are not affected, and no records are deleted.',
+  'system.jobs.modal.clear.title': 'Clear finished jobs?',
   'system.jobs.modal.retry.description': 'Retry the failed steps of this task.',
   'system.jobs.modal.retry.title': 'Retry this job?',
-  'system.jobs.pollFailed': 'Live job updates are paused. Click Refresh to retry.',
   'system.jobs.progress': '{{done}} / {{total}}',
   'system.jobs.progressUnknown': '{{done}} completed (total unknown)',
-  'system.jobs.readOnly': 'You can view jobs but not retry or cancel them.',
+  'system.jobs.readOnly': 'You can view jobs but not retry, cancel, or clear them.',
   'system.jobs.refreshFailed': 'Could not refresh jobs. Previously loaded rows are kept.',
   'system.jobs.summary.active': 'Active',
   'system.jobs.summary.completed': 'Completed',
   'system.jobs.summary.failed': 'Failed',
   'system.jobs.summary.total': 'Total',
-  'system.jobs.summaryTitle': 'Background tasks',
   'system.jobs.summaryCountsTitle': 'Job totals',
   'system.jobs.summaryUnavailable': 'Task totals are temporarily unavailable. Try Refresh.',
   'system.jobs.title': 'Recent tasks',
   'system.jobs.toast.cancelFailed': 'Could not cancel the job',
   'system.jobs.toast.cancelRequested': 'Cancel requested',
+  'system.jobs.toast.clearFailed': 'Could not clear jobs',
+  'system.jobs.toast.cleared': 'Cleared {{count}} finished job(s)',
   'system.jobs.toast.committedRefreshFailed':
     'Saved, but the latest job state could not be loaded.',
   'system.jobs.toast.conflict':
     'The job changed in the meantime; the latest state has been loaded.',
   'system.jobs.toast.retryFailed': 'Could not retry the job',
   'system.jobs.toast.retryRequested': 'Retry requested',
-  'system.jobs.updatesAvailable': 'New job updates are available',
-  'system.jobs.updatesAvailableDescription': 'Click Apply updates to see the latest jobs.',
   'system.oidc.attention': 'Needs attention',
   'system.oidc.attentionHint': 'Single sign-on is not running from the published configuration.',
   'system.oidc.enabled': 'Enabled',
@@ -2338,6 +2330,111 @@ export default {
   'system.status.refreshFailed':
     'System status could not be refreshed; showing the previous result.',
   'system.title': 'Status monitoring',
+  'system.alerts.tabs.alerts': 'Alerts',
+  'system.alerts.tabs.statusApi': 'Status API',
+  'system.alerts.loadFailed': 'Could not load alert settings',
+  'system.alerts.readOnly': 'You can view these settings but not change them.',
+  'system.alerts.enabled': 'Enable alerts',
+  'system.alerts.envDisabled':
+    'Alerts are turned off on the server; these settings have no effect for now.',
+  'system.alerts.envDisabledHelp':
+    'The server sets AIHUB_STATUS_ALERTS=0. Remove it and restart to send alerts.',
+  'system.alerts.channels.title': 'Channels',
+  'system.alerts.channels.workNotice': 'Work notification',
+  'system.alerts.channels.workNoticeHelp':
+    'Sent through the DingTalk notification app. Only users with a bound DingTalk account receive it.',
+  'system.alerts.channels.robot': 'DingTalk group robot',
+  'system.alerts.channels.email': 'Email',
+  'system.alerts.channels.notifyAppMissing': 'The DingTalk notification app is not configured.',
+  'system.alerts.channels.notifyModuleOff': 'The DingTalk notification module is turned off.',
+  'system.alerts.channels.mailMissing': 'Mail service is not configured.',
+  'system.alerts.channels.configure': 'Configure',
+  'system.alerts.recipients.label': 'Recipients',
+  'system.alerts.recipients.roles': 'Platform admins',
+  'system.alerts.recipients.users': 'Specific users',
+  'system.alerts.recipients.addUser': 'Search to add a user',
+  'system.alerts.recipients.unbound':
+    'No DingTalk account bound; this user will not receive work notifications',
+  'system.alerts.recipients.deleted': 'Deleted user',
+  'system.alerts.recipients.banned': 'Disabled',
+  'system.alerts.recipients.bannedHelp': 'This account is disabled and will not receive alerts.',
+  'system.alerts.robot.webhookUrl': 'Webhook URL',
+  'system.alerts.robot.secret': 'Signing secret',
+  'system.alerts.robot.secretHelp': 'Required when the robot\'s security setting is "Signature".',
+  'system.alerts.robot.keyword': 'Keyword',
+  'system.alerts.robot.keywordHelp':
+    'Required when the robot\'s security setting is "Custom keywords"; every alert includes it.',
+  'system.alerts.robot.optional': 'Optional',
+  'system.alerts.credential.stored': 'Current: {{hint}}',
+  'system.alerts.email.recipients': 'Recipients',
+  'system.alerts.email.placeholder': 'Enter an email address and press Enter',
+  'system.alerts.rules.title': 'Alert rules',
+  'system.alerts.rules.dependencies': 'Dependencies',
+  'system.alerts.rules.workers': 'Background workers',
+  'system.alerts.rules.capabilities': 'Capability readiness',
+  'system.alerts.rules.runtimeErrors': 'Runtime error spikes',
+  'system.alerts.rules.dingtalkApiBudget': 'DingTalk API usage',
+  'system.alerts.rules.threshold': 'Daily DingTalk API call threshold',
+  'system.alerts.rules.thresholdHelp': 'Leave empty to use the default. 0 turns this alert off.',
+  'system.alerts.rules.thresholdPlaceholder': 'Default {{value}}',
+  'system.alerts.rules.thresholdDefault': 'Default',
+  'system.alerts.rules.repeatInterval': 'Repeat interval (hours)',
+  'system.alerts.rules.repeatIntervalHelp':
+    'How long to wait before reminding again about a problem that is still ongoing.',
+  'system.alerts.rules.notifyOnRecovery': 'Notify on recovery',
+  'system.alerts.test.action': 'Send test',
+  'system.alerts.test.saveFirst': 'Switch this channel on and save first',
+  'system.alerts.test.unsaved': 'Save your changes first',
+  'system.alerts.test.success': 'Sent to {{count}} recipient(s)',
+  'system.alerts.test.failed': 'Failed: {{error}}',
+  'system.alerts.test.failedUnknown': 'Could not send. Try again later.',
+  'system.alerts.errors.invalid': 'Fix the highlighted fields first.',
+  'system.alerts.errors.rolesRequired': 'Select at least one role.',
+  'system.alerts.errors.usersRequired': 'Add at least one user.',
+  'system.alerts.errors.webhookUrl': 'Enter a valid DingTalk robot webhook URL.',
+  'system.alerts.errors.secretInvalid':
+    'Enter a signing secret of up to {{max}} characters (not just spaces).',
+  'system.alerts.errors.webhookRequired': "Enter the robot's webhook URL.",
+  'system.alerts.errors.emailRequired': 'Add at least one recipient.',
+  'system.alerts.errors.emailInvalid': 'Invalid email address: {{value}}',
+  'system.alerts.errors.emailTooMany': 'At most {{max}} recipients.',
+  'system.alerts.errors.threshold': 'Enter a whole number from 0 to 10,000,000.',
+  'system.alerts.errors.repeatInterval': 'Enter a whole number from 1 to 168.',
+  'system.alerts.save': 'Save',
+  'system.alerts.cancel': 'Cancel',
+  'system.alerts.close': 'Close',
+  'system.alerts.toast.saved': 'Alert settings saved',
+  'system.alerts.toast.saveFailed': 'Could not save alert settings',
+  'system.alerts.toast.conflict':
+    'The settings were changed elsewhere. Review them and save again.',
+  'system.statusApi.endpoints': 'Endpoints',
+  'system.statusApi.help':
+    'For an external monitoring system. Send the token as "Authorization: Bearer <token>"; the health check needs no token.',
+  'system.statusApi.endpoint.summary': 'Status summary',
+  'system.statusApi.endpoint.events': 'Events',
+  'system.statusApi.endpoint.health': 'Health check',
+  'system.statusApi.healthNoAuth': 'No token',
+  'system.statusApi.token.title': 'Access token',
+  'system.statusApi.token.notSet': 'Not generated',
+  'system.statusApi.token.set': 'Generated · {{hint}} · {{time}}',
+  'system.statusApi.token.envConfigured':
+    'A token is also set by an environment variable and works as well.',
+  'system.statusApi.token.generate': 'Generate token',
+  'system.statusApi.token.rotate': 'Regenerate',
+  'system.statusApi.token.revoke': 'Revoke',
+  'system.statusApi.token.once':
+    'This token is shown only once. Copy it now; it works on every instance within a minute.',
+  'system.statusApi.token.copy': 'Copy',
+  'system.statusApi.modal.rotate.title': 'Regenerate the token?',
+  'system.statusApi.modal.rotate.description':
+    'The old token stops working within a minute, and the new one works on every instance within a minute. Update the services that use it.',
+  'system.statusApi.modal.revoke.title': 'Revoke the token?',
+  'system.statusApi.modal.revoke.description':
+    'The token stops working within a minute; after that it can no longer access the status API.',
+  'system.statusApi.toast.rotated': 'New token generated',
+  'system.statusApi.toast.revoked': 'Token revoked',
+  'system.statusApi.toast.failed': 'Operation failed',
+  'system.statusApi.loadFailed': 'Could not load status API details',
   'system.values.availabilityError.operation_unavailable':
     'The operation is temporarily unavailable.',
   'system.values.dependencyError.configuration_incomplete': 'Configuration is incomplete.',
@@ -2392,8 +2489,7 @@ export default {
   'system.values.status.unknown': 'Unknown',
   'system.values.status.unreported': 'Unreported',
   'systemGeneral.title': 'General settings',
-  'systemGeneral.description':
-    'Infrastructure, IM connectors, and network proxy settings for this deployment.',
+  'systemGeneral.description': 'Infrastructure and integration settings for this deployment.',
   'systemGeneral.tabs.infrastructure': 'Infrastructure',
   'systemGeneral.tabs.imConnectors': 'IM connectors',
   'systemGeneral.tabs.networkProxy': 'Network proxy',
@@ -2421,16 +2517,13 @@ export default {
   'systemGeneral.howToChange.restart': 'Restart the service after changing these variables.',
   // IM 连接器 — one admin-provisioned robot per IM platform (§ adminImConnectors contract).
   'systemGeneral.imConnectors.empty': 'No IM platforms are available.',
-  'systemGeneral.imConnectors.readOnly':
-    'You can view the connector, but you do not have permission to change it.',
+  'systemGeneral.imConnectors.readOnly': 'You can view this connector but not change it.',
   'systemGeneral.imConnectors.saved': 'Saved',
   'systemGeneral.imConnectors.platform.dingtalk': 'DingTalk',
-  'systemGeneral.imConnectors.sections.credentials': 'Credentials',
-  'systemGeneral.imConnectors.sections.cardTemplates': 'Card templates',
-  'systemGeneral.imConnectors.sections.capabilities': 'Capabilities',
-  'systemGeneral.imConnectors.sections.session': 'Session policy',
-  // 通知应用（服务号）— the second DingTalk app: work notifications + the contacts directory.
-  'systemGeneral.imConnectors.sections.notifyApp': 'Notification app (service account)',
+  'systemGeneral.imConnectors.sections.credentials': 'Connection credentials',
+  'systemGeneral.imConnectors.sections.chat': 'Robot chat',
+  // 通知应用 — the second DingTalk app: work notifications + the contacts directory.
+  'systemGeneral.imConnectors.sections.notifyApp': 'Notification app',
   'systemGeneral.imConnectors.fields.enabled': 'Enabled',
   'systemGeneral.imConnectors.fields.clientId': 'Client ID',
   'systemGeneral.imConnectors.fields.clientSecret': 'Client Secret',
@@ -2441,46 +2534,56 @@ export default {
   'systemGeneral.imConnectors.fields.notifyAppKey': 'AppKey',
   'systemGeneral.imConnectors.fields.notifyAppSecret': 'AppSecret',
   'systemGeneral.imConnectors.fields.notifyAgentId': 'AgentId',
-  'systemGeneral.imConnectors.fields.notifyRobotEnabled': 'Service-account robot',
-  'systemGeneral.imConnectors.fields.notifyWorkNoticeEnabled': 'Work notification',
+  'systemGeneral.imConnectors.fields.notifyRobotEnabled': 'Robot messages',
+  'systemGeneral.imConnectors.fields.notifyWorkNoticeEnabled': 'Work notifications',
   'systemGeneral.imConnectors.fields.aiCardTemplateId': 'AI card template ID',
   'systemGeneral.imConnectors.fields.selectCardTemplateId': 'Select card template ID',
-  'systemGeneral.imConnectors.fields.chatEnabled': 'Chat',
+  'systemGeneral.imConnectors.fields.confirmCardTemplateId': 'Confirmation card template ID',
+  'systemGeneral.imConnectors.fields.chatEnabled': 'Enable chat',
   'systemGeneral.imConnectors.fields.pushEnabled': 'Reminder push',
   'systemGeneral.imConnectors.fields.idleNewTopic': 'Start a new session when idle',
   'systemGeneral.imConnectors.fields.idleNewTopicHours': 'Idle duration (hours)',
   'systemGeneral.imConnectors.hints.credentials':
     'Create an enterprise internal app in the DingTalk developer console, add a robot, and set message receiving to Stream mode.',
   'systemGeneral.imConnectors.hints.robotCode':
-    'From the robot page of the app; it is usually the same as the Client ID.',
+    "Shown on the app's robot page; usually the same as the Client ID.",
   'systemGeneral.imConnectors.hints.robotDisplayName':
-    'Shown in the binding instructions on chat platforms; keep it identical to the robot name in DingTalk.',
+    'Keep it identical to the robot name in DingTalk; used in binding instructions. Leave it empty to use the default name.',
   'systemGeneral.imConnectors.hints.corpId':
-    'DingTalk developer console home page → Enterprise information → CorpId. Leave it empty to pick it up from the first message.',
+    'DingTalk developer console home → Enterprise information → CorpId. Left empty, it is detected automatically.',
   'systemGeneral.imConnectors.hints.agentId':
-    'DingTalk developer console → App → Basic information → AgentId. Used by the workbench micro-app single sign-on deep link.',
-  'systemGeneral.imConnectors.hints.cardTemplates':
-    'Falls back to Markdown messages when left empty.',
+    'DingTalk developer console → App → Basic information → AgentId. Used for single sign-on links into the workbench.',
   'systemGeneral.imConnectors.hints.notifyApp':
-    'Sends the work notifications used by task notices and scheduled reminders, and syncs the contacts directory. Grant the contacts read scope to this app in the DingTalk developer console and publish it.',
+    'Sends work notifications and reminders, and syncs the contacts directory. Grant this app the contacts read permission in the DingTalk developer console and publish it.',
   'systemGeneral.imConnectors.hints.notifyAgentId':
-    'DingTalk developer console → the notification app → Basic information → AgentId.',
+    'DingTalk developer console → notification app → Basic information → AgentId.',
   'systemGeneral.imConnectors.hints.notifyRobotEnabled':
-    'When off, this channel is not used for sending.',
+    "Send as a direct message from the notification app's robot.",
   'systemGeneral.imConnectors.hints.notifyWorkNoticeEnabled':
-    'When off, this channel is not used for sending.',
+    "Send as a work notification; only employees within the notification app's visible range receive it.",
   'systemGeneral.imConnectors.hints.chatEnabled': 'Answer direct messages and group mentions.',
-  'systemGeneral.imConnectors.hints.pushEnabled': 'Deliver task reminders to linked employees.',
+  'systemGeneral.imConnectors.hints.pushEnabled':
+    'Master switch for task and reminder pushes to DingTalk, over both channels (work notifications and robot messages). Without a notification app, the chat robot sends them.',
   'systemGeneral.imConnectors.hints.idleNewTopic':
-    'Start a new session when the previous message is older than the idle duration.',
+    'Start a new session when the previous message is older than the set duration.',
+  'systemGeneral.imConnectors.hints.aiCardTemplateId':
+    'Used for streaming replies. Left empty, replies are sent as Markdown messages.',
+  'systemGeneral.imConnectors.hints.selectCardTemplateId':
+    'Used to switch assistants and sessions. Left empty, a basic button card is used.',
+  'systemGeneral.imConnectors.hints.confirmCardTemplateId':
+    'The card that asks the employee to confirm before a write action. Left empty, the template from the environment is used.',
+  'systemGeneral.imConnectors.prefill.auto': 'Auto-detected',
+  'systemGeneral.imConnectors.prefill.env': 'From environment',
+  'systemGeneral.imConnectors.units.hours': 'hours',
+  'systemGeneral.imConnectors.unsaved': 'Unsaved changes',
   'systemGeneral.imConnectors.secret.stored': 'Stored · {{fingerprint}}',
   'systemGeneral.imConnectors.status.disabled': 'Disabled',
   'systemGeneral.imConnectors.status.connecting': 'Connecting',
   'systemGeneral.imConnectors.status.connected': 'Connected',
   'systemGeneral.imConnectors.status.error': 'Connection error',
   'systemGeneral.imConnectors.status.unknown': 'Unknown',
-  'systemGeneral.imConnectors.status.lastEventAt': 'Last event {{time}}',
-  'systemGeneral.imConnectors.status.lastFrameAt': 'Last frame {{time}}',
+  'systemGeneral.imConnectors.status.lastEventAt': 'Last event: {{time}}',
+  'systemGeneral.imConnectors.status.lastFrameAt': 'Last heartbeat: {{time}}',
   'systemGeneral.imConnectors.stats.linkedUsers': 'Linked employees {{value}}',
   'systemGeneral.imConnectors.stats.messages7d': 'Messages in 7 days {{value}}',
   'systemGeneral.imConnectors.stats.pushes7d': 'Pushes in 7 days {{value}}',
@@ -2493,8 +2596,6 @@ export default {
   'systemGeneral.imConnectors.test.errors.unknown': 'Connection test failed.',
   'systemGeneral.imConnectors.errors.idleHours': 'Enter a whole number between 1 and 720.',
   'systemGeneral.imConnectors.notifyApp.test': 'Test',
-  'systemGeneral.imConnectors.notifyApp.secretPlaceholder':
-    'Stored — leave blank to keep it unchanged',
   'systemGeneral.imConnectors.notifyApp.directory.summary':
     'Directory: {{departments}} departments · {{users}} members · last synced {{time}}',
   'systemGeneral.imConnectors.notifyApp.directory.never': 'Not synced yet',
@@ -2506,11 +2607,12 @@ export default {
   'systemGeneral.imConnectors.notifyApp.directory.error': 'Last sync failed: {{message}}',
   'systemGeneral.imConnectors.notifyApp.directory.loadFailed':
     'Could not load directory status. Try again.',
-  // 钉钉个人数据 — employee-authorized reads of their own to-dos, group chats and reports.
-  'systemGeneral.imConnectors.personal.title': 'DingTalk personal data (employee authorization)',
+  // 个人数据授权 — employee-authorized reads of their own to-dos, group chats, reports and docs.
+  'systemGeneral.imConnectors.personal.title': 'Personal data authorization',
   'systemGeneral.imConnectors.personal.description':
-    'After an employee authorizes it, the AI assistant can read that employee\'s own DingTalk to-dos, group messages, work reports, docs, Drive files, knowledge bases, sheets and AI tables. Deploy the aihub-dws service first, and in <cli>DingTalk developer console → Basic information → CLI settings</cli> turn on "Allow members to access personal data through the CLI".',
-  'systemGeneral.imConnectors.personal.fields.enabled': 'Enable DingTalk personal data',
+    'Once an employee authorizes it, the assistant can read that employee\'s own DingTalk to-dos, group messages, work reports, docs and sheets. Turn on "Allow members to access personal data through the CLI" in the DingTalk developer console.',
+  'systemGeneral.imConnectors.personal.cliLink': 'CLI settings',
+  'systemGeneral.imConnectors.personal.fields.enabled': 'Allow employee authorization',
   'systemGeneral.imConnectors.personal.fields.todo': 'To-dos',
   'systemGeneral.imConnectors.personal.fields.chat': 'Group messages',
   'systemGeneral.imConnectors.personal.fields.report': 'Work reports',
@@ -2518,17 +2620,19 @@ export default {
   'systemGeneral.imConnectors.personal.fields.docs': 'Docs / Drive / Knowledge bases',
   'systemGeneral.imConnectors.personal.fields.sheets': 'Sheets / AI tables',
   'systemGeneral.imConnectors.personal.hints.write':
-    "Update or complete a to-do, submit a report, append to or create a doc, append sheet rows, and add or update AI-table records. Each action needs the employee's approval on a confirmation card.",
+    "Update or complete to-dos, submit reports, and edit docs and sheets. Every write needs the employee's approval on a confirmation card.",
   'systemGeneral.imConnectors.personal.brokerMissing':
-    'aihub-dws was not detected (DINGTALK_PERSONAL_BROKER_URL / DINGTALK_PERSONAL_BROKER_TOKEN). Turning this on has no effect until the service is configured.',
+    'Personal data service not detected; turning this on has no effect yet',
+  'systemGeneral.imConnectors.personal.brokerMissingHelp':
+    'Deploy the personal data service and set DINGTALK_PERSONAL_BROKER_URL and DINGTALK_PERSONAL_BROKER_TOKEN.',
+  'systemGeneral.imConnectors.personal.brokerService': 'Personal data service',
   'systemGeneral.imConnectors.personal.authorizedCount': '{{count}} employees authorized',
   // 工作台能力 — approval, to-dos and calendar handled as the member's own DingTalk identity. They
   // run on the notification app, which is why the block sits under it.
   'systemGeneral.imConnectors.workspace.title': 'Workbench capabilities',
   'systemGeneral.imConnectors.workspace.description':
-    "Lets the assistant handle approvals, to-dos and calendar events as the member's own DingTalk identity.",
-  'systemGeneral.imConnectors.workspace.notConfigured':
-    'These capabilities run on the notification app above. Configure it first.',
+    "The assistant handles approvals, to-dos and calendar events as the member's own DingTalk identity. All calls go through the notification app.",
+  'systemGeneral.imConnectors.workspace.notConfigured': 'Configure the notification app first.',
   'systemGeneral.imConnectors.workspace.fields.approval': 'Approval',
   'systemGeneral.imConnectors.workspace.fields.todo': 'To-dos',
   'systemGeneral.imConnectors.workspace.fields.calendar': 'Calendar',
@@ -2546,15 +2650,14 @@ export default {
   'systemGeneral.imConnectors.workspace.tier.hints.off':
     'Automatic approval rules cannot be created or run.',
   'systemGeneral.imConnectors.workspace.tier.hints.strict':
-    'Rules must expire within 90 days, and each rule handles up to 20 items a day.',
+    'Expires within 90 days; up to 20 items per rule per day.',
   'systemGeneral.imConnectors.workspace.tier.hints.moderate':
-    'Rules may run indefinitely, and each rule handles up to 50 items a day.',
-  'systemGeneral.imConnectors.workspace.tier.hints.relaxed':
-    'Rules may run indefinitely, with no daily limit.',
-  'systemGeneral.imConnectors.workspace.tier.requiresApproval': 'Available once Approval is on.',
+    'No expiry; up to 50 items per rule per day.',
+  'systemGeneral.imConnectors.workspace.tier.hints.relaxed': 'No expiry; no daily limit.',
   'systemGeneral.imConnectors.workspace.probe.run': 'Check permissions',
   'systemGeneral.imConnectors.workspace.probe.row': '{{capability}}: {{status}}',
   'systemGeneral.imConnectors.workspace.probe.ok': 'Granted',
+  'systemGeneral.imConnectors.workspace.probe.skipped': 'Not installed',
   'systemGeneral.imConnectors.workspace.probe.missingScopes': 'Missing permission: {{scopes}}',
   'systemGeneral.imConnectors.workspace.probe.applyLink': 'Request the permission in DingTalk',
   'systemGeneral.imConnectors.workspace.probe.consoleLink':
@@ -2570,10 +2673,10 @@ export default {
     'Existing rules will be shortened to expire within 90 days, and their owners will be notified.',
   'systemGeneral.imConnectors.workspace.tierConfirm.off':
     'Existing rules will stop running. They are not deleted.',
-  // 接口调用量 — what the workbench capabilities above actually spend of the vendor's per-app quota.
+  // 接口调用量 — what this deployment's DingTalk calls spend of the vendor's per-app quota.
   'systemGeneral.imConnectors.apiStats.title': 'API call volume',
   'systemGeneral.imConnectors.apiStats.description':
-    'Calls the workbench capabilities made through the notification app. DingTalk meters them per app.',
+    'DingTalk API calls made by this deployment. DingTalk meters the quota per app.',
   'systemGeneral.imConnectors.apiStats.total': 'Last {{days}} days {{value}}',
   'systemGeneral.imConnectors.apiStats.today': 'Today {{value}}',
   'systemGeneral.imConnectors.apiStats.column.api': 'API',
@@ -2584,7 +2687,7 @@ export default {
   'systemGeneral.imConnectors.apiStats.empty': 'No data',
   'systemGeneral.imConnectors.apiStats.emptyToday': 'No calls today',
   'systemGeneral.imConnectors.apiStats.loadFailed': 'Could not load the call volume. Try again.',
-  // 绑定用户 — which AIHub account a DingTalk user pushes to. Signing in through DingTalk binds
+  // 绑定用户 — which platform account a DingTalk user pushes to. Signing in through DingTalk binds
   // the account automatically; every other account (local / break-glass) is bound here by hand.
   'systemGeneral.imConnectors.bindings.bind': 'Bind user',
   'systemGeneral.imConnectors.bindings.bindFailed': 'Could not bind this user. Try again.',
@@ -2593,7 +2696,7 @@ export default {
   'systemGeneral.imConnectors.bindings.columns.createdAt': 'Bound at',
   'systemGeneral.imConnectors.bindings.columns.platformUser': 'DingTalk user',
   'systemGeneral.imConnectors.bindings.columns.source': 'Source',
-  'systemGeneral.imConnectors.bindings.columns.user': 'AIHub user',
+  'systemGeneral.imConnectors.bindings.columns.user': 'Platform user',
   'systemGeneral.imConnectors.bindings.conflict':
     'This DingTalk user is already bound to {{name}}.',
   'systemGeneral.imConnectors.bindings.conflictIdentityEmail':
@@ -2603,13 +2706,13 @@ export default {
   'systemGeneral.imConnectors.bindings.emptySearch': 'No binding matches this search.',
   'systemGeneral.imConnectors.bindings.fields.platformUserId': 'DingTalk user ID',
   'systemGeneral.imConnectors.bindings.fields.platformUsername': 'DingTalk name (optional)',
-  'systemGeneral.imConnectors.bindings.fields.user': 'AIHub user',
+  'systemGeneral.imConnectors.bindings.fields.user': 'Platform user',
   'systemGeneral.imConnectors.bindings.hint':
-    'Reminders reach the AIHub account bound to a DingTalk user. Accounts that signed in with DingTalk are bound automatically; bind the others here.',
+    'Reminders reach the account bound to each DingTalk user. Accounts that signed in with DingTalk are bound automatically; bind the others here.',
   'systemGeneral.imConnectors.bindings.hints.platformUserId':
     'The userid from the DingTalk contacts directory.',
   'systemGeneral.imConnectors.bindings.hints.platformUsername':
-    'Left empty, the name is read from DingTalk when the connector has credentials.',
+    'Left empty, it is read from DingTalk.',
   'systemGeneral.imConnectors.bindings.hints.user':
     'The account whose task reminders are pushed to DingTalk.',
   'systemGeneral.imConnectors.bindings.loadFailed': 'Could not load the bound users.',
@@ -2619,7 +2722,7 @@ export default {
     'Rebinding stops DingTalk reminders from reaching {{name}}.',
   'systemGeneral.imConnectors.bindings.rebindKeepsIdentity':
     'Rebinding routes messages from this DingTalk user to the new account; reminders for both accounts still reach the same DingTalk user.',
-  'systemGeneral.imConnectors.bindings.search': 'Search an AIHub user or a DingTalk ID',
+  'systemGeneral.imConnectors.bindings.search': 'Search a platform user or DingTalk ID',
   'systemGeneral.imConnectors.bindings.source.auto': 'Automatic',
   'systemGeneral.imConnectors.bindings.source.manual': 'Manual',
   'systemGeneral.imConnectors.bindings.submit': 'Bind',
@@ -3196,10 +3299,15 @@ export default {
   'audit.logs.action.admin.skills.rollback': 'Roll back skill',
   'audit.logs.action.admin.skills.updateDraft': 'Update skill draft',
   'audit.logs.action.admin.skills.validate': 'Validate skill',
+  'audit.logs.action.admin.system.alerts.test': 'Send a status alert test',
+  'audit.logs.action.admin.system.alerts.update': 'Update status alert settings',
   'audit.logs.action.admin.system.jobs.cancel': 'Cancel platform job',
+  'audit.logs.action.admin.system.jobs.clear': 'Clear finished jobs',
   'audit.logs.action.admin.system.jobs.retry': 'Retry platform job',
   'audit.logs.action.admin.system.prepareRestart': 'Prepare restart',
   'audit.logs.action.admin.system.requestRestart': 'Request restart',
+  'audit.logs.action.admin.system.statusApi.revoke': 'Revoke status API token',
+  'audit.logs.action.admin.system.statusApi.rotate': 'Generate status API token',
   'audit.logs.action.admin.users.ban': 'Ban user',
   'audit.logs.action.admin.users.create': 'Create user',
   'audit.logs.action.admin.users.delete': 'Delete user',
@@ -4777,6 +4885,10 @@ export default {
     '{{label}} · unavailable until the provider list loads',
   'enterprise.error.PLATFORM_MODULE_DISABLED':
     'This feature belongs to a module that is switched off for this deployment.',
+  'modules.blockedBy': 'Turn on {{modules}} first',
+  'modules.blockedByEnv': '{{module}} is switched off by {{variable}}',
+  'modules.children': '{{n}} sub-modules',
+  'modules.collapseAll': 'Collapse all',
   'modules.core.items.adminShell': 'Admin console shell and system status',
   'modules.core.items.auth': 'Sign-in and sessions',
   'modules.core.items.chat': 'Chat, assistants and topics',
@@ -4789,8 +4901,9 @@ export default {
   'modules.deps.redis': 'Redis',
   'modules.deps.s3': 'object storage',
   'modules.deps.searxng': 'search engine',
-  'modules.description':
-    'Turning off modules you do not use lowers memory and background work. Most changes take effect once you reload the page; modules tagged “restart required” only free their resources after the service restarts.',
+  'modules.description': 'Switch off modules you do not use to save memory and background work.',
+  'modules.descriptionHint':
+    'Most changes take effect once you reload the page. Modules tagged “Restart required” only stop their background jobs and free memory after the service restarts.',
   'modules.disabledSurface.action': 'Go to module configuration',
   'modules.disabledSurface.byEnv':
     'Switched off by {{variable}}. Change the container parameter and restart the service to enable it.',
@@ -4801,21 +4914,23 @@ export default {
   'modules.envTooltip':
     'Switched off by {{variable}}. Change the container parameter and restart the service to enable it.',
   'modules.errors.loadFailed': 'Could not load the module settings.',
+  'modules.expandAll': 'Expand all',
   'modules.errors.saveFailed':
     'Could not save the module settings. Someone may have changed them first — reload and try again.',
-  'modules.groups.fork': 'Platform management',
-  'modules.groups.upstream': 'Application features',
+  'modules.groups.app': 'Application features',
+  'modules.groups.integration': 'Integrations',
+  'modules.groups.platform': 'Platform management',
   'modules.guide.action': 'Start',
   'modules.guide.later': 'Later',
   'modules.guide.steps': '① Choose modules → ② Check infrastructure → ③ Done',
   'modules.guide.title': 'Finish setting up this deployment',
+  'modules.helpFor': 'About {{field}}',
   'modules.items.agentSignal.desc': 'Event-driven agent triggers and workflow handoff.',
   'modules.items.agentSignal.title': 'Agent signals',
   'modules.items.audit.desc':
     'Operation logs, conversation evidence, exports, legal holds and retention.',
   'modules.items.audit.title': 'Audit',
-  'modules.items.bots.desc':
-    'Discord / Slack / Telegram adapters and the resident gateway service.',
+  'modules.items.bots.desc': 'Discord, Slack and Telegram bots and their resident gateway.',
   'modules.items.bots.title': 'Chat platform bots',
   'modules.items.branding.desc': 'Custom name, logo and colors, plus the asset cleanup job.',
   'modules.items.branding.title': 'Runtime branding',
@@ -4824,9 +4939,34 @@ export default {
   'modules.items.databaseIdp.title': 'Sign-in methods',
   'modules.items.deviceGateway.desc': 'Remote device control; needs a device gateway service.',
   'modules.items.deviceGateway.title': 'Device gateway',
+  'modules.items.dingtalk.desc':
+    'Master switch for the DingTalk integration. Turning it off stops every DingTalk capability below.',
+  'modules.items.dingtalk.title': 'DingTalk',
+  'modules.items.dingtalkApproval.desc':
+    'Assistants submit and handle approvals for members, and auto-approve by rule.',
+  'modules.items.dingtalkApproval.title': 'Approvals & auto-approval',
+  'modules.items.dingtalkChat.desc': 'Members chat with assistants directly in DingTalk.',
+  'modules.items.dingtalkChat.title': 'Bot chat',
+  'modules.items.dingtalkDocs.desc':
+    "Once authorized, assistants read and write the member's DingTalk docs, drive and sheets.",
+  'modules.items.dingtalkDocs.title': 'Docs & sheets',
+  'modules.items.dingtalkNotify.desc':
+    'Work notices, task pushes and reminders through the notification app, plus directory sync.',
+  'modules.items.dingtalkNotify.title': 'Work notices & reminders',
+  'modules.items.dingtalkPersonal.desc':
+    "Once authorized, assistants read the member's DingTalk to-dos, group chats and work reports.",
+  'modules.items.dingtalkPersonal.title': 'Personal data (member-authorized)',
+  'modules.items.dingtalkWorkspace.desc':
+    'Assistants view and manage DingTalk calendar events and to-dos for members.',
+  'modules.items.dingtalkWorkspace.title': 'Calendar & to-dos',
   'modules.items.documentRender.desc':
     'Office/PDF page rendering via the Gotenberg sidecar. Required for layout-aware feeding of image-heavy documents.',
   'modules.items.documentRender.title': 'Document render',
+  'modules.items.enterpriseLookup.desc':
+    'Look up company registration and risk records through Qichacha and Tianyancha.',
+  'modules.items.enterpriseLookup.title': 'Company lookup',
+  'modules.items.fileOrphanGc.desc': 'Daily cleanup of stored files that nothing references.',
+  'modules.items.fileOrphanGc.title': 'Orphan file cleanup',
   'modules.items.imageGen.desc':
     'Image and video generation endpoints and their processing libraries.',
   'modules.items.imageGen.title': 'Image & video generation',
@@ -4854,7 +4994,9 @@ export default {
   'modules.items.platformStats.desc': 'Deployment-wide usage statistics; the queries are heavy.',
   'modules.items.platformStats.title': 'Platform statistics',
   'modules.items.sandbox.desc':
-    "Python interpreter and code sandbox tools that run in isolated local Docker containers. Requires the Docker socket (docker.sock) plus the host Docker group (`DOCKER_GID` from `stat -c '%g' /var/run/docker.sock`). EACCES means the app user cannot access the socket, not that Docker is down.",
+    'Python interpreter and code sandbox tools, run in isolated Docker containers.',
+  'modules.items.sandbox.hint':
+    "Needs the Docker socket (docker.sock) mounted and the host Docker group (`DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`). EACCES means the app user cannot access the socket, not that Docker is down.",
   'modules.items.sandbox.title': 'Code sandbox',
   'modules.items.settingsPolicy.desc':
     'Administrator-managed defaults and locks for user settings.',
@@ -4876,8 +5018,9 @@ export default {
   'modules.presets.full.title': 'Complete',
   'modules.presets.minimal.desc': 'Core features only',
   'modules.presets.minimal.title': 'Minimal',
-  'modules.presets.standard.desc': 'Adds audit, moderation and network proxy',
+  'modules.presets.standard.desc': 'Adds audit, assistant management, web search and more',
   'modules.presets.standard.title': 'Standard',
+  'modules.quoted': '“{{name}}”',
   'modules.restart.action': 'Restart now',
   'modules.restart.desc':
     'The switch already applies to the API. Restarting the service is what stops their background work and frees the memory.',
@@ -4890,7 +5033,7 @@ export default {
   'modules.saved.hot':
     'Switched {{enabled}} module(s) on and {{disabled}} off. Reload the page to see the change.',
   'modules.saved.withRestart':
-    'Switched {{enabled}} module(s) on and {{disabled}} off; {{restart}} of them free their resources after a restart.',
+    'Switched {{enabled}} module(s) on and {{disabled}} off; {{restart}} module(s) take full effect after a restart.',
   'modules.status.disabled': 'Off',
   'modules.status.env': 'Set by environment',
   'modules.status.pendingRestart': 'Restart pending',
@@ -4911,7 +5054,6 @@ export default {
   'modules.summary.unmeasuredHint':
     'Some enabled modules have not been measured yet, so the real figure is higher.',
   'modules.tags.backgroundJobs': '{{n}} background jobs',
-  'modules.tags.dependsOn': 'Needs {{modules}}, which this selection leaves off.',
   'modules.tags.idleRss': '≈ {{mb}} MB memory',
   'modules.tags.loadKind.perFetch': 'Runs on every outbound request',
   'modules.tags.loadKind.perMessage': 'Runs on every message',

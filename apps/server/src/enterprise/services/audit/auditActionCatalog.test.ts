@@ -7,6 +7,27 @@ import {
   AUDIT_TARGET_TYPES,
 } from './auditActionCatalog';
 
+describe('status monitoring audit catalog', () => {
+  it('catalogues alert, job-clear, and status API actions', () => {
+    const actions = [
+      'admin.system.alerts.test',
+      'admin.system.alerts.update',
+      'admin.system.jobs.clear',
+      'admin.system.statusApi.revoke',
+      'admin.system.statusApi.rotate',
+    ] as const;
+    for (const action of actions) {
+      expect(AUDIT_ACTIONS).toContain(action);
+    }
+    expect(AUDIT_ACTION.SYSTEM_ALERTS_UPDATE).toBe('admin.system.alerts.update');
+    expect(AUDIT_ACTION.SYSTEM_ALERTS_TEST).toBe('admin.system.alerts.test');
+    expect(AUDIT_ACTION.SYSTEM_JOBS_CLEAR).toBe('admin.system.jobs.clear');
+    expect(AUDIT_ACTION.SYSTEM_STATUS_API_ROTATE).toBe('admin.system.statusApi.rotate');
+    expect(AUDIT_ACTION.SYSTEM_STATUS_API_REVOKE).toBe('admin.system.statusApi.revoke');
+    expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
+  });
+});
+
 describe('dingtalk personal audit catalog', () => {
   it('catalogues the personal actions and the target type', () => {
     const actions = [

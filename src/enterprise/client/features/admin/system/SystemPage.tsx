@@ -23,6 +23,7 @@ const SystemPage = () => {
   const enabled = accessStatus === 'allowed' && canRead;
   const canReadAuthSnapshot = permissions.includes(PLATFORM_PERMISSIONS.OIDC_PUBLISH);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [showOfflineInstances, setShowOfflineInstances] = useState(false);
   const status = useAdminSystemStatus(enabled, adminSystemService);
   const authSnapshot = useAdminSystemAuthSnapshotStatus(
@@ -47,6 +48,7 @@ const SystemPage = () => {
   });
   const mutations = useAdminSystemJobMutations({
     authMethod: authMethod ?? null,
+    onCleared: jobs.goToFirstPage,
     onRefresh: jobs.refresh,
     service: adminSystemService,
   });
@@ -84,8 +86,10 @@ const SystemPage = () => {
 
   return (
     <SystemPageView
+      alertSettingsOpen={alertSettingsOpen}
       authSnapshot={authSnapshot.data}
       canOperate={canOperate}
+      canRead={enabled}
       instances={instances}
       isRefreshing={isRefreshing}
       jobs={jobs}
@@ -97,6 +101,7 @@ const SystemPage = () => {
         isLoading: status.isLoading,
         retry: () => void status.mutate(),
       }}
+      onAlertSettingsOpenChange={setAlertSettingsOpen}
       onRefresh={() => void refreshAll()}
       onShowOfflineInstancesChange={setShowOfflineInstances}
     />

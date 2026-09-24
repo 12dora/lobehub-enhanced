@@ -218,6 +218,13 @@
       "when": 1789620000000,
       "tag": "0038_global_files_creator_nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790273239855,
+      "tag": "0039_platform_status_settings",
+      "breakpoints": true
     }
   ]
 }

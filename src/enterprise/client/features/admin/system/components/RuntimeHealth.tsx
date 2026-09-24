@@ -46,6 +46,7 @@ import {
   workerLabel,
 } from '../statusHealth';
 import { OperationalStatus } from './OperationalStatus';
+import { SectionHeader } from './SectionHeader';
 
 const styles = createStaticStyles(({ css }) => ({
   code: css`
@@ -88,11 +89,6 @@ const styles = createStaticStyles(({ css }) => ({
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 8px;
   `,
-  sectionTitle: css`
-    margin: 0;
-    font-size: ${cssVar.fontSizeLG};
-    font-weight: ${cssVar.fontWeightStrong};
-  `,
   small: css`
     font-size: ${cssVar.fontSizeSM};
   `,
@@ -127,26 +123,6 @@ const statusSeverity = (status: string): StatusProblemSeverity | null =>
 
 const textTypeOf = (severity: StatusProblemSeverity | null) =>
   severity === 'error' ? 'danger' : severity === 'warning' ? 'warning' : 'secondary';
-
-const SectionHeading = ({
-  description,
-  icon,
-  title,
-}: {
-  description?: ReactNode;
-  icon: LucideIcon;
-  title: ReactNode;
-}) => (
-  <Flexbox gap={4}>
-    <Flexbox horizontal align="center" gap={8}>
-      <Icon icon={icon} size={18} />
-      <Text as="h2" className={styles.sectionTitle}>
-        {title}
-      </Text>
-    </Flexbox>
-    {description ? <Text type="secondary">{description}</Text> : null}
-  </Flexbox>
-);
 
 const EmptyBlock = ({ children, testId }: { children: ReactNode; testId?: string }) => (
   <Block data-testid={testId} padding={16} variant="outlined">
@@ -323,8 +299,8 @@ export const CapabilityReadiness = memo<{ status: AdminSystemStatus }>(({ status
 
   return (
     <Flexbox gap={8}>
-      <SectionHeading
-        description={t('system.capabilities.description')}
+      <SectionHeader
+        help={t('system.capabilities.help')}
         icon={Gauge}
         title={t('system.capabilities.title')}
       />
@@ -396,8 +372,8 @@ export const WorkerHealthList = memo<{ status: AdminSystemStatus }>(({ status })
 
   return (
     <Flexbox gap={8}>
-      <SectionHeading
-        description={t('system.workers.description')}
+      <SectionHeader
+        help={t('system.workers.help')}
         icon={Timer}
         title={t('system.workers.title')}
       />
@@ -461,11 +437,7 @@ export const RuntimeErrorList = memo<{ status: AdminSystemStatus }>(({ status })
 
   return (
     <Flexbox gap={8}>
-      <SectionHeading
-        description={t('system.runtimeErrors.description')}
-        icon={Bug}
-        title={t('system.runtimeErrors.title')}
-      />
+      <SectionHeader icon={Bug} title={t('system.runtimeErrors.title')} />
       {rows.length === 0 ? (
         <EmptyBlock testId="runtime-errors-empty">{t('system.runtimeErrors.empty')}</EmptyBlock>
       ) : (
@@ -499,11 +471,7 @@ export const RecentEventList = memo<{ status: AdminSystemStatus }>(({ status }) 
 
   return (
     <Flexbox gap={8}>
-      <SectionHeading
-        description={t('system.recentEvents.description')}
-        icon={Clock}
-        title={t('system.recentEvents.title')}
-      />
+      <SectionHeader icon={Clock} title={t('system.recentEvents.title')} />
       {events.length === 0 ? (
         <EmptyBlock>{t('system.recentEvents.empty')}</EmptyBlock>
       ) : (

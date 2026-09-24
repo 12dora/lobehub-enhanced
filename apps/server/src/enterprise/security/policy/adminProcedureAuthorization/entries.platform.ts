@@ -430,6 +430,21 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_PLATFORM = [
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.STATS_READ] },
   },
   {
+    kind: 'query',
+    path: 'admin.system.alerts.get',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
+  },
+  {
+    kind: 'mutation',
+    path: 'admin.system.alerts.test',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
+  },
+  {
+    kind: 'mutation',
+    path: 'admin.system.alerts.update',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
+  },
+  {
     kind: 'mutation',
     path: 'admin.system.cancelDocumentRenderJob',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
@@ -491,6 +506,16 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_PLATFORM = [
   },
   {
     kind: 'mutation',
+    path: 'admin.system.jobs.clear',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
+  },
+  {
+    kind: 'query',
+    path: 'admin.system.jobs.list',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
+  },
+  {
+    kind: 'mutation',
     path: 'admin.system.prepareRestart',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.OIDC_PUBLISH] },
   },
@@ -512,6 +537,21 @@ export const ADMIN_PROCEDURE_AUTHORIZATION_PLATFORM = [
   {
     kind: 'mutation',
     path: 'admin.system.runDocumentRenderGc',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
+  },
+  {
+    kind: 'query',
+    path: 'admin.system.statusApi.get',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_READ] },
+  },
+  {
+    kind: 'mutation',
+    path: 'admin.system.statusApi.revoke',
+    permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
+  },
+  {
+    kind: 'mutation',
+    path: 'admin.system.statusApi.rotate',
     permission: { mode: 'all', permissions: [PLATFORM_PERMISSIONS.SYSTEM_OPERATE] },
   },
   {

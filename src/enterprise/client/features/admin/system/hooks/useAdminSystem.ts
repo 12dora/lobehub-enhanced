@@ -1,8 +1,16 @@
 'use client';
 
-import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import useSWRInfinite from 'swr/infinite';
 
+import { DEFAULT_PAGE_SIZE as DEFAULT_TABLE_PAGE_SIZE } from '@/enterprise/client/features/admin/primitives/dataTableChange';
 import type { AdminReauthAuthMethod } from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
 import { withAdminReauthRetry } from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
 import type {
@@ -10,34 +18,30 @@ import type {
   SsoAuthSnapshot,
 } from '@/enterprise/client/features/admin/system/controller';
 import {
-  adminSystemJobsChanged,
   canRunAdminSystemJobAction,
   classifyAdminSystemJobsError,
-  collectAdminSystemJobs,
   didAdminSystemJobRefreshConfirm,
-  hasActiveAdminSystemJobs,
   isAdminSystemConflictError,
   isAdminSystemInvalidInputError,
   isAdminSystemJobMutationAuthoritative,
-  resetAdminSystemJobPages,
   shouldPollAdminSystemJobs,
 } from '@/enterprise/client/features/admin/system/controller';
 import type {
   AdminSystemGetInstanceRevisionsInput,
   AdminSystemInstanceRevisions,
   AdminSystemJob,
-  AdminSystemJobs,
+  AdminSystemJobsPage,
   AdminSystemService,
 } from '@/enterprise/client/services/adminSystem';
 import { ADMIN_POLL_INTERVALS } from '@/enterprise/client/shared/pollIntervals';
 import { useVisiblePoll } from '@/enterprise/client/shared/useVisiblePoll';
 import { useClientDataSWR } from '@/libs/swr';
 
+import { invalidateAdminSystemAlerts } from '../invalidate';
 import {
   buildAdminSystemAuthSnapshotKey,
   buildAdminSystemInstancesKey,
   buildAdminSystemJobsKey,
-  buildAdminSystemJobsPollKey,
   buildAdminSystemStatusKey,
 } from '../swrKeys';
 
@@ -195,22 +199,36 @@ export const useAdminSystemInstances = (
 };
 
 export interface AdminSystemJobsState {
-  applyStagedUpdate: () => Promise<void>;
+  /** Error while the current page has something to show (previous rows are kept). */
   backgroundError: unknown;
-  hasActiveJobs: boolean;
-  hasMore: boolean;
-  hasStagedUpdate: boolean;
+  data?: AdminSystemJobsPage;
+  /** Jump back to page 1 and reload it (after 清除 the old page numbers no longer apply). */
+  goToFirstPage: () => Promise<void>;
+  /** Error before any page could be shown. */
   initialError: unknown;
   isLoadingInitial: boolean;
-  isLoadingMore: boolean;
+  /**
+   * Rows on screen belong to another page (or predate a 清除) while the requested one loads —
+   * the table must not present them, or their row actions, as the current page.
+   */
+  isLoadingPage: boolean;
   jobs: AdminSystemJob[];
-  loadMore: () => void;
-  loadMoreError: boolean;
-  pollError: unknown;
-  refresh: () => Promise<AdminSystemJobs[] | undefined>;
-  retryLoadMore: () => void;
+  page: number;
+  pageSize: number;
+  refresh: () => Promise<AdminSystemJobsPage | undefined>;
+  setPagination: (page: number, pageSize: number) => void;
+  total: number;
 }
 
+export const ADMIN_SYSTEM_JOBS_PAGE_SIZE = DEFAULT_TABLE_PAGE_SIZE;
+
+/**
+ * 近期任务 as one server page (`admin.system.jobs.list`) with an exact total.
+ *
+ * While the status aggregate reports active jobs the current page is re-read every 3s — in place,
+ * no staged "apply updates" step — and every tick also refreshes the aggregate, which is the only
+ * authority that can stop the loop.
+ */
 export const useAdminSystemJobs = (
   enabled: boolean,
   service: AdminSystemService,
@@ -218,102 +236,116 @@ export const useAdminSystemJobs = (
     authoritativeActiveCount?: number | null;
     refreshAuthority: () => Promise<unknown>;
   },
-  limit = DEFAULT_PAGE_SIZE,
 ): AdminSystemJobsState => {
-  const [stagedFirstPage, setStagedFirstPage] = useState<AdminSystemJobs | null>(null);
-  const swr = useSWRInfinite<AdminSystemJobs>(
-    (index, previous: AdminSystemJobs | null) => {
-      if (!enabled) return null;
-      if (previous && previous.nextCursor === null) return null;
-      const cursor = index === 0 ? undefined : (previous?.nextCursor ?? undefined);
-      return buildAdminSystemJobsKey({ cursor, limit }, enabled);
-    },
-    ([, input]: readonly [string, { cursor?: string; limit: number }]) => service.getJobs(input),
-    { revalidateFirstPage: false, revalidateOnFocus: false },
-  );
-  const pages = swr.data ?? [];
-  const jobs = collectAdminSystemJobs(pages);
-  const visibleHasActiveJobs = hasActiveAdminSystemJobs(jobs);
-  const authoritativeActiveCount = options.authoritativeActiveCount;
-  const shouldPoll =
-    enabled && shouldPollAdminSystemJobs({ authoritativeActiveCount, visibleHasActiveJobs });
-  // Publish before paint so the status hook can drop its 30s timer in the same frame.
-  useLayoutEffect(() => {
-    setJobsStatusPollActive(shouldPoll);
-    return () => setJobsStatusPollActive(false);
-  }, [shouldPoll]);
-  // An active job only needs watching while somebody is watching: the poll (and the authority
+  const [pagination, setPaginationState] = useState({
+    page: 1,
+    pageSize: ADMIN_SYSTEM_JOBS_PAGE_SIZE,
+  });
+  const { page, pageSize } = pagination;
+  /**
+   * Bumped by 清除: every cached page may still list jobs that are now hidden, so the next read
+   * goes to a fresh key (never a cached, possibly deduped one) and shows as loading until it lands.
+   */
+  const [generation, setGeneration] = useState(0);
+  const shouldPoll = enabled && shouldPollAdminSystemJobs(options.authoritativeActiveCount);
+  const shouldPollRef = useRef(shouldPoll);
+  shouldPollRef.current = shouldPoll;
+  const refreshAuthorityRef = useRef(options.refreshAuthority);
+  refreshAuthorityRef.current = options.refreshAuthority;
+  const refreshAuthority = useCallback(() => {
+    void refreshAuthorityRef.current().catch((error: unknown) => {
+      console.error('[admin.system] failed to refresh active-job authority', error);
+    });
+  }, []);
+
+  // Active work only needs watching while somebody is watching: the poll (and the authority
   // refresh it drags along) stops for a background tab and resumes on refocus.
-  const jobsRefreshInterval = useVisiblePoll(ACTIVE_JOB_POLL_INTERVAL_MS, shouldPoll);
-  const poll = useClientDataSWR(
-    buildAdminSystemJobsPollKey(shouldPoll, limit),
-    () => service.getJobs({ limit }),
+  const refreshInterval = useVisiblePoll(ACTIVE_JOB_POLL_INTERVAL_MS, shouldPoll);
+  const swr = useClientDataSWR(
+    buildAdminSystemJobsKey({ page, pageSize }, enabled, generation),
+    () => service.listJobs({ page, pageSize }),
     {
-      refreshInterval: jobsRefreshInterval,
+      keepPreviousData: true,
+      refreshInterval,
       revalidateOnFocus: false,
-      shouldRetryOnError: false,
-      onSuccess: (incoming) => {
-        setStagedFirstPage(adminSystemJobsChanged(pages[0], incoming) ? incoming : null);
-        // The first page may contain only newer terminal jobs. The aggregate is the authority for
-        // stopping polling, so refresh it every cycle instead of inferring zero from this page.
-        void options.refreshAuthority().catch((error: unknown) => {
-          console.error('[admin.system] failed to refresh active-job authority', error);
-        });
+      onError: () => {
+        // The status cards must not freeze behind a failing jobs list: keep the aggregate moving.
+        if (shouldPollRef.current) refreshAuthority();
+      },
+      onSuccess: () => {
+        if (!shouldPollRef.current) return;
+        // A page of terminal rows says nothing about other pages. The aggregate decides when the
+        // loop stops, so refresh it on every poll tick instead of inferring zero from this page.
+        refreshAuthority();
       },
     },
   );
 
-  const loadedPages = swr.data?.length ?? 0;
-  const settled = swr.data !== undefined;
-  const reachedEnd = loadedPages > 0 && pages.at(-1)?.nextCursor === null;
-  const applyStagedUpdate = useCallback(async () => {
-    if (!stagedFirstPage) return;
-    const incoming = stagedFirstPage;
-    await swr.mutate(() => resetAdminSystemJobPages(incoming), {
-      revalidate: false,
-    });
-    setStagedFirstPage(null);
-  }, [stagedFirstPage, swr.mutate]);
+  // Publish before paint so the status hook can drop its 30s timer in the same frame. While the
+  // jobs list is failing it cannot drive the status refresh, so the 30s status poll takes over.
+  const jobsPollOwnsStatus = shouldPoll && !swr.error;
+  useLayoutEffect(() => {
+    setJobsStatusPollActive(jobsPollOwnsStatus);
+    return () => setJobsStatusPollActive(false);
+  }, [jobsPollOwnsStatus]);
 
-  const errorPhase = classifyAdminSystemJobsError({
-    error: swr.error,
-    loadedPages,
-    requestedPages: swr.size,
-    settled,
-  });
+  const data = swr.data as AdminSystemJobsPage | undefined;
+  const total = data?.total ?? 0;
+  // With `keepPreviousData`, SWR keeps reporting `isLoading` while it shows another key's rows.
+  const isLoadingPage = enabled && data !== undefined && Boolean(swr.isLoading);
+
+  // A page emptied underneath the operator (jobs cleared, rows hidden) snaps back to the last one
+  // that still has rows instead of stranding them on a blank page.
+  useEffect(() => {
+    // `keepPreviousData` may still be showing another page while this one loads.
+    if (!data || data.page !== page || data.items.length > 0 || page <= 1) return;
+    const lastPage = Math.max(1, Math.ceil(data.total / pageSize));
+    if (lastPage < page) setPaginationState((current) => ({ ...current, page: lastPage }));
+  }, [data, page, pageSize]);
+
+  const mutate = swr.mutate;
   const refresh = useCallback(async () => {
-    setStagedFirstPage(null);
-    const result = await swr.mutate();
-    void options.refreshAuthority().catch((error: unknown) => {
+    const result = (await mutate()) as AdminSystemJobsPage | undefined;
+    refreshAuthority();
+    return result;
+  }, [mutate, refreshAuthority]);
+
+  const goToFirstPage = useCallback(async () => {
+    // A new key fetches on its own; the aggregate (job totals use the same filter) still needs
+    // the refresh.
+    setPaginationState((current) => ({ ...current, page: 1 }));
+    setGeneration((current) => current + 1);
+    await refreshAuthorityRef.current().catch((error: unknown) => {
       console.error('[admin.system] failed to refresh active-job authority', error);
     });
-    return result;
-  }, [options.refreshAuthority, swr.mutate]);
+  }, []);
+
+  const setPagination = useCallback((nextPage: number, nextPageSize: number) => {
+    setPaginationState({ page: Math.max(1, nextPage), pageSize: nextPageSize });
+  }, []);
 
   return {
-    applyStagedUpdate,
-    backgroundError: errorPhase === 'background' ? swr.error : undefined,
-    hasActiveJobs:
-      authoritativeActiveCount === 0
-        ? false
-        : (authoritativeActiveCount ?? 0) > 0 || visibleHasActiveJobs,
-    hasMore: enabled && loadedPages > 0 && !reachedEnd,
-    hasStagedUpdate: stagedFirstPage !== null,
-    isLoadingInitial: enabled && !settled && swr.isValidating,
-    isLoadingMore: swr.isValidating && loadedPages > 0 && swr.size > loadedPages,
-    initialError: errorPhase === 'initial' ? swr.error : undefined,
-    jobs,
-    loadMore: () => void swr.setSize((size) => size + 1),
-    loadMoreError: errorPhase === 'load_more' && !swr.isValidating,
-    pollError: poll.error,
+    backgroundError: data ? swr.error : undefined,
+    data,
+    goToFirstPage,
+    initialError: data ? undefined : swr.error,
+    isLoadingInitial: enabled && !data && !swr.error && Boolean(swr.isValidating || swr.isLoading),
+    isLoadingPage,
+    jobs: data?.items ?? [],
+    page,
+    pageSize,
     refresh,
-    retryLoadMore: () => void swr.setSize(swr.size),
+    setPagination,
+    total,
   };
 };
 
 export interface AdminSystemJobMutations {
   busyJobIds: readonly string[];
   cancel: (job: AdminSystemJob) => Promise<AdminSystemJobMutationResult>;
+  /** 清除: hide finished rows (non-destructive), then show page 1 again. */
+  clear: () => Promise<AdminSystemJobsClearOutcome>;
+  clearing: boolean;
   refreshPendingJobIds: readonly string[];
   retry: (job: AdminSystemJob) => Promise<AdminSystemJobMutationResult>;
   retryRefresh: () => Promise<boolean>;
@@ -321,27 +353,35 @@ export interface AdminSystemJobMutations {
 
 export type AdminSystemJobMutationResult = 'conflict' | 'failed' | 'refresh_failed' | 'succeeded';
 
+export type AdminSystemJobsClearOutcome =
+  { hidden: number; ok: true } | { error: unknown; ok: false };
+
 interface UseAdminSystemJobMutationsOptions {
   authMethod: AdminReauthAuthMethod;
-  onRefresh: () => Promise<AdminSystemJobs[] | undefined>;
+  /** Runs after a successful 清除 — the owner resets to page 1 and reloads. */
+  onCleared?: () => Promise<void>;
+  onRefresh: () => Promise<AdminSystemJobsPage | undefined>;
   service: AdminSystemService;
 }
 
 export const useAdminSystemJobMutations = ({
   authMethod,
+  onCleared,
   onRefresh,
   service,
 }: UseAdminSystemJobMutationsOptions): AdminSystemJobMutations => {
   const busyRef = useRef(new Set<string>());
   const refreshPendingRef = useRef(new Map<string, AdminSystemJob>());
+  const clearingRef = useRef(false);
   const [busyJobIds, setBusyJobIds] = useState<readonly string[]>([]);
   const [refreshPendingJobIds, setRefreshPendingJobIds] = useState<readonly string[]>([]);
+  const [clearing, setClearing] = useState(false);
 
   const retryRefresh = useCallback(async () => {
     try {
-      const pages = await onRefresh();
+      const refreshed = await onRefresh();
       for (const [jobId, committed] of refreshPendingRef.current) {
-        if (didAdminSystemJobRefreshConfirm(pages, committed)) {
+        if (didAdminSystemJobRefreshConfirm(refreshed?.items, committed)) {
           refreshPendingRef.current.delete(jobId);
         }
       }
@@ -409,9 +449,9 @@ export const useAdminSystemJobMutations = ({
           return 'refresh_failed' as const;
         }
         try {
-          const pages = await onRefresh();
-          if (!didAdminSystemJobRefreshConfirm(pages, committed)) {
-            // Stale row still visible on a loaded page with different CAS — keep pending.
+          const refreshed = await onRefresh();
+          if (!didAdminSystemJobRefreshConfirm(refreshed?.items, committed)) {
+            // Stale row still visible on the current page with different CAS — keep pending.
             throw new Error('PLATFORM_COMMITTED_JOB_REFRESH_UNCONFIRMED');
           }
           return 'succeeded' as const;
@@ -441,9 +481,33 @@ export const useAdminSystemJobMutations = ({
     [authMethod, onRefresh, service],
   );
 
+  const clear = useCallback(async (): Promise<AdminSystemJobsClearOutcome> => {
+    if (clearingRef.current) return { error: new Error('PLATFORM_JOBS_CLEAR_PENDING'), ok: false };
+    clearingRef.current = true;
+    setClearing(true);
+    try {
+      const result = await withAdminReauthRetry(() => service.clearJobs(), { authMethod });
+      // 清除 writes the shared settings row: an open 告警设置 drawer needs its new revision.
+      void invalidateAdminSystemAlerts();
+      // The watermark moved: every page number the operator had open now points elsewhere.
+      await onCleared?.().catch((error: unknown) => {
+        console.error('[admin.system] failed to reload jobs after clearing', error);
+      });
+      return { hidden: result.hidden, ok: true };
+    } catch (error) {
+      console.error('[admin.system] failed to clear jobs', error);
+      return { error, ok: false };
+    } finally {
+      clearingRef.current = false;
+      setClearing(false);
+    }
+  }, [authMethod, onCleared, service]);
+
   return {
     busyJobIds,
     cancel: (job) => run(job, 'cancel'),
+    clear,
+    clearing,
     refreshPendingJobIds,
     retryRefresh,
     retry: (job) => run(job, 'retry'),

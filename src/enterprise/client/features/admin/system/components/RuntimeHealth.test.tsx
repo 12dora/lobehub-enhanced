@@ -68,6 +68,13 @@ vi.mock('@lobehub/ui', () => ({
       {children}
     </span>
   ),
+  // The "?" next to a section title: render the trigger and expose the tip text.
+  Tooltip: ({ children, title }: MockProps & { title?: ReactNode }) => (
+    <>
+      {children}
+      <span data-testid="tooltip">{title}</span>
+    </>
+  ),
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -411,5 +418,44 @@ describe('RecentEventList', () => {
   it('shows an empty state without events', () => {
     render(<RecentEventList status={buildStatus()} />);
     expect(screen.getByText('system.recentEvents.empty')).toBeTruthy();
+  });
+});
+
+describe('section headings', () => {
+  it('moves the capability note into a "?" tooltip next to the title', () => {
+    render(<CapabilityReadiness status={buildStatus()} />);
+
+    const help = screen.getByRole('button', {
+      name: 'systemGeneral.helpFor:{"field":"system.capabilities.title"}',
+    });
+    expect(help).toBeTruthy();
+    expect(screen.getByTestId('tooltip').textContent).toBe('system.capabilities.help');
+    expect(document.body.textContent).not.toContain('system.capabilities.description');
+  });
+
+  it('moves the worker scope note into a "?" tooltip next to the title', () => {
+    render(<WorkerHealthList status={buildStatus()} />);
+
+    expect(
+      screen.getByRole('button', {
+        name: 'systemGeneral.helpFor:{"field":"system.workers.title"}',
+      }),
+    ).toBeTruthy();
+    expect(screen.getByTestId('tooltip').textContent).toBe('system.workers.help');
+    expect(document.body.textContent).not.toContain('system.workers.description');
+  });
+
+  it('drops the descriptions that only repeated the title', () => {
+    render(
+      <>
+        <RuntimeErrorList status={buildStatus()} />
+        <RecentEventList status={buildStatus()} />
+      </>,
+    );
+
+    expect(screen.getByText('system.runtimeErrors.title')).toBeTruthy();
+    expect(screen.getByText('system.recentEvents.title')).toBeTruthy();
+    expect(screen.queryByTestId('tooltip')).toBeNull();
+    expect(document.body.textContent).not.toContain('description');
   });
 });

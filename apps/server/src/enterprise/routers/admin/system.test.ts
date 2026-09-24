@@ -15,6 +15,7 @@ import {
   platformJobs,
   platformSandboxPackageInstalls,
   platformSandboxSettings,
+  platformStatusSettings,
   rolePermissions,
   roles,
   userRoles,
@@ -119,6 +120,7 @@ const cleanup = async () => {
   await db.delete(platformSandboxPackageInstalls);
   await db.delete(platformSandboxSettings);
   await db.delete(platformDocumentRenderSettings);
+  await db.delete(platformStatusSettings);
   await deletePlatformAuditLogsForTest(db, { actorUserIds: Object.values(ids) });
   const ownedRoles = await db
     .select({ id: roles.id })
@@ -681,5 +683,85 @@ describe('admin.system operations gate', () => {
       force: true,
       requestedBy: ids.operator,
     });
+  });
+});
+
+describe('admin.system jobs page and status API', () => {
+  it('pages jobs for a system reader and denies a user without that permission', async () => {
+    const operator = await callerFor(ids.operator);
+    const page = await operator.jobs.list({ page: 1 });
+    expect(page).toMatchObject({ items: [], page: 1, pageSize: 20, total: 0 });
+    expect(page.clearedAt === null || typeof page.clearedAt === 'string').toBe(true);
+
+    const reader = await callerFor(ids.reader);
+    await expect(reader.jobs.list({ page: 1 })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(reader.jobs.clear({})).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+    await expect(reader.statusApi.get()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PLATFORM_PERMISSION_DENIED',
+    });
+  });
+
+  it('requires recent reauth before rotating or revoking the status API token', async () => {
+    const operator = await callerFor(
+      ids.operator,
+      new Date(Date.now() - ADMIN_REAUTH_MAX_AGE_MS - 1000),
+    );
+    await expect(operator.statusApi.rotate({})).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+      message: 'ADMIN_REAUTH_REQUIRED',
+    });
+    await expect(operator.statusApi.revoke({})).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+      message: 'ADMIN_REAUTH_REQUIRED',
+    });
+    const audits = await db
+      .select()
+      .from(platformAuditLogs)
+      .where(eq(platformAuditLogs.actorUserId, ids.operator));
+    expect(audits.map((row) => row.action).sort()).toEqual([
+      'admin.system.statusApi.revoke',
+      'admin.system.statusApi.rotate',
+    ]);
+    expect(audits.every((row) => row.result === 'denied')).toBe(true);
+  });
+
+  it('stores the optional reason on status API rotate and revoke audits', async () => {
+    const operator = await callerFor(ids.operator);
+    const rotated = await operator.statusApi.rotate({ reason: '轮换看板令牌' });
+    expect(rotated.token).toMatch(/^sk-status-[0-9A-Za-z]{32}$/);
+    expect(rotated.view.tokenSet).toBe(true);
+    const rotateAudits = await db
+      .select()
+      .from(platformAuditLogs)
+      .where(eq(platformAuditLogs.action, 'admin.system.statusApi.rotate'));
+    expect(rotateAudits).toEqual([
+      expect.objectContaining({ reason: '轮换看板令牌', result: 'success' }),
+    ]);
+
+    const revoked = await operator.statusApi.revoke({ reason: '停用看板令牌' });
+    expect(revoked.tokenSet).toBe(false);
+    const revokeAudits = await db
+      .select()
+      .from(platformAuditLogs)
+      .where(eq(platformAuditLogs.action, 'admin.system.statusApi.revoke'));
+    expect(revokeAudits).toEqual([
+      expect.objectContaining({ reason: '停用看板令牌', result: 'success' }),
+    ]);
+
+    await expect(operator.statusApi.rotate({})).resolves.toMatchObject({
+      view: { tokenSet: true },
+    });
+    const omitted = await db
+      .select({ reason: platformAuditLogs.reason })
+      .from(platformAuditLogs)
+      .where(eq(platformAuditLogs.action, 'admin.system.statusApi.rotate'));
+    expect(omitted.map((row) => row.reason).toSorted()).toEqual(['轮换看板令牌', null].toSorted());
   });
 });

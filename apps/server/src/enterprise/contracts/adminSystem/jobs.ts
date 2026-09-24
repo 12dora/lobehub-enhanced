@@ -79,6 +79,34 @@ export const adminSystemGetJobsOutputSchema = z
   })
   .strict();
 
+const isoTimestampSchema = z.string().datetime();
+
+export const adminSystemListJobsInputSchema = z
+  .object({
+    page: z.number().int().min(1).max(10_000),
+    pageSize: z.number().int().min(10).max(100).default(20),
+  })
+  .strict();
+
+export const adminSystemListJobsOutputSchema = z
+  .object({
+    clearedAt: isoTimestampSchema.nullable(),
+    items: z.array(adminSystemJobSchema).max(100),
+    page: z.number().int().min(1),
+    pageSize: z.number().int().min(10).max(100),
+    total: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const adminSystemClearJobsInputSchema = z.object({}).strict();
+
+export const adminSystemClearJobsOutputSchema = z
+  .object({
+    clearedAt: isoTimestampSchema,
+    hidden: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const jobMutationIntentSchema = z
   .object({
     expectedRevision: platformJobRevisionSchema,
@@ -103,6 +131,10 @@ export const adminSystemRetryJobInputSchema = jobMutationIntentSchema
 export const adminSystemRetryJobOutputSchema = adminSystemJobSchema;
 
 export type AdminSystemCancelJobInput = z.input<typeof adminSystemCancelJobInputSchema>;
+export type AdminSystemClearJobsInput = z.input<typeof adminSystemClearJobsInputSchema>;
+export type AdminSystemClearJobsOutput = z.infer<typeof adminSystemClearJobsOutputSchema>;
 export type AdminSystemGetJobsInput = z.input<typeof adminSystemGetJobsInputSchema>;
 export type AdminSystemJob = z.infer<typeof adminSystemJobSchema>;
+export type AdminSystemListJobsInput = z.input<typeof adminSystemListJobsInputSchema>;
+export type AdminSystemListJobsOutput = z.infer<typeof adminSystemListJobsOutputSchema>;
 export type AdminSystemRetryJobInput = z.input<typeof adminSystemRetryJobInputSchema>;

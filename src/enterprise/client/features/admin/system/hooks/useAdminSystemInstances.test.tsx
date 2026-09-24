@@ -75,9 +75,10 @@ const page = (
 
 const service: AdminSystemService = {
   cancelJob: vi.fn(),
+  clearJobs: vi.fn(),
   getInstanceRevisions: vi.fn(),
-  getJobs: vi.fn(),
   getStatus: vi.fn(),
+  listJobs: vi.fn(),
   retryJob: vi.fn(),
 };
 

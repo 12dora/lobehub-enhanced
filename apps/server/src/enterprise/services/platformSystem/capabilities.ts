@@ -1,5 +1,6 @@
 import { DEFAULT_SYSTEM_AGENT_CONFIG } from '@lobechat/const';
 
+import { isPlatformModuleId } from '@/const/platform';
 import { PlatformSettingsModel } from '@/database/models/platform/settings';
 import { platformAiModels, platformAiProviders } from '@/database/schemas/platform';
 import type { LobeChatDatabase } from '@/database/type';
@@ -7,6 +8,10 @@ import type { AdminSystemSandboxHealth } from '@/server/enterprise/contracts/adm
 import { parseEnterpriseFeatureFlags } from '@/server/enterprise/featureFlags';
 import { readDingtalkApiDailyAlertThreshold } from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
 import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
+import {
+  readCachedStatusAlertRuntime,
+  resolveDingtalkApiAlertThreshold,
+} from '@/server/enterprise/services/platformSystem/statusAlertSettings';
 import { parseSystemAgent } from '@/server/globalConfig/parseSystemAgent';
 
 import type { RuntimeErrorSummaryItem } from './runtimeErrors';
@@ -232,20 +237,38 @@ export const projectMemoryCapability = (input: {
   return report('memory_embedding', 'unknown', { reason: '记忆向量探针返回无法识别' });
 };
 
+/**
+ * Known module ids follow `isModuleEnabled`. An id this build does not know yet
+ * stays enabled so readiness matches the pre-module behaviour until that id lands.
+ */
+export const capabilityModuleEnabled = async (id: string): Promise<boolean> => {
+  if (!isPlatformModuleId(id)) return true;
+  try {
+    return await isModuleEnabled(id);
+  } catch {
+    return true;
+  }
+};
+
 export const projectDingtalkCapability = (input: {
   callsToday: number;
   configured: boolean;
   errors10m: number;
+  dailyAlertThreshold?: number;
   lastError?: string;
+  moduleEnabled?: boolean;
   readFailed?: boolean;
 }): CapabilityReport => {
+  if (input.moduleEnabled === false) {
+    return report('dingtalk_connector', 'disabled', { reason: '钉钉模块未启用' });
+  }
   if (input.readFailed) {
     return report('dingtalk_connector', 'unknown', { reason: '无法读取钉钉连接器配置' });
   }
   if (!input.configured) {
     return report('dingtalk_connector', 'disabled', { reason: '未配置钉钉连接器' });
   }
-  const alertThreshold = readDingtalkApiDailyAlertThreshold();
+  const alertThreshold = input.dailyAlertThreshold ?? readDingtalkApiDailyAlertThreshold();
   const calls =
     alertThreshold > 0
       ? `今日 API 调用 ${input.callsToday} 次（告警阈值 ${alertThreshold}）`
@@ -284,9 +307,9 @@ export const loadDingtalkPersonalDataEnabled = async (db: LobeChatDatabase): Pro
 };
 
 /**
- * `disabled` when the admin switch is off, even if the broker env is missing
- * (`disabled` does not raise a status alert). Only when the switch is on:
- * broker env missing → `unavailable` (未检测到 aihub-dws 服务), `/healthz` failure
+ * `disabled` when the module or the admin switch is off, even if the broker env is
+ * missing (`disabled` does not raise a status alert). Only when both are on:
+ * broker env missing → `unavailable` (未检测到钉钉个人数据服务), health check failure
  * → `unavailable`, otherwise `healthy` with `已授权 N 人`.
  * `enabled` is the raw `personalDataEnabled` switch.
  */
@@ -295,8 +318,12 @@ export const projectDingtalkPersonalCapability = (input: {
   brokerConfigured: boolean;
   enabled: boolean;
   healthOk: boolean;
+  moduleEnabled?: boolean;
   readFailed?: boolean;
 }): CapabilityReport => {
+  if (input.moduleEnabled === false) {
+    return report('dingtalk_personal', 'disabled', { reason: '钉钉个人数据模块未启用' });
+  }
   if (input.readFailed) {
     return report('dingtalk_personal', 'unknown', { reason: '无法读取钉钉个人数据配置' });
   }
@@ -304,10 +331,10 @@ export const projectDingtalkPersonalCapability = (input: {
     return report('dingtalk_personal', 'disabled', { reason: '未启用钉钉个人数据' });
   }
   if (!input.brokerConfigured) {
-    return report('dingtalk_personal', 'unavailable', { reason: '未检测到 aihub-dws 服务' });
+    return report('dingtalk_personal', 'unavailable', { reason: '未检测到钉钉个人数据服务' });
   }
   if (!input.healthOk) {
-    return report('dingtalk_personal', 'unavailable', { reason: 'aihub-dws 健康检查失败' });
+    return report('dingtalk_personal', 'unavailable', { reason: '钉钉个人数据服务健康检查失败' });
   }
   const count = Number.isFinite(input.authorizedCount)
     ? Math.max(0, Math.trunc(input.authorizedCount))
@@ -315,7 +342,7 @@ export const projectDingtalkPersonalCapability = (input: {
   return report('dingtalk_personal', 'healthy', { detail: `已授权 ${count} 人` });
 };
 
-/** Internal aihub-dws probe. No auth header. Missing URL or any failure is not healthy. */
+/** Broker health probe. No auth header. Missing URL or any failure is not healthy. */
 export const probeDingtalkPersonalBroker = async (
   env: { DINGTALK_PERSONAL_BROKER_URL?: string } = {
     DINGTALK_PERSONAL_BROKER_URL: process.env.DINGTALK_PERSONAL_BROKER_URL,
@@ -353,6 +380,15 @@ const loadDingtalkPersonalCapability = async (
   db: LobeChatDatabase,
   env: Record<string, string | undefined>,
 ): Promise<CapabilityReport> => {
+  if (!(await capabilityModuleEnabled('dingtalkPersonal'))) {
+    return projectDingtalkPersonalCapability({
+      authorizedCount: 0,
+      brokerConfigured: false,
+      enabled: false,
+      healthOk: false,
+      moduleEnabled: false,
+    });
+  }
   try {
     const personalDataEnabled = await loadDingtalkPersonalDataEnabled(db);
     if (!personalDataEnabled) {
@@ -473,6 +509,13 @@ export const loadCapabilities = async (params: {
 }): Promise<CapabilityReport[]> => {
   const env = params.env ?? process.env;
   const sandbox = projectSandboxCapability(params.sandbox);
+  let dailyAlertThreshold = readDingtalkApiDailyAlertThreshold(env);
+  try {
+    const runtime = await readCachedStatusAlertRuntime();
+    dailyAlertThreshold = resolveDingtalkApiAlertThreshold(runtime.settings, env);
+  } catch {
+    // env / 5000 stays the fallback when alert settings cannot be read
+  }
 
   const memory = projectMemoryCapability(await loadMemoryAvailability(params.db));
 
@@ -515,26 +558,38 @@ export const loadCapabilities = async (params: {
   }
 
   let dingtalk: CapabilityReport;
-  try {
-    const { getMessengerDingTalkConfig } = await import('@/config/messenger');
-    const { getDingtalkApiCallStats } =
-      await import('@/server/enterprise/services/dingtalkWorkspace/apiCallStats');
-    const config = await getMessengerDingTalkConfig();
-    const stats = config ? await getDingtalkApiCallStats({ days: 1 }) : { days: [], total: 0 };
-    const callsToday = stats.days.reduce((sum, day) => sum + day.total, 0);
-    const errors = dingtalkError(params.runtime ?? []);
-    dingtalk = projectDingtalkCapability({
-      callsToday,
-      configured: Boolean(config),
-      ...errors,
-    });
-  } catch {
+  if (!(await capabilityModuleEnabled('dingtalk'))) {
     dingtalk = projectDingtalkCapability({
       callsToday: 0,
       configured: false,
+      dailyAlertThreshold,
       errors10m: 0,
-      readFailed: true,
+      moduleEnabled: false,
     });
+  } else {
+    try {
+      const { getMessengerDingTalkConfig } = await import('@/config/messenger');
+      const { getDingtalkApiCallStats } =
+        await import('@/server/enterprise/services/dingtalkWorkspace/apiCallStats');
+      const config = await getMessengerDingTalkConfig();
+      const stats = config ? await getDingtalkApiCallStats({ days: 1 }) : { days: [], total: 0 };
+      const callsToday = stats.days.reduce((sum, day) => sum + day.total, 0);
+      const errors = dingtalkError(params.runtime ?? []);
+      dingtalk = projectDingtalkCapability({
+        callsToday,
+        configured: Boolean(config),
+        dailyAlertThreshold,
+        ...errors,
+      });
+    } catch {
+      dingtalk = projectDingtalkCapability({
+        callsToday: 0,
+        configured: false,
+        dailyAlertThreshold,
+        errors10m: 0,
+        readFailed: true,
+      });
+    }
   }
 
   const personal = await loadDingtalkPersonalCapability(params.db, env);

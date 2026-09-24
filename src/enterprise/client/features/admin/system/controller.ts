@@ -1,7 +1,7 @@
 import { PLATFORM_ERROR_CODES } from '@/const/platform/errorCodes';
 import { PLATFORM_PERMISSIONS } from '@/const/platform/permissions';
 import { mapEnterpriseError } from '@/enterprise/client/errors/mapEnterpriseError';
-import type { AdminSystemJob, AdminSystemJobs } from '@/enterprise/client/services/adminSystem';
+import type { AdminSystemJob } from '@/enterprise/client/services/adminSystem';
 
 export interface AdminSystemPermissions {
   canOperate: boolean;
@@ -110,24 +110,16 @@ export const deriveSsoPresentation = (input: {
   };
 };
 
-const ACTIVE_JOB_STATUSES = new Set<AdminSystemJob['status']>(['pending', 'reserved', 'running']);
 const CANCELLABLE_JOB_STATUSES = new Set<AdminSystemJob['status']>(['pending', 'running']);
 const RETRYABLE_JOB_STATUSES = new Set<AdminSystemJob['status']>(['cancelled', 'dead', 'failed']);
 
-export const isAdminSystemJobActive = (job: AdminSystemJob): boolean =>
-  ACTIVE_JOB_STATUSES.has(job.status);
-
-export const hasActiveAdminSystemJobs = (jobs: readonly AdminSystemJob[]): boolean =>
-  jobs.some(isAdminSystemJobActive);
-
-export const shouldPollAdminSystemJobs = (input: {
-  authoritativeActiveCount?: number | null;
-  visibleHasActiveJobs: boolean;
-}): boolean => {
-  if (input.authoritativeActiveCount === 0) return false;
-  if ((input.authoritativeActiveCount ?? 0) > 0) return true;
-  return input.visibleHasActiveJobs;
-};
+/**
+ * 近期任务 re-reads its current page every few seconds only while the status aggregate says a job
+ * is still active. A missing or unhealthy aggregate (`null`) never starts the loop: the page's own
+ * 30s status poll and the 刷新 button cover that case.
+ */
+export const shouldPollAdminSystemJobs = (authoritativeActiveCount?: number | null): boolean =>
+  (authoritativeActiveCount ?? 0) > 0;
 
 export type AdminSystemJobsErrorPhase = 'background' | 'initial' | 'load_more' | null;
 
@@ -154,63 +146,22 @@ export const canRunAdminSystemJobAction = (
   return job.canRetry && RETRYABLE_JOB_STATUSES.has(job.status);
 };
 
-const jobFingerprint = (job: AdminSystemJob): string =>
-  [
-    job.jobId,
-    job.status,
-    job.revision ?? 'none',
-    job.progress.done,
-    job.progress.total ?? 'none',
-    job.failedCount ?? 'none',
-    job.updatedAt.toISOString(),
-  ].join(':');
-
-/** Order-sensitive fingerprint: a reordered first page is staged instead of applied silently. */
-export const getAdminSystemJobsFingerprint = (page: AdminSystemJobs | undefined): string =>
-  page?.items.map(jobFingerprint).join('|') ?? '';
-
-export const adminSystemJobsChanged = (
-  visible: AdminSystemJobs | undefined,
-  incoming: AdminSystemJobs | undefined,
-): boolean =>
-  Boolean(incoming) &&
-  getAdminSystemJobsFingerprint(visible) !== getAdminSystemJobsFingerprint(incoming);
-
-/** A new first page invalidates every older keyset cursor in the loaded tail. */
-export const resetAdminSystemJobPages = (firstPage: AdminSystemJobs): AdminSystemJobs[] => [
-  firstPage,
-];
-
-export const collectAdminSystemJobs = (pages: readonly AdminSystemJobs[]): AdminSystemJob[] => {
-  const seen = new Set<string>();
-  const jobs: AdminSystemJob[] = [];
-  for (const page of pages) {
-    for (const job of page.items) {
-      if (seen.has(job.jobId)) continue;
-      seen.add(job.jobId);
-      jobs.push(job);
-    }
-  }
-  return jobs;
-};
-
 /**
  * Confirm a committed job mutation against a refresh snapshot.
  *
- * The mutation response is the authoritative CAS result. List pages are a
- * best-effort UI projection: when pagination shifts the row off currently
- * loaded pages, treat the committed DTO itself as confirmed rather than
- * leaving the row permanently "refresh pending".
+ * The mutation response is the authoritative CAS result. The table page is a
+ * best-effort UI projection: when pagination shifts the row off the current
+ * page, treat the committed DTO itself as confirmed rather than leaving the
+ * row permanently "refresh pending".
  */
 export const didAdminSystemJobRefreshConfirm = (
-  pages: readonly AdminSystemJobs[] | undefined,
+  items: readonly AdminSystemJob[] | undefined,
   committed: AdminSystemJob,
 ): boolean => {
   if (committed.revision === null) return false;
-  const refreshed =
-    pages && collectAdminSystemJobs(pages).find((job) => job.jobId === committed.jobId);
+  const refreshed = items?.find((job) => job.jobId === committed.jobId);
   if (refreshed === undefined) {
-    // Job not on loaded pages (pagination drift) — mutation response stands.
+    // Job not on the current page (pagination drift) — mutation response stands.
     return true;
   }
   return refreshed.revision === committed.revision && refreshed.status === committed.status;

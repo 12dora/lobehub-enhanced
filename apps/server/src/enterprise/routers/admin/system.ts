@@ -9,6 +9,8 @@ import {
   adminSystemCancelDocumentRenderJobOutputSchema,
   adminSystemCancelJobInputSchema,
   adminSystemCancelJobOutputSchema,
+  adminSystemClearJobsInputSchema,
+  adminSystemClearJobsOutputSchema,
   adminSystemGetDocumentRenderSettingsOutputSchema,
   adminSystemGetDocumentRenderStatusOutputSchema,
   adminSystemGetEnterpriseLookupSettingsOutputSchema,
@@ -21,6 +23,8 @@ import {
   adminSystemGetSandboxPackageStatsOutputSchema,
   adminSystemGetSandboxSettingsOutputSchema,
   adminSystemGetStatusOutputSchema,
+  adminSystemListJobsInputSchema,
+  adminSystemListJobsOutputSchema,
   adminSystemPrepareRestartInputSchema,
   adminSystemPrepareRestartOutputSchema,
   adminSystemRequestRestartInputSchema,
@@ -65,6 +69,7 @@ import {
   toSandboxSettingsOutput,
 } from '../../services/sandboxSettings';
 import { isIdentityProviderFeatureEnabled } from './identityProvidersSupport';
+import { adminSystemAlertsRouter } from './system.alerts';
 import {
   getEnterpriseLookupSettings,
   testEnterpriseLookupProviderHandler,
@@ -77,6 +82,7 @@ import {
   updateDocumentRenderSettingsHandler,
   updateSandboxSettingsHandler,
 } from './system.settings';
+import { adminSystemStatusApiRouter } from './system.statusApi';
 
 const systemProcedure = preAccessAuthedProcedure
   .use(({ next }) => {
@@ -99,6 +105,8 @@ const platformSystemBase = preAccessAuthedProcedure
   .use(withAdminMutationRateLimit());
 
 export const adminSystemRouter = router({
+  alerts: adminSystemAlertsRouter,
+
   cancelDocumentRenderJob: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
     .input(adminSystemCancelDocumentRenderJobInputSchema)
@@ -160,6 +168,26 @@ export const adminSystemRouter = router({
       executePlatformSystem(() => new PlatformSystemAdminService(ctx.serverDB).getJobs(input)),
     ),
 
+  jobs: router({
+    clear: platformSystemBase
+      .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+      .input(adminSystemClearJobsInputSchema)
+      .output(adminSystemClearJobsOutputSchema)
+      .mutation(({ ctx }) =>
+        executePlatformSystem(() =>
+          new PlatformSystemAdminService(ctx.serverDB).clearJobs(ctx.userId!),
+        ),
+      ),
+
+    list: platformSystemBase
+      .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
+      .input(adminSystemListJobsInputSchema)
+      .output(adminSystemListJobsOutputSchema)
+      .query(({ ctx, input }) =>
+        executePlatformSystem(() => new PlatformSystemAdminService(ctx.serverDB).listJobs(input)),
+      ),
+  }),
+
   getSandboxPackageStats: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_READ))
     .input(adminSystemGetSandboxPackageStatsInputSchema)
@@ -219,6 +247,8 @@ export const adminSystemRouter = router({
         return { jobId: result.jobId, ok: true };
       }),
     ),
+
+  statusApi: adminSystemStatusApiRouter,
 
   retryJob: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))

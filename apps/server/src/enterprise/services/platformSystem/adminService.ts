@@ -16,6 +16,7 @@ import type {
   AdminSystemGetJobsInput,
   AdminSystemInstanceState,
   AdminSystemJob,
+  AdminSystemListJobsInput,
   AdminSystemRetryJobInput,
   AdminSystemSandboxHealth,
 } from '@/server/enterprise/contracts/adminSystem';
@@ -30,7 +31,7 @@ import {
   controlPlatformAgentRolloutJob,
   PLATFORM_AGENT_ROLLOUT_JOB_TYPE,
 } from '../agentCatalog/rolloutService';
-import { AUDIT_ACTION, type AuditAction } from '../audit/auditActionCatalog';
+import { AUDIT_ACTION, AUDIT_TARGET_TYPE, type AuditAction } from '../audit/auditActionCatalog';
 import { getIdentityProviderStartupArtifactHealth } from '../identityProvider/startupArtifact';
 import { parseEnvironmentIdentityProviderIds } from '../identityProvider/startupSnapshot';
 import {
@@ -62,6 +63,7 @@ import type { LiveInfraHealth, LiveInfraHealthProbe } from './infraHealthMemo';
 import { getLiveInfraHealth } from './infraHealthMemo';
 import { probeLatencyMs } from './infraProbes';
 import { fullJobProjection, projectJob } from './jobProjection';
+import { readJobsClearedAt, writeJobsClearedAt } from './jobsWatermark';
 import { readRuntimeErrorSummary } from './runtimeErrors';
 import { probeSandboxHealth } from './sandboxProbe';
 import {
@@ -138,7 +140,12 @@ export class PlatformSystemAdminService {
       (this.envOverride ? async () => null : () => probeDocumentRenderHealth(this.now));
     this.env = options.env ?? process.env;
     this.getScopeEpoch = options.getScopeEpoch;
-    this.jobSummary = options.jobSummary ?? (() => new PlatformJobModel(this.db).getAdminSummary());
+    this.jobSummary =
+      options.jobSummary ??
+      (async () => {
+        const clearedAt = await readJobsClearedAt(this.db);
+        return new PlatformJobModel(this.db).getAdminSummary({ clearedAt });
+      });
     this.keyManagementProbe = options.keyManagementProbe;
     this.now = options.now ?? (() => new Date());
     this.objectStorageProbe = options.objectStorageProbe;
@@ -404,6 +411,68 @@ export class PlatformSystemAdminService {
           })
         : null,
     };
+  };
+
+  /** Numbered page. Same watermark as 任务统计: active rows stay, finished rows do not. */
+  listJobs = async (input: AdminSystemListJobsInput) => {
+    const page = input.page;
+    const pageSize = input.pageSize ?? 20;
+    const clearedAt = await readJobsClearedAt(this.db);
+    const result = await new PlatformJobModel(this.db).listForAdminPage({
+      clearedAt,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    });
+    return {
+      clearedAt: clearedAt ? clearedAt.toISOString() : null,
+      items: result.items.map(projectJob),
+      page,
+      pageSize,
+      total: result.total,
+    };
+  };
+
+  /**
+   * Move the watermark to the database clock (`now()`). Rows and idempotency keys stay.
+   * `hidden` is how many finished rows this watermark newly conceals.
+   */
+  clearJobs = async (actorUserId: string) => {
+    try {
+      return await this.db.transaction(async (tx) => {
+        const previousClearedAt = await readJobsClearedAt(tx, { strict: true });
+        const stored = await writeJobsClearedAt(tx, { updatedBy: actorUserId });
+        const hidden = await new PlatformJobModel(tx as LobeChatDatabase).countNewlyHiddenForAdmin({
+          clearedAt: stored,
+          previousClearedAt,
+        });
+        const clearedAtIso = stored.toISOString();
+        await new PlatformAuditService(tx).append({
+          action: AUDIT_ACTION.SYSTEM_JOBS_CLEAR,
+          actorUserId,
+          afterDiff: { clearedAt: clearedAtIso, hidden },
+          result: 'success',
+          targetId: 'jobs',
+          targetType: AUDIT_TARGET_TYPE.SYSTEM,
+        });
+        return { clearedAt: clearedAtIso, hidden };
+      });
+    } catch (error) {
+      try {
+        await new PlatformAuditService(this.db).append({
+          action: AUDIT_ACTION.SYSTEM_JOBS_CLEAR,
+          actorUserId,
+          afterDiff: { error: mutationFailureCategory(error) },
+          result: 'failure',
+          targetId: 'jobs',
+          targetType: AUDIT_TARGET_TYPE.SYSTEM,
+        });
+      } catch (auditError) {
+        console.error('[admin.system.jobs] clear failure audit unavailable', {
+          errorClass: auditError instanceof Error ? auditError.name : 'UnknownError',
+        });
+      }
+      throw error;
+    }
   };
 
   private getRecentPublishFailures = async () => {

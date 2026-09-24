@@ -1,13 +1,17 @@
 'use client';
 
-import { Alert, Flexbox, Text } from '@lobehub/ui';
+import { Alert, Flexbox } from '@lobehub/ui';
 import { Button, toast } from '@lobehub/ui/base-ui';
-import { createStaticStyles } from 'antd-style';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { openDangerConfirm } from '@/enterprise/client/features/admin/primitives/DangerConfirm';
 import DataTable from '@/enterprise/client/features/admin/primitives/DataTable';
+import { DEFAULT_PAGE_SIZE_OPTIONS } from '@/enterprise/client/features/admin/primitives/dataTableChange';
+import {
+  AdminReauthBlockedError,
+  AdminReauthCancelledError,
+} from '@/enterprise/client/features/admin/reauth/requestAdminReauth';
 import type { AdminSystemJobAction } from '@/enterprise/client/features/admin/system/controller';
 import { canRunAdminSystemJobAction } from '@/enterprise/client/features/admin/system/controller';
 import type {
@@ -17,14 +21,7 @@ import type {
 import type { AdminSystemJob } from '@/enterprise/client/services/adminSystem';
 
 import { buildJobsColumns } from './jobsColumns';
-
-const styles = createStaticStyles(({ css }) => ({
-  footer: css`
-    display: flex;
-    justify-content: center;
-    padding-block: 8px;
-  `,
-}));
+import { SectionHeader } from './SectionHeader';
 
 export interface JobsPanelProps {
   canOperate: boolean;
@@ -32,6 +29,7 @@ export interface JobsPanelProps {
   state: AdminSystemJobsState;
 }
 
+/** 近期任务: one server page at a time, with 清除 for operators. */
 export const JobsPanel = memo<JobsPanelProps>(({ canOperate, mutations, state }) => {
   const { t } = useTranslation('admin');
   const blocked = useMemo(
@@ -70,6 +68,30 @@ export const JobsPanel = memo<JobsPanelProps>(({ canOperate, mutations, state })
     [blocked, mutations, t],
   );
 
+  const openClear = useCallback(() => {
+    if (mutations.clearing) return;
+    // Non-destructive: finished rows are only hidden; running work keeps going.
+    openDangerConfirm({
+      confirmText: t('system.jobs.actions.clear'),
+      content: t('system.jobs.modal.clear.description'),
+      title: t('system.jobs.modal.clear.title'),
+      onConfirm: async () => {
+        const outcome = await mutations.clear();
+        if (outcome.ok) {
+          toast.success(t('system.jobs.toast.cleared', { count: outcome.hidden }));
+          return;
+        }
+        if (outcome.error instanceof AdminReauthCancelledError) {
+          toast.error(t('system.actions.reauthCancelled'));
+        } else if (outcome.error instanceof AdminReauthBlockedError) {
+          toast.error(t('users.errors.reauthBlocked'));
+        } else {
+          toast.error(t('system.jobs.toast.clearFailed'));
+        }
+      },
+    });
+  }, [mutations, t]);
+
   const columns = useMemo(
     () =>
       buildJobsColumns({
@@ -82,26 +104,27 @@ export const JobsPanel = memo<JobsPanelProps>(({ canOperate, mutations, state })
     [blocked, canOperate, mutations.busyJobIds, openAction, t],
   );
 
+  // Another page's (or pre-清除) rows must not stand in for the requested page.
+  const tableLoading = state.isLoadingInitial || state.isLoadingPage;
+
   return (
     <Flexbox gap={8}>
-      {!canOperate ? <Alert showIcon message={t('system.jobs.readOnly')} type="info" /> : null}
-      {state.hasStagedUpdate ? (
-        <Alert
-          showIcon
-          description={t('system.jobs.updatesAvailableDescription')}
-          message={t('system.jobs.updatesAvailable')}
-          type="info"
-          action={
+      <SectionHeader
+        title={t('system.jobs.title')}
+        actions={
+          canOperate ? (
             <Button
-              disabled={mutations.busyJobIds.length > 0}
+              disabled={mutations.clearing || state.total === 0}
+              loading={mutations.clearing}
               size="small"
-              onClick={() => void state.applyStagedUpdate()}
+              onClick={openClear}
             >
-              {t('system.jobs.actions.applyUpdates')}
+              {t('system.jobs.actions.clear')}
             </Button>
-          }
-        />
-      ) : null}
+          ) : null
+        }
+      />
+      {!canOperate ? <Alert showIcon message={t('system.jobs.readOnly')} type="info" /> : null}
       {mutations.refreshPendingJobIds.length > 0 ? (
         <Alert
           showIcon
@@ -114,10 +137,7 @@ export const JobsPanel = memo<JobsPanelProps>(({ canOperate, mutations, state })
           }
         />
       ) : null}
-      {state.pollError ? (
-        <Alert showIcon message={t('system.jobs.pollFailed')} type="warning" />
-      ) : null}
-      {state.backgroundError && state.jobs.length > 0 ? (
+      {state.backgroundError && state.data ? (
         <Alert
           showIcon
           message={t('system.jobs.refreshFailed')}
@@ -134,39 +154,19 @@ export const JobsPanel = memo<JobsPanelProps>(({ canOperate, mutations, state })
         dataSource={state.jobs}
         emptyDescription={t('system.jobs.empty')}
         error={Boolean(state.initialError)}
-        loading={state.isLoadingInitial}
-        pagination={false}
+        loading={tableLoading}
         rowKey="jobId"
         scroll={{ x: canOperate ? 1100 : 930 }}
         size="small"
+        pagination={{
+          current: state.page,
+          pageSize: state.pageSize,
+          pageSizeOptions: [...DEFAULT_PAGE_SIZE_OPTIONS],
+          total: state.total,
+        }}
+        onPaginationChange={state.setPagination}
         onRetry={() => void state.refresh()}
       />
-      {state.loadMoreError ? (
-        <Alert
-          showIcon
-          message={t('system.jobs.loadMoreFailed')}
-          type="error"
-          action={
-            <Button size="small" onClick={state.retryLoadMore}>
-              {t('system.actions.retry')}
-            </Button>
-          }
-        />
-      ) : state.hasMore ? (
-        <div className={styles.footer}>
-          <Button
-            disabled={state.isLoadingMore}
-            loading={state.isLoadingMore}
-            onClick={state.loadMore}
-          >
-            {t('system.jobs.actions.loadMore')}
-          </Button>
-        </div>
-      ) : state.jobs.length > 0 ? (
-        <div className={styles.footer}>
-          <Text type="secondary">{t('system.jobs.end')}</Text>
-        </div>
-      ) : null}
     </Flexbox>
   );
 });

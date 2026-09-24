@@ -6,10 +6,13 @@ import { roles, userRoles } from '@/database/schemas/rbac';
 import type { LobeChatDatabase } from '@/database/type';
 import {
   getDingtalkApiCallTotal,
-  readDingtalkApiDailyAlertThreshold,
   topDingtalkApiCallEndpoints,
 } from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
+import {
+  DEFAULT_STATUS_ALERT_SETTINGS,
+  type StatusAlertSettings,
+} from '@/types/platform/statusAlerts';
 
 import type { CapabilityReport } from './capabilities';
 import {
@@ -17,6 +20,21 @@ import {
   RUNTIME_ERROR_SPIKE_COUNT,
   scrubRuntimeErrorMessage,
 } from './runtimeErrors';
+import {
+  deliverStatusAlertChannels,
+  postDingtalkRobotMarkdown,
+  sendStatusAlertEmail,
+} from './statusAlertChannels';
+import {
+  emptyStatusAlertRuntime,
+  invalidateStatusAlertSettingsCache,
+  isStatusAlertMailConfigured,
+  isStatusAlertNotifyAppConfigured,
+  loadStatusAlertRuntime,
+  readCachedStatusAlertRuntime,
+  resolveDingtalkApiAlertThreshold,
+  type StatusAlertRuntime,
+} from './statusAlertSettings';
 import type { WorkerHealth } from './workerHealth';
 
 /** Global admin roles. `platform_user` is every signed-in member and is not alerted. */
@@ -30,10 +48,19 @@ export const PLATFORM_ADMIN_ALERT_ROLES = [
 
 export const STATUS_ALERT_INTERVAL_MS = 60_000;
 export const STATUS_ALERT_DEDUP_MS = 6 * 60 * 60 * 1000;
+/**
+ * Recent-events ring cap. A flapping component records at most one row per health
+ * (unhealthy or recovered) inside this window. The alert state map still updates
+ * on every tick, so the next real change is not lost. Send dedupe is separate
+ * and uses `repeatIntervalHours`.
+ */
+export const STATUS_ALERT_RECORD_WINDOW_MS = 10 * 60 * 1000;
 export const DINGTALK_API_BUDGET_ALERT_ID = 'budget:dingtalk_api';
 export const DINGTALK_API_BUDGET_ALERT_LABEL = '钉钉 API 今日调用量';
 /** Stored next to the budget tile so a midnight counter reset is not a recovery. */
 const BUDGET_ALERT_DAY_FIELD = `${DINGTALK_API_BUDGET_ALERT_ID}:day`;
+const RECORD_KEY_PREFIX = 'platform:status-alert:record:';
+const STATUS_ALERT_RECORD_TTL_SECONDS = STATUS_ALERT_RECORD_WINDOW_MS / 1000;
 const LOCK_KEY = 'platform:status-alert:lock';
 const LOCK_TTL_SECONDS = 50;
 const STATE_KEY = 'platform:status-alert:state';
@@ -151,6 +178,39 @@ export const statusAlertsEnabled = (env: Partial<NodeJS.ProcessEnv> = process.en
 export const statusAlertLink = (env: Partial<NodeJS.ProcessEnv> = process.env): string => {
   const base = (env.APP_URL ?? '').trim().replace(/\/$/, '');
   return base ? `${base}/admin/system/status` : '/admin/system/status';
+};
+
+const LATIN_BRAND_KEYS = new Set(['aihub', 'lobehub', 'lobechat']);
+
+/** Used when the published site title is empty or a built-in Latin product name. */
+export const STATUS_ALERT_SITE_TITLE_FALLBACK = 'AI 平台';
+
+export const resolveStatusAlertSiteTitle = (name: string | null | undefined): string => {
+  const trimmed = name?.trim() ?? '';
+  if (!trimmed) return STATUS_ALERT_SITE_TITLE_FALLBACK;
+  const key = trimmed.replaceAll(/\s+/g, '').toLowerCase();
+  if (LATIN_BRAND_KEYS.has(key)) return STATUS_ALERT_SITE_TITLE_FALLBACK;
+  return trimmed;
+};
+
+const CJK_TITLE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+
+/** CJK titles sit against 状态告警; a Latin title keeps a separating space. */
+export const statusAlertTitleFor = (siteTitle: string): string =>
+  CJK_TITLE.test(siteTitle) ? `${siteTitle}状态告警` : `${siteTitle} 状态告警`;
+
+export const alertRuleEnabledForComponent = (
+  id: string,
+  rules: StatusAlertSettings['rules'],
+): boolean => {
+  if (id === DINGTALK_API_BUDGET_ALERT_ID || id.startsWith('budget:')) {
+    return rules.dingtalkApiBudget;
+  }
+  if (id.startsWith('dependency:')) return rules.dependencies;
+  if (id.startsWith('worker:')) return rules.workers;
+  if (id.startsWith('capability:')) return rules.capabilities;
+  if (id.startsWith('spike:')) return rules.runtimeErrors;
+  return true;
 };
 
 export const deriveAlertComponents = (snapshot: StatusAlertSnapshot): AlertComponent[] => {
@@ -341,8 +401,9 @@ const renderStatusAlertText = (
 export const formatStatusAlertMessage = (
   transitions: readonly AlertTransition[],
   link: string,
+  siteTitle: string = STATUS_ALERT_SITE_TITLE_FALLBACK,
 ): { text: string; title: string } => {
-  const title = 'AIHub 状态告警';
+  const title = statusAlertTitleFor(siteTitle);
   const all = formatStatusAlertLines(transitions).map((line) => line.text);
   let shown = Math.min(STATUS_ALERT_LINE_MAX, all.length);
   let text = renderStatusAlertText(title, all.slice(0, shown), all.length - shown, link);
@@ -396,7 +457,30 @@ export const collectVerifiedAdminStaffIds = async (
   return [...ids];
 };
 
-export const listPlatformAdminStaffIds = async (db: LobeChatDatabase): Promise<string[]> => {
+export const listStatusAlertStaffIds = async (
+  db: LobeChatDatabase,
+  settings: Pick<StatusAlertSettings, 'channels'>,
+): Promise<string[]> => {
+  const channel = settings.channels.workNotice;
+  const { resolveVerifiedDingtalkIdentity } = await import('../dingtalkWorkspace/identity');
+  const resolve = (userId: string) => resolveVerifiedDingtalkIdentity(db, userId);
+  if (channel.recipientMode === 'users') {
+    if (channel.userIds.length === 0) return [];
+    const rows = await db
+      .select({ userId: users.id })
+      .from(users)
+      .where(
+        and(
+          inArray(users.id, [...channel.userIds]),
+          or(eq(users.banned, false), isNull(users.banned)),
+        ),
+      );
+    return collectVerifiedAdminStaffIds(
+      rows.map((row) => row.userId),
+      resolve,
+    );
+  }
+  if (channel.roles.length === 0) return [];
   const rows = await db
     .select({ userId: users.id })
     .from(userRoles)
@@ -407,28 +491,39 @@ export const listPlatformAdminStaffIds = async (db: LobeChatDatabase): Promise<s
         isNull(userRoles.workspaceId),
         isNull(roles.workspaceId),
         eq(roles.isActive, true),
-        inArray(roles.name, [...PLATFORM_ADMIN_ALERT_ROLES]),
+        inArray(roles.name, [...channel.roles]),
         or(eq(users.banned, false), isNull(users.banned)),
         sql`(${userRoles.expiresAt} IS NULL OR ${userRoles.expiresAt} > NOW())`,
       ),
     );
-  const { resolveVerifiedDingtalkIdentity } = await import('../dingtalkWorkspace/identity');
   return collectVerifiedAdminStaffIds(
     rows.map((row) => row.userId),
-    (userId) => resolveVerifiedDingtalkIdentity(db, userId),
+    resolve,
   );
 };
+
+export const listPlatformAdminStaffIds = async (db: LobeChatDatabase): Promise<string[]> =>
+  listStatusAlertStaffIds(db, { channels: DEFAULT_STATUS_ALERT_SETTINGS.channels });
 
 export interface StatusAlertDeps {
   acquireLock: () => Promise<'acquired' | 'held' | 'unavailable'>;
   /** `unavailable` means the shared dedup store could not be claimed; do not send. */
   claimDedup: (id: string, state: AlertHealth) => Promise<boolean | 'unavailable'>;
+  /**
+   * False when this component and health were already written to recent events
+   * inside {@link STATUS_ALERT_RECORD_WINDOW_MS}.
+   */
+  claimRecord?: (id: string, state: AlertHealth, now: number) => Promise<boolean>;
   enabled: () => boolean;
+  /** Injected by tests. Production uses global fetch. */
+  fetchImpl?: typeof fetch;
   link: () => string;
   listStaffIds: () => Promise<string[]>;
   loadApiBudget?: () => Promise<AlertComponent | null>;
   loadPrevious: () => Promise<Map<string, AlertHealth>>;
+  loadSettings?: () => Promise<StatusAlertRuntime>;
   loadSnapshot: () => Promise<StatusAlertSnapshot>;
+  mailConfigured?: () => Promise<boolean>;
   now: () => number;
   recordEvent: (event: {
     level: 'info' | 'warning';
@@ -436,11 +531,18 @@ export interface StatusAlertDeps {
     subsystem: string;
   }) => Promise<void>;
   releaseLock: () => Promise<void>;
+  resolveSiteTitle?: () => Promise<string>;
   saveState: (state: Map<string, AlertHealth>) => Promise<void>;
   send: (input: { staffIds: string[]; text: string; title: string }) => Promise<void>;
+  sendEmail?: (payload: { subject: string; text: string; to: string[] }) => Promise<void>;
 }
 
 const memoryState = new Map<string, AlertHealth>();
+/** First time each component became unhealthy, keyed by alert id (`dependency:database`). */
+const memorySince = new Map<string, string>();
+/** Last time a component+health was written to recent events, for the in-process window. */
+const memoryRecordedAt = new Map<string, number>();
+const SINCE_FIELD_SUFFIX = ':since';
 /** Day loaded with the previous budget tile. Set only by the default state reader. */
 let loadedBudgetDay: string | undefined;
 /** In-process copy of that day, used when Redis cannot be read. */
@@ -450,6 +552,7 @@ let budgetDayToSave: string | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let started = false;
 let lockToken: string | null = null;
+let activeDedupTtlSeconds = Math.ceil(STATUS_ALERT_DEDUP_MS / 1000);
 
 const warnRedisUnavailable = (reason: 'dedup' | 'lock'): void => {
   const now = Date.now();
@@ -460,10 +563,14 @@ const warnRedisUnavailable = (reason: 'dedup' | 'lock'): void => {
 
 export const resetStatusAlertsForTest = (): void => {
   memoryState.clear();
+  memorySince.clear();
+  memoryRecordedAt.clear();
   loadedBudgetDay = undefined;
   memoryBudgetDay = undefined;
   budgetDayToSave = undefined;
   lastRedisUnavailableWarnAt = 0;
+  activeDedupTtlSeconds = Math.ceil(STATUS_ALERT_DEDUP_MS / 1000);
+  invalidateStatusAlertSettingsCache();
   if (timer) clearInterval(timer);
   timer = undefined;
   started = false;
@@ -516,14 +623,22 @@ const defaultLoadPrevious = async (): Promise<Map<string, AlertHealth>> => {
     const hash = (await redis.hgetall(STATE_KEY)) ?? {};
     loadedBudgetDay = undefined;
     const next = new Map<string, AlertHealth>();
+    memorySince.clear();
     for (const [id, raw] of Object.entries(hash)) {
       if (id === BUDGET_ALERT_DAY_FIELD) {
         if (raw) loadedBudgetDay = raw;
         continue;
       }
+      if (id.endsWith(SINCE_FIELD_SUFFIX)) {
+        const alertId = id.slice(0, -SINCE_FIELD_SUFFIX.length);
+        if (alertId && raw && Number.isFinite(Date.parse(raw))) memorySince.set(alertId, raw);
+        continue;
+      }
       const health = parseHealth(raw);
       if (health) next.set(id, health);
     }
+    memoryState.clear();
+    for (const [id, health] of next) memoryState.set(id, health);
     return next;
   } catch {
     loadedBudgetDay = memoryBudgetDay;
@@ -531,10 +646,23 @@ const defaultLoadPrevious = async (): Promise<Map<string, AlertHealth>> => {
   }
 };
 
+const nextUnhealthySince = (state: ReadonlyMap<string, AlertHealth>, nowIso: string) => {
+  const since = new Map<string, string>();
+  for (const [id, health] of state) {
+    if (health !== 'unhealthy') continue;
+    const kept = memoryState.get(id) === 'unhealthy' ? memorySince.get(id) : undefined;
+    since.set(id, kept ?? nowIso);
+  }
+  return since;
+};
+
 const defaultSaveState = async (state: Map<string, AlertHealth>): Promise<void> => {
   memoryBudgetDay = budgetDayToSave;
+  const since = nextUnhealthySince(state, new Date().toISOString());
   memoryState.clear();
+  memorySince.clear();
   for (const [id, health] of state) memoryState.set(id, health);
+  for (const [id, at] of since) memorySince.set(id, at);
   const redis = redisClient();
   if (!redis) return;
   try {
@@ -542,8 +670,9 @@ const defaultSaveState = async (state: Map<string, AlertHealth>): Promise<void> 
     // hash field. A leftover `unhealthy` would page a false recovery later.
     const tx = redis.multi();
     tx.del(STATE_KEY);
-    if (state.size > 0) {
+    if (state.size > 0 || since.size > 0) {
       for (const [id, health] of state) tx.hset(STATE_KEY, id, health);
+      for (const [id, at] of since) tx.hset(STATE_KEY, `${id}${SINCE_FIELD_SUFFIX}`, at);
       if (budgetDayToSave) tx.hset(STATE_KEY, BUDGET_ALERT_DAY_FIELD, budgetDayToSave);
       tx.expire(STATE_KEY, STATE_TTL_SECONDS);
     }
@@ -551,6 +680,42 @@ const defaultSaveState = async (state: Map<string, AlertHealth>): Promise<void> 
     if (!replaced) throw new Error('status alert state replace aborted');
   } catch {
     // in-process map still dedups this replica
+  }
+};
+
+/** Summary component id (`dependency.database`) → alert-state id (`dependency:database`). */
+export const statusAlertIdForComponent = (componentId: string): string | null => {
+  const dot = componentId.indexOf('.');
+  if (dot <= 0) return null;
+  const group = componentId.slice(0, dot);
+  const name = componentId.slice(dot + 1);
+  if (!name) return null;
+  if (group === 'runtime') return `spike:${name}`;
+  if (
+    group === 'dependency' ||
+    group === 'capability' ||
+    group === 'worker' ||
+    group === 'budget'
+  ) {
+    return `${group}:${name}`;
+  }
+  return null;
+};
+
+/** When each unhealthy component first flipped. Missing or unreadable store → empty. */
+export const readStatusAlertUnhealthySince = async (): Promise<Map<string, string>> => {
+  const redis = redisClient();
+  if (!redis) return new Map(memorySince);
+  try {
+    const hash = (await redis.hgetall(STATE_KEY)) ?? {};
+    const since = new Map<string, string>();
+    for (const [id, raw] of Object.entries(hash)) {
+      if (!id.endsWith(SINCE_FIELD_SUFFIX) || !raw || !Number.isFinite(Date.parse(raw))) continue;
+      since.set(id.slice(0, -SINCE_FIELD_SUFFIX.length), new Date(raw).toISOString());
+    }
+    return since;
+  } catch {
+    return new Map(memorySince);
   }
 };
 
@@ -566,8 +731,7 @@ export const formatDingtalkApiBudgetDetail = (
   return top ? `${head}。最多：${top}` : head;
 };
 
-const loadDingtalkApiBudget = async (): Promise<AlertComponent | null> => {
-  const threshold = readDingtalkApiDailyAlertThreshold();
+const loadDingtalkApiBudget = async (threshold: number): Promise<AlertComponent | null> => {
   if (threshold <= 0) return null;
   const day = await getDingtalkApiCallTotal();
   if (!day) return null;
@@ -579,6 +743,43 @@ const loadDingtalkApiBudget = async (): Promise<AlertComponent | null> => {
     status: over ? 'unavailable' : 'healthy',
     ...(over ? { detail: formatDingtalkApiBudgetDetail(day.total, threshold, day.byApi) } : {}),
   };
+};
+
+const recordWindowKey = (id: string, state: AlertHealth) => `${id}:${state}`;
+
+/**
+ * One recent-event row per component and health per 10 minutes.
+ * Redis is shared across the lock holder; the in-process map covers a Redis miss
+ * so a flap cannot fill the 50-slot ring.
+ */
+const defaultClaimRecord = async (
+  id: string,
+  state: AlertHealth,
+  now: number,
+): Promise<boolean> => {
+  const key = recordWindowKey(id, state);
+  const previous = memoryRecordedAt.get(key);
+  if (previous != null && now - previous < STATUS_ALERT_RECORD_WINDOW_MS) return false;
+  const redis = redisClient();
+  if (redis) {
+    try {
+      const result = await redis.set(
+        `${RECORD_KEY_PREFIX}${key}`,
+        '1',
+        'EX',
+        STATUS_ALERT_RECORD_TTL_SECONDS,
+        'NX',
+      );
+      if (result !== 'OK') {
+        memoryRecordedAt.set(key, now);
+        return false;
+      }
+    } catch {
+      // Fall through and use the in-process window.
+    }
+  }
+  memoryRecordedAt.set(key, now);
+  return true;
 };
 
 const defaultClaimDedup = async (
@@ -595,7 +796,7 @@ const defaultClaimDedup = async (
       `platform:status-alert:dedup:${id}:${state}`,
       '1',
       'EX',
-      Math.ceil(STATUS_ALERT_DEDUP_MS / 1000),
+      activeDedupTtlSeconds,
       'NX',
     );
     return result === 'OK';
@@ -620,13 +821,15 @@ export const runStatusAlertEvaluation = async (
     return { sent: false, transitions: 0 };
   }
   try {
+    const runtime = await loadAlertRuntime(deps);
     const snapshot = await (deps.loadSnapshot ?? loadSnapshotFromStatus)();
     loadedBudgetDay = undefined;
     const previous = await (deps.loadPrevious ?? defaultLoadPrevious)();
     const previousBudgetDay = loadedBudgetDay;
     const components = deriveAlertComponents(snapshot);
+    const threshold = resolveDingtalkApiAlertThreshold(runtime.settings);
     try {
-      const budget = await (deps.loadApiBudget ?? loadDingtalkApiBudget)();
+      const budget = await (deps.loadApiBudget ?? (() => loadDingtalkApiBudget(threshold)))();
       if (budget) components.push(budget);
     } catch (error) {
       console.warn('[status-alert] dingtalk api budget read failed', {
@@ -636,19 +839,33 @@ export const runStatusAlertEvaluation = async (
     const transitions = selectAlertTransitions(previous, components, {
       previousBudgetDay,
     }).filter((transition) => formatStatusAlertLines([transition]).length > 0);
-    const claim = deps.claimDedup ?? defaultClaimDedup;
+    const candidates = transitions.filter((transition) => {
+      if (!alertRuleEnabledForComponent(transition.id, runtime.settings.rules)) return false;
+      if (transition.next === 'healthy' && !runtime.settings.notifyOnRecovery) return false;
+      return true;
+    });
     const notify: AlertTransition[] = [];
-    for (const transition of transitions) {
-      const claimed = await claim(transition.id, transition.next);
-      if (claimed === 'unavailable') {
-        // Leave saved state untouched so the transition is retried next tick.
-        return { sent: false, transitions: 0 };
+    if (runtime.settings.enabled) {
+      activeDedupTtlSeconds = runtime.settings.repeatIntervalHours * 60 * 60;
+      const claim = deps.claimDedup ?? defaultClaimDedup;
+      for (const transition of candidates) {
+        const claimed = await claim(transition.id, transition.next);
+        if (claimed === 'unavailable') {
+          // Leave saved state untouched so the transition is retried next tick.
+          return { sent: false, transitions: 0 };
+        }
+        if (claimed === true) notify.push(transition);
       }
-      if (claimed === true) notify.push(transition);
     }
     const record =
       deps.recordEvent ?? ((event) => appendRuntimeEvent({ ...event, at: deps.now?.() }));
-    for (const transition of notify) {
+    const claimRecord = deps.claimRecord ?? defaultClaimRecord;
+    const recordedAt = deps.now?.() ?? Date.now();
+    // Recent events keep recording when sending is off or send-dedup suppresses a repeat.
+    // A flap still updates alert state below, but the ring keeps at most one row per
+    // component and health inside STATUS_ALERT_RECORD_WINDOW_MS.
+    for (const transition of candidates) {
+      if (!(await claimRecord(transition.id, transition.next, recordedAt))) continue;
       const line = formatStatusAlertLines([transition])[0];
       await record({
         level: transition.next === 'healthy' ? 'info' : 'warning',
@@ -659,16 +876,7 @@ export const runStatusAlertEvaluation = async (
     let sent = false;
     if (notify.length > 0) {
       try {
-        const staffIds = await (deps.listStaffIds ?? listStaffFromDb)();
-        if (staffIds.length > 0) {
-          const message = formatStatusAlertMessage(notify, (deps.link ?? statusAlertLink)());
-          await (deps.send ?? sendWorkNoticeToAdmins)({
-            staffIds,
-            text: message.text,
-            title: message.title,
-          });
-          sent = true;
-        }
+        sent = await deliverAlertChannels(deps, runtime, notify);
       } catch (error) {
         // One attempt per transition. Retrying every minute would bill DingTalk.
         console.error('[status-alert] send failed', {
@@ -686,9 +894,68 @@ export const runStatusAlertEvaluation = async (
   }
 };
 
-const listStaffFromDb = async (): Promise<string[]> => {
+const loadAlertRuntime = async (deps: Partial<StatusAlertDeps>): Promise<StatusAlertRuntime> => {
+  if (deps.loadSettings) return deps.loadSettings();
+  try {
+    return await readCachedStatusAlertRuntime();
+  } catch (error) {
+    console.warn('[status-alert] settings read failed', {
+      errorClass: error instanceof Error ? error.name : 'UnknownError',
+    });
+    return emptyStatusAlertRuntime();
+  }
+};
+
+const resolveAlertSiteTitle = async (override?: () => Promise<string>): Promise<string> => {
+  if (override) return override();
+  try {
+    const { resolveServerRuntimeBranding } =
+      await import('@/server/enterprise/services/branding/runtimeBranding');
+    const branding = await resolveServerRuntimeBranding();
+    return resolveStatusAlertSiteTitle(branding.name);
+  } catch {
+    return STATUS_ALERT_SITE_TITLE_FALLBACK;
+  }
+};
+
+const listStaffFromDb = async (settings: StatusAlertSettings): Promise<string[]> => {
   const { getServerDB } = await import('@/database/core/db-adaptor');
-  return listPlatformAdminStaffIds(await getServerDB());
+  return listStatusAlertStaffIds(await getServerDB(), settings);
+};
+
+const deliverAlertChannels = async (
+  deps: Partial<StatusAlertDeps>,
+  runtime: StatusAlertRuntime,
+  notify: readonly AlertTransition[],
+): Promise<boolean> => {
+  const siteTitle = await resolveAlertSiteTitle(deps.resolveSiteTitle);
+  const message = formatStatusAlertMessage(notify, (deps.link ?? statusAlertLink)(), siteTitle);
+  const workNotice = runtime.settings.channels.workNotice;
+  const staffIds = workNotice.enabled
+    ? await (deps.listStaffIds ?? (() => listStaffFromDb(runtime.settings)))()
+    : [];
+  const mailConfigured = deps.mailConfigured
+    ? await deps.mailConfigured()
+    : await isStatusAlertMailConfigured();
+  const counts = await deliverStatusAlertChannels({
+    fetchImpl: deps.fetchImpl,
+    mailConfigured,
+    message,
+    now: deps.now?.(),
+    sendEmail: deps.sendEmail,
+    sendWorkNotice: (payload) => (deps.send ?? sendWorkNoticeToAdmins)(payload),
+    target: {
+      email: runtime.settings.channels.email,
+      robot: {
+        enabled: runtime.settings.channels.dingtalkRobot.enabled,
+        keyword: runtime.settings.channels.dingtalkRobot.keyword,
+        secret: runtime.robotSecret,
+        webhookUrl: runtime.robotWebhook ?? runtime.settings.channels.dingtalkRobot.webhookUrl,
+      },
+      workNotice: { enabled: workNotice.enabled, staffIds },
+    },
+  });
+  return counts.workNotice + counts.robot + counts.email > 0;
 };
 
 const sendWorkNoticeToAdmins = async (input: {
@@ -702,6 +969,100 @@ const sendWorkNoticeToAdmins = async (input: {
     markdown: { text: input.text, title: input.title },
     staffIds: input.staffIds,
   });
+};
+
+export const STATUS_ALERT_TEST_BODY = '这是一条测试消息，请忽略。';
+
+const isNotifyAppMissing = (error: unknown): boolean =>
+  Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'notify_app_not_configured',
+  );
+
+const logTestFailure = (channel: string, error: unknown): void => {
+  console.error('[status-alert] test send failed', {
+    channel,
+    errorClass: error instanceof Error ? error.name : 'UnknownError',
+  });
+};
+
+/** Sends one short test using the stored settings. Never includes secrets in the result. */
+export const sendStoredStatusAlertTest = async (
+  db: LobeChatDatabase,
+  channel: 'dingtalkRobot' | 'email' | 'workNotice',
+): Promise<{ delivered: number; error: string | null; ok: boolean }> => {
+  const runtime = await loadStatusAlertRuntime(db);
+  const siteTitle = await resolveAlertSiteTitle();
+  const title = statusAlertTitleFor(siteTitle);
+  const text = `${STATUS_ALERT_TEST_BODY}\n${statusAlertLink()}`;
+  const settings = runtime.settings;
+
+  if (channel === 'workNotice') {
+    if (!settings.channels.workNotice.enabled) {
+      return { delivered: 0, error: '工作通知未启用', ok: false };
+    }
+    if (!(await isStatusAlertNotifyAppConfigured())) {
+      return { delivered: 0, error: '钉钉通知应用未配置', ok: false };
+    }
+    const staffIds = await listStatusAlertStaffIds(db, settings);
+    if (staffIds.length === 0) {
+      return { delivered: 0, error: '没有已验证的钉钉接收人', ok: false };
+    }
+    try {
+      await sendWorkNoticeToAdmins({ staffIds, text, title });
+      return { delivered: staffIds.length, error: null, ok: true };
+    } catch (error) {
+      logTestFailure(channel, error);
+      return {
+        delivered: 0,
+        error: isNotifyAppMissing(error) ? '钉钉通知应用未配置' : '工作通知发送失败',
+        ok: false,
+      };
+    }
+  }
+
+  if (channel === 'dingtalkRobot') {
+    const robot = settings.channels.dingtalkRobot;
+    const webhookUrl = runtime.robotWebhook ?? robot.webhookUrl;
+    if (!robot.enabled) return { delivered: 0, error: '群机器人未启用', ok: false };
+    if (!webhookUrl) return { delivered: 0, error: '未配置群机器人 Webhook', ok: false };
+    try {
+      await postDingtalkRobotMarkdown({
+        keyword: robot.keyword,
+        secret: runtime.robotSecret,
+        text,
+        title,
+        webhookUrl,
+      });
+      return { delivered: 1, error: null, ok: true };
+    } catch (error) {
+      logTestFailure(channel, error);
+      return { delivered: 0, error: '群机器人发送失败', ok: false };
+    }
+  }
+
+  if (!settings.channels.email.enabled) {
+    return { delivered: 0, error: '邮件通知未启用', ok: false };
+  }
+  if (settings.channels.email.recipients.length === 0) {
+    return { delivered: 0, error: '未配置收件人', ok: false };
+  }
+  if (!(await isStatusAlertMailConfigured())) {
+    return { delivered: 0, error: '邮件服务未配置', ok: false };
+  }
+  try {
+    await sendStatusAlertEmail({
+      recipients: settings.channels.email.recipients,
+      text,
+      title,
+    });
+    return { delivered: settings.channels.email.recipients.length, error: null, ok: true };
+  } catch (error) {
+    logTestFailure(channel, error);
+    return { delivered: 0, error: '邮件发送失败', ok: false };
+  }
 };
 
 const loadSnapshotFromStatus = async (): Promise<StatusAlertSnapshot> => {

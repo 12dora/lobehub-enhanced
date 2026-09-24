@@ -78,12 +78,20 @@ export {
   type AdminSystemCancelJobInput,
   adminSystemCancelJobInputSchema,
   adminSystemCancelJobOutputSchema,
+  type AdminSystemClearJobsInput,
+  adminSystemClearJobsInputSchema,
+  type AdminSystemClearJobsOutput,
+  adminSystemClearJobsOutputSchema,
   type AdminSystemGetJobsInput,
   adminSystemGetJobsInputSchema,
   adminSystemGetJobsOutputSchema,
   type AdminSystemJob,
   adminSystemJobKindSchema,
   adminSystemJobSchema,
+  type AdminSystemListJobsInput,
+  adminSystemListJobsInputSchema,
+  type AdminSystemListJobsOutput,
+  adminSystemListJobsOutputSchema,
   type AdminSystemRetryJobInput,
   adminSystemRetryJobInputSchema,
   adminSystemRetryJobOutputSchema,
@@ -120,6 +128,23 @@ export {
   type SandboxPackageManager,
   sandboxPackageManagerSchema,
 } from './adminSystem/sandbox';
+export {
+  type AdminSystemStatusApiRevokeInput,
+  adminSystemStatusApiRevokeInputSchema,
+  adminSystemStatusApiRevokeOutputSchema,
+  type AdminSystemStatusApiRotateInput,
+  adminSystemStatusApiRotateInputSchema,
+  type AdminSystemStatusApiRotateOutput,
+  adminSystemStatusApiRotateOutputSchema,
+  type AdminSystemStatusApiView,
+  adminSystemStatusApiViewSchema,
+  STATUS_API_TOKEN_PATTERN,
+} from './adminSystem/statusApi';
+/**
+ * Alert settings contracts. Owned by the alerts agent; re-exported here so
+ * `admin.system` callers share one barrel.
+ */
+export * from './adminSystem/alerts';
 export {
   type AdminSystemCapability,
   adminSystemCapabilityKeySchema,

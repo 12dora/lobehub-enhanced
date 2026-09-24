@@ -66,6 +66,7 @@ export const executePlatformSystem = async <T>(operation: () => Promise<T>): Pro
   try {
     return await operation();
   } catch (error) {
+    if (error instanceof TRPCError) throw error;
     if (error instanceof PlatformSystemJobNotFoundError) {
       return throwEnterpriseError({
         code: PLATFORM_ERROR_CODES.PLATFORM_NOT_FOUND,

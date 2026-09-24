@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   adminSystemCancelJobInputSchema,
+  adminSystemClearJobsInputSchema,
+  adminSystemClearJobsOutputSchema,
   adminSystemGetInfraSettingsOutputSchema,
   adminSystemGetInstanceRevisionsInputSchema,
   adminSystemGetJobsOutputSchema,
   adminSystemGetStatusOutputSchema,
   adminSystemJobKindSchema,
+  adminSystemListJobsInputSchema,
+  adminSystemListJobsOutputSchema,
   adminSystemRequestRestartOutputSchema,
   adminSystemSandboxHealthSchema,
   adminSystemTestDependencyInputSchema,
@@ -417,5 +421,35 @@ describe('admin system infrastructure settings contracts', () => {
         draft: input.config,
       }).draft,
     ).toEqual(input.config);
+  });
+});
+
+describe('admin system job pages', () => {
+  it('requires a page and clamps page size to 10..100 with a default of 20', () => {
+    expect(adminSystemListJobsInputSchema.parse({ page: 1 })).toEqual({ page: 1, pageSize: 20 });
+    expect(adminSystemListJobsInputSchema.parse({ page: 2, pageSize: 100 }).pageSize).toBe(100);
+    expect(adminSystemListJobsInputSchema.safeParse({ page: 0 }).success).toBe(false);
+    expect(adminSystemListJobsInputSchema.safeParse({ page: 1, pageSize: 9 }).success).toBe(false);
+    expect(adminSystemListJobsInputSchema.safeParse({ page: 1, pageSize: 101 }).success).toBe(
+      false,
+    );
+    expect(adminSystemListJobsInputSchema.safeParse({ page: 1, cursor: 'x' }).success).toBe(false);
+    expect(adminSystemClearJobsInputSchema.parse({})).toEqual({});
+    expect(adminSystemClearJobsInputSchema.safeParse({ force: true }).success).toBe(false);
+    expect(
+      adminSystemClearJobsOutputSchema.parse({
+        clearedAt: '2026-09-25T00:00:00.000Z',
+        hidden: 3,
+      }),
+    ).toEqual({ clearedAt: '2026-09-25T00:00:00.000Z', hidden: 3 });
+    expect(
+      adminSystemListJobsOutputSchema.safeParse({
+        clearedAt: null,
+        items: [],
+        page: 1,
+        pageSize: 20,
+        total: 0,
+      }).success,
+    ).toBe(true);
   });
 });

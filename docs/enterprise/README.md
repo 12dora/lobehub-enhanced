@@ -42,6 +42,7 @@ AIHub 是基于 LobeHub 的企业内部版二次开发。本目录是这套二�
 - **[chatgpt-web-provider.md](./chatgpt-web-provider.md)** — ChatGPT Web (`chatgptweb`) 服务商：libcurl-impersonate 持久 HTTP/2 /curl-impersonate CLI 传输层环境变量、开发机 / 镜像准备、共享账号接入、能力范围与已知限制。
 - **[upstream-sync.md](./upstream-sync.md)** — 上游同步台账：同步方法、每轮已合入 / 已跳过的上游 PR 与原因（首轮 v2.2.10 → v2.2.16，随 v1.3.0 发布）。
 - **[modules.md](./modules.md)** — 可选模块 / 部署分档：预设、环境变量、Compose profiles、关闭后的返回值、镜像体积。
+- **[status-api.md](./status-api.md)** — 对外状态 API：健康检查、摘要、事件、令牌与 `schemaVersion`。
 - **[cursor-provider.md](./cursor-provider.md)** — Cursor (`cursor`) 服务商：浏览器登录 / API Key 接入、60 天有效期、Cursor Agent CLI 传输层环境变量与共享使用建议。
 - **[runbooks/](./runbooks/)** — 运维手册：回滚、灾难恢复、Prometheus 告警、上线预检、安全验收。
 - **[../security/](../security/)** — 企业威胁模型与 Vault 密钥提供方设计。

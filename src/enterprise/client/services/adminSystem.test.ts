@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { adminSystemService } from './adminSystem';
 
 const mocks = vi.hoisted(() => ({
+  alertsGet: vi.fn(),
+  alertsTest: vi.fn(),
+  alertsUpdate: vi.fn(),
   cancelDocumentRenderJob: vi.fn(),
   cancelJob: vi.fn(),
   getDocumentRenderSettings: vi.fn(),
@@ -11,11 +14,15 @@ const mocks = vi.hoisted(() => ({
   getSandboxPackageStats: vi.fn(),
   getSandboxSettings: vi.fn(),
   getInstanceRevisions: vi.fn(),
-  getJobs: vi.fn(),
   getStatus: vi.fn(),
+  jobsClear: vi.fn(),
+  jobsList: vi.fn(),
   retryDocumentRenderJob: vi.fn(),
   retryJob: vi.fn(),
   runDocumentRenderGc: vi.fn(),
+  statusApiGet: vi.fn(),
+  statusApiRevoke: vi.fn(),
+  statusApiRotate: vi.fn(),
   testDependency: vi.fn(),
   updateDocumentRenderSettings: vi.fn(),
   updateSandboxSettings: vi.fn(),
@@ -25,6 +32,11 @@ vi.mock('@/libs/trpc/client', () => ({
   lambdaClient: {
     admin: {
       system: {
+        alerts: {
+          get: { query: mocks.alertsGet },
+          test: { mutate: mocks.alertsTest },
+          update: { mutate: mocks.alertsUpdate },
+        },
         cancelDocumentRenderJob: { mutate: mocks.cancelDocumentRenderJob },
         cancelJob: { mutate: mocks.cancelJob },
         getDocumentRenderSettings: { query: mocks.getDocumentRenderSettings },
@@ -33,11 +45,19 @@ vi.mock('@/libs/trpc/client', () => ({
         getSandboxPackageStats: { query: mocks.getSandboxPackageStats },
         getSandboxSettings: { query: mocks.getSandboxSettings },
         getInstanceRevisions: { query: mocks.getInstanceRevisions },
-        getJobs: { query: mocks.getJobs },
         getStatus: { query: mocks.getStatus },
+        jobs: {
+          clear: { mutate: mocks.jobsClear },
+          list: { query: mocks.jobsList },
+        },
         retryDocumentRenderJob: { mutate: mocks.retryDocumentRenderJob },
         retryJob: { mutate: mocks.retryJob },
         runDocumentRenderGc: { mutate: mocks.runDocumentRenderGc },
+        statusApi: {
+          get: { query: mocks.statusApiGet },
+          revoke: { mutate: mocks.statusApiRevoke },
+          rotate: { mutate: mocks.statusApiRotate },
+        },
         testDependency: { mutate: mocks.testDependency },
         updateDocumentRenderSettings: { mutate: mocks.updateDocumentRenderSettings },
         updateSandboxSettings: { mutate: mocks.updateSandboxSettings },
@@ -52,19 +72,60 @@ describe('Admin System service adapter', () => {
   it('forwards read inputs to admin.system procedures', async () => {
     const status = { snapshotAt: new Date('2026-07-20T00:00:00.000Z') };
     const instances = { items: [], nextCursor: null };
-    const jobs = { items: [], nextCursor: null };
+    const jobs = { clearedAt: null, items: [], page: 2, pageSize: 50, total: 0 };
     mocks.getStatus.mockResolvedValue(status);
     mocks.getInstanceRevisions.mockResolvedValue(instances);
-    mocks.getJobs.mockResolvedValue(jobs);
+    mocks.jobsList.mockResolvedValue(jobs);
 
     await expect(adminSystemService.getStatus()).resolves.toBe(status);
     await expect(adminSystemService.getInstanceRevisions({ limit: 20 })).resolves.toBe(instances);
-    await expect(adminSystemService.getJobs({ cursor: 'next-page', limit: 20 })).resolves.toBe(
-      jobs,
-    );
+    await expect(adminSystemService.listJobs({ page: 2, pageSize: 50 })).resolves.toBe(jobs);
     expect(mocks.getStatus).toHaveBeenCalledWith();
     expect(mocks.getInstanceRevisions).toHaveBeenCalledWith({ limit: 20 });
-    expect(mocks.getJobs).toHaveBeenCalledWith({ cursor: 'next-page', limit: 20 });
+    expect(mocks.jobsList).toHaveBeenCalledWith({ page: 2, pageSize: 50 });
+  });
+
+  it('clears finished jobs through admin.system.jobs.clear with an empty input', async () => {
+    const cleared = { clearedAt: '2026-09-25T00:00:00.000Z', hidden: 12 };
+    mocks.jobsClear.mockResolvedValue(cleared);
+
+    await expect(adminSystemService.clearJobs()).resolves.toBe(cleared);
+    expect(mocks.jobsClear).toHaveBeenCalledWith({});
+  });
+
+  it('forwards the alert-settings get / update / test procedures', async () => {
+    const view = { revision: 3, settings: { enabled: true } };
+    const input = {
+      expectedRevision: 3,
+      robotSecret: { action: 'keep' as const },
+      settings: { enabled: false },
+    };
+    const tested = { delivered: 2, error: null, ok: true };
+    mocks.alertsGet.mockResolvedValue(view);
+    mocks.alertsUpdate.mockResolvedValue(view);
+    mocks.alertsTest.mockResolvedValue(tested);
+
+    await expect(adminSystemService.getAlertSettings()).resolves.toBe(view);
+    await expect(adminSystemService.updateAlertSettings(input as never)).resolves.toBe(view);
+    await expect(adminSystemService.testAlertChannel({ channel: 'email' })).resolves.toBe(tested);
+    expect(mocks.alertsGet).toHaveBeenCalledWith();
+    expect(mocks.alertsUpdate).toHaveBeenCalledWith(input);
+    expect(mocks.alertsTest).toHaveBeenCalledWith({ channel: 'email' });
+  });
+
+  it('forwards the status API token procedures', async () => {
+    const view = { envTokenConfigured: false, tokenHint: null, tokenSet: false };
+    const rotated = { token: `sk-status-${'a'.repeat(32)}`, view };
+    mocks.statusApiGet.mockResolvedValue(view);
+    mocks.statusApiRotate.mockResolvedValue(rotated);
+    mocks.statusApiRevoke.mockResolvedValue(view);
+
+    await expect(adminSystemService.getStatusApi()).resolves.toBe(view);
+    await expect(adminSystemService.rotateStatusApiToken()).resolves.toBe(rotated);
+    await expect(adminSystemService.revokeStatusApiToken()).resolves.toBe(view);
+    expect(mocks.statusApiGet).toHaveBeenCalledWith();
+    expect(mocks.statusApiRotate).toHaveBeenCalledWith({});
+    expect(mocks.statusApiRevoke).toHaveBeenCalledWith({});
   });
 
   it('forwards audited CAS mutation inputs without rewriting them', async () => {

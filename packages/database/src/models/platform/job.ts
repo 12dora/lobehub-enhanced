@@ -102,6 +102,27 @@ export interface AdminPlatformJobListParams {
   limit?: number;
 }
 
+/**
+ * Offset page for 近期任务. `clearedAt` hides rows that had already finished at the watermark.
+ * Active rows stay visible. A terminal row with no `finishedAt` uses `updatedAt`.
+ */
+export interface AdminPlatformJobPageParams {
+  clearedAt?: Date | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminPlatformJobSummaryParams {
+  /** Active rows (pending / reserved / running) stay in the totals. */
+  clearedAt?: Date | null;
+}
+
+/** Finished rows the new watermark hides that the previous watermark still showed. */
+export interface AdminPlatformJobHiddenCountParams {
+  clearedAt: Date;
+  previousClearedAt?: Date | null;
+}
+
 export interface AdminPlatformJobListItem {
   attempt: number;
   createdAt: Date;
@@ -125,6 +146,78 @@ export interface AdminPlatformJobSummary {
   failed: number;
   total: number;
 }
+
+const ADMIN_ACTIVE_JOB_STATUSES = [
+  'pending',
+  'reserved',
+  'running',
+] as const satisfies readonly PlatformJobStatus[];
+
+/**
+ * Finish time used by 清除. Active rows are ignored by callers. A terminal row that never
+ * recorded `finishedAt` falls back to `updatedAt`, so a job that was still running at clear
+ * time stays visible after it ends.
+ */
+const effectiveFinishedAt = sql`coalesce(
+  ${platformJobs.finishedAt},
+  case
+    when ${platformJobs.status} in ('succeeded', 'failed', 'cancelled', 'dead')
+      then ${platformJobs.updatedAt}
+    else null
+  end
+)`;
+
+const executableJobs = () => notInArray(platformJobs.type, [...PLATFORM_JOB_LEDGER_TYPES]);
+
+const watermarkDate = (value: Date | null | undefined): Date | null => {
+  if (!value || Number.isNaN(value.getTime())) return null;
+  return value;
+};
+
+/**
+ * Executable jobs an operator still sees: every active row, plus rows that had not finished
+ * by the watermark (`finishedAt` null, or finish time strictly after the watermark).
+ */
+const visibleAdminJobs = (clearedAt: Date | null | undefined): SQL => {
+  const executable = executableJobs();
+  const watermark = watermarkDate(clearedAt);
+  if (!watermark) return executable;
+  return (
+    and(
+      executable,
+      or(
+        inArray(platformJobs.status, [...ADMIN_ACTIVE_JOB_STATUSES]),
+        sql`${effectiveFinishedAt} is null`,
+        sql`${effectiveFinishedAt} > ${watermark}`,
+      ),
+    ) ?? executable
+  );
+};
+
+const adminJobColumns = {
+  attempt: platformJobs.attempt,
+  createdAt: platformJobs.createdAt,
+  failedCount: sql<number | null>`case
+    when ${platformJobs.resultSummary}->>'failed' ~ '^[0-9]{1,9}$'
+      then (${platformJobs.resultSummary}->>'failed')::int
+    else null
+  end`,
+  finishedAt: platformJobs.finishedAt,
+  hasError: sql<boolean>`${platformJobs.lastError} is not null`,
+  id: platformJobs.id,
+  maxAttempts: platformJobs.maxAttempts,
+  progressDone: platformJobs.progressDone,
+  progressTotal: platformJobs.progressTotal,
+  revision: sql<number | null>`case
+    when ${platformJobs.input}->'control'->>'revision' ~ '^[0-9]{1,9}$'
+      then (${platformJobs.input}->'control'->>'revision')::int
+    else null
+  end`,
+  startedAt: platformJobs.startedAt,
+  status: platformJobs.status,
+  type: platformJobs.type,
+  updatedAt: platformJobs.updatedAt,
+};
 
 /**
  * Platform job state machine with idempotent enqueue, lease claim, heartbeat, and retry.
@@ -288,30 +381,7 @@ export class PlatformJobModel {
         )
       : undefined;
     const rows = await this.db
-      .select({
-        attempt: platformJobs.attempt,
-        createdAt: platformJobs.createdAt,
-        failedCount: sql<number | null>`case
-          when ${platformJobs.resultSummary}->>'failed' ~ '^[0-9]{1,9}$'
-            then (${platformJobs.resultSummary}->>'failed')::int
-          else null
-        end`,
-        finishedAt: platformJobs.finishedAt,
-        hasError: sql<boolean>`${platformJobs.lastError} is not null`,
-        id: platformJobs.id,
-        maxAttempts: platformJobs.maxAttempts,
-        progressDone: platformJobs.progressDone,
-        progressTotal: platformJobs.progressTotal,
-        revision: sql<number | null>`case
-          when ${platformJobs.input}->'control'->>'revision' ~ '^[0-9]{1,9}$'
-            then (${platformJobs.input}->'control'->>'revision')::int
-          else null
-        end`,
-        startedAt: platformJobs.startedAt,
-        status: platformJobs.status,
-        type: platformJobs.type,
-        updatedAt: platformJobs.updatedAt,
-      })
+      .select(adminJobColumns)
       .from(platformJobs)
       .where(and(executable, cursor))
       .orderBy(desc(platformJobs.createdAt), desc(platformJobs.id))
@@ -325,8 +395,58 @@ export class PlatformJobModel {
     };
   };
 
-  getAdminSummary = async (): Promise<AdminPlatformJobSummary> => {
-    const executable = notInArray(platformJobs.type, [...PLATFORM_JOB_LEDGER_TYPES]);
+  /**
+   * Numbered page. Ledger rows stay excluded. A watermark hides rows already finished at
+   * `clearedAt`; active rows are always returned. `total` is `count(*)` of that same set.
+   */
+  listForAdminPage = async (
+    params: AdminPlatformJobPageParams = {},
+  ): Promise<{ items: AdminPlatformJobListItem[]; total: number }> => {
+    const limit = Math.min(Math.max(Math.floor(params.limit ?? 20), 1), 100);
+    const offset = Math.min(Math.max(Math.floor(params.offset ?? 0), 0), 1_000_000);
+    const where = visibleAdminJobs(params.clearedAt);
+    const [countRow] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(platformJobs)
+      .where(where);
+    const items = await this.db
+      .select(adminJobColumns)
+      .from(platformJobs)
+      .where(where)
+      .orderBy(desc(platformJobs.createdAt), desc(platformJobs.id))
+      .limit(limit)
+      .offset(offset);
+    return { items, total: Number(countRow?.total ?? 0) };
+  };
+
+  /**
+   * Finished executable rows that `clearedAt` hides and `previousClearedAt` did not.
+   * Rows are not deleted.
+   */
+  countNewlyHiddenForAdmin = async (params: AdminPlatformJobHiddenCountParams): Promise<number> => {
+    const watermark = watermarkDate(params.clearedAt);
+    if (!watermark) return 0;
+    const previous = watermarkDate(params.previousClearedAt);
+    const window = previous
+      ? sql`${effectiveFinishedAt} > ${previous} and ${effectiveFinishedAt} <= ${watermark}`
+      : sql`${effectiveFinishedAt} <= ${watermark}`;
+    const [row] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(platformJobs)
+      .where(
+        and(
+          executableJobs(),
+          notInArray(platformJobs.status, [...ADMIN_ACTIVE_JOB_STATUSES]),
+          sql`${effectiveFinishedAt} is not null`,
+          window,
+        ),
+      );
+    return Number(row?.total ?? 0);
+  };
+
+  getAdminSummary = async (
+    params: AdminPlatformJobSummaryParams = {},
+  ): Promise<AdminPlatformJobSummary> => {
     const [row] = await this.db
       .select({
         active: sql<number>`count(*) filter (where ${platformJobs.status} in ('pending', 'reserved', 'running'))::int`,
@@ -335,7 +455,7 @@ export class PlatformJobModel {
         total: sql<number>`count(*)::int`,
       })
       .from(platformJobs)
-      .where(executable);
+      .where(visibleAdminJobs(params.clearedAt));
     return {
       active: Number(row?.active ?? 0),
       completed: Number(row?.completed ?? 0),

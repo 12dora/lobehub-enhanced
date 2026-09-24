@@ -110,6 +110,111 @@ describe('PlatformJobModel', () => {
         total: 7,
       });
     });
+
+    it('pages executable jobs with a watermark and keeps active rows in the totals', async () => {
+      const older = new Date('2026-07-01T00:00:00.000Z');
+      const newer = new Date('2026-07-02T00:00:00.000Z');
+      const watermark = new Date('2026-07-01T12:00:00.000Z');
+      await serverDB.insert(platformJobs).values([
+        {
+          createdAt: older,
+          finishedAt: older,
+          id: 'pjob_0000000000000011',
+          idempotencyKey: 'admin-page-hidden-succeeded',
+          status: 'succeeded',
+          type: 'platform.agent.rollout.v1',
+          updatedAt: older,
+        },
+        {
+          createdAt: older,
+          id: 'pjob_0000000000000012',
+          idempotencyKey: 'admin-page-active-pending',
+          status: 'pending',
+          type: 'platform.agent.rollout.v1',
+        },
+        {
+          createdAt: older,
+          id: 'pjob_0000000000000013',
+          idempotencyKey: 'admin-page-active-running',
+          status: 'running',
+          type: 'platform.secret.rewrap.v1',
+        },
+        {
+          createdAt: older,
+          finishedAt: newer,
+          id: 'pjob_0000000000000014',
+          idempotencyKey: 'admin-page-visible-failed',
+          status: 'failed',
+          type: 'platform.audit.export.v1',
+        },
+        {
+          createdAt: newer,
+          finishedAt: newer,
+          id: 'pjob_0000000000000015',
+          idempotencyKey: 'admin-page-visible-succeeded',
+          status: 'succeeded',
+          type: 'platform.agent.rollout.v1',
+        },
+        {
+          createdAt: older,
+          finishedAt: null,
+          id: 'pjob_0000000000000017',
+          idempotencyKey: 'admin-page-hidden-updated',
+          status: 'cancelled',
+          type: 'platform.agent.rollout.v1',
+          updatedAt: older,
+        },
+        {
+          createdAt: newer,
+          id: 'pjob_0000000000000016',
+          idempotencyKey: 'admin-page-ledger',
+          status: 'failed',
+          type: PLATFORM_SECRET_REWRAP_FAILURE_TYPE,
+        },
+      ]);
+
+      const first = await jobModel.listForAdminPage({ clearedAt: watermark, limit: 2, offset: 0 });
+      expect(first.total).toBe(4);
+      expect(first.items.map(({ id }) => id)).toEqual([
+        'pjob_0000000000000015',
+        'pjob_0000000000000014',
+      ]);
+      const second = await jobModel.listForAdminPage({
+        clearedAt: watermark,
+        limit: 2,
+        offset: 2,
+      });
+      expect(second.total).toBe(4);
+      expect(second.items.map(({ id }) => id)).toEqual([
+        'pjob_0000000000000013',
+        'pjob_0000000000000012',
+      ]);
+      const pastEnd = await jobModel.listForAdminPage({
+        clearedAt: watermark,
+        limit: 2,
+        offset: 4,
+      });
+      expect(pastEnd).toEqual({ items: [], total: 4 });
+
+      await expect(jobModel.getAdminSummary({ clearedAt: watermark })).resolves.toEqual({
+        active: 2,
+        completed: 1,
+        failed: 1,
+        total: 4,
+      });
+      await expect(
+        jobModel.countNewlyHiddenForAdmin({ clearedAt: watermark, previousClearedAt: null }),
+      ).resolves.toBe(2);
+      await expect(
+        jobModel.countNewlyHiddenForAdmin({
+          clearedAt: newer,
+          previousClearedAt: watermark,
+        }),
+      ).resolves.toBe(2);
+
+      const unfiltered = await jobModel.listForAdmin({ limit: 50 });
+      expect(unfiltered.items.map(({ id }) => id)).toContain('pjob_0000000000000011');
+    });
   });
 
   describe('operational backlog snapshot', () => {
