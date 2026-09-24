@@ -10,20 +10,18 @@ const item = (reasoningEffort?: string | null) => ({
   reasoningEffort: reasoningEffort as never,
 });
 
+interface TestCard {
+  id: string;
+  providerId: string;
+  settings?: { defaultEffortLevel?: string; effortLevels?: string[]; extendParams?: string[] };
+}
+
 const mockCatalog = ({
   builtinAiModelList = [],
   enabledAiModels = [],
 }: {
-  builtinAiModelList?: Array<{
-    id: string;
-    providerId: string;
-    settings?: { extendParams?: string[] };
-  }>;
-  enabledAiModels?: Array<{
-    id: string;
-    providerId: string;
-    settings?: { extendParams?: string[] };
-  }>;
+  builtinAiModelList?: TestCard[];
+  enabledAiModels?: TestCard[];
 }) => {
   vi.spyOn(aiInfraStore, 'getAiInfraStoreState').mockReturnValue({
     builtinAiModelList,
@@ -31,13 +29,7 @@ const mockCatalog = ({
   } as never);
 };
 
-const mockEnabledAiModels = (
-  enabledAiModels: Array<{
-    id: string;
-    providerId: string;
-    settings?: { extendParams?: string[] };
-  }>,
-) => {
+const mockEnabledAiModels = (enabledAiModels: TestCard[]) => {
   mockCatalog({ enabledAiModels });
 };
 
@@ -207,5 +199,80 @@ describe('resolveSystemAgentEffortParams', () => {
         reasoningEffort: 'xhigh' as never,
       }),
     ).toEqual({});
+  });
+
+  describe('per-model effort narrowing (collapsed Cursor card)', () => {
+    const cursorItem = (reasoningEffort: string) => ({
+      model: 'grok-4.7',
+      provider: 'cursor',
+      reasoningEffort: reasoningEffort as never,
+    });
+
+    type Narrowing = Omit<NonNullable<TestCard['settings']>, 'extendParams'>;
+
+    const cursorCard = (settings: Narrowing = {}): TestCard => ({
+      id: 'grok-4.7',
+      providerId: 'cursor',
+      settings: { extendParams: ['cursorReasoningEffort'], ...settings },
+    });
+
+    const narrowed: Narrowing = {
+      defaultEffortLevel: 'high',
+      effortLevels: ['low', 'medium', 'high', 'xhigh'],
+    };
+
+    it('keeps a level the card offers', () => {
+      mockEnabledAiModels([cursorCard(narrowed)]);
+
+      expect(resolveSystemAgentEffortParams(cursorItem('medium'))).toEqual({
+        reasoning_effort: 'medium',
+      });
+    });
+
+    it('clamps a level the card lacks onto the nearest offered level', () => {
+      mockEnabledAiModels([cursorCard(narrowed)]);
+
+      expect(resolveSystemAgentEffortParams(cursorItem('max'))).toEqual({
+        reasoning_effort: 'xhigh',
+      });
+      expect(resolveSystemAgentEffortParams(cursorItem('minimal'))).toEqual({
+        reasoning_effort: 'low',
+      });
+    });
+
+    it('uses the card default for a level the control does not know', () => {
+      mockEnabledAiModels([cursorCard({ ...narrowed, defaultEffortLevel: 'medium' })]);
+
+      expect(resolveSystemAgentEffortParams(cursorItem('extended'))).toEqual({
+        reasoning_effort: 'medium',
+      });
+    });
+
+    it('breaks a tie toward the stronger level', () => {
+      mockEnabledAiModels([cursorCard({ effortLevels: ['medium', 'xhigh'] })]);
+
+      expect(resolveSystemAgentEffortParams(cursorItem('high'))).toEqual({
+        reasoning_effort: 'xhigh',
+      });
+    });
+
+    it('passes every control level through when the card does not narrow', () => {
+      mockEnabledAiModels([cursorCard()]);
+
+      expect(resolveSystemAgentEffortParams(cursorItem('max'))).toEqual({
+        reasoning_effort: 'max',
+      });
+    });
+
+    it('narrows any control, e.g. an OpenAI card', () => {
+      mockEnabledAiModels([
+        {
+          ...openaiCard(['gpt5_6ReasoningEffort']),
+          settings: { effortLevels: ['low', 'high'], extendParams: ['gpt5_6ReasoningEffort'] },
+        },
+      ]);
+
+      expect(resolveSystemAgentEffortParams(item('ultra'))).toEqual({ reasoning_effort: 'high' });
+    });
   });
 });

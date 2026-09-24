@@ -305,6 +305,63 @@ describe('aiModelSelectors', () => {
     });
   });
 
+  describe('modelEffortSettings', () => {
+    const withEnabled = (
+      settings: NonNullable<AIProviderStoreState['enabledAiModels']>[number]['settings'],
+    ): AIProviderStoreState => ({
+      ...mockState,
+      enabledAiModels: [
+        {
+          abilities: { reasoning: true },
+          id: 'grok-4.7',
+          providerId: 'cursor',
+          settings,
+          type: 'chat',
+        },
+      ],
+    });
+
+    it('returns the card levels and default of a narrowed model', () => {
+      const state = withEnabled({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high', 'xhigh'],
+        extendParams: ['cursorReasoningEffort'],
+      });
+
+      expect(aiModelSelectors.modelEffortSettings('grok-4.7', 'cursor')(state)).toEqual({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high', 'xhigh'],
+      });
+    });
+
+    it('returns a lone pinned default', () => {
+      const state = withEnabled({
+        defaultEffortLevel: 'medium',
+        extendParams: ['cursorReasoningEffort'],
+      });
+
+      expect(aiModelSelectors.modelEffortSettings('grok-4.7', 'cursor')(state)).toEqual({
+        defaultEffortLevel: 'medium',
+        effortLevels: undefined,
+      });
+    });
+
+    it('returns undefined when the card does not narrow its effort control', () => {
+      const select = aiModelSelectors.modelEffortSettings('grok-4.7', 'cursor');
+
+      expect(select(withEnabled({ extendParams: ['cursorReasoningEffort'] }))).toBeUndefined();
+      expect(select(withEnabled({ effortLevels: [] }))).toBeUndefined();
+      expect(select(withEnabled(undefined))).toBeUndefined();
+      // Settings without any effort narrowing (disabledParams only).
+      const selectModel1 = aiModelSelectors.modelEffortSettings('model1', 'provider1');
+      expect(selectModel1(mockState)).toBeUndefined();
+    });
+
+    it('returns undefined for a model that is not enabled', () => {
+      expect(aiModelSelectors.modelEffortSettings('missing', 'cursor')(mockState)).toBeUndefined();
+    });
+  });
+
   describe('getModelCard', () => {
     it('should find model in enabledAiModels first', () => {
       const state: AIProviderStoreState = {

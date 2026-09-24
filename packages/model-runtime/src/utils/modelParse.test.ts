@@ -159,7 +159,33 @@ const { grokProviderModels, loadModelsMock, mockDefaultModelList, xaiProviderMod
         releasedAt: '2026-01-01',
         settings: { extendParams: ['enableReasoning'], searchImpl: 'params' },
       },
-    ] as (Partial<ChatModelCard> & { id: string })[],
+      {
+        abilities: { functionCall: true, reasoning: true, search: true, vision: true },
+        displayName: 'Gemini 3.7 Flash',
+        id: 'gemini-3.7-flash',
+        providerId: 'cursor',
+        releasedAt: '2026-08-11',
+        settings: {
+          defaultEffortLevel: 'high',
+          effortLevels: ['low', 'medium', 'high'],
+          extendParams: ['cursorReasoningEffort'],
+          searchImpl: 'params',
+        },
+      },
+      {
+        abilities: { functionCall: true, reasoning: true, vision: true },
+        displayName: 'Claude Opus 5 Thinking',
+        id: 'claude-opus-5-thinking',
+        providerId: 'cursor',
+        releasedAt: '2026-08-11',
+        settings: {
+          defaultEffortLevel: 'high',
+          effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          extendParams: ['cursorReasoningEffort'],
+          searchImpl: 'params',
+        },
+      },
+    ] as (Partial<ChatModelCard> & { id: string; providerId?: string })[],
     xaiProviderModels: [
       {
         abilities: { reasoning: true, vision: true },
@@ -686,6 +712,45 @@ describe('modelParse', () => {
         }),
       );
       expect(unknown?.settings).toBeUndefined();
+    });
+
+    it('does not donate cursor effort settings to a non-cursor provider', async () => {
+      const listed = [
+        { id: 'gemini-3.8-flash' },
+        { id: 'claude-opus-6-thinking' },
+        { id: 'gemini-3.7-flash' },
+      ];
+      const openai = await processModelList(listed, MODEL_LIST_CONFIGS.openai, 'openai');
+      const mixed = await processMultiProviderModelList(listed);
+
+      for (const result of [openai, mixed]) {
+        for (const id of ['gemini-3.8-flash', 'claude-opus-6-thinking', 'gemini-3.7-flash']) {
+          const card = result.find((model) => model.id === id);
+          expect(card?.settings?.extendParams ?? [], id).not.toContain('cursorReasoningEffort');
+          expect(card?.settings?.effortLevels, id).toBeUndefined();
+          expect(card?.settings?.defaultEffortLevel, id).toBeUndefined();
+        }
+      }
+
+      const opus = openai.find((model) => model.id === 'claude-opus-6-thinking');
+      expect(opus?.settings?.extendParams).toEqual(['enableReasoning']);
+
+      const cursor = await processModelList(
+        [{ id: 'gemini-3.7-flash' }, { id: 'gemini-3.8-flash' }],
+        MODEL_LIST_CONFIGS.openai,
+        'cursor',
+      );
+      expect(cursor.find((model) => model.id === 'gemini-3.7-flash')?.settings).toMatchObject({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high'],
+        extendParams: ['cursorReasoningEffort'],
+      });
+      expect(
+        cursor.find((model) => model.id === 'gemini-3.8-flash')?.settings?.extendParams,
+      ).toEqual(['cursorReasoningEffort']);
+      expect(
+        cursor.find((model) => model.id === 'gemini-3.8-flash')?.settings?.effortLevels,
+      ).toBeUndefined();
     });
   });
 

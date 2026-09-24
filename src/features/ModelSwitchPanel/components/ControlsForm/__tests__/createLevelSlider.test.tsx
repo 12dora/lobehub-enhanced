@@ -139,6 +139,63 @@ describe('createLevelSliderComponent', () => {
     });
   });
 
+  describe('per-model narrowing (levels prop)', () => {
+    const createSlider = () =>
+      createLevelSliderComponent<TestLevel>({
+        configKey: 'reasoningEffort',
+        defaultValue: 'medium',
+        levels: TEST_LEVELS,
+      });
+
+    const shownLabels = () =>
+      [...document.querySelectorAll('button[type="button"]')].map((node) => node.textContent);
+    const selectedLabel = () =>
+      document.querySelector('button[aria-current="true"]')?.textContent ?? null;
+
+    it('renders only the offered levels', () => {
+      const TestSlider = createSlider();
+
+      render(<TestSlider levels={['low', 'high']} value="low" />);
+
+      expect(shownLabels()).toEqual(['low', 'high']);
+      expect(selectedLabel()).toBe('low');
+    });
+
+    it('shows a value outside the offered levels as the nearest one, ties toward stronger', () => {
+      const TestSlider = createSlider();
+
+      render(<TestSlider levels={['low', 'high']} value="medium" />);
+
+      expect(selectedLabel()).toBe('high');
+    });
+
+    it('pulls a default the offered levels lack onto the nearest offered level', () => {
+      const TestSlider = createSlider();
+
+      render(<TestSlider levels={['high']} onChange={vi.fn()} />);
+
+      expect(shownLabels()).toEqual(['high']);
+      expect(selectedLabel()).toBe('high');
+    });
+
+    it('falls back to the default for a value the level list does not know', () => {
+      const TestSlider = createSlider();
+
+      render(<TestSlider defaultValue="low" levels={['low', 'high']} value={'bogus' as never} />);
+
+      expect(selectedLabel()).toBe('low');
+    });
+
+    it('keeps every configured level for an empty subset', () => {
+      const TestSlider = createSlider();
+
+      render(<TestSlider levels={[]} value="medium" />);
+
+      expect(shownLabels()).toEqual(['low', 'medium', 'high']);
+      expect(selectedLabel()).toBe('medium');
+    });
+  });
+
   describe('factory configuration', () => {
     it('should create slider with custom marks', () => {
       const customMarks = {

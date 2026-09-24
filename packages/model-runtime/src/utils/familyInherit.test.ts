@@ -525,4 +525,71 @@ describe('inheritFamilyCard', () => {
     expect(inherited?.settings).toEqual({ searchImpl: 'params' });
     expect(inherited?.abilities?.reasoning).toBe(true);
   });
+
+  it('keeps cursor bank cards out of another provider and drops cursor effort keys', () => {
+    const cursorGemini: FamilyKnownCard = {
+      abilities: { reasoning: true, vision: true },
+      id: 'gemini-3.7-flash',
+      providerId: 'cursor',
+      releasedAt: '2026-08-11',
+      settings: {
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high'],
+        extendParams: ['cursorReasoningEffort'],
+        searchImpl: 'params',
+      },
+    };
+    const cursorOpus: FamilyKnownCard = {
+      abilities: { reasoning: true },
+      id: 'claude-opus-5-thinking',
+      providerId: 'cursor',
+      releasedAt: '2026-08-11',
+      settings: {
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'high', 'max'],
+        extendParams: ['cursorReasoningEffort'],
+        searchImpl: 'params',
+      },
+    };
+
+    expect(
+      inheritFamilyCard('gemini-3.8-flash', { globalCards: [cursorGemini], providerCards: [] }),
+    ).toBeUndefined();
+    expect(
+      inheritFamilyCard('claude-opus-6-thinking', { globalCards: [cursorOpus], providerCards: [] }),
+    ).toBeUndefined();
+
+    const mixed = inheritFamilyCard('claude-opus-6-thinking', {
+      globalCards: [],
+      providerCards: [
+        {
+          abilities: { reasoning: true },
+          id: 'claude-opus-5-thinking',
+          releasedAt: '2026-08-11',
+          settings: {
+            defaultEffortLevel: 'high',
+            effortLevels: ['low', 'high', 'max'],
+            extendParams: ['cursorReasoningEffort', 'enableReasoning'],
+            searchImpl: 'params',
+          },
+        },
+      ],
+    });
+    expect(mixed?.settings).toEqual({
+      extendParams: ['enableReasoning'],
+      searchImpl: 'params',
+    });
+    expect(mixed?.settings).not.toHaveProperty('effortLevels');
+    expect(mixed?.settings).not.toHaveProperty('defaultEffortLevel');
+
+    const forCursor = inheritFamilyCard(
+      'gemini-3.8-flash',
+      { globalCards: [cursorGemini], providerCards: [] },
+      { includeCursorDonors: true },
+    );
+    expect(forCursor?.settings?.extendParams).toEqual(['cursorReasoningEffort']);
+    expect(forCursor?.settings?.searchImpl).toBe('params');
+    expect(forCursor?.settings?.effortLevels).toBeUndefined();
+    expect(forCursor?.settings?.defaultEffortLevel).toBeUndefined();
+  });
 });

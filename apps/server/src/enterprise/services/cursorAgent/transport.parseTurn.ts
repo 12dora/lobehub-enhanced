@@ -10,6 +10,29 @@ const MAX_IMAGES = 4;
 const MAX_IMAGE_DECODED_BYTES = 6 * 1024 * 1024;
 const MAX_MODEL_ID_CHARS = 256;
 const MODEL_ID_RE = /^[a-z0-9][\w.:\-[\]=,]*$/i;
+
+/** Effort values the turn body may carry. Anything else is rejected. */
+export const CURSOR_EFFORT_LEVELS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+
+export type CursorEffortLevel = (typeof CURSOR_EFFORT_LEVELS)[number];
+
+const CURSOR_EFFORT_SET: ReadonlySet<string> = new Set(CURSOR_EFFORT_LEVELS);
+
+/** Same rule `parseTurnBody` applies to `body.model`. Resolved ids must pass it too. */
+export const isCursorModelId = (value: string): boolean =>
+  value.length <= MAX_MODEL_ID_CHARS && MODEL_ID_RE.test(value);
+
+const isCursorEffort = (value: unknown): value is CursorEffortLevel =>
+  typeof value === 'string' && CURSOR_EFFORT_SET.has(value);
+
 /**
  * `--new-session-id` is validated by the CLI against exactly this shape (UUIDv4,
  * bundle 2026.08.11-e8db854 `src/state/requested-session-id.ts`) and rejected with a
@@ -23,6 +46,12 @@ export interface TurnImage {
 }
 
 export interface TurnRequest {
+  /**
+   * Requested reasoning effort. The CLI has no effort flag; the transport resolves
+   * this against the live list (loaded on a cold cache) and then sends only the
+   * concrete model id. If that list cannot be loaded, a base id is synthesized.
+   */
+  effort?: CursorEffortLevel;
   /** Native Cursor WebSearch is allowed when the chat payload opted into search. */
   enabledSearch?: boolean;
   history: unknown;
@@ -76,12 +105,15 @@ export const parseTurnBody = async (request: Request): Promise<TurnRequest | Res
     return jsonError(400, 'invalid_request', 'request body must be an object');
   }
   const body = raw as Record<string, unknown>;
-  if (
-    typeof body.model !== 'string' ||
-    !MODEL_ID_RE.test(body.model) ||
-    body.model.length > MAX_MODEL_ID_CHARS
-  ) {
+  if (typeof body.model !== 'string' || !isCursorModelId(body.model)) {
     return jsonError(400, 'invalid_request', 'invalid model id');
+  }
+  let effort: CursorEffortLevel | undefined;
+  if (body.effort !== undefined) {
+    if (!isCursorEffort(body.effort)) {
+      return jsonError(400, 'invalid_request', 'invalid effort');
+    }
+    effort = body.effort;
   }
   if (typeof body.prompt !== 'string') {
     return jsonError(400, 'invalid_request', 'prompt must be a string');
@@ -144,6 +176,7 @@ export const parseTurnBody = async (request: Request): Promise<TurnRequest | Res
   const requestedSessionId = request.headers.get(CURSOR_CONVERSATION_HEADER)?.trim();
 
   return {
+    ...(effort ? { effort } : {}),
     ...(body.enabledSearch === true ? { enabledSearch: true } : {}),
     history,
     images,

@@ -44,6 +44,7 @@ export const DEFAULT_AGENT_CHAT_CONFIG_EFFORT_PATHS = [
   'defaultAgent.config.chatConfig.thinkingLevel2',
   'defaultAgent.config.chatConfig.thinkingLevel3',
   'defaultAgent.config.chatConfig.thinkingLevel4',
+  'defaultAgent.config.chatConfig.cursorReasoningEffort',
   'defaultAgent.config.chatConfig.thinking',
 ] as const;
 
@@ -77,6 +78,7 @@ const useDefaultAgentChatConfigEffortMetas = () =>
     usePlatformSettingMeta('defaultAgent.config.chatConfig.thinkingLevel2'),
     usePlatformSettingMeta('defaultAgent.config.chatConfig.thinkingLevel3'),
     usePlatformSettingMeta('defaultAgent.config.chatConfig.thinkingLevel4'),
+    usePlatformSettingMeta('defaultAgent.config.chatConfig.cursorReasoningEffort'),
     usePlatformSettingMeta('defaultAgent.config.chatConfig.thinking'),
   ] as const;
 

@@ -356,6 +356,8 @@ export default {
     'For ChatGPT Web Pro SKUs. The only accepted value is Standard.',
   'providerModels.item.modelConfig.extendParams.options.codexMaxReasoningEffort.hint':
     'For Codex models; controls reasoning intensity.',
+  'providerModels.item.modelConfig.extendParams.options.cursorReasoningEffort.hint':
+    'For Cursor models; controls reasoning intensity. Available levels depend on the model.',
   'providerModels.item.modelConfig.extendParams.options.disableContextCaching.hint':
     'For Claude models; can lower cost and speed up responses.',
   'providerModels.item.modelConfig.extendParams.options.effort.hint':
@@ -528,6 +530,8 @@ export default {
     'No shared account is connected. Connect one above, then sync.',
   'providerModels.list.syncUpstream.success':
     'Synced {{total}} models from upstream ({{created}} new)',
+  'providerModels.list.syncUpstream.successWithDeleted':
+    'Synced {{total}} models from upstream ({{created}} new, {{deleted}} removed)',
   'providerModels.list.syncUpstream.syncing': 'Syncing…',
   'providerModels.list.syncUpstream.unsupported': 'This provider cannot enumerate its models',
   'providerModels.list.syncUpstream.validationFailed':

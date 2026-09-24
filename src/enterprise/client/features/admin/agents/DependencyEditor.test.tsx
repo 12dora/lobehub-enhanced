@@ -1595,4 +1595,161 @@ describe('DependencyEditor thinking effort', () => {
     });
     expect(onThinkingEffortChange).toHaveBeenCalledWith(null);
   });
+
+  describe('a model that narrows its control (collapsed Cursor card)', () => {
+    const CURSOR_REF = {
+      modelKey: 'grok-4.7',
+      providerChecksum: 'a'.repeat(64),
+      providerKey: 'cursor',
+      providerRevision: 4,
+    };
+
+    const publishCursorModels = () => {
+      hooks.providers = {
+        ...idle,
+        data: page([{ displayName: 'Cursor', id: 'p1', providerKey: 'cursor' }]),
+      };
+      hooks.source = {
+        ...idle,
+        data: {
+          chatModels: [
+            {
+              displayName: 'Grok 4.7',
+              effortSettings: {
+                defaultEffortLevel: 'high',
+                effortLevels: ['low', 'medium', 'high', 'xhigh'],
+              },
+              extendParams: ['cursorReasoningEffort'],
+              modelKey: 'grok-4.7',
+              type: 'chat',
+            },
+            {
+              displayName: 'Claude 4.6 Opus Thinking',
+              effortSettings: { defaultEffortLevel: 'high', effortLevels: ['high', 'max'] },
+              extendParams: ['cursorReasoningEffort'],
+              modelKey: 'claude-4.6-opus-thinking',
+              type: 'chat',
+            },
+            {
+              displayName: 'Cursor Full',
+              extendParams: ['cursorReasoningEffort'],
+              modelKey: 'cursor-full',
+              type: 'chat',
+            },
+          ],
+          providerChecksum: 'a'.repeat(64),
+          providerKey: 'cursor',
+          providerRevision: 4,
+        },
+      };
+    };
+
+    const renderCursor = (
+      thinkingEffort: { controlKey: string; level: string } | null,
+      onThinkingEffortChange = vi.fn(),
+    ) => {
+      render(
+        <DependencyEditor
+          editable
+          enabled
+          agentId="agent-1"
+          dependencies={{ connectors: [], model: CURSOR_REF, skills: [] }}
+          thinkingEffort={thinkingEffort}
+          onChange={vi.fn()}
+          onThinkingEffortChange={onThinkingEffortChange}
+          onValidityChange={vi.fn()}
+        />,
+      );
+      return {
+        effort: screen.getByLabelText('agentCatalog.editor.thinkingEffort'),
+        onThinkingEffortChange,
+      };
+    };
+
+    const optionTexts = (select: HTMLElement) =>
+      [...select.querySelectorAll('option')].map((option) => option.textContent);
+
+    it('offers only the model levels and names its default on the default option', () => {
+      publishCursorModels();
+      const { effort } = renderCursor(null);
+
+      expect(optionTexts(effort)).toEqual([
+        '--',
+        'agentCatalog.editor.thinkingEffortDefaultLevel',
+        'serviceModel.reasoningEffort.options.low',
+        'serviceModel.reasoningEffort.options.medium',
+        'serviceModel.reasoningEffort.options.high',
+        'serviceModel.reasoningEffort.options.xhigh',
+      ]);
+      expect(effort.dataset.value).toBe('__model_default__');
+    });
+
+    it('shows a stored level the model lacks as the nearest level it runs', () => {
+      publishCursorModels();
+      const { effort } = renderCursor({ controlKey: 'cursorReasoningEffort', level: 'max' });
+
+      expect(effort.dataset.value).toBe('xhigh');
+    });
+
+    it('moves the stored level to the nearest one when the new model narrows it away', () => {
+      publishCursorModels();
+      const { onThinkingEffortChange } = renderCursor({
+        controlKey: 'cursorReasoningEffort',
+        level: 'low',
+      });
+
+      fireEvent.change(screen.getByLabelText('agentCatalog.dependency.model.model'), {
+        target: { value: 'claude-4.6-opus-thinking' },
+      });
+      expect(onThinkingEffortChange).toHaveBeenCalledWith({
+        controlKey: 'cursorReasoningEffort',
+        level: 'high',
+      });
+    });
+
+    it('keeps the stored level when the new model still runs it', () => {
+      publishCursorModels();
+      const { onThinkingEffortChange } = renderCursor({
+        controlKey: 'cursorReasoningEffort',
+        level: 'high',
+      });
+
+      fireEvent.change(screen.getByLabelText('agentCatalog.dependency.model.model'), {
+        target: { value: 'claude-4.6-opus-thinking' },
+      });
+      expect(onThinkingEffortChange).not.toHaveBeenCalled();
+    });
+
+    it('keeps the plain default option and every level for a model without narrowing', () => {
+      publishCursorModels();
+      render(
+        <DependencyEditor
+          editable
+          enabled
+          agentId="agent-1"
+          thinkingEffort={null}
+          dependencies={{
+            connectors: [],
+            model: { ...CURSOR_REF, modelKey: 'cursor-full' },
+            skills: [],
+          }}
+          onChange={vi.fn()}
+          onThinkingEffortChange={vi.fn()}
+          onValidityChange={vi.fn()}
+        />,
+      );
+
+      expect(optionTexts(screen.getByLabelText('agentCatalog.editor.thinkingEffort'))).toEqual([
+        '--',
+        'agentCatalog.editor.thinkingEffortDefault',
+        'serviceModel.reasoningEffort.options.none',
+        'serviceModel.reasoningEffort.options.minimal',
+        'serviceModel.reasoningEffort.options.low',
+        'serviceModel.reasoningEffort.options.medium',
+        'serviceModel.reasoningEffort.options.high',
+        'serviceModel.reasoningEffort.options.xhigh',
+        'serviceModel.reasoningEffort.options.max',
+      ]);
+    });
+  });
 });

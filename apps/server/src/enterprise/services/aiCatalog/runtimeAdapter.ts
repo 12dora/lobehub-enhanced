@@ -1,4 +1,4 @@
-import type { ModelRuntimeHooks } from '@lobechat/model-runtime';
+import { type ModelRuntimeHooks, parseCursorModelId } from '@lobechat/model-runtime';
 import type { AiProviderRuntimeState, EnabledProvider } from '@lobechat/types';
 import { isRecord } from '@lobechat/utils/object';
 import type { ModelSearchImplementType } from 'model-bank';
@@ -184,36 +184,72 @@ export interface AiCatalogPublishedExecutionModel {
   type: string;
 }
 
+/**
+ * Arrays built for a cursor provider (`providerKey` or `settings.sdkType`).
+ * The hook factory is invoked with this same array, so a legacy concrete id
+ * can be accepted without a second argument the runtime bridge does not pass.
+ */
+const cursorProviderAllowlists = new WeakSet<readonly AiCatalogPublishedExecutionModel[]>();
+
+const isCursorExecutionProvider = (
+  providerKey: string,
+  settings?: { sdkType?: unknown } | null,
+): boolean => providerKey === 'cursor' || settings?.sdkType === 'cursor';
+
+/**
+ * A legacy concrete cursor id (`parseCursorModelId(id).effort` set) is allowed
+ * for chat when its collapsed base is published and enabled. The variant row
+ * itself may be disabled or already deleted; the transport passes the concrete
+ * id through. Other providers and other model types stay exact-match.
+ */
+export const isCursorLegacyCatalogModelAllowed = (
+  model: string,
+  allowedModels: readonly { modelKey: string; type: string }[],
+  expectedType: string,
+): boolean => {
+  if (expectedType !== 'chat') return false;
+  const parsed = parseCursorModelId(model);
+  if (!parsed.effort || !parsed.baseId || parsed.baseId === model) return false;
+  return allowedModels.some((item) => item.modelKey === parsed.baseId && item.type === 'chat');
+};
+
 const assertPublishedModel = async (
   allowedModels: AiCatalogPublishedExecutionModel[],
   model: string,
   expectedType: string,
   operation: string,
+  cursorProvider: boolean,
 ): Promise<void> => {
-  const allowed = allowedModels.some(
-    (item) => item.modelKey === model && item.type === expectedType,
-  );
+  const allowed =
+    allowedModels.some((item) => item.modelKey === model && item.type === expectedType) ||
+    (cursorProvider && isCursorLegacyCatalogModelAllowed(model, allowedModels, expectedType));
   if (!allowed) throw new AiCatalogModelNotPublishedError(model, operation);
 };
+
+export interface AiCatalogAllowlistOptions {
+  /** `providerKey === 'cursor'` or `settings.sdkType === 'cursor'`. */
+  cursorProvider?: boolean;
+}
 
 /** Fail-closed allowlist guard composed before all provider/network hooks. */
 export const createAiCatalogModelAllowlistHooks = (
   allowedModels: AiCatalogPublishedExecutionModel[],
-): ModelRuntimeHooks => ({
-  beforeChat: (payload) => assertPublishedModel(allowedModels, payload.model, 'chat', 'chat'),
-  beforeCreateImage: (payload) =>
-    assertPublishedModel(allowedModels, payload.model, 'image', 'createImage'),
-  beforeCreateVideo: (payload) =>
-    assertPublishedModel(allowedModels, payload.model, 'video', 'createVideo'),
-  beforeEmbeddings: (payload) =>
-    assertPublishedModel(allowedModels, payload.model, 'embedding', 'embeddings'),
-  beforeGenerateObject: (payload) =>
-    assertPublishedModel(allowedModels, payload.model, 'chat', 'generateObject'),
-  beforeTextToSpeech: (payload) =>
-    assertPublishedModel(allowedModels, payload.model, 'tts', 'textToSpeech'),
-  beforeTranscribe: (payload) =>
-    assertPublishedModel(allowedModels, payload.model, 'asr', 'transcribe'),
-});
+  options?: AiCatalogAllowlistOptions,
+): ModelRuntimeHooks => {
+  const cursorProvider =
+    options?.cursorProvider === true || cursorProviderAllowlists.has(allowedModels);
+  const assert = (model: string, expectedType: string, operation: string) =>
+    assertPublishedModel(allowedModels, model, expectedType, operation, cursorProvider);
+  return {
+    beforeChat: (payload) => assert(payload.model, 'chat', 'chat'),
+    beforeCreateImage: (payload) => assert(payload.model, 'image', 'createImage'),
+    beforeCreateVideo: (payload) => assert(payload.model, 'video', 'createVideo'),
+    beforeEmbeddings: (payload) => assert(payload.model, 'embedding', 'embeddings'),
+    beforeGenerateObject: (payload) => assert(payload.model, 'chat', 'generateObject'),
+    beforeTextToSpeech: (payload) => assert(payload.model, 'tts', 'textToSpeech'),
+    beforeTranscribe: (payload) => assert(payload.model, 'asr', 'transcribe'),
+  };
+};
 
 /** Server-only resolver. Plaintext is returned for one execution and is never cached. */
 export class AiCatalogExecutionResolver {
@@ -292,10 +328,17 @@ export class AiCatalogExecutionResolver {
       if (error instanceof AiCatalogNotFoundError) throw unavailable();
       throw error;
     }
-    if (
-      params.modelKey &&
-      !resolved.allowedModels.some((model) => model.modelKey === params.modelKey)
-    ) {
+    const pinnedSettings =
+      isRecord(revision.payload.provider) && isRecord(revision.payload.provider.settings)
+        ? revision.payload.provider.settings
+        : undefined;
+    const cursorProvider = isCursorExecutionProvider(params.providerKey, pinnedSettings);
+    const pinnedListed = resolved.allowedModels.some((model) => model.modelKey === params.modelKey);
+    const legacyPinned =
+      cursorProvider &&
+      !!params.modelKey &&
+      isCursorLegacyCatalogModelAllowed(params.modelKey, resolved.allowedModels, 'chat');
+    if (params.modelKey && !pinnedListed && !legacyPinned) {
       throw new AiCatalogModelNotPublishedError(params.modelKey, 'chat');
     }
     return resolved;
@@ -355,6 +398,9 @@ export class AiCatalogExecutionResolver {
             : [],
         )
       : [];
+    if (isCursorExecutionProvider(providerKey, settings)) {
+      cursorProviderAllowlists.add(allowedModels);
+    }
     const config = isRecord(provider.config) ? (provider.config as PlatformAiProviderConfig) : {};
     let keyVaults: PlatformProviderKeyVaults = {};
     if (revision.secretFingerprint) {

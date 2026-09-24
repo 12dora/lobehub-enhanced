@@ -10,8 +10,12 @@ import { useTranslation } from 'react-i18next';
 // Single source of truth for "which level is showing", shared with the in-chat quick
 // selector and the ControlsForm sliders — it carries the model-specific default
 // overrides (Gemini flash `thinkingLevel`, gpt-5.5 `gpt5_2ReasoningEffort`) that the
-// registry's static table cannot express.
-import { resolveCurrentEffortLevel } from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
+// registry's static table cannot express, and the per-model narrowing
+// (`settings.effortLevels` / `defaultEffortLevel`) of the selected card.
+import {
+  resolveCurrentEffortLevel,
+  resolveOfferedEffortLevels,
+} from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
 // Scoped hook: defaults to the user singleton, but resolves the published platform
 // catalog under AdminProviderSettingsStoreProvider — same source `ModelSelect` reads,
 // so the offered levels always match the model the picker next to it shows.
@@ -55,7 +59,13 @@ const EffortSelect = memo<EffortSelectProps>(
   ({ chatConfig, disabled, model, onChange, provider, value }) => {
     const { t } = useTranslation('setting');
     const extendParams = useAiInfraStore(aiModelSelectors.modelExtendParams(model, provider));
+    const modelSettings = useAiInfraStore(aiModelSelectors.modelEffortSettings(model, provider));
     const control = useMemo(() => findEffortControl(extendParams), [extendParams]);
+    // A card may offer only part of its control (e.g. a collapsed Cursor model).
+    const levels = useMemo(
+      () => (control ? resolveOfferedEffortLevels(control.definition, modelSettings) : []),
+      [control, modelSettings],
+    );
 
     // chatConfig mode cannot express a clear, so it must not advertise one.
     const isChatConfigMode = chatConfig !== undefined;
@@ -66,12 +76,12 @@ const EffortSelect = memo<EffortSelectProps>(
           ? []
           : [{ label: t('serviceModel.reasoningEffort.default'), value: UNSET }]),
         // Values stay the raw registry levels — only the label is localized.
-        ...(control?.definition.levels ?? []).map((level) => ({
+        ...levels.map((level) => ({
           label: t(effortLevelLabelKey(level)),
           value: level,
         })),
       ],
-      [control, isChatConfigMode, t],
+      [isChatConfigMode, levels, t],
     );
 
     if (!control) return null;
@@ -81,8 +91,8 @@ const EffortSelect = memo<EffortSelectProps>(
 
     // Only systemAgent mode can represent "unset". chatConfig mode has no Default option to
     // fall back on, so it must show the level the model would actually use. Either way a
-    // stored value goes through the shared resolver, which clamps a level the current model
-    // no longer offers back onto that model's real default.
+    // stored value goes through the shared resolver: a level the card narrowed away shows as
+    // the nearest offered one, and a level the control does not know shows the model default.
     const selected =
       !stored && !isChatConfigMode
         ? UNSET
@@ -91,6 +101,7 @@ const EffortSelect = memo<EffortSelectProps>(
             definition: control.definition,
             key: control.key,
             model,
+            modelSettings,
           });
 
     return (

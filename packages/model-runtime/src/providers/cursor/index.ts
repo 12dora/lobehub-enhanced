@@ -9,10 +9,18 @@ import type { ChatMethodOptions, ChatStreamPayload } from '../../types';
 import { AgentRuntimeErrorType } from '../../types/error';
 import { AgentRuntimeError } from '../../utils/createError';
 import { debugStream } from '../../utils/debugStream';
+import { EFFORT_CONTROL_REGISTRY } from '../../utils/effortControlRegistry';
+import type { FamilyCardPools } from '../../utils/familyInherit';
 import { inheritFamilyCard, stampFamilyInheritedKeys } from '../../utils/familyInherit';
 import { StreamingResponse } from '../../utils/response';
+import type { CursorListedModel, CursorModelGroup } from './modelGroups';
+import { groupCursorModels, parseCursorModelId, resolveCursorModelId } from './modelGroups';
 import { isCursorToolsActive } from './toolProtocol';
+import type { CursorTurnBody } from './turn';
 import { buildCursorTurn } from './turn';
+
+export type { CursorListedModel, CursorModelGroup };
+export { groupCursorModels, parseCursorModelId, resolveCursorModelId };
 
 const log = createDebug('lobe-cursor:runtime');
 
@@ -38,6 +46,61 @@ const DEFAULT_PROVIDER = 'cursor';
 const DEBUG_FLAG = 'DEBUG_CURSOR_CHAT_COMPLETION';
 const TRANSPORT_UNAVAILABLE = 'Cursor Agent transport unavailable';
 const CURSOR_CATALOG = new Map(cursorChatModels.map((model) => [model.id, model]));
+/** Levels the CLI transport accepts. Anything else (ultra, no_think, …) is omitted. */
+const CURSOR_TRANSPORT_EFFORTS: ReadonlySet<string> = new Set(
+  EFFORT_CONTROL_REGISTRY.cursorReasoningEffort.levels,
+);
+
+interface CursorLocalOverride {
+  contextWindowTokens?: number;
+  description?: string;
+  displayName: string;
+  functionCall?: boolean;
+  reasoning?: boolean;
+  releasedAt?: string;
+  search?: boolean;
+  settings?: ChatModelCard['settings'];
+  vision?: boolean;
+}
+
+/**
+ * Ids that also exist on another provider. They stay out of the global bank
+ * (an id-only fallback would attach the wrong card) and are applied only here.
+ * Abilities match the previous Cursor `auto` bank card, including vision: false.
+ */
+const CURSOR_LOCAL_OVERRIDES: Readonly<Record<string, CursorLocalOverride>> = {
+  auto: {
+    contextWindowTokens: 200_000,
+    description: 'Lets Cursor pick a model for each message.',
+    displayName: 'Auto (Cursor)',
+    functionCall: true,
+    reasoning: false,
+    releasedAt: '2026-08-11',
+    search: true,
+    settings: { searchImpl: 'params' },
+    vision: false,
+  },
+};
+
+const cursorTransportEffort = (
+  value: ChatStreamPayload['reasoning_effort'],
+): ChatStreamPayload['reasoning_effort'] | undefined =>
+  value && CURSOR_TRANSPORT_EFFORTS.has(value) ? value : undefined;
+
+const toCursorLocalOverrideCard = (id: string, override: CursorLocalOverride): ChatModelCard => ({
+  contextWindowTokens: override.contextWindowTokens,
+  description: override.description,
+  displayName: override.displayName,
+  enabled: false,
+  functionCall: override.functionCall,
+  id,
+  reasoning: override.reasoning,
+  releasedAt: override.releasedAt,
+  search: override.search,
+  settings: override.settings ? { ...override.settings } : undefined,
+  type: 'chat',
+  vision: override.vision,
+});
 
 type CursorCatalogEntry = (typeof cursorChatModels)[number];
 
@@ -47,9 +110,11 @@ const cloneCursorSettings = (
 ): ChatModelCard['settings'] => {
   if (!settings) return undefined;
   const extendParams = settings.extendParams;
+  const effortLevels = settings.effortLevels;
   return {
     ...settings,
     ...(Array.isArray(extendParams) ? { extendParams: [...extendParams] } : {}),
+    ...(Array.isArray(effortLevels) ? { effortLevels: [...effortLevels] } : {}),
   };
 };
 
@@ -73,6 +138,98 @@ export const toCursorKnownModelCard = (
     type: 'chat',
     vision: known.abilities?.vision,
   };
+};
+
+/**
+ * Stamp the live group's effort control onto a card without marking those keys
+ * family-inherited. Sync persists unstamped keys and would otherwise drop them
+ * on a row that already has metadata.
+ */
+const applyCursorEffort = (card: ChatModelCard, group: CursorModelGroup): ChatModelCard => {
+  const extendParams = [...(card.settings?.extendParams ?? [])];
+  if (!extendParams.includes('cursorReasoningEffort')) {
+    extendParams.push('cursorReasoningEffort');
+  }
+  card.settings = {
+    ...card.settings,
+    defaultEffortLevel: group.defaultLevel,
+    effortLevels: [...group.levels],
+    extendParams,
+  };
+  return card;
+};
+
+/** One concrete id. A single level does not grow an effort selector. */
+const toCursorListedCard = (
+  model: { id: string; name?: string },
+  pools: FamilyCardPools,
+): ChatModelCard => {
+  const id = model.id;
+  const known = CURSOR_CATALOG.get(id);
+  if (known) return toCursorKnownModelCard(id, model.name, known);
+  const local = CURSOR_LOCAL_OVERRIDES[id];
+  if (local) return toCursorLocalOverrideCard(id, local);
+
+  const displayName = model.name || id;
+  const contextWindowTokens = /1m/i.test(displayName) ? 1_000_000 : undefined;
+  const base: ChatModelCard = {
+    displayName,
+    enabled: false,
+    id,
+    reasoning: undefined,
+    type: 'chat',
+    ...(contextWindowTokens ? { contextWindowTokens } : {}),
+  };
+  const inherited = inheritFamilyCard(id, pools, {
+    extendParams: false,
+    includeCursorDonors: true,
+    type: 'chat',
+  });
+  if (!inherited) return base;
+
+  const abilities = inherited.abilities;
+  const abilityKeys: string[] = [];
+  if (typeof abilities?.files === 'boolean') {
+    base.files = abilities.files;
+    abilityKeys.push('files');
+  }
+  if (typeof abilities?.functionCall === 'boolean') {
+    base.functionCall = abilities.functionCall;
+    abilityKeys.push('functionCall');
+  }
+  if (typeof abilities?.reasoning === 'boolean') {
+    base.reasoning = abilities.reasoning;
+    abilityKeys.push('reasoning');
+  }
+  if (typeof abilities?.search === 'boolean') {
+    base.search = abilities.search;
+    abilityKeys.push('search');
+  }
+  if (typeof abilities?.vision === 'boolean') {
+    base.vision = abilities.vision;
+    abilityKeys.push('vision');
+  }
+  if (typeof abilities?.imageOutput === 'boolean') {
+    base.imageOutput = abilities.imageOutput;
+    abilityKeys.push('imageOutput');
+  }
+  if (typeof abilities?.video === 'boolean') {
+    base.video = abilities.video;
+    abilityKeys.push('video');
+  }
+  const settings = cloneCursorSettings(inherited.settings);
+  const settingKeys = settings ? Object.keys(settings) : [];
+  if (settings) base.settings = settings;
+  stampFamilyInheritedKeys(base, { abilities: abilityKeys, settings: settingKeys });
+  return base;
+};
+
+const toCursorGroupCard = (group: CursorModelGroup, pools: FamilyCardPools): ChatModelCard => {
+  const known = CURSOR_CATALOG.get(group.baseId);
+  const card = known
+    ? toCursorKnownModelCard(group.baseId, group.displayName, known)
+    : toCursorListedCard({ id: group.baseId, name: group.displayName }, pools);
+  return applyCursorEffort(card, group);
 };
 
 export interface LobeCursorAIParams {
@@ -141,12 +298,14 @@ export class LobeCursorAI implements LobeRuntimeAI {
 
   async chat(payload: ChatStreamPayload, options?: ChatMethodOptions): Promise<Response> {
     const inputStartAt = Date.now();
-    const body = buildCursorTurn({
+    const turn = buildCursorTurn({
       messages: payload.messages,
       model: payload.model,
       tool_choice: payload.tool_choice,
       tools: payload.tools,
     });
+    const effort = cursorTransportEffort(payload.reasoning_effort);
+    const body: CursorTurnBody = effort ? { ...turn, effort } : turn;
 
     const response = await this.request(`${this.baseURL}/v1/turn`, {
       body: JSON.stringify({
@@ -208,68 +367,30 @@ export class LobeCursorAI implements LobeRuntimeAI {
       (model): model is { id: string; name?: string } =>
         typeof model?.id === 'string' && model.id.length > 0,
     );
-    const needsInheritance = listed.some((model) => !CURSOR_CATALOG.has(model.id));
+    const { groups } = groupCursorModels(listed);
+    const groupByBase = new Map(groups.map((group) => [group.baseId, group]));
+    const needsInheritance = listed.some((model) => {
+      const group = groupByBase.get(parseCursorModelId(model.id).baseId);
+      const id = group ? group.baseId : model.id;
+      return !CURSOR_CATALOG.has(id) && !Object.hasOwn(CURSOR_LOCAL_OVERRIDES, id);
+    });
     const globalCards = needsInheritance ? await loadModels() : [];
     const providerCards = needsInheritance ? [...CURSOR_CATALOG.values()] : [];
+    const pools = { globalCards, providerCards };
 
-    return listed.map((model) => {
-      const id = model.id;
-      const known = CURSOR_CATALOG.get(id);
-      if (known) return toCursorKnownModelCard(id, model.name, known);
-      const displayName = model.name || id;
-      const contextWindowTokens = /1m/i.test(displayName) ? 1_000_000 : undefined;
-      const base: ChatModelCard = {
-        displayName,
-        enabled: false,
-        id,
-        reasoning: undefined,
-        type: 'chat',
-        ...(contextWindowTokens ? { contextWindowTokens } : {}),
-      };
-      // Effort is already in the id (`-high`, `-xhigh`, …). Never invent extendParams.
-      const inherited = inheritFamilyCard(
-        id,
-        { globalCards, providerCards },
-        { extendParams: false, type: 'chat' },
-      );
-      if (!inherited) return base;
-
-      const abilities = inherited.abilities;
-      const abilityKeys: string[] = [];
-      if (typeof abilities?.files === 'boolean') {
-        base.files = abilities.files;
-        abilityKeys.push('files');
+    const cards: ChatModelCard[] = [];
+    const emitted = new Set<string>();
+    for (const model of listed) {
+      const group = groupByBase.get(parseCursorModelId(model.id).baseId);
+      if (group) {
+        if (emitted.has(group.baseId)) continue;
+        emitted.add(group.baseId);
+        cards.push(toCursorGroupCard(group, pools));
+        continue;
       }
-      if (typeof abilities?.functionCall === 'boolean') {
-        base.functionCall = abilities.functionCall;
-        abilityKeys.push('functionCall');
-      }
-      if (typeof abilities?.reasoning === 'boolean') {
-        base.reasoning = abilities.reasoning;
-        abilityKeys.push('reasoning');
-      }
-      if (typeof abilities?.search === 'boolean') {
-        base.search = abilities.search;
-        abilityKeys.push('search');
-      }
-      if (typeof abilities?.vision === 'boolean') {
-        base.vision = abilities.vision;
-        abilityKeys.push('vision');
-      }
-      if (typeof abilities?.imageOutput === 'boolean') {
-        base.imageOutput = abilities.imageOutput;
-        abilityKeys.push('imageOutput');
-      }
-      if (typeof abilities?.video === 'boolean') {
-        base.video = abilities.video;
-        abilityKeys.push('video');
-      }
-      const settings = cloneCursorSettings(inherited.settings);
-      const settingKeys = settings ? Object.keys(settings) : [];
-      if (settings) base.settings = settings;
-      stampFamilyInheritedKeys(base, { abilities: abilityKeys, settings: settingKeys });
-      return base;
-    });
+      cards.push(toCursorListedCard(model, pools));
+    }
+    return cards;
   }
 
   private async request(url: string, init: RequestInit): Promise<Response> {

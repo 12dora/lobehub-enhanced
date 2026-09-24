@@ -1,11 +1,17 @@
+import { findEffortControl } from '@lobechat/model-runtime';
 import type { LobeAgentChatConfig } from '@lobechat/types';
 import { type FormItemProps } from '@lobehub/ui';
 import { Form } from '@lobehub/ui';
 import { Form as AntdForm, Grid, Switch } from 'antd';
 import isEqual from 'fast-deep-equal';
-import { memo, useEffect, useMemo } from 'react';
+import { cloneElement, isValidElement, memo, type ReactElement, useEffect, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
+import {
+  hasModelEffortNarrowing,
+  resolveDefaultEffortLevel,
+  resolveOfferedEffortLevels,
+} from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
 import { useAgentId } from '@/features/ChatInput/hooks/useAgentId';
 import { useUpdateAgentConfig } from '@/features/ChatInput/hooks/useUpdateAgentConfig';
 import {
@@ -20,6 +26,7 @@ import { ChatGPTWebProThinkingEffortSlider } from './ChatGPTWebProThinkingEffort
 import { ChatGPTWebThinkingEffortSlider } from './ChatGPTWebThinkingEffortSlider';
 import CodexMaxReasoningEffortSlider from './CodexMaxReasoningEffortSlider';
 import ContextCachingSwitch from './ContextCachingSwitch';
+import CursorReasoningEffortSlider from './CursorReasoningEffortSlider';
 import DeepSeekReasoningEffortSlider from './DeepSeekReasoningEffortSlider';
 import EffortSlider from './EffortSlider';
 import GLM52ReasoningEffortSlider from './GLM52ReasoningEffortSlider';
@@ -53,6 +60,12 @@ import ThinkingLevel3Slider from './ThinkingLevel3Slider';
 import ThinkingLevel4Slider from './ThinkingLevel4Slider';
 import ThinkingLevelSlider from './ThinkingLevelSlider';
 import ThinkingSlider from './ThinkingSlider';
+
+/** Props ControlsForm injects into the model's effort slider when its card narrows it. */
+interface EffortSliderNarrowing {
+  defaultValue: string;
+  levels: readonly string[];
+}
 
 interface ControlsFormProps {
   disabled?: boolean;
@@ -100,6 +113,27 @@ const ControlsForm = memo<ControlsFormProps>(
     );
 
     const modelExtendParams = useAiInfraStore(aiModelSelectors.modelExtendParams(model, provider));
+    const modelEffortSettings = useAiInfraStore(
+      aiModelSelectors.modelEffortSettings(model, provider),
+    );
+    // The model's primary effort control (same pick as the in-chat pill). When the card
+    // narrows it (`settings.effortLevels` / `defaultEffortLevel`), its slider shows only
+    // those levels and the card's default; every other slider stays as declared.
+    const effortControl = useMemo(() => findEffortControl(modelExtendParams), [modelExtendParams]);
+    const effortNarrowing = useMemo<EffortSliderNarrowing | undefined>(() => {
+      if (!effortControl || !hasModelEffortNarrowing(modelEffortSettings)) return undefined;
+
+      return {
+        defaultValue: resolveDefaultEffortLevel({
+          definition: effortControl.definition,
+          key: effortControl.key,
+          model,
+          modelSettings: modelEffortSettings,
+        }),
+        levels: resolveOfferedEffortLevels(effortControl.definition, modelEffortSettings),
+      };
+    }, [effortControl, model, modelEffortSettings]);
+
     const initialValues = useMemo(() => {
       const enableReasoningInitialValue = resolveEnableReasoningInitialValue(config);
       const enableAdaptiveThinkingInitialValue = resolveEnableAdaptiveThinkingInitialValue(
@@ -413,6 +447,17 @@ const ControlsForm = memo<ControlsFormProps>(
         },
       },
       {
+        children: <CursorReasoningEffortSlider />,
+        desc: 'reasoning_effort',
+        label: t('extendParams.reasoningEffort.title'),
+        layout: 'vertical',
+        minWidth: undefined,
+        name: 'cursorReasoningEffort',
+        style: {
+          paddingBottom: 0,
+        },
+      },
+      {
         children: <Grok46ReasoningEffortSlider />,
         label: t('extendParams.reasoningEffort.title'),
         layout: 'vertical',
@@ -613,6 +658,20 @@ const ControlsForm = memo<ControlsFormProps>(
       },
     ].filter(Boolean) as FormItemProps[];
 
+    // Hand the card's narrowed levels/default to the primary effort slider only.
+    const withEffortNarrowing = (item: FormItemProps): FormItemProps => {
+      if (!effortNarrowing || item.name !== effortControl?.key || !isValidElement(item.children))
+        return item;
+
+      return {
+        ...item,
+        children: cloneElement(
+          item.children as ReactElement<Partial<EffortSliderNarrowing>>,
+          effortNarrowing,
+        ),
+      };
+    };
+
     return (
       <div
         style={{
@@ -627,11 +686,10 @@ const ControlsForm = memo<ControlsFormProps>(
           size={'small'}
           style={{ fontSize: 12 }}
           variant={'borderless'}
-          items={
-            (modelExtendParams || [])
-              .map((item: any) => items.find((i) => i.name === item))
-              .filter(Boolean) as FormItemProps[]
-          }
+          items={(modelExtendParams || [])
+            .map((item: any) => items.find((i) => i.name === item))
+            .filter((item): item is FormItemProps => !!item)
+            .map(withEffortNarrowing)}
           onValuesChange={async (values) => {
             if (disabled) return;
             onUpdatingChange?.(true);

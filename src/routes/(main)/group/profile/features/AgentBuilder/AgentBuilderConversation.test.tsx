@@ -68,6 +68,7 @@ vi.mock('@/store/agent/selectors', () => ({
 
 vi.mock('@/store/aiInfra', () => ({
   aiModelSelectors: {
+    modelEffortSettings: () => () => undefined,
     modelExtendParams: () => () => ['gpt5_6ReasoningEffort'],
   },
   useAiInfraStore: (selector: (state: unknown) => unknown) => selector({}),

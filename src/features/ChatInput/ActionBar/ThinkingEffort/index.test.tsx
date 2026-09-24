@@ -4,7 +4,7 @@
 import type { EffortLevel } from '@lobechat/model-runtime';
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import settingCopy from '@/locales/default/setting';
 
@@ -27,7 +27,9 @@ const label = (level: EffortLevel) => settingCopy[`serviceModel.reasoningEffort.
 const mocks = vi.hoisted(() => ({
   agentId: 'agent-1',
   chatConfigByAgent: {} as Record<string, Record<string, unknown>>,
+  effortSettings: undefined as { defaultEffortLevel?: string; effortLevels?: string[] } | undefined,
   extendParams: undefined as string[] | undefined,
+  locale: 'en' as 'en' | 'zh',
   menuItems: [] as { closeOnClick?: boolean; key: string; label?: unknown; onClick: () => void }[],
   model: 'gpt-5.5',
   permission: { allowed: true, reason: undefined as string | undefined },
@@ -44,11 +46,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-i18next', async () => {
   const chat = (await import('@/locales/default/chat')).default as Record<string, string>;
   const setting = (await import('@/locales/default/setting')).default as Record<string, string>;
-  const dictionaries: Record<string, Record<string, string> | undefined> = { chat, setting };
+  // What users actually see (zh-CN), for the Chinese assertions.
+  const zhChat = await import('../../../../../locales/zh-CN/chat.json');
+  const zhSetting = await import('../../../../../locales/zh-CN/setting.json');
+  const byLocale: Record<'en' | 'zh', Record<string, Record<string, string> | undefined>> = {
+    en: { chat, setting },
+    zh: {
+      chat: zhChat.default as Record<string, string>,
+      setting: zhSetting.default as Record<string, string>,
+    },
+  };
 
   return {
     useTranslation: (ns?: string | string[]) => ({
       t: (key: string, options?: Record<string, unknown>) => {
+        const dictionaries = byLocale[mocks.locale];
         const namespaces = options?.ns ? [options.ns as string] : ([] as string[]).concat(ns ?? []);
         const template = namespaces.map((name) => dictionaries[name]?.[key]).find(Boolean);
         if (!template) return key;
@@ -88,6 +100,7 @@ vi.mock('@/store/agent/selectors', () => ({
 
 vi.mock('@/store/aiInfra', () => ({
   aiModelSelectors: {
+    modelEffortSettings: () => () => mocks.effortSettings,
     modelExtendParams: () => () => mocks.extendParams,
   },
   useAiInfraStore: (selector: (state: unknown) => unknown) => selector({}),
@@ -129,7 +142,9 @@ describe('ThinkingEffort', () => {
   beforeEach(() => {
     mocks.agentId = 'agent-1';
     mocks.chatConfigByAgent = {};
+    mocks.effortSettings = undefined;
     mocks.extendParams = undefined;
+    mocks.locale = 'en';
     mocks.menuItems = [];
     mocks.model = 'gpt-5.5';
     mocks.permission = { allowed: true, reason: undefined };
@@ -295,6 +310,101 @@ describe('ThinkingEffort', () => {
       );
       // The level is still readable, it just cannot be changed.
       expect(screen.getByText(label('medium'))).toBeInTheDocument();
+    });
+  });
+
+  describe('per-model narrowing (collapsed Cursor card)', () => {
+    const narrowCursorCard = () => {
+      mocks.extendParams = ['cursorReasoningEffort'];
+      mocks.model = 'grok-4.7';
+      mocks.provider = 'cursor';
+      mocks.effortSettings = {
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high', 'xhigh'],
+      };
+    };
+
+    afterEach(() => {
+      mocks.provider = 'openai';
+    });
+
+    it('offers only the card levels and shows the card default', () => {
+      narrowCursorCard();
+
+      render(<ThinkingEffort />);
+
+      expect(mocks.menuItems.map((item) => item.key)).toEqual(['low', 'medium', 'high', 'xhigh']);
+      expect(screen.getByText(label('high'))).toBeInTheDocument();
+    });
+
+    it('shows 高 by default in Chinese', () => {
+      narrowCursorCard();
+      mocks.locale = 'zh';
+
+      render(<ThinkingEffort />);
+
+      expect(mocks.menuItems).toHaveLength(4);
+      expect(screen.getByText('高')).toBeInTheDocument();
+      expect(screen.getByTestId('tooltip')).toHaveAttribute('data-title', '思考强度：高');
+    });
+
+    it('shows a stored level the card lacks as the nearest offered level', () => {
+      narrowCursorCard();
+      mocks.chatConfigByAgent = { 'agent-1': { cursorReasoningEffort: 'max' } };
+
+      render(<ThinkingEffort />);
+
+      expect(screen.getByText(label('xhigh'))).toBeInTheDocument();
+      expect(screen.queryByText(label('max'))).toBeNull();
+    });
+
+    it('still writes exactly the picked level to the control config key', () => {
+      narrowCursorCard();
+
+      render(<ThinkingEffort />);
+      menuItem('low').onClick();
+
+      expect(mocks.updateAgentChatConfig).toHaveBeenCalledWith({ cursorReasoningEffort: 'low' });
+    });
+
+    it('treats re-picking the shown nearest level as a no-op', () => {
+      narrowCursorCard();
+      mocks.chatConfigByAgent = { 'agent-1': { cursorReasoningEffort: 'max' } };
+
+      render(<ThinkingEffort />);
+      // `xhigh` is what the pill shows, so re-picking it is a no-op like any selected level.
+      menuItem('xhigh').onClick();
+
+      expect(mocks.updateAgentChatConfig).not.toHaveBeenCalled();
+    });
+
+    it('offers every registry level when the card does not narrow the control', () => {
+      mocks.extendParams = ['cursorReasoningEffort'];
+      mocks.model = 'grok-4.7';
+
+      render(<ThinkingEffort />);
+
+      expect(mocks.menuItems.map((item) => item.key)).toEqual([
+        'none',
+        'minimal',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+      expect(screen.getByText(label('high'))).toBeInTheDocument();
+    });
+
+    it('narrows any effort control, not only the Cursor one', () => {
+      mocks.extendParams = ['gpt5_2ReasoningEffort'];
+      mocks.effortSettings = { effortLevels: ['low', 'high'] };
+
+      render(<ThinkingEffort />);
+
+      expect(mocks.menuItems.map((item) => item.key)).toEqual(['low', 'high']);
+      // gpt-5.5 defaults to `medium`, which this card lacks: the tie resolves stronger.
+      expect(screen.getByText(label('high'))).toBeInTheDocument();
     });
   });
 

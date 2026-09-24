@@ -4,13 +4,21 @@ import { spawn } from 'node:child_process';
 import { CURSOR_ACCOUNT_HEADER } from '@lobechat/model-runtime';
 
 import { resolveCursorAgentConfigSeedDir } from './configSeed';
+import type { CursorAgentStatePaths } from './env';
 import { buildCursorAgentChildEnv, ensureCursorAgentStateDir } from './env';
 import { CursorAgentPolicyError, CursorAgentUnavailableError } from './errors';
-import { getCachedCursorModels, resetCursorModelsCache, runListModels } from './models';
+import {
+  CursorModelListSkippedError,
+  getCachedCursorModels,
+  loadCursorModelsOnce,
+  resetCursorModelsCache,
+  resolveCachedCursorModelId,
+  runListModels,
+} from './models';
 import { resolveCursorCliCached } from './resolveCli';
 import { createAbortError, jsonError, mapGateError, TurnGate } from './transport.gate';
 import type { TurnRequest } from './transport.parseTurn';
-import { parseTurnBody } from './transport.parseTurn';
+import { isCursorModelId, parseTurnBody } from './transport.parseTurn';
 import { relayCliStream, trimErrorMessage } from './transport.relay';
 import type { CursorConfigSeedGeneration, CursorScratch, TurnScratch } from './transport.scratch';
 import {
@@ -25,11 +33,23 @@ export { resetCursorModelsCache };
 export type { CursorConfigSeedGeneration } from './transport.scratch';
 
 const ORIGIN_HOST = 'cursor.local';
+const SKIP_LIST_FAILURE_CODES = new Set(['overloaded', 'queue_timeout']);
+
+const listFailureCode = (body: ArrayBuffer): string | undefined => {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(body)) as { error?: { code?: unknown } };
+    return typeof parsed.error?.code === 'string' ? parsed.error.code : undefined;
+  } catch {
+    return undefined;
+  }
+};
 const DEFAULT_MAX_CONCURRENCY = 4;
 const DEFAULT_MAX_QUEUE = 16;
 const DEFAULT_TURN_TIMEOUT_MS = 600_000;
 const DEFAULT_QUEUE_TIMEOUT_MS = 60_000;
 const MODELS_TIMEOUT_MS = 60_000;
+/** A turn waits this long for a cold list, then continues on the saved list. */
+const TURN_LIST_LOAD_WAIT_MS = 15_000;
 
 export const CURSOR_AGENT_MAX_CONCURRENCY_ENV = 'CURSOR_AGENT_MAX_CONCURRENCY';
 export const CURSOR_AGENT_MAX_QUEUE_ENV = 'CURSOR_AGENT_MAX_QUEUE';
@@ -39,12 +59,54 @@ const FETCH_CACHE_MAX = 4;
 const keyed = new Map<string, { fetch: typeof fetch; lastUsed: number }>();
 
 export interface CursorAgentFetchOptions {
+  /**
+   * How long a turn waits for a cold `--list-models` before resolving from the
+   * saved list. The load keeps running and fills the cache. Default 15 seconds.
+   */
+  listLoadWaitMs?: number;
   maxConcurrency?: number;
   maxQueue?: number;
   proxyUrl?: string | null;
   queueTimeoutMs?: number;
   turnTimeoutMs?: number;
 }
+
+/**
+ * Wait until the shared list load settles, the caller aborts, or `waitMs`
+ * elapses. Timing out does not cancel `pending`: the load keeps running and
+ * fills the cache for a later turn.
+ */
+const waitForTurnListLoad = (
+  pending: Promise<unknown>,
+  signal: AbortSignal | undefined,
+  waitMs: number,
+): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    let settled = false;
+    // `finish` reads the timeout id, which is assigned once below.
+    const timer: { id?: ReturnType<typeof setTimeout> } = {};
+    let onAbort = () => undefined as void;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (timer.id) clearTimeout(timer.id);
+      signal?.removeEventListener('abort', onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    onAbort = () => finish(createAbortError());
+    timer.id = setTimeout(() => finish(), waitMs);
+    timer.id.unref?.();
+    signal?.addEventListener('abort', onAbort);
+    pending.then(
+      () => finish(),
+      () => finish(),
+    );
+  });
 
 const parsePositiveInt = (value: string | undefined, fallback: number): number => {
   if (!value) return fallback;
@@ -191,8 +253,78 @@ export const createCursorAgentFetch = (options: CursorAgentFetchOptions = {}): t
     options.turnTimeoutMs ??
     parsePositiveInt(process.env[CURSOR_AGENT_TURN_TIMEOUT_MS_ENV], DEFAULT_TURN_TIMEOUT_MS);
   const queueTimeoutMs = options.queueTimeoutMs ?? DEFAULT_QUEUE_TIMEOUT_MS;
+  const listLoadWaitMs = options.listLoadWaitMs ?? TURN_LIST_LOAD_WAIT_MS;
   const gate = new TurnGate(maxConcurrency, maxQueue);
   const proxyUrl = options.proxyUrl;
+
+  /**
+   * GET /v1/models body: admission, then scratch + config seed, then
+   * `runListModels`, then copy the seed back and release. A turn that misses
+   * the cache uses this same path and afterwards acquires the gate again.
+   */
+  const listCursorModels = async (params: {
+    accountSeedDir: () => string;
+    signal?: AbortSignal;
+    state: CursorAgentStatePaths;
+    token: string;
+  }): Promise<Response> => {
+    const cached = getCachedCursorModels(params.token);
+    if (cached) {
+      return new Response(JSON.stringify({ models: cached }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      });
+    }
+
+    // Admission first: a rejected request must not touch the shared config seed.
+    try {
+      await gate.acquire(queueTimeoutMs, params.signal);
+    } catch (error) {
+      const mapped = mapGateError(error);
+      if (mapped) return mapped;
+      throw error;
+    }
+
+    let scratch: CursorScratch | undefined;
+    // Assigned by the staging step below; the handler returns early when that throws.
+    let seedGeneration: CursorConfigSeedGeneration;
+    let configSeedDir: string;
+    try {
+      configSeedDir = params.accountSeedDir();
+      scratch = createScratchRoot(params.state.turns);
+      seedGeneration = seedTurnConfig(configSeedDir, scratch.configDir);
+    } catch (error) {
+      gate.release();
+      removeScratch(scratch?.root);
+      const detail = error instanceof Error ? error.message : 'failed to stage model files';
+      return jsonError(503, 'cli_error', trimErrorMessage(detail, params.token));
+    }
+
+    const env = buildCursorAgentChildEnv({
+      proxyUrl,
+      stateDir: params.state.root,
+      token: params.token,
+      turnRoot: scratch.root,
+    });
+    try {
+      return await runListModels({
+        cwd: scratch.root,
+        env,
+        signal: params.signal,
+        timeoutMs: Math.min(turnTimeoutMs, MODELS_TIMEOUT_MS),
+        token: params.token,
+      });
+    } catch (error) {
+      if (error instanceof CursorAgentUnavailableError) {
+        return jsonError(503, 'cli_unavailable', error.message);
+      }
+      throw error;
+    } finally {
+      copyTurnConfigSeedBack(scratch.configDir, configSeedDir, seedGeneration);
+      removeScratch(scratch.root);
+      gate.release();
+    }
+  };
 
   const cursorFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = parseRequest(input, init);
@@ -235,67 +367,50 @@ export const createCursorAgentFetch = (options: CursorAgentFetchOptions = {}): t
     const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
     if (request.method === 'GET' && pathname === '/v1/models') {
-      const cached = getCachedCursorModels(token);
-      if (cached) {
-        return new Response(JSON.stringify({ models: cached }), {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        });
-      }
-
-      // Admission first: a rejected request must not touch the shared config seed.
-      try {
-        await gate.acquire(queueTimeoutMs, request.signal);
-      } catch (error) {
-        const mapped = mapGateError(error);
-        if (mapped) return mapped;
-        throw error;
-      }
-
-      let scratch: CursorScratch | undefined;
-      // Assigned by the staging step below; the handler returns early when that throws.
-      let seedGeneration: CursorConfigSeedGeneration;
-      let configSeedDir: string;
-      try {
-        configSeedDir = accountSeedDir();
-        scratch = createScratchRoot(state.turns);
-        seedGeneration = seedTurnConfig(configSeedDir, scratch.configDir);
-      } catch (error) {
-        gate.release();
-        removeScratch(scratch?.root);
-        const detail = error instanceof Error ? error.message : 'failed to stage model files';
-        return jsonError(503, 'cli_error', trimErrorMessage(detail, token));
-      }
-
-      const env = buildCursorAgentChildEnv({
-        proxyUrl,
-        stateDir: state.root,
+      return listCursorModels({
+        accountSeedDir,
+        signal: request.signal,
+        state,
         token,
-        turnRoot: scratch.root,
       });
-      try {
-        return await runListModels({
-          cwd: scratch.root,
-          env,
-          signal: request.signal,
-          timeoutMs: Math.min(turnTimeoutMs, MODELS_TIMEOUT_MS),
-          token,
-        });
-      } catch (error) {
-        if (error instanceof CursorAgentUnavailableError) {
-          return jsonError(503, 'cli_unavailable', error.message);
-        }
-        throw error;
-      } finally {
-        copyTurnConfigSeedBack(scratch.configDir, configSeedDir, seedGeneration);
-        removeScratch(scratch.root);
-        gate.release();
-      }
     }
 
     if (request.method === 'POST' && pathname === '/v1/turn') {
       const parsed = await parseTurnBody(request);
       if (parsed instanceof Response) return parsed;
+
+      // A cold cache loads the live list on its own gate slot (one load per
+      // token; concurrent turns share it). The turn waits at most 15 seconds,
+      // then resolves from the last-known-good snapshot or synthesis. The load
+      // is not tied to this request: it keeps running and fills the cache. A
+      // real CLI failure is remembered for 60 seconds. Gate busy, queue
+      // timeout, and abort are not. Resolution stays before the turn's
+      // admission so a rejected id never takes a turn slot. The resolved id is
+      // checked with the same rule as the request body — a mapper result must
+      // not reach `--model` unchecked.
+      if (!getCachedCursorModels(token)) {
+        const pending = loadCursorModelsOnce(token, async () => {
+          const response = await listCursorModels({
+            accountSeedDir,
+            state,
+            token,
+          });
+          const body = await response.arrayBuffer();
+          if (!response.ok) {
+            const code = listFailureCode(body);
+            if (code && SKIP_LIST_FAILURE_CODES.has(code)) throw new CursorModelListSkippedError();
+            return undefined;
+          }
+          return getCachedCursorModels(token);
+        });
+        await waitForTurnListLoad(pending, request.signal, listLoadWaitMs);
+        if (request.signal?.aborted) throw createAbortError();
+      }
+      const resolvedModel = resolveCachedCursorModelId(token, parsed.model, parsed.effort);
+      if (!isCursorModelId(resolvedModel)) {
+        return jsonError(400, 'invalid_request', 'invalid model id');
+      }
+      const turn = resolvedModel === parsed.model ? parsed : { ...parsed, model: resolvedModel };
 
       try {
         await gate.acquire(queueTimeoutMs, request.signal);
@@ -311,7 +426,7 @@ export const createCursorAgentFetch = (options: CursorAgentFetchOptions = {}): t
       let configSeedDir: string;
       try {
         configSeedDir = accountSeedDir();
-        scratch = writeTurnScratch(state.turns, parsed);
+        scratch = writeTurnScratch(state.turns, turn);
         seedGeneration = seedTurnConfig(configSeedDir, scratch.configDir);
       } catch (error) {
         gate.release();
@@ -330,7 +445,7 @@ export const createCursorAgentFetch = (options: CursorAgentFetchOptions = {}): t
       let child: ChildProcessWithoutNullStreams;
       const spawnedAt = Date.now();
       try {
-        child = spawnCursor(buildTurnArgv(parsed, scratch), { cwd: scratch.root, env });
+        child = spawnCursor(buildTurnArgv(turn, scratch), { cwd: scratch.root, env });
       } catch (error) {
         gate.release();
         removeScratch(scratch.root);

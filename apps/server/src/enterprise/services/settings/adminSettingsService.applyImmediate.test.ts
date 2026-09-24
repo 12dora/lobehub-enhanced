@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { EFFORT_CONTROL_KEYS } from '@lobechat/model-runtime';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -271,7 +272,11 @@ describe('AdminSettingsService.applyImmediate', () => {
       ).toBeNull();
     }
 
-    expect(DEFAULT_AGENT_CHAT_CONFIG_EFFORT_PATHS).toHaveLength(25);
+    expect(DEFAULT_AGENT_CHAT_CONFIG_EFFORT_PATHS).toContain(
+      'defaultAgent.config.chatConfig.cursorReasoningEffort',
+    );
+    expect(settingsRegistry.has('defaultAgent.config.chatConfig.cursorReasoningEffort')).toBe(true);
+    expect(DEFAULT_AGENT_CHAT_CONFIG_EFFORT_PATHS).toHaveLength(EFFORT_CONTROL_KEYS.length);
     expect(settingsRegistry.has('defaultAgent.config.chatConfig.thinking')).toBe(true);
     expect(settingsRegistry.has('defaultAgent.config.chatConfig.enableStreaming')).toBe(true);
     expect(settingsRegistry.has('systemAgent.userMemoryEmbedding.reasoningEffort')).toBe(false);

@@ -28,6 +28,8 @@ export interface CursorHistoryMessage {
 }
 
 export interface CursorTurnBody {
+  /** `payload.reasoning_effort`. The transport maps this onto a concrete CLI id. */
+  effort?: ChatStreamPayload['reasoning_effort'];
   history?: { messages: CursorHistoryMessage[]; replaceUserInfo: false };
   images?: CursorTurnImage[];
   model: string;

@@ -50,14 +50,20 @@ export const useSyncUpstreamModels = (provider: string) => {
 
     setIsSyncing(true);
     try {
-      const { created, total } = await syncUpstreamModelList(provider);
+      const { created, deleted = 0, total } = await syncUpstreamModelList(provider);
 
       if (total === 0) {
         message.info(t('providerModels.list.syncUpstream.empty'));
         return;
       }
 
-      message.success(t('providerModels.list.syncUpstream.success', { created, total }));
+      // Rows the upstream no longer lists are removed (e.g. Cursor effort variants folded into
+      // one model); say so, or a list that visibly shrank reads like a failure.
+      message.success(
+        deleted > 0
+          ? t('providerModels.list.syncUpstream.successWithDeleted', { created, deleted, total })
+          : t('providerModels.list.syncUpstream.success', { created, total }),
+      );
     } catch (error) {
       console.error(error);
 

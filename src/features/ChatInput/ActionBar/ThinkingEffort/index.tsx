@@ -19,7 +19,7 @@ import { useUpdateAgentConfig } from '../../hooks/useUpdateAgentConfig';
 import { type ActionDropdownMenuItems } from '../components/ActionDropdown';
 import ActionDropdown from '../components/ActionDropdown';
 import { useActionBarContext } from '../context';
-import { resolveCurrentEffortLevel } from './resolveEffortLevel';
+import { resolveCurrentEffortLevel, resolveOfferedEffortLevels } from './resolveEffortLevel';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   level: css`
@@ -51,6 +51,10 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
  * Renders nothing unless the active model declares a discrete-level effort
  * extend param (`findEffortControl`); writing goes to the same `chatConfig`
  * field as the corresponding slider under `ModelSwitchPanel/ControlsForm`.
+ *
+ * A model card may narrow the control (`settings.effortLevels` /
+ * `settings.defaultEffortLevel`): only those levels are offered, and a stored level
+ * outside them is shown as the nearest offered one.
  */
 const ThinkingEffort = memo(() => {
   // Levels are named in the `setting` namespace so the pill, the service-model
@@ -71,7 +75,12 @@ const ThinkingEffort = memo(() => {
     isEqual,
   );
   const extendParams = useAiInfraStore(aiModelSelectors.modelExtendParams(model, provider));
+  const modelSettings = useAiInfraStore(aiModelSelectors.modelEffortSettings(model, provider));
   const control = useMemo(() => findEffortControl(extendParams), [extendParams]);
+  const levels = useMemo(
+    () => (control ? resolveOfferedEffortLevels(control.definition, modelSettings) : []),
+    [control, modelSettings],
+  );
 
   const currentLevel = control
     ? resolveCurrentEffortLevel({
@@ -79,13 +88,14 @@ const ThinkingEffort = memo(() => {
         definition: control.definition,
         key: control.key,
         model,
+        modelSettings,
       })
     : undefined;
 
   const items: ActionDropdownMenuItems = useMemo(() => {
     if (!control) return [];
 
-    const { configKey, levels } = control.definition;
+    const { configKey } = control.definition;
 
     return levels.map((level) => ({
       // The label is an element, which ActionDropdown otherwise reads as
@@ -104,7 +114,7 @@ const ThinkingEffort = memo(() => {
         updateAgentChatConfig({ [configKey]: level });
       },
     }));
-  }, [control, currentLevel, t, updateAgentChatConfig]);
+  }, [control, currentLevel, levels, t, updateAgentChatConfig]);
 
   if (!control || !currentLevel) return null;
 

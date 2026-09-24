@@ -5,6 +5,7 @@ import type { SliderSingleProps } from 'antd/es/slider';
 import type { CSSProperties } from 'react';
 import { memo } from 'react';
 
+import { clampToOfferedLevel } from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
 import { useAgentId } from '@/features/ChatInput/hooks/useAgentId';
 import { useUpdateAgentConfig } from '@/features/ChatInput/hooks/useUpdateAgentConfig';
 import { useAgentStore } from '@/store/agent';
@@ -37,9 +38,34 @@ export interface LevelSliderConfig<T extends string> {
 
 export interface CreatedLevelSliderProps<T extends string> {
   defaultValue?: T;
+  /**
+   * Per-model subset of the configured levels (weakest → strongest), e.g. a model card's
+   * `settings.effortLevels`. When set, only these levels are shown, and a value outside
+   * them is displayed as the nearest one (ties → stronger); a value the full level list
+   * does not know falls back to the default. Omit it to keep every configured level.
+   */
+  levels?: readonly T[];
   onChange?: (value: T) => void;
   value?: T;
 }
+
+/**
+ * The value to show on a narrowed slider: the value itself when offered, else the
+ * nearest offered level, else the default (itself pulled onto the offered set).
+ */
+const resolveNarrowedValue = <T extends string>(
+  allLevels: readonly T[],
+  offered: readonly T[],
+  value: unknown,
+  fallback: T,
+): T => {
+  if (typeof value === 'string') {
+    const clamped = clampToOfferedLevel(allLevels, offered, value);
+    if (clamped) return clamped;
+  }
+
+  return clampToOfferedLevel(allLevels, offered, fallback) ?? offered[0] ?? fallback;
+};
 
 /**
  * Factory function to create a level slider component that supports both
@@ -52,12 +78,13 @@ export function createLevelSliderComponent<T extends string>(config: LevelSlider
   // Inner pure UI component - no store hooks, safe for preview
   const LevelSliderInner = memo<{
     defaultValue: T;
+    levels: readonly T[];
     onChange: (_v: T) => void;
     value: T;
-  }>(({ value, onChange, defaultValue: dv }) => (
+  }>(({ value, onChange, defaultValue: dv, levels: shownLevels }) => (
     <LevelSlider<T>
       defaultValue={dv}
-      levels={levels}
+      levels={shownLevels}
       marks={marks}
       style={style}
       value={value}
@@ -66,29 +93,52 @@ export function createLevelSliderComponent<T extends string>(config: LevelSlider
   ));
 
   // Store-connected component - uses agent store hooks
-  const LevelSliderWithStore = memo<{ defaultValue: T }>(({ defaultValue: dv }) => {
-    const agentId = useAgentId();
-    const { updateAgentChatConfig } = useUpdateAgentConfig();
-    const agentConfig = useAgentStore((s) => chatConfigByIdSelectors.getChatConfigById(agentId)(s));
+  const LevelSliderWithStore = memo<{ defaultValue: T; offered?: readonly T[] }>(
+    ({ defaultValue: dv, offered }) => {
+      const agentId = useAgentId();
+      const { updateAgentChatConfig } = useUpdateAgentConfig();
+      const agentConfig = useAgentStore((s) =>
+        chatConfigByIdSelectors.getChatConfigById(agentId)(s),
+      );
 
-    const resolveValue = (): T => {
-      const rawValue = agentConfig[configKey];
-      if (typeof rawValue === 'string' && levels.includes(rawValue as T)) return rawValue as T;
+      const resolveValue = (): T => {
+        const rawValue = agentConfig[configKey];
+        if (offered) return resolveNarrowedValue(levels, offered, rawValue, dv);
+        if (typeof rawValue === 'string' && levels.includes(rawValue as T)) return rawValue as T;
 
-      return dv;
-    };
+        return dv;
+      };
 
-    const handleChange = (newValue: T) => {
-      updateAgentChatConfig({ [configKey]: newValue });
-    };
+      const handleChange = (newValue: T) => {
+        updateAgentChatConfig({ [configKey]: newValue });
+      };
 
-    return <LevelSliderInner defaultValue={dv} value={resolveValue()} onChange={handleChange} />;
-  });
+      return (
+        <LevelSliderInner
+          defaultValue={dv}
+          levels={offered ?? levels}
+          value={resolveValue()}
+          onChange={handleChange}
+        />
+      );
+    },
+  );
 
   // Main exported component - chooses between controlled and store mode
   const CreatedLevelSlider = memo<CreatedLevelSliderProps<T>>(
-    ({ value: controlledValue, onChange: controlledOnChange, defaultValue: propDefaultValue }) => {
-      const dv = propDefaultValue ?? defaultValue;
+    ({
+      value: controlledValue,
+      onChange: controlledOnChange,
+      defaultValue: propDefaultValue,
+      levels: offeredLevels,
+    }) => {
+      // An empty subset would render a slider with nothing to pick — keep every level.
+      const offered = offeredLevels?.length ? offeredLevels : undefined;
+      const configuredDefault = propDefaultValue ?? defaultValue;
+      // A narrowed slider must never default to a level it does not show.
+      const dv = offered
+        ? resolveNarrowedValue(levels, offered, configuredDefault, configuredDefault)
+        : configuredDefault;
       const isControlled = controlledValue !== undefined || controlledOnChange !== undefined;
 
       if (isControlled) {
@@ -96,14 +146,19 @@ export function createLevelSliderComponent<T extends string>(config: LevelSlider
         return (
           <LevelSliderInner
             defaultValue={dv}
-            value={controlledValue ?? dv}
+            levels={offered ?? levels}
+            value={
+              offered
+                ? resolveNarrowedValue(levels, offered, controlledValue, dv)
+                : (controlledValue ?? dv)
+            }
             onChange={controlledOnChange ?? (() => {})}
           />
         );
       }
 
       // Uncontrolled mode: use store
-      return <LevelSliderWithStore defaultValue={dv} />;
+      return <LevelSliderWithStore defaultValue={dv} offered={offered} />;
     },
   );
 

@@ -105,6 +105,7 @@ vi.mock('@/features/Workspace/useWorkspaceAwareNavigate', () => ({
 
 vi.mock('@/store/aiInfra', () => ({
   aiModelSelectors: {
+    modelEffortSettings: () => () => undefined,
     modelExtendParams: (model: string) => () => mocks.extendParamsByModel[model],
   },
   useScopedAiInfraStore: (selector: (state: unknown) => unknown) => selector({}),

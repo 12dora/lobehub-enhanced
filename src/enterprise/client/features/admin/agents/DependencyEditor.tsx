@@ -6,6 +6,11 @@ import { Flexbox } from '@lobehub/ui';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 
+import {
+  clampToOfferedLevel,
+  resolveOfferedEffortLevels,
+} from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
+
 import { ConnectorDependencyField } from './ConnectorDependencyField';
 import {
   buildModelDependency,
@@ -151,22 +156,38 @@ export const DependencyEditor = ({
       sourceSettled,
     });
 
+  /** A published model's chat option, if the current source lists it. */
+  const chatModelOf = (modelKey: string | undefined) =>
+    modelKey ? source.data?.chatModels.find((entry) => entry.modelKey === modelKey) : undefined;
+
   /** Which thinking-effort control a published model offers, from its own `extendParams`. */
   const effortControlKeyOf = (modelKey: string | undefined): string | undefined =>
-    findEffortControl(
-      modelKey
-        ? source.data?.chatModels.find((entry) => entry.modelKey === modelKey)?.extendParams
-        : undefined,
-    )?.key;
+    findEffortControl(chatModelOf(modelKey)?.extendParams)?.key;
 
   /**
    * A stored effort belongs to ONE control, and which control applies is a property of the model.
    * Whenever the new model does not offer that same control the stored pair is dropped rather than
    * carried over: a level the model cannot honour would be published as a promise nothing keeps.
+   * Under the same control, a level the new model narrows away (`settings.effortLevels`) moves to
+   * the nearest level it does run — exactly what the picker then shows.
    */
   const retainThinkingEffort = (modelKey: string | undefined) => {
     if (!thinkingEffort || !onThinkingEffortChange) return;
-    if (effortControlKeyOf(modelKey) !== thinkingEffort.controlKey) onThinkingEffortChange(null);
+    const option = chatModelOf(modelKey);
+    const control = findEffortControl(option?.extendParams);
+    if (!control || control.key !== thinkingEffort.controlKey) {
+      onThinkingEffortChange(null);
+      return;
+    }
+
+    const level = clampToOfferedLevel(
+      control.definition.levels,
+      resolveOfferedEffortLevels(control.definition, option?.effortSettings),
+      thinkingEffort.level,
+    );
+    if (!level) onThinkingEffortChange(null);
+    else if (level !== thinkingEffort.level)
+      onThinkingEffortChange({ controlKey: thinkingEffort.controlKey, level });
   };
 
   const chooseProvider = (nextId: string | undefined) => {

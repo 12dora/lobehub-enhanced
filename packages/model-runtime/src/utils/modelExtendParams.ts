@@ -321,6 +321,10 @@ export const applyModelExtendParams = (ctx: ApplyModelExtendParamsContext): Mode
     extendParams.reasoning_effort = chatConfig.codexMaxReasoningEffort;
   }
 
+  if (modelExtendParams.includes('cursorReasoningEffort') && chatConfig.cursorReasoningEffort) {
+    extendParams.reasoning_effort = chatConfig.cursorReasoningEffort;
+  }
+
   // DeepSeek reasoning effort is reconciled last to avoid invalid combinations.
   if (modelExtendParams.includes('deepseekV4ReasoningEffort')) {
     const deepseekV4ReasoningEffort = chatConfig.deepseekV4ReasoningEffort;

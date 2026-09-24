@@ -2,8 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { deriveCursorConversationId } from '../../browserProfile';
-import { FAMILY_INHERITED_KEYS } from '../../utils/familyInherit';
 import { AgentRuntimeErrorType } from '../../types/error';
+import { FAMILY_INHERITED_KEYS } from '../../utils/familyInherit';
 import {
   CURSOR_ACCOUNT_HEADER,
   CURSOR_CONVERSATION_HEADER,
@@ -148,6 +148,46 @@ describe('LobeCursorAI', () => {
         model: 'composer-2.5',
         prompt: 'search the web',
       });
+    });
+
+    it('puts reasoning_effort on the turn body as effort', async () => {
+      const fetchImpl = vi.fn<
+        (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+      >(async () => successTurn());
+      const runtime = new LobeCursorAI({ apiKey: 'jwt-token', fetch: fetchImpl });
+
+      await runtime.chat({
+        messages: [{ content: 'hi', role: 'user' }],
+        model: 'grok-4.7',
+        reasoning_effort: 'xhigh',
+      });
+
+      expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toEqual({
+        effort: 'xhigh',
+        model: 'grok-4.7',
+        prompt: 'hi',
+      });
+    });
+
+    it('omits effort when reasoning_effort is outside the Cursor levels', async () => {
+      const fetchImpl = vi.fn<
+        (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+      >(async () => successTurn());
+      const runtime = new LobeCursorAI({ apiKey: 'jwt-token', fetch: fetchImpl });
+
+      for (const reasoning_effort of ['ultra', 'no_think'] as const) {
+        await runtime.chat({
+          messages: [{ content: 'hi', role: 'user' }],
+          model: 'grok-4.7',
+          reasoning_effort,
+        });
+      }
+
+      expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toEqual({
+        model: 'grok-4.7',
+        prompt: 'hi',
+      });
+      expect(JSON.parse(String(fetchImpl.mock.calls[1]![1]?.body))).not.toHaveProperty('effort');
     });
 
     it('forwards tools into the turn body as a system tool-protocol block', async () => {
@@ -453,15 +493,17 @@ describe('LobeCursorAI', () => {
         }),
       );
 
-      expect(cards.slice(0, 4)).toEqual([
+      expect(cards.slice(0, 2)).toEqual([
         {
+          // Private to this provider: `auto` is also a ChatGPT Web bank id.
           contextWindowTokens: 200_000,
-          // Follows the curated card in model-bank (renamed by the frontend round).
+          description: 'Lets Cursor pick a model for each message.',
           displayName: 'Auto (Cursor)',
           enabled: false,
           functionCall: true,
           id: 'auto',
           reasoning: false,
+          releasedAt: '2026-08-11',
           search: true,
           settings: { searchImpl: 'params' },
           type: 'chat',
@@ -479,7 +521,13 @@ describe('LobeCursorAI', () => {
           type: 'chat',
           vision: true,
         },
-        {
+      ]);
+      // Single-level legacy ids are no longer exact bank hits after the collapse,
+      // so they stay concrete and inherit the family (with the family mark).
+      const opus = cards[2];
+      const sol = cards[3];
+      expect(opus).toEqual(
+        expect.objectContaining({
           contextWindowTokens: 1_000_000,
           displayName: 'Claude Opus 5 1M Thinking',
           enabled: false,
@@ -490,8 +538,10 @@ describe('LobeCursorAI', () => {
           settings: { searchImpl: 'params' },
           type: 'chat',
           vision: true,
-        },
-        {
+        }),
+      );
+      expect(sol).toEqual(
+        expect.objectContaining({
           contextWindowTokens: 1_000_000,
           displayName: 'GPT-5.6 Sol 1M High',
           enabled: false,
@@ -502,8 +552,17 @@ describe('LobeCursorAI', () => {
           settings: { searchImpl: 'params' },
           type: 'chat',
           vision: true,
-        },
-      ]);
+        }),
+      );
+      expect(Reflect.get(opus ?? {}, FAMILY_INHERITED_KEYS)).toEqual({
+        abilities: ['functionCall', 'reasoning', 'search', 'vision'],
+        settings: ['searchImpl'],
+      });
+      // gpt-5.6-sol is no longer a cursor bank card; its donor is the OpenAI card, which has files.
+      expect(Reflect.get(sol ?? {}, FAMILY_INHERITED_KEYS)).toEqual({
+        abilities: ['files', 'functionCall', 'reasoning', 'search', 'vision'],
+        settings: ['searchImpl'],
+      });
       expect(cards).toHaveLength(7);
       const low = cards.find((card) => card.id === 'grok-4.7-low');
       const fast = cards.find((card) => card.id === 'grok-4.7-high-fast');
@@ -546,6 +605,90 @@ describe('LobeCursorAI', () => {
         reasoning: undefined,
         type: 'chat',
       });
+    });
+
+    it('collapses a multi-level family and does not family-stamp effort', async () => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              models: [
+                { id: 'grok-4.7-low', name: 'Grok 4.7  Low' },
+                { id: 'grok-4.7-medium', name: 'Grok 4.7  Medium' },
+                { id: 'grok-4.7-high', name: 'Grok 4.7  High' },
+                { id: 'grok-4.7-xhigh', name: 'Grok 4.7  Extra High' },
+                { id: 'grok-4.7-low-fast', name: 'Grok 4.7 Low Fast' },
+                { id: 'grok-4.7-high-fast', name: 'Grok 4.7 High Fast' },
+                { id: 'cursor-grok-4.6-low', name: 'Grok 4.6 Low' },
+                { id: 'cursor-grok-4.6-high', name: 'Grok 4.6' },
+                { id: 'composer-2.5', name: 'Composer 2.5' },
+              ],
+            }),
+            { status: 200 },
+          ),
+      );
+      const runtime = new LobeCursorAI({ apiKey: 'jwt', fetch: fetchImpl });
+      const cards = await runtime.models();
+
+      expect(cards.map((card) => card.id)).toEqual([
+        'grok-4.7',
+        'grok-4.7-fast',
+        'cursor-grok-4.6',
+        'composer-2.5',
+      ]);
+
+      const grok = cards[0];
+      expect(grok).toEqual(
+        expect.objectContaining({
+          displayName: 'Grok 4.7',
+          enabled: false,
+          functionCall: true,
+          id: 'grok-4.7',
+          reasoning: true,
+          search: true,
+          type: 'chat',
+        }),
+      );
+      expect(grok?.settings).toEqual({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high', 'xhigh'],
+        extendParams: ['cursorReasoningEffort'],
+        searchImpl: 'params',
+      });
+      expect(Reflect.get(grok ?? {}, FAMILY_INHERITED_KEYS)).toEqual({
+        abilities: ['functionCall', 'reasoning', 'search'],
+        settings: ['searchImpl'],
+      });
+
+      const fast = cards[1];
+      expect(fast?.settings).toMatchObject({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'high'],
+        extendParams: ['cursorReasoningEffort'],
+      });
+      expect(Reflect.get(fast ?? {}, FAMILY_INHERITED_KEYS)).toEqual({
+        abilities: ['functionCall', 'reasoning', 'search'],
+        settings: ['searchImpl'],
+      });
+
+      const known = cards[2];
+      expect(known).toEqual(
+        expect.objectContaining({
+          contextWindowTokens: 200_000,
+          displayName: 'Grok 4.6',
+          id: 'cursor-grok-4.6',
+          vision: false,
+        }),
+      );
+      expect(known?.settings).toMatchObject({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'high'],
+        extendParams: ['cursorReasoningEffort'],
+        searchImpl: 'params',
+      });
+      expect(Reflect.get(known ?? {}, FAMILY_INHERITED_KEYS)).toBeUndefined();
+
+      expect(cards[3]?.settings).toEqual({ searchImpl: 'params' });
     });
 
     it('shallow-clones known settings so callers cannot mutate later cards', () => {

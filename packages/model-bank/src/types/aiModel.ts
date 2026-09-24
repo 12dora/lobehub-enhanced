@@ -372,6 +372,7 @@ export type ExtendParamsType =
   | 'kimiK3ReasoningEffort'
   | 'ring2_6ReasoningEffort'
   | 'codexMaxReasoningEffort'
+  | 'cursorReasoningEffort'
   | 'opus47Effort'
   | 'step3_5ReasoningEffort'
   | 'textVerbosity'
@@ -389,15 +390,49 @@ export type ExtendParamsType =
 
 export type DisabledParamType = 'temperature' | 'top_p' | 'frequency_penalty' | 'presence_penalty';
 
+/**
+ * Every discrete effort level any model family can store on a card.
+ * Kept in model-bank so settings do not depend on model-runtime.
+ * `EffortLevel` in model-runtime is this same union.
+ */
+export const ModelEffortLevelSchema = z.enum([
+  'no_think',
+  'disabled',
+  'none',
+  'minimal',
+  'auto',
+  'low',
+  'standard',
+  'medium',
+  'extended',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+  'enabled',
+]);
+
+export type ModelEffortLevel = z.infer<typeof ModelEffortLevelSchema>;
+
 export interface AiModelSettings {
   /** Live Codex catalog protocol flag; runtime discovery remains authoritative. */
   chatgptResponsesLite?: boolean;
+  /**
+   * Default level when the user has not chosen one.
+   * Honoured only when it is one of the offered levels.
+   */
+  defaultEffortLevel?: ModelEffortLevel;
   /**
    * Chat params that should be hidden from the agent config UI and stripped from
    * outbound requests. Use this for models whose API rejects specific sampling
    * params (e.g. Claude Opus 4.7 returns 400 on any non-default temperature / top_p).
    */
   disabledParams?: DisabledParamType[];
+  /**
+   * Subset of the model's effort control, weakest → strongest.
+   * When set, the control offers only these levels.
+   */
+  effortLevels?: ModelEffortLevel[];
   extendParams?: ExtendParamsType[];
   /**
    * Optional legacy leftover from a previous catalog shape. ChatGPT Web no
@@ -440,6 +475,7 @@ export const ExtendParamsTypeSchema = z.enum([
   'kimiK3ReasoningEffort',
   'ring2_6ReasoningEffort',
   'codexMaxReasoningEffort',
+  'cursorReasoningEffort',
   'opus47Effort',
   'step3_5ReasoningEffort',
   'textVerbosity',
@@ -469,6 +505,8 @@ export const AiModelSettingsSchema = z.object({
   chatgptResponsesLite: z.boolean().optional(),
   disabledParams: z.array(DisabledParamTypeSchema).optional(),
   extendParams: z.array(ExtendParamsTypeSchema).optional(),
+  effortLevels: z.array(ModelEffortLevelSchema).optional(),
+  defaultEffortLevel: ModelEffortLevelSchema.optional(),
   searchImpl: ModelSearchImplementTypeSchema.optional(),
   searchProvider: z.string().optional(),
 });

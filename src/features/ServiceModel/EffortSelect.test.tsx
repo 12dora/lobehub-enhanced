@@ -47,9 +47,14 @@ vi.mock('@lobehub/ui/base-ui', () => ({
 }));
 
 const extendParamsMock = vi.fn<() => string[] | undefined>();
+const effortSettingsMock =
+  vi.fn<() => { defaultEffortLevel?: string; effortLevels?: string[] } | undefined>();
 
 vi.mock('@/store/aiInfra', () => ({
-  aiModelSelectors: { modelExtendParams: () => () => extendParamsMock() },
+  aiModelSelectors: {
+    modelEffortSettings: () => () => effortSettingsMock(),
+    modelExtendParams: () => () => extendParamsMock(),
+  },
   useScopedAiInfraStore: (selector: (state: unknown) => unknown) => selector({}),
 }));
 
@@ -70,6 +75,8 @@ const label = (level: EffortLevel) => settingCopy[`serviceModel.reasoningEffort.
 describe('EffortSelect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` keeps implementations; reset the narrowing explicitly per test.
+    effortSettingsMock.mockReturnValue(undefined);
   });
 
   it('renders nothing when the model exposes no discrete effort control', () => {
@@ -237,5 +244,48 @@ describe('EffortSelect', () => {
     renderSelect({ disabled: true });
 
     expect(picker()).toBeDisabled();
+  });
+
+  describe('per-model narrowing (collapsed Cursor card)', () => {
+    const narrowCursorCard = () => {
+      extendParamsMock.mockReturnValue(['cursorReasoningEffort']);
+      effortSettingsMock.mockReturnValue({
+        defaultEffortLevel: 'high',
+        effortLevels: ['low', 'medium', 'high', 'xhigh'],
+      });
+    };
+
+    const optionValues = () =>
+      [...picker().querySelectorAll('option')].map((option) => option.value);
+
+    it('offers only the card levels', () => {
+      narrowCursorCard();
+      renderSelect({ model: 'grok-4.7', provider: 'cursor' });
+
+      expect(optionValues()).toEqual(['__provider_default__', 'low', 'medium', 'high', 'xhigh']);
+    });
+
+    it('seeds an unset chatConfig with the card default', () => {
+      narrowCursorCard();
+      renderSelect({ chatConfig: {} as never, model: 'grok-4.7', provider: 'cursor' });
+
+      expect(optionValues()).toEqual(['low', 'medium', 'high', 'xhigh']);
+      expect((picker() as HTMLSelectElement).value).toBe('high');
+    });
+
+    it('shows a stored level the card lacks as the nearest offered level', () => {
+      narrowCursorCard();
+      renderSelect({ model: 'grok-4.7', provider: 'cursor', value: 'max' });
+
+      expect((picker() as HTMLSelectElement).value).toBe('xhigh');
+    });
+
+    it('offers every registry level when the card does not narrow the control', () => {
+      extendParamsMock.mockReturnValue(['cursorReasoningEffort']);
+      renderSelect({ chatConfig: {} as never, model: 'grok-4.7', provider: 'cursor' });
+
+      expect(optionValues()).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+      expect((picker() as HTMLSelectElement).value).toBe('high');
+    });
   });
 });

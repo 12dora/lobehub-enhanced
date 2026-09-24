@@ -11,6 +11,7 @@ import {
   type ProviderPublishedDetail,
   type ProviderRevisionRef,
   type PublishedConnectorDetail,
+  readModelEffortSettings,
   resolveProviderModelSource,
   staleConnectorKeys,
   staleSkillKeys,
@@ -88,6 +89,58 @@ describe('dependencyCatalog exact resolution', () => {
       [],
       [],
     ]);
+  });
+
+  // A collapsed Cursor model offers only some levels of its control; the picker must know which.
+  it('carries each model’s effort narrowing, only when it narrows something', () => {
+    const source = resolveProviderModelSource(
+      {
+        models: [
+          {
+            displayName: 'Grok 4.7',
+            modelKey: 'grok-4.7',
+            settings: {
+              defaultEffortLevel: 'high',
+              effortLevels: ['low', 'medium', 'high', 'xhigh'],
+              extendParams: ['cursorReasoningEffort'],
+            },
+            type: 'chat',
+          },
+          {
+            displayName: 'GPT-4.1',
+            modelKey: 'gpt-4.1',
+            settings: { extendParams: ['reasoningEffort'] },
+            type: 'chat',
+          },
+        ],
+        providerKey: 'cursor',
+        revision: 4,
+      },
+      revisions,
+    )!;
+
+    expect(source.chatModels[0].effortSettings).toEqual({
+      defaultEffortLevel: 'high',
+      effortLevels: ['low', 'medium', 'high', 'xhigh'],
+    });
+    expect(source.chatModels[1]).not.toHaveProperty('effortSettings');
+  });
+
+  it('reads effort narrowing from free-form settings, dropping unknown levels', () => {
+    expect(readModelEffortSettings(null)).toBeUndefined();
+    expect(readModelEffortSettings('x')).toBeUndefined();
+    expect(readModelEffortSettings({ extendParams: ['effort'] })).toBeUndefined();
+    expect(readModelEffortSettings({ effortLevels: [] })).toBeUndefined();
+    expect(readModelEffortSettings({ effortLevels: ['bogus', 3] })).toBeUndefined();
+    expect(
+      readModelEffortSettings({
+        defaultEffortLevel: 'bogus',
+        effortLevels: ['low', 'bogus', 'high'],
+      }),
+    ).toEqual({ effortLevels: ['low', 'high'] });
+    expect(readModelEffortSettings({ defaultEffortLevel: 'max' })).toEqual({
+      defaultEffortLevel: 'max',
+    });
   });
 
   it('returns null when the published revision has no matching published checksum', () => {

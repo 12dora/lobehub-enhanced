@@ -4,6 +4,9 @@ import type {
   PlatformAgentModelDependencyRef,
   PlatformAgentSkillDependencyRef,
 } from '@lobechat/types';
+import { type ModelEffortLevel, ModelEffortLevelSchema } from 'model-bank';
+
+import type { ModelEffortSettings } from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
 
 import type { AdminAgentDraftDependencies } from './types';
 
@@ -27,7 +30,7 @@ export interface PublishedProviderSummary {
 export interface ProviderPublishedModel {
   displayName: string | null;
   modelKey: string;
-  /** Published model settings json; only `extendParams` is read here. */
+  /** Published model settings json; only `extendParams` and the effort narrowing are read here. */
   settings?: unknown;
   type: string;
 }
@@ -35,6 +38,11 @@ export interface ProviderPublishedModel {
 /** A published model option (from admin.aiProviders.get → published.models). */
 export interface PublishedModelOption {
   displayName: string | null;
+  /**
+   * Per-model narrowing of that control (`settings.effortLevels` / `defaultEffortLevel`), e.g.
+   * a collapsed Cursor model that runs only some levels. Absent → the control's full levels.
+   */
+  effortSettings?: ModelEffortSettings;
   /**
    * `settings.extendParams` of the published model — the only input that decides which
    * thinking-effort control (if any) the model offers.
@@ -61,6 +69,30 @@ export const readModelExtendParams = (settings: unknown): string[] => {
   const value = (settings as { extendParams?: unknown }).extendParams;
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === 'string');
+};
+
+const isModelEffortLevel = (value: unknown): value is ModelEffortLevel =>
+  ModelEffortLevelSchema.safeParse(value).success;
+
+/**
+ * `settings.effortLevels` / `settings.defaultEffortLevel` of a published model, or `undefined`
+ * when it narrows nothing. Free-form json again: unknown levels are dropped, never guessed.
+ */
+export const readModelEffortSettings = (settings: unknown): ModelEffortSettings | undefined => {
+  if (!settings || typeof settings !== 'object') return undefined;
+  const { defaultEffortLevel, effortLevels } = settings as {
+    defaultEffortLevel?: unknown;
+    effortLevels?: unknown;
+  };
+  const levels = Array.isArray(effortLevels) ? effortLevels.filter(isModelEffortLevel) : [];
+  const pinned = isModelEffortLevel(defaultEffortLevel) ? defaultEffortLevel : undefined;
+
+  if (levels.length === 0 && !pinned) return undefined;
+
+  return {
+    ...(pinned ? { defaultEffortLevel: pinned } : {}),
+    ...(levels.length > 0 ? { effortLevels: levels } : {}),
+  };
 };
 
 /** A provider revision-history row (from admin.aiProviders.listRevisions). */
@@ -103,12 +135,17 @@ export const resolveProviderModelSource = (
   return {
     chatModels: detail.models
       .filter((model) => model.type === 'chat')
-      .map((model) => ({
-        displayName: model.displayName,
-        extendParams: readModelExtendParams(model.settings),
-        modelKey: model.modelKey,
-        type: model.type,
-      })),
+      .map((model) => {
+        const effortSettings = readModelEffortSettings(model.settings);
+
+        return {
+          displayName: model.displayName,
+          ...(effortSettings ? { effortSettings } : {}),
+          extendParams: readModelExtendParams(model.settings),
+          modelKey: model.modelKey,
+          type: model.type,
+        };
+      }),
     providerChecksum: match.checksum,
     providerKey: detail.providerKey,
     providerRevision: detail.revision,

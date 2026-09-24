@@ -19,6 +19,8 @@ export interface FamilyInheritedKeys {
 export interface FamilyKnownCard {
   abilities?: ModelAbilities;
   id: string;
+  /** `loadModels()` rows set this. Cursor rows stay out of every other provider's donor pool. */
+  providerId?: string;
   releasedAt?: string;
   settings?: AiModelSettings;
   /** Bank `type`. Chat donors never fill image, video, or embedding ids. */
@@ -44,6 +46,12 @@ export interface InheritFamilyOptions {
    * false. Defaults to true.
    */
   extendParams?: boolean;
+  /**
+   * Keep `providerId: 'cursor'` rows in the global donor pool, and allow
+   * `cursorReasoningEffort` to be copied. Defaults to false so another
+   * provider cannot inherit Cursor's effort pill.
+   */
+  includeCursorDonors?: boolean;
   /**
    * Upstream model type. When omitted, image / video / embedding are inferred
    * from variant words and everything else is `chat`.
@@ -111,6 +119,52 @@ const ABILITY_KEYS = [
 ] as const satisfies readonly (keyof ModelAbilities)[];
 
 const indexCache = new WeakMap<readonly FamilyKnownCard[], DonorIndex>();
+/** Keyed by the source array; `length` + `last` guard against callers that mutate it. */
+const cursorExcludedCache = new WeakMap<
+  readonly { providerId?: string }[],
+  { last: unknown; length: number; result: readonly { providerId?: string }[] }
+>();
+
+const CURSOR_PROVIDER_ID = 'cursor';
+const CURSOR_REASONING_EFFORT = 'cursorReasoningEffort';
+
+/**
+ * Cursor bank rows are not donors for any other provider. The same array is
+ * returned when nothing is tagged `cursor`, so the donor index stays cached.
+ */
+export const excludeCursorBankCards = <T extends { providerId?: string }>(
+  cards: readonly T[],
+): readonly T[] => {
+  const cached = cursorExcludedCache.get(cards);
+  const last = cards.at(-1);
+  if (cached && cached.length === cards.length && cached.last === last) {
+    return cached.result as readonly T[];
+  }
+  const result = cards.some((card) => card.providerId === CURSOR_PROVIDER_ID)
+    ? cards.filter((card) => card.providerId !== CURSOR_PROVIDER_ID)
+    : cards;
+  cursorExcludedCache.set(cards, { last, length: cards.length, result });
+  return result;
+};
+
+/**
+ * Drop Cursor's effort control and its per-model narrowing. Other effort
+ * controls keep `effortLevels` when `cursorReasoningEffort` is absent.
+ * Returns the same object when there is nothing to drop.
+ */
+export const stripCursorPrivateSettings = (settings: AiModelSettings): AiModelSettings => {
+  const extendParams = settings.extendParams;
+  if (!Array.isArray(extendParams) || !extendParams.includes(CURSOR_REASONING_EFFORT)) {
+    return settings;
+  }
+  const kept = extendParams.filter((key) => key !== CURSOR_REASONING_EFFORT);
+  const next: AiModelSettings = { ...settings };
+  if (kept.length > 0) next.extendParams = kept;
+  else delete next.extendParams;
+  delete next.defaultEffortLevel;
+  delete next.effortLevels;
+  return next;
+};
 
 const isDateToken = (token: string): boolean => DATE_8.test(token) || DATE_4.test(token);
 
@@ -348,6 +402,7 @@ const copySettings = (
   settings: AiModelSettings | undefined,
   modelId: string,
   allowExtendParams: boolean,
+  allowCursorSettings: boolean,
 ): AiModelSettings | undefined => {
   if (!settings) return undefined;
   const next: AiModelSettings = {};
@@ -358,8 +413,14 @@ const copySettings = (
     Array.isArray(extendParams) &&
     extendParams.length > 0
   ) {
-    next.extendParams = [...extendParams];
+    const params = allowCursorSettings
+      ? extendParams
+      : extendParams.filter((key) => key !== CURSOR_REASONING_EFFORT);
+    if (params.length > 0) next.extendParams = [...params];
   }
+  // Never copy `effortLevels` / `defaultEffortLevel`. Cursor stamps the live
+  // group's levels itself; a family mark on those keys would make sync drop them.
+  // A non-cursor target also drops `cursorReasoningEffort` above.
   if (settings.searchImpl) next.searchImpl = settings.searchImpl;
   return Object.keys(next).length > 0 ? next : undefined;
 };
@@ -440,8 +501,11 @@ export const inheritFamilyCard = (
   if (!unknown) return undefined;
 
   const unknownType = resolveType(options?.type, unknown.variants);
+  const includeCursorDonors = options?.includeCursorDonors === true;
   const providerIndex = donorIndexFor(pools.providerCards);
-  const globalIndex = donorIndexFor(pools.globalCards);
+  const globalIndex = donorIndexFor(
+    includeCursorDonors ? pools.globalCards : excludeCursorBankCards(pools.globalCards),
+  );
   const key = indexKey(unknown.stem, unknown.variants, unknownType);
   const providerBucket = providerIndex.stems.has(unknown.stem)
     ? (providerIndex.byKey.get(key) ?? [])
@@ -452,7 +516,12 @@ export const inheritFamilyCard = (
   if (!donor) return undefined;
 
   const abilities = copyAbilities(donor.abilities, modelId);
-  const settings = copySettings(donor.settings, modelId, options?.extendParams !== false);
+  const settings = copySettings(
+    donor.settings,
+    modelId,
+    options?.extendParams !== false,
+    includeCursorDonors,
+  );
   if (!abilities && !settings) return undefined;
   return {
     ...(abilities ? { abilities } : {}),

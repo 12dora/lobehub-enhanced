@@ -290,6 +290,7 @@
   "providerModels.item.modelConfig.extendParams.options.chatgptWebProThinkingEffort.hint": "适用于 ChatGPT Web 的 Pro SKU。上游只接受 Standard。",
   "providerModels.item.modelConfig.extendParams.options.chatgptWebThinkingEffort.hint": "适用于 ChatGPT Web 的 thinking SKU；Standard / Extended / Max 三档，与 chatgpt.com 的 thinking_effort 一致。",
   "providerModels.item.modelConfig.extendParams.options.codexMaxReasoningEffort.hint": "适用于 Codex 模型；控制推理强度。",
+  "providerModels.item.modelConfig.extendParams.options.cursorReasoningEffort.hint": "适用于 Cursor 模型；控制推理强度，可选档位因模型而异。",
   "providerModels.item.modelConfig.extendParams.options.deepseekV4ReasoningEffort.hint": "适用于 DeepSeek V4 思维模式；用于控制推理强度。`high` 为默认值，`max` 可启用更深层次的推理，适用于复杂的智能体工作流程。",
   "providerModels.item.modelConfig.extendParams.options.disableContextCaching.hint": "适用于 Claude 模型；可降低成本并加快响应速度。",
   "providerModels.item.modelConfig.extendParams.options.effort.hint": "适用于 Claude Opus 4.6；控制努力程度（低/中/高/最大）。",
@@ -304,6 +305,7 @@
   "providerModels.item.modelConfig.extendParams.options.grok4_20ReasoningEffort.hint": "适用于 Grok 4.20 系列；控制推理强度。低/中档使用 4 个代理，高/超高使用 16 个代理。",
   "providerModels.item.modelConfig.extendParams.options.grok4_3ReasoningEffort.hint": "适用于 Grok 4.3 系列；控制推理强度。",
   "providerModels.item.modelConfig.extendParams.options.grok4_5ReasoningEffort.hint": "适用于 Grok 4.5 系列；控制推理强度（低/中/高，默认为高）。",
+  "providerModels.item.modelConfig.extendParams.options.grok4_6ReasoningEffort.hint": "适用于 Grok 4.6 系列；控制推理强度（低/中/高/xhigh，默认高）。推理无法关闭。",
   "providerModels.item.modelConfig.extendParams.options.hy3ReasoningEffort.hint": "适用于 Hy3 模型；控制推理强度。no_think（超快响应）、low（快速推理）和 high（深度推理）三档，以适应从高频交互到复杂工程任务的不同延迟和深度需求。",
   "providerModels.item.modelConfig.extendParams.options.imageAspectRatio.hint": "适用于 Gemini 图像生成模型；控制生成图像的宽高比。",
   "providerModels.item.modelConfig.extendParams.options.imageAspectRatio2.hint": "适用于 Nano Banana 2；控制生成图像的宽高比（支持超宽 1:4、4:1、1:8、8:1）。",
@@ -405,6 +407,7 @@
   "providerModels.list.syncUpstream.managed": "该服务商的模型由管理员统一管理",
   "providerModels.list.syncUpstream.sharedAccountNotConnected": "尚未连接共享账号，请先在上方连接账号后再同步。",
   "providerModels.list.syncUpstream.success": "已从上游同步 {{total}} 个模型（新增 {{created}} 个）",
+  "providerModels.list.syncUpstream.successWithDeleted": "已从上游同步 {{total}} 个模型（新增 {{created}} 个，移除 {{deleted}} 个）",
   "providerModels.list.syncUpstream.syncing": "同步中…",
   "providerModels.list.syncUpstream.unsupported": "该服务商不支持读取上游模型列表",
   "providerModels.list.syncUpstream.validationFailed": "服务商配置未通过校验",
@@ -435,6 +438,5 @@
   "vertexai.region.placeholder": "选择区域",
   "vertexai.region.title": "Vertex AI 区域",
   "zeroone.title": "01.AI 零一万物",
-  "zhipu.title": "智谱",
-  "providerModels.item.modelConfig.extendParams.options.grok4_6ReasoningEffort.hint": "适用于 Grok 4.6 系列；控制推理强度（低/中/高/xhigh，默认高）。推理无法关闭。"
+  "zhipu.title": "智谱"
 }

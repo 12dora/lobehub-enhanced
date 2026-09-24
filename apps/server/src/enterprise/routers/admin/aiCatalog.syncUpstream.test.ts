@@ -176,7 +176,7 @@ describe('admin.aiModels.syncUpstream', () => {
     ]);
 
     const result = await caller.aiModels.syncUpstream({ providerId: providerKey });
-    expect(result).toEqual({ created: 1, total: 2, updated: 1 });
+    expect(result).toEqual({ created: 1, deleted: 0, retained: 0, total: 2, updated: 1 });
     expect(PlatformAiRuntimeBridge.resolvePlatformAiExecutionConfig).not.toHaveBeenCalled();
 
     detail = await caller.aiProviders.get({ id: providerId });
@@ -219,7 +219,7 @@ describe('admin.aiModels.syncUpstream', () => {
     mockModels.mockResolvedValue([{ displayName: 'Live', id: 'live-model', type: 'chat' }]);
 
     const result = await caller.aiModels.syncUpstream({ providerId: providerKey });
-    expect(result).toEqual({ created: 0, total: 1, updated: 0 });
+    expect(result).toEqual({ created: 0, deleted: 0, retained: 0, total: 1, updated: 0 });
 
     const after = await caller.aiProviders.get({ id: providerId });
     expect(after.draft.models.find((model) => model.modelKey === 'live-model')).toMatchObject({
@@ -313,7 +313,7 @@ describe('admin.aiModels.syncUpstream', () => {
     mockModels.mockResolvedValue([{ displayName: 'Only', id: 'only', type: 'chat' }]);
 
     const result = await caller.aiModels.syncUpstream({ providerId: providerKey });
-    expect(result).toEqual({ created: 1, total: 1, updated: 0 });
+    expect(result).toEqual({ created: 1, deleted: 0, retained: 0, total: 1, updated: 0 });
     expect(ModelRuntime.initModelRuntimeWithUserPayload).toHaveBeenCalled();
     expect(PlatformAiRuntimeBridge.resolvePlatformAiExecutionConfig).not.toHaveBeenCalled();
   });

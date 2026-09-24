@@ -1,4 +1,4 @@
-import { AiModelSourceEnum } from 'model-bank';
+import { type AiModelSettings, AiModelSourceEnum } from 'model-bank';
 
 import { type AIProviderStoreState } from '@/store/aiInfra/initialState';
 import { ModelSearchImplement } from '@/types/search';
@@ -107,6 +107,27 @@ const modelExtendParams = (id: string, provider: string) => (s: AIProviderStoreS
   return model?.settings?.extendParams;
 };
 
+/**
+ * Per-model narrowing of the model's thinking-effort control: `settings.effortLevels`
+ * (the subset of the control's levels this model offers) and `settings.defaultEffortLevel`.
+ * `undefined` when the enabled card declares neither, so callers keep the control's full
+ * registry levels and default. The object is rebuilt on every call — read it through the
+ * store's default shallow equality.
+ */
+const modelEffortSettings =
+  (id: string, provider: string) =>
+  (
+    s: AIProviderStoreState,
+  ): Pick<AiModelSettings, 'defaultEffortLevel' | 'effortLevels'> | undefined => {
+    const settings = getEnabledModelById(id, provider)(s)?.settings;
+    const effortLevels = settings?.effortLevels?.length ? settings.effortLevels : undefined;
+    const defaultEffortLevel = settings?.defaultEffortLevel || undefined;
+
+    if (!effortLevels && !defaultEffortLevel) return undefined;
+
+    return { defaultEffortLevel, effortLevels };
+  };
+
 const modelDisabledParams = (id: string, provider: string) => (s: AIProviderStoreState) => {
   const model = getEnabledModelById(id, provider)(s);
 
@@ -178,6 +199,7 @@ export const aiModelSelectors = {
   modelBuiltinSearchImpl,
   modelContextWindowTokens,
   modelDisabledParams,
+  modelEffortSettings,
   modelExtendParams,
   totalAiProviderModelList,
 };

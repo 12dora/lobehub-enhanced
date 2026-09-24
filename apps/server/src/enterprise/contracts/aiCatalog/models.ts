@@ -200,6 +200,13 @@ export const adminAiModelSyncUpstreamInputSchema = z
 export const adminAiModelSyncUpstreamOutputSchema = z
   .object({
     created: z.number().int().nonnegative(),
+    /** Legacy cursor variant rows removed because they were never enabled. 0 for other providers. */
+    deleted: z.number().int().nonnegative(),
+    /**
+     * Legacy cursor variants kept because a published dependent still references
+     * them. 0 for other providers.
+     */
+    retained: z.number().int().nonnegative(),
     total: z.number().int().nonnegative(),
     updated: z.number().int().nonnegative(),
   })

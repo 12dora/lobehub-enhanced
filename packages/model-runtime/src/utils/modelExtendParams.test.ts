@@ -206,6 +206,16 @@ describe('applyModelExtendParams', () => {
     expect(result.reasoning_effort).toBe('high');
   });
 
+  it('resolves Cursor reasoning effort onto reasoning_effort', () => {
+    const result = applyModelExtendParams({
+      chatConfig: chatConfig({ cursorReasoningEffort: 'xhigh' }),
+      extendParams: ['cursorReasoningEffort'],
+      model: 'grok-4.7',
+    });
+
+    expect(result.reasoning_effort).toBe('xhigh');
+  });
+
   it('resolves Grok 4.6 xhigh reasoning effort', () => {
     const result = applyModelExtendParams({
       chatConfig: chatConfig({ grok4_6ReasoningEffort: 'xhigh' }),

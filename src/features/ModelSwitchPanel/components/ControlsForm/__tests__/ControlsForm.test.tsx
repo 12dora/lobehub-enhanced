@@ -12,7 +12,13 @@ interface TestAgentState {
 
 interface TestAiState {
   abilities?: { reasoning?: boolean };
+  effortSettings?: { defaultEffortLevel?: string; effortLevels?: string[] };
   extendParams: string[];
+}
+
+interface TestFormItem {
+  children?: { props?: Record<string, unknown> };
+  name?: string;
 }
 
 const testState = vi.hoisted(() => ({
@@ -25,13 +31,13 @@ const testState = vi.hoisted(() => ({
     abilities: undefined as { reasoning?: boolean } | undefined,
     extendParams: ['enableReasoning'],
   } as TestAiState,
-  formItems: [] as Array<{ name?: string }>,
+  formItems: [] as TestFormItem[],
   setFieldsValue: vi.fn(),
   updateAgentChatConfig: vi.fn(),
 }));
 
 vi.mock('@lobehub/ui', () => {
-  const MockForm = ({ items }: { items?: Array<{ name?: string }> }) => {
+  const MockForm = ({ items }: { items?: TestFormItem[] }) => {
     testState.formItems = items ?? [];
     return <div data-testid="controls-form" />;
   };
@@ -79,6 +85,7 @@ vi.mock('@/store/agent/selectors', () => ({
 
 vi.mock('@/store/aiInfra', () => ({
   aiModelSelectors: {
+    modelEffortSettings: () => (state: TestAiState) => state.effortSettings,
     modelExtendParams: () => (state: TestAiState) => state.extendParams,
   },
   useAiInfraStore: <T,>(selector: (state: TestAiState) => T) => selector(testState.aiState),
@@ -186,5 +193,73 @@ describe('ControlsForm', () => {
     render(<ControlsForm model="gpt-5-6-pro" provider="chatgptweb" />);
 
     expect(testState.formItems.map((item) => item.name)).toEqual(['chatgptWebProThinkingEffort']);
+  });
+
+  describe('per-model effort narrowing', () => {
+    const itemNamed = (name: string) => {
+      const item = testState.formItems.find((entry) => entry.name === name);
+      if (!item) throw new Error(`no form item "${name}"`);
+
+      return item;
+    };
+
+    it('shows the Cursor slider with only the card levels and the card default', () => {
+      testState.agentState = { config: {}, model: 'grok-4.7', provider: 'cursor' };
+      testState.aiState = {
+        effortSettings: {
+          defaultEffortLevel: 'high',
+          effortLevels: ['low', 'medium', 'high', 'xhigh'],
+        },
+        extendParams: ['cursorReasoningEffort'],
+      };
+
+      render(<ControlsForm model="grok-4.7" provider="cursor" />);
+
+      expect(testState.formItems.map((item) => item.name)).toEqual(['cursorReasoningEffort']);
+      expect(itemNamed('cursorReasoningEffort').children?.props).toEqual(
+        expect.objectContaining({
+          defaultValue: 'high',
+          levels: ['low', 'medium', 'high', 'xhigh'],
+        }),
+      );
+    });
+
+    it('clamps the registry default onto the card levels when the card pins none', () => {
+      testState.agentState = { config: {}, model: 'claude-4.6-opus-thinking', provider: 'cursor' };
+      testState.aiState = {
+        effortSettings: { effortLevels: ['low', 'medium'] },
+        extendParams: ['cursorReasoningEffort'],
+      };
+
+      render(<ControlsForm model="claude-4.6-opus-thinking" provider="cursor" />);
+
+      expect(itemNamed('cursorReasoningEffort').children?.props).toEqual(
+        expect.objectContaining({ defaultValue: 'medium', levels: ['low', 'medium'] }),
+      );
+    });
+
+    it('leaves the slider untouched when the card does not narrow it', () => {
+      testState.agentState = { config: {}, model: 'grok-4.7', provider: 'cursor' };
+      testState.aiState = { extendParams: ['cursorReasoningEffort'] };
+
+      render(<ControlsForm model="grok-4.7" provider="cursor" />);
+
+      expect(itemNamed('cursorReasoningEffort').children?.props).not.toHaveProperty('levels');
+    });
+
+    it('narrows only the primary effort control', () => {
+      testState.agentState = { config: {}, model: 'grok-4.7', provider: 'cursor' };
+      testState.aiState = {
+        effortSettings: { effortLevels: ['high', 'xhigh'] },
+        extendParams: ['thinking', 'cursorReasoningEffort'],
+      };
+
+      render(<ControlsForm model="grok-4.7" provider="cursor" />);
+
+      expect(itemNamed('cursorReasoningEffort').children?.props).toEqual(
+        expect.objectContaining({ defaultValue: 'high', levels: ['high', 'xhigh'] }),
+      );
+      expect(itemNamed('thinking').children?.props).not.toHaveProperty('levels');
+    });
   });
 });

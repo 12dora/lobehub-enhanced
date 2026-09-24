@@ -48,10 +48,14 @@ export { LobeChatGPTAI } from './providers/chatGPT';
 export { ChatGPTWebClient, LobeChatGPTWebAI } from './providers/chatgptWeb';
 export { LobeCometAPIAI } from './providers/cometapi';
 export { LobeComfyUI } from './providers/comfyui';
+export type { CursorListedModel, CursorModelGroup } from './providers/cursor';
 export {
   CURSOR_ACCOUNT_HEADER,
   CURSOR_CONVERSATION_HEADER,
+  groupCursorModels,
   LobeCursorAI,
+  parseCursorModelId,
+  resolveCursorModelId,
 } from './providers/cursor';
 export { LobeDeepSeekAI } from './providers/deepseek';
 export { LobeGLMCodingPlanAI } from './providers/glmCodingPlan';
@@ -112,6 +116,8 @@ export {
   type EffortLevel,
   findEffortControl,
   isEffortControlKey,
+  narrowEffortLevels,
+  resolveModelDefaultEffort,
 } from './utils/effortControlRegistry';
 export { createFetchRequestHandler } from './utils/fetchRequestHandler';
 export { getModelPropertyWithFallback } from './utils/getFallbackModelProperty';

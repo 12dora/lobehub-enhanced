@@ -28,7 +28,12 @@ import {
   AiCatalogValidationError,
 } from './adminService';
 import { applyChatGPTWebCatalogSyncPolicy, mapCardsToBatchUpdate } from './adminService.sync';
-import { FAMILY_INHERITED_KEYS } from './adminService.sync.mapping';
+import {
+  applyCursorCatalogSyncPolicy,
+  applyProviderCatalogSyncPolicy,
+  FAMILY_INHERITED_KEYS,
+} from './adminService.sync.mapping';
+import type * as DependenciesModule from './dependencies';
 import { AiCatalogExecutionResolver } from './runtimeAdapter';
 import type * as SharedOAuthRefreshModule from './sharedOAuthRefresh';
 
@@ -46,9 +51,40 @@ vi.mock('@/server/modules/ModelRuntime', async (importOriginal) => {
   };
 });
 
-const { mockRefreshSharedOAuthVault } = vi.hoisted(() => ({
+const { dependentOverride, mockRefreshSharedOAuthVault } = vi.hoisted(() => ({
+  dependentOverride: {
+    current: null as
+      | ((
+          db: unknown,
+          providerKey: string,
+          modelKeys: readonly string[],
+        ) => Promise<
+          Array<{
+            blocking: boolean;
+            label: string;
+            resourceId: string;
+            resourceType: string;
+          }>
+        >)
+      | null,
+  },
   mockRefreshSharedOAuthVault: vi.fn(),
 }));
+
+vi.mock('./dependencies', async (importOriginal) => {
+  const actual = await importOriginal<typeof DependenciesModule>();
+  return {
+    ...actual,
+    resolveAiCatalogDependentsForModels: (
+      db: Parameters<typeof actual.resolveAiCatalogDependentsForModels>[0],
+      providerKey: string,
+      modelKeys: readonly string[],
+    ) =>
+      dependentOverride.current
+        ? dependentOverride.current(db, providerKey, modelKeys)
+        : actual.resolveAiCatalogDependentsForModels(db, providerKey, modelKeys),
+  };
+});
 
 vi.mock('./sharedOAuthRefresh', async (importOriginal) => {
   const actual = await importOriginal<typeof SharedOAuthRefreshModule>();
@@ -114,6 +150,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  dependentOverride.current = null;
   await cleanup();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -639,6 +676,8 @@ describe('AiCatalogAdminService.syncUpstream', () => {
 
     await expect(service.syncUpstream('admin', { providerId })).resolves.toEqual({
       created: 1,
+      deleted: 0,
+      retained: 0,
       total: 1,
       updated: 0,
     });
@@ -714,6 +753,8 @@ describe('AiCatalogAdminService.syncUpstream', () => {
 
     await expect(service.syncUpstream('admin', { providerId })).resolves.toEqual({
       created: 0,
+      deleted: 0,
+      retained: 0,
       total: 1,
       updated: 1,
     });
@@ -837,5 +878,585 @@ describe('AiCatalogAdminService.syncUpstream', () => {
       (row) => row.modelKey === 'gpt-5-6-thinking',
     );
     expect(thinking?.enabled).toBe(true);
+  });
+});
+
+describe('applyCursorCatalogSyncPolicy', () => {
+  const cards = [
+    { displayName: 'Grok 4.6', id: 'cursor-grok-4.6', type: 'chat' as const },
+    { displayName: 'Grok 4.7', id: 'grok-4.7', type: 'chat' as const },
+  ];
+
+  const legacy = [
+    draftModel({
+      displayName: 'Cursor Grok 4.6 High',
+      enabled: true,
+      id: 'v-46',
+      modelKey: 'cursor-grok-4.6-high',
+    }),
+    draftModel({
+      displayName: 'Grok 4.7 Low',
+      enabled: false,
+      id: 'v-low',
+      modelKey: 'grok-4.7-low',
+    }),
+    draftModel({
+      displayName: 'Grok 4.7 High',
+      enabled: true,
+      id: 'v-high',
+      modelKey: 'grok-4.7-high',
+    }),
+    draftModel({
+      displayName: 'Grok 4.7 Low Fast',
+      enabled: false,
+      id: 'v-fast',
+      modelKey: 'grok-4.7-low-fast',
+    }),
+    draftModel({
+      displayName: 'Kimi K3 High',
+      enabled: true,
+      id: 'v-kimi',
+      modelKey: 'kimi-k3-high',
+    }),
+  ];
+
+  it('enables returned bases, disables enabled variants, and deletes never-enabled variants', () => {
+    const mapped = mapCardsToBatchUpdate(cards, legacy);
+    const plan = applyCursorCatalogSyncPolicy(
+      legacy,
+      mapped,
+      cards.map((card) => card.id),
+    );
+    const byId = Object.fromEntries(plan.items.map((item) => [item.id, item]));
+
+    expect(byId['cursor-grok-4.6']).toMatchObject({ enabled: true });
+    expect(byId['grok-4.7']).toMatchObject({ enabled: true });
+    expect(byId['v-46']).toMatchObject({ enabled: false });
+    expect(byId['v-high']).toMatchObject({ enabled: false });
+    expect(plan.deleted).toEqual([{ id: 'v-low', modelKey: 'grok-4.7-low' }]);
+    expect(plan.retained).toBe(0);
+    expect(byId['v-fast']).toBeUndefined();
+    expect(byId['v-kimi']).toBeUndefined();
+    expect(plan.updated).toBe(mapped.updated + 2);
+  });
+
+  it('keeps variants that have blocking dependents and still enables their bases', () => {
+    const mapped = mapCardsToBatchUpdate(cards, legacy);
+    const plan = applyCursorCatalogSyncPolicy(
+      legacy,
+      mapped,
+      cards.map((card) => card.id),
+      new Set(['cursor-grok-4.6-high', 'grok-4.7-low']),
+    );
+    const byId = Object.fromEntries(plan.items.map((item) => [item.id, item]));
+
+    expect(plan.retained).toBe(2);
+    expect(plan.deleted).toEqual([]);
+    expect(byId['v-46']).toBeUndefined();
+    expect(byId['cursor-grok-4.6']).toMatchObject({ enabled: true });
+    expect(byId['grok-4.7']).toMatchObject({ enabled: true });
+    expect(byId['v-high']).toMatchObject({ enabled: false });
+  });
+
+  it('enables an existing disabled base when any legacy variant is enabled', () => {
+    const existing = [
+      draftModel({
+        abilities: { reasoning: true },
+        displayName: 'Grok 4.7',
+        enabled: false,
+        id: 'base-47',
+        modelKey: 'grok-4.7',
+        settings: { searchImpl: 'params' },
+      }),
+      draftModel({
+        displayName: 'Grok 4.7 High',
+        enabled: true,
+        id: 'v-high',
+        modelKey: 'grok-4.7-high',
+      }),
+    ];
+    const baseCards = [{ displayName: 'Grok 4.7', id: 'grok-4.7', type: 'chat' as const }];
+    const mapped = mapCardsToBatchUpdate(baseCards, existing);
+    const plan = applyCursorCatalogSyncPolicy(existing, mapped, ['grok-4.7']);
+    const byId = Object.fromEntries(plan.items.map((item) => [item.id, item]));
+
+    expect(byId['base-47']).toMatchObject({ enabled: true });
+    expect(byId['v-high']).toMatchObject({ enabled: false });
+    expect(plan.deleted).toEqual([]);
+  });
+
+  it('writes cursor selector settings onto an edited gpt-5.3-codex row and retires variants', () => {
+    const card = {
+      displayName: 'Codex 5.3',
+      files: true,
+      functionCall: true,
+      id: 'gpt-5.3-codex',
+      reasoning: true,
+      settings: {
+        defaultEffortLevel: 'medium' as const,
+        effortLevels: ['low', 'medium', 'high', 'xhigh'] as ('low' | 'medium' | 'high' | 'xhigh')[],
+        extendParams: ['cursorReasoningEffort' as const],
+      },
+      type: 'chat' as const,
+      vision: true,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: {
+        abilities: ['files', 'functionCall', 'reasoning', 'vision'],
+        settings: [],
+      },
+    });
+    const existing = [
+      draftModel({
+        abilities: { functionCall: true, search: true },
+        displayName: 'Codex 5.3',
+        enabled: true,
+        id: 'codex',
+        modelKey: 'gpt-5.3-codex',
+        settings: {
+          extendParams: ['gpt5_2ReasoningEffort' as const],
+          searchImpl: 'internal' as const,
+        },
+      }),
+      draftModel({
+        displayName: 'Codex 5.3 Low',
+        enabled: true,
+        id: 'v-low',
+        modelKey: 'gpt-5.3-codex-low',
+      }),
+      draftModel({
+        displayName: 'Codex 5.3 High',
+        enabled: false,
+        id: 'v-high',
+        modelKey: 'gpt-5.3-codex-high',
+      }),
+      draftModel({
+        displayName: 'Codex 5.3 Extra High',
+        enabled: false,
+        id: 'v-xhigh',
+        modelKey: 'gpt-5.3-codex-xhigh',
+      }),
+      draftModel({
+        displayName: 'Codex 5.3 Fast',
+        enabled: true,
+        id: 'v-fast',
+        modelKey: 'gpt-5.3-codex-fast',
+      }),
+    ];
+    const mapped = mapCardsToBatchUpdate([card], existing);
+    const plan = applyCursorCatalogSyncPolicy(existing, mapped, ['gpt-5.3-codex']);
+    const byId = Object.fromEntries(plan.items.map((item) => [item.id, item]));
+
+    expect(byId.codex?.settings).toEqual({
+      defaultEffortLevel: 'medium',
+      effortLevels: ['low', 'medium', 'high', 'xhigh'],
+      extendParams: ['gpt5_2ReasoningEffort', 'cursorReasoningEffort'],
+      searchImpl: 'internal',
+    });
+    expect(byId['v-low']).toMatchObject({ enabled: false });
+    expect(plan.deleted).toEqual([
+      { id: 'v-high', modelKey: 'gpt-5.3-codex-high' },
+      { id: 'v-xhigh', modelKey: 'gpt-5.3-codex-xhigh' },
+    ]);
+    expect(plan.retained).toBe(0);
+    expect(byId['v-fast']).toBeUndefined();
+    expect(JSON.stringify(plan)).not.toContain('familyInheritedKeys');
+  });
+});
+
+describe('applyProviderCatalogSyncPolicy cursor scope', () => {
+  const cards = [
+    { displayName: 'Grok 4.6', id: 'cursor-grok-4.6', type: 'chat' as const },
+    { displayName: 'Grok 4.7', id: 'grok-4.7', type: 'chat' as const },
+  ];
+  const legacy = [
+    draftModel({
+      displayName: 'Cursor Grok 4.6 High',
+      enabled: true,
+      id: 'v-46',
+      modelKey: 'cursor-grok-4.6-high',
+    }),
+    draftModel({
+      displayName: 'Grok 4.7 Low',
+      enabled: false,
+      id: 'v-low',
+      modelKey: 'grok-4.7-low',
+    }),
+  ];
+
+  it('leaves a non-cursor provider unchanged', () => {
+    const mapped = mapCardsToBatchUpdate(cards, legacy);
+    const plan = applyProviderCatalogSyncPolicy({
+      existing: legacy,
+      mapped,
+      providerKey: 'openai',
+      returnedModelKeys: cards.map((card) => card.id),
+      settings: { sdkType: 'openai' },
+    });
+
+    expect(plan.deleted).toEqual([]);
+    expect(plan.items).toEqual(mapped.items);
+    expect(plan.items.find((item) => item.id === 'v-46')).toBeUndefined();
+    expect(plan.updated).toBe(mapped.updated);
+  });
+
+  it('matches provider key cursor and sdkType cursor', () => {
+    const mapped = mapCardsToBatchUpdate(cards, legacy);
+    const returnedModelKeys = cards.map((card) => card.id);
+    for (const identity of [
+      { providerKey: 'cursor', settings: { sdkType: 'openai' } },
+      { providerKey: 'corp-cursor', settings: { sdkType: 'cursor' } },
+    ]) {
+      const plan = applyProviderCatalogSyncPolicy({
+        existing: legacy,
+        mapped,
+        returnedModelKeys,
+        ...identity,
+      });
+      expect(plan.deleted.map((row) => row.modelKey)).toEqual(['grok-4.7-low']);
+      expect(plan.items.find((item) => item.id === 'v-46')).toMatchObject({ enabled: false });
+    }
+  });
+});
+
+describe('AiCatalogAdminService.syncUpstream cursor variants', () => {
+  const collapsedCards = [
+    { displayName: 'Grok 4.6', id: 'cursor-grok-4.6', type: 'chat' as const },
+    { displayName: 'Grok 4.7', id: 'grok-4.7', type: 'chat' as const },
+    { displayName: 'Composer 2.5', id: 'composer-2.5', type: 'chat' as const },
+  ];
+
+  const seedLegacyRows = async (providerKey: string, sdkType: string) => {
+    const service = createService();
+    const created = await service.applyProviderImmediate('admin', {
+      displayName: providerKey,
+      enabled: true,
+      mode: 'create',
+      providerKey,
+      reason: 'seed provider',
+      secret: {
+        operation: 'replace',
+        value:
+          sdkType === 'cursor'
+            ? {
+                oauthAccessToken: `seed-${providerKey}`,
+                oauthRefreshToken: `refresh-${providerKey}`,
+              }
+            : `seed-${providerKey}`,
+      },
+      settings: { sdkType },
+      source: 'custom',
+    });
+    const providerId = created.draft.id;
+    const detail = await service.getDetail(providerId);
+    await service.applyModelImmediate('admin', {
+      expectedDraftToken: detail.draftToken,
+      models: [
+        {
+          displayName: 'Cursor Grok 4.6 High',
+          enabled: true,
+          id: 'cursor-grok-4.6-high',
+          type: 'chat',
+        },
+        { displayName: 'Grok 4.7 Low', enabled: false, id: 'grok-4.7-low', type: 'chat' },
+        { displayName: 'Grok 4.7 High', enabled: true, id: 'grok-4.7-high', type: 'chat' },
+        {
+          displayName: 'Grok 4.7 Low Fast',
+          enabled: false,
+          id: 'grok-4.7-low-fast',
+          type: 'chat',
+        },
+        { displayName: 'Composer 2.5', enabled: true, id: 'composer-2.5', type: 'chat' },
+        { displayName: 'Kimi K3 High', enabled: true, id: 'kimi-k3-high', type: 'chat' },
+      ],
+      operation: 'batchUpdate',
+      providerId,
+      reason: 'seed legacy cursor models',
+    });
+    return { providerId, service };
+  };
+
+  const rowsByKey = async (providerId: string) => {
+    const rows = await db
+      .select()
+      .from(platformAiModels)
+      .where(eq(platformAiModels.providerId, providerId));
+    return new Map(rows.map((row) => [row.modelKey, row]));
+  };
+
+  it('enables collapsed bases, disables enabled variants, and deletes never-enabled ones', async () => {
+    const { providerId, service } = await seedLegacyRows('corp-cursor', 'cursor');
+    mockModels.mockResolvedValue(collapsedCards);
+
+    await expect(service.syncUpstream('admin', { providerId })).resolves.toEqual({
+      created: 2,
+      deleted: 1,
+      retained: 0,
+      total: 3,
+      updated: 2,
+    });
+
+    const byKey = await rowsByKey(providerId);
+    expect(byKey.get('cursor-grok-4.6')).toMatchObject({ enabled: true });
+    expect(byKey.get('cursor-grok-4.6-high')).toMatchObject({ enabled: false });
+    expect(byKey.get('grok-4.7')).toMatchObject({ enabled: true });
+    expect(byKey.get('grok-4.7-high')).toMatchObject({ enabled: false });
+    expect(byKey.has('grok-4.7-low')).toBe(false);
+    expect(byKey.get('grok-4.7-low-fast')).toMatchObject({ enabled: false });
+    expect(byKey.get('composer-2.5')).toMatchObject({ enabled: true });
+    expect(byKey.get('kimi-k3-high')).toMatchObject({ enabled: true });
+
+    const syncAudits = (await db.select().from(platformAuditLogs)).filter(
+      (row) => row.action === 'admin.aiModels.syncUpstream' && row.result === 'success',
+    );
+    expect(syncAudits).toHaveLength(1);
+    expect(syncAudits[0]?.afterDiff).toMatchObject({
+      created: 2,
+      deleted: 1,
+      retained: 0,
+      total: 3,
+      updated: 2,
+    });
+
+    const deletions = (await db.select().from(platformAuditLogs)).filter(
+      (row) => row.action === 'admin.aiModels.deleteFromDraft' && row.result === 'success',
+    );
+    expect(deletions.map((row) => row.beforeDiff)).toEqual([
+      expect.objectContaining({ modelKey: 'grok-4.7-low', providerId }),
+    ]);
+  });
+
+  it('keeps a pinned legacy variant enabled and does not roll the sync back', async () => {
+    const { providerId, service } = await seedLegacyRows('corp-cursor', 'cursor');
+    const repository = new PlatformAgentCatalogRepository(db);
+    const agent = await repository.createIdentity({
+      agentKey: 'cursor-pinned-variant',
+      isDefault: false,
+      systemKey: null,
+    });
+    const version = await repository.appendVersionCas({
+      agentId: agent.id,
+      config: {
+        avatar: null,
+        backgroundColor: null,
+        description: 'Pins a legacy cursor id',
+        displayName: 'Pinned variant',
+        modelParameters: {},
+        openingMessage: null,
+        openingQuestions: [],
+        systemRole: 'Use the pinned model.',
+        tags: [],
+      },
+      dependencySnapshot: {
+        connectors: [],
+        model: {
+          modelKey: 'cursor-grok-4.6-high',
+          providerChecksum: 'c'.repeat(64),
+          providerKey: 'corp-cursor',
+          providerRevision: 1,
+        },
+        skills: [],
+      },
+      expectedDraftSequence: 0,
+      expectedRevision: 0,
+      version: '1.0.0',
+    });
+    await repository.pointToVersionCas({
+      agentId: agent.id,
+      expectedDraftSequence: 1,
+      expectedRevision: 0,
+      publishedAt: new Date(),
+      versionId: version!.id,
+    });
+
+    mockModels.mockResolvedValue(collapsedCards);
+
+    await expect(service.syncUpstream('admin', { providerId })).resolves.toEqual({
+      created: 2,
+      deleted: 1,
+      retained: 1,
+      total: 3,
+      updated: 1,
+    });
+
+    const byKey = await rowsByKey(providerId);
+    expect(byKey.get('cursor-grok-4.6')).toMatchObject({ enabled: true });
+    expect(byKey.get('cursor-grok-4.6-high')).toMatchObject({ enabled: true });
+    expect(byKey.get('grok-4.7')).toMatchObject({ enabled: true });
+    expect(byKey.get('grok-4.7-high')).toMatchObject({ enabled: false });
+    expect(byKey.has('grok-4.7-low')).toBe(false);
+  });
+
+  it('does not retire legacy rows on a non-cursor provider', async () => {
+    const { providerId, service } = await seedLegacyRows('corp-openai', 'openai');
+    mockModels.mockResolvedValue(collapsedCards);
+
+    await expect(service.syncUpstream('admin', { providerId })).resolves.toEqual({
+      created: 2,
+      deleted: 0,
+      retained: 0,
+      total: 3,
+      updated: 0,
+    });
+
+    const byKey = await rowsByKey(providerId);
+    expect(byKey.get('cursor-grok-4.6')).toMatchObject({ enabled: false });
+    expect(byKey.get('cursor-grok-4.6-high')).toMatchObject({ enabled: true });
+    expect(byKey.get('grok-4.7')).toMatchObject({ enabled: false });
+    expect(byKey.get('grok-4.7-high')).toMatchObject({ enabled: true });
+    expect(byKey.get('grok-4.7-low')).toMatchObject({ enabled: false });
+    expect(byKey.get('grok-4.7-low-fast')).toMatchObject({ enabled: false });
+    expect(byKey.get('kimi-k3-high')).toMatchObject({ enabled: true });
+
+    const syncAudit = (await db.select().from(platformAuditLogs)).find(
+      (row) => row.action === 'admin.aiModels.syncUpstream' && row.result === 'success',
+    );
+    expect(syncAudit?.afterDiff).toMatchObject({ deleted: 0 });
+  });
+
+  it('persists selector settings on an edited gpt-5.3-codex row and retires its variants', async () => {
+    const service = createService();
+    const created = await service.applyProviderImmediate('admin', {
+      displayName: 'codex-cursor',
+      enabled: true,
+      mode: 'create',
+      providerKey: 'codex-cursor',
+      reason: 'seed provider',
+      secret: {
+        operation: 'replace',
+        value: { oauthAccessToken: 'seed-codex-cursor', oauthRefreshToken: 'refresh-codex' },
+      },
+      settings: { sdkType: 'cursor' },
+      source: 'custom',
+    });
+    const providerId = created.draft.id;
+    const detail = await service.getDetail(providerId);
+    await service.applyModelImmediate('admin', {
+      expectedDraftToken: detail.draftToken,
+      models: [
+        {
+          abilities: { functionCall: true, search: true },
+          displayName: 'Codex 5.3',
+          enabled: true,
+          id: 'gpt-5.3-codex',
+          settings: { searchImpl: 'internal' },
+          type: 'chat',
+        },
+        {
+          displayName: 'Codex 5.3 Low',
+          enabled: true,
+          id: 'gpt-5.3-codex-low',
+          type: 'chat',
+        },
+        {
+          displayName: 'Codex 5.3 High',
+          enabled: false,
+          id: 'gpt-5.3-codex-high',
+          type: 'chat',
+        },
+        {
+          displayName: 'Codex 5.3 Fast',
+          enabled: true,
+          id: 'gpt-5.3-codex-fast',
+          type: 'chat',
+        },
+      ],
+      operation: 'batchUpdate',
+      providerId,
+      reason: 'seed edited codex row',
+    });
+
+    const card = {
+      displayName: 'Codex 5.3',
+      files: true,
+      functionCall: true,
+      id: 'gpt-5.3-codex',
+      reasoning: true,
+      settings: {
+        defaultEffortLevel: 'medium',
+        effortLevels: ['low', 'medium', 'high', 'xhigh'],
+        extendParams: ['cursorReasoningEffort'],
+      },
+      type: 'chat' as const,
+      vision: true,
+    };
+    Object.defineProperty(card, FAMILY_INHERITED_KEYS, {
+      configurable: true,
+      enumerable: true,
+      value: {
+        abilities: ['files', 'functionCall', 'reasoning', 'vision'],
+        settings: [],
+      },
+    });
+    mockModels.mockResolvedValue([card]);
+
+    await expect(service.syncUpstream('admin', { providerId })).resolves.toMatchObject({
+      deleted: 1,
+      retained: 0,
+    });
+
+    const byKey = await rowsByKey(providerId);
+    expect(byKey.get('gpt-5.3-codex')?.settings).toMatchObject({
+      defaultEffortLevel: 'medium',
+      effortLevels: ['low', 'medium', 'high', 'xhigh'],
+      extendParams: ['cursorReasoningEffort'],
+      searchImpl: 'internal',
+    });
+    expect(byKey.get('gpt-5.3-codex')?.abilities).toMatchObject({
+      functionCall: true,
+      search: true,
+    });
+    expect(byKey.get('gpt-5.3-codex-low')?.enabled).toBe(false);
+    expect(byKey.has('gpt-5.3-codex-high')).toBe(false);
+    expect(byKey.get('gpt-5.3-codex-fast')?.enabled).toBe(true);
+  });
+
+  it('counts only variants that are actually blocked when a pin appears during sync', async () => {
+    const { providerId, service } = await seedLegacyRows('retry-cursor', 'cursor');
+    let precheck = true;
+    dependentOverride.current = async (_db, _providerKey, modelKeys) => {
+      if (precheck) {
+        precheck = false;
+        return [];
+      }
+      if (modelKeys.includes('cursor-grok-4.6-high')) {
+        return [
+          {
+            blocking: true,
+            label: 'Pinned variant',
+            resourceId: 'agent-pin',
+            resourceType: 'agent',
+          },
+        ];
+      }
+      return [];
+    };
+    mockModels.mockResolvedValue(collapsedCards);
+
+    try {
+      await expect(service.syncUpstream('admin', { providerId })).resolves.toEqual({
+        created: 2,
+        deleted: 1,
+        retained: 1,
+        total: 3,
+        updated: 1,
+      });
+    } finally {
+      dependentOverride.current = null;
+    }
+
+    const byKey = await rowsByKey(providerId);
+    expect(byKey.get('cursor-grok-4.6-high')?.enabled).toBe(true);
+    expect(byKey.get('grok-4.7-high')?.enabled).toBe(false);
+    expect(byKey.has('grok-4.7-low')).toBe(false);
+    expect(byKey.get('cursor-grok-4.6')?.enabled).toBe(true);
+    expect(byKey.get('grok-4.7')?.enabled).toBe(true);
+
+    const syncAudit = (await db.select().from(platformAuditLogs)).find(
+      (row) => row.action === 'admin.aiModels.syncUpstream' && row.result === 'success',
+    );
+    expect(syncAudit?.afterDiff).toMatchObject({ deleted: 1, retained: 1 });
   });
 });

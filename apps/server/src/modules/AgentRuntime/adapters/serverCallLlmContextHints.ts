@@ -1,14 +1,18 @@
 import { type CallLLMPayload, stripAssistantReasoningForReplay } from '@lobechat/agent-runtime';
 import { BRANDING_PROVIDER } from '@lobechat/business-const';
+import type { ModelExtendParams } from '@lobechat/model-runtime';
 import {
   applyModelExtendParams,
+  clampEffortLevel,
+  findEffortControl,
+  isAggregationProviderForEffortLookup,
   isDeepSeekThinkingEligibleModel,
   isDeepSeekV4FamilyModel,
   isKimiAlwaysPreserveThinkingModel,
-  type ModelExtendParams,
+  narrowEffortLevels,
   readExtendParamsFromModelCards,
 } from '@lobechat/model-runtime';
-import type { UIChatMessage } from '@lobechat/types';
+import type { LobeAgentChatConfig, UIChatMessage } from '@lobechat/types';
 import { type ExtendParamsType, ModelProvider } from 'model-bank';
 import { isProviderNativeFileInput } from 'model-bank/modelProviders';
 
@@ -23,6 +27,111 @@ interface ResolveServerCallLlmContextHintsInput {
   model: string;
   provider: string;
 }
+
+/** Published catalog row, or a static-bank card, reduced to the effort fields. */
+interface EffortSourceCard {
+  config?: { deploymentName?: string };
+  id: string;
+  providerId: string;
+  settings?: {
+    defaultEffortLevel?: string | null;
+    effortLevels?: readonly string[] | null;
+    extendParams?: string[];
+  };
+}
+
+const matchesEffortModelId = (item: EffortSourceCard, model: string) =>
+  item.id === model || item.config?.deploymentName === model;
+
+const findEffortSourceCard = (
+  models: readonly EffortSourceCard[] | undefined,
+  model: string,
+  provider: string,
+) => models?.find((item) => item.providerId === provider && matchesEffortModelId(item, model));
+
+const nonEmptyExtendParams = (card: EffortSourceCard | undefined) => {
+  const params = card?.settings?.extendParams;
+  return params?.length ? params : undefined;
+};
+
+/**
+ * Published models from the process-wide catalog projection. A miss or a
+ * catalog error returns undefined so the caller can fall back to the static bank.
+ */
+const loadPublishedCatalogModels = async (
+  db: RuntimeExecutorContext['serverDB'] | undefined,
+): Promise<readonly EffortSourceCard[] | undefined> => {
+  if (!db) return undefined;
+
+  try {
+    const [{ AiCatalogRuntimeAdapter }, { getEmptyAiProviderRuntimeState }] = await Promise.all([
+      import('@/server/enterprise/services/aiCatalog/runtimeAdapter'),
+      import('@/server/enterprise/services/aiCatalog/runtimeProjection'),
+    ]);
+    const state = await new AiCatalogRuntimeAdapter(db).resolve({
+      upstreamState: getEmptyAiProviderRuntimeState(),
+    });
+    return state.enabledAiModels;
+  } catch (error) {
+    log('Failed to read the published AI catalog for model extend params: %O', error);
+    return undefined;
+  }
+};
+
+/**
+ * Prefer the published card for this provider/model. Only a missing card falls
+ * back to the static bank (same aggregator rule as `readExtendParamsFromModelCards`).
+ */
+const resolveEffortSource = (
+  published: readonly EffortSourceCard[] | undefined,
+  builtin: readonly EffortSourceCard[],
+  model: string,
+  provider: string,
+): { card?: EffortSourceCard; extendParams?: string[] } => {
+  const publishedCard = findEffortSourceCard(published, model, provider);
+  if (publishedCard) {
+    return { card: publishedCard, extendParams: nonEmptyExtendParams(publishedCard) };
+  }
+
+  const extendParams = readExtendParamsFromModelCards(builtin, model, provider);
+  if (!extendParams) return {};
+
+  const providerCard = findEffortSourceCard(builtin, model, provider);
+  if (nonEmptyExtendParams(providerCard)) return { card: providerCard, extendParams };
+
+  if (!isAggregationProviderForEffortLookup(provider)) return { extendParams };
+
+  const idMatch = builtin.find(
+    (item) => matchesEffortModelId(item, model) && !!nonEmptyExtendParams(item),
+  );
+  return { card: idMatch, extendParams };
+};
+
+/**
+ * When the card narrows an effort control, map the stored level onto the levels
+ * it actually offers (nearest, ties → stronger) before it is written to the payload.
+ */
+const clampChatConfigToCardEffort = (
+  chatConfig: LobeAgentChatConfig,
+  extendParams: readonly string[] | undefined,
+  card: EffortSourceCard | undefined,
+): LobeAgentChatConfig => {
+  const settings = card?.settings;
+  if (!extendParams?.length || !settings) return chatConfig;
+  if (!settings.effortLevels?.length && !settings.defaultEffortLevel) return chatConfig;
+
+  const control = findEffortControl(extendParams);
+  if (!control) return chatConfig;
+
+  const stored = chatConfig[control.definition.configKey];
+  if (typeof stored !== 'string') return chatConfig;
+
+  const offered = narrowEffortLevels(control.definition, settings);
+  const clamped = clampEffortLevel(control.definition, stored, offered);
+  if (clamped === stored) return chatConfig;
+
+  return { ...chatConfig, [control.definition.configKey]: clamped } as LobeAgentChatConfig;
+};
 
 export interface ServerCallLlmContextHints {
   capabilities: {
@@ -48,7 +157,10 @@ export const resolveServerCallLlmContextHints = async ({
 }: ResolveServerCallLlmContextHintsInput): Promise<ServerCallLlmContextHints> => {
   const agentConfig = ctx.agentConfig;
   const { loadModels } = await import('@/business/client/model-bank/loadModels');
-  const builtinModels = await loadModels();
+  const [builtinModels, publishedModels] = await Promise.all([
+    loadModels(),
+    loadPublishedCatalogModels(ctx.serverDB),
+  ]);
 
   const preserveThinkingConfigured =
     typeof agentConfig?.chatConfig?.preserveThinking === 'boolean'
@@ -83,9 +195,17 @@ export const resolveServerCallLlmContextHints = async ({
     }
   }
 
-  // LobeHub-only same-id fallback — a CometAPI/custom empty card must not
-  // inherit origin `hy3ReasoningEffort` (or similar) and emit unsupported params.
-  const modelExtendParams = readExtendParamsFromModelCards(builtinModels, model, provider);
+  // Published catalog card first (the same source the web client uses), then the
+  // static bank. A published card with an empty extendParams list is authoritative:
+  // it must not inherit another provider's controls. The bank fallback keeps the
+  // LobeHub-only same-id rule — a CometAPI/custom empty card must not inherit
+  // origin `hy3ReasoningEffort` (or similar) and emit unsupported params.
+  const { card: effortCard, extendParams: modelExtendParams } = resolveEffortSource(
+    publishedModels,
+    builtinModels,
+    model,
+    provider,
+  );
 
   const modelSupportsPreserveThinkingFromCard =
     Array.isArray(modelExtendParams) && modelExtendParams.includes('preserveThinking');
@@ -128,9 +248,12 @@ export const resolveServerCallLlmContextHints = async ({
       ? preserveThinkingConfigured
       : undefined;
 
-  const resolvedModelExtendParams = agentConfig?.chatConfig
+  const chatConfigForExtendParams = agentConfig?.chatConfig
+    ? clampChatConfigToCardEffort(agentConfig.chatConfig, modelExtendParams, effortCard)
+    : undefined;
+  const resolvedModelExtendParams = chatConfigForExtendParams
     ? applyModelExtendParams({
-        chatConfig: agentConfig.chatConfig,
+        chatConfig: chatConfigForExtendParams,
         extendParams: modelExtendParams as ExtendParamsType[] | undefined,
         model,
       })

@@ -8,6 +8,7 @@ import fs, {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +26,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cursorAgentAccountConfigSeedDir, cursorAgentTokenConfigSeedDir } from './configSeed';
 import { CURSOR_AGENT_INSTANCE_ID_ENV, CURSOR_AGENT_STATE_DIR_ENV } from './env';
 import { CursorAgentPolicyError } from './errors';
-import { resetCursorModelsCache } from './models';
+import type * as ModelsModule from './models';
+import {
+  cursorLastKnownGoodModelListPath,
+  getCachedCursorModels,
+  resetCursorModelsCache,
+  setCachedCursorModels,
+} from './models';
 import { CURSOR_AGENT_HOME_ENV, resetCursorCliCache } from './resolveCli';
 import {
   buildTurnArgv,
@@ -33,12 +40,26 @@ import {
   CURSOR_WEB_SEARCH_TOOL,
   resetCursorAgentFetch,
 } from './transport';
+import { CURSOR_EFFORT_LEVELS } from './transport.parseTurn';
 
 const { join } = nodePath;
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { resolveCachedCursorModelIdMock, spawnMock } = vi.hoisted(() => ({
+  resolveCachedCursorModelIdMock: vi.fn(),
+  spawnMock: vi.fn(),
+}));
 
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
+
+vi.mock('./models', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModelsModule>();
+  resolveCachedCursorModelIdMock.mockImplementation(actual.resolveCachedCursorModelId);
+  return {
+    ...actual,
+    resolveCachedCursorModelId: (token: string, model: string, effort?: string | null): string =>
+      resolveCachedCursorModelIdMock(token, model, effort),
+  };
+});
 
 /**
  * Sample from explore/cursor-sandbox/print-stream.jsonl (the one allowed print-mode run).
@@ -79,7 +100,7 @@ const makeFakeChild = (): FakeChild => {
   return child;
 };
 
-const emitThenClose = (child: FakeChild, stdout: string, code = 0, stderr = '') => {
+const emitThenClose = (child: FakeChild, stdout: string, code: number | null = 0, stderr = '') => {
   setImmediate(() => {
     if (stdout) child.stdout.write(stdout.endsWith('\n') ? stdout : `${stdout}\n`);
     if (stderr) child.stderr.write(stderr);
@@ -142,6 +163,9 @@ beforeEach(() => {
   resetCursorModelsCache();
   resetCursorAgentFetch();
   spawnMock.mockReset();
+  // A cold cache loads `--list-models` before the turn. Seed the default token
+  // so existing turn tests keep a single spawn; cold-cache cases reset this.
+  setCachedCursorModels(TOKEN, [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
   cursorFetch = createCursorAgentFetch({
     maxConcurrency: 4,
     queueTimeoutMs: 60_000,
@@ -182,6 +206,13 @@ describe('createCursorAgentFetch policy', () => {
 });
 
 describe('GET /v1/models', () => {
+  // The file seed keeps turn tests off `--list-models`. These cases exercise
+  // the list path, so they start with an empty cache, in-flight map, and
+  // failure memory. `resetCursorModelsCache` clears all three.
+  beforeEach(() => {
+    resetCursorModelsCache();
+  });
+
   it('parses id/name lines, strips (default), and caches for 10 minutes', async () => {
     spawnMock.mockImplementation(() => {
       const child = makeFakeChild();
@@ -214,6 +245,78 @@ describe('GET /v1/models', () => {
     });
     expect(other.status).toBe(200);
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache an empty successful list', async () => {
+    spawnMock.mockImplementation(() => {
+      const child = makeFakeChild();
+      emitThenClose(child, 'Available models\n');
+      return child;
+    });
+
+    const first = await cursorFetch('https://cursor.local/v1/models', { headers: AUTH });
+    expect(first.status).toBe(503);
+    await expect(first.json()).resolves.toMatchObject({
+      error: { code: 'cli_error', message: 'model list was empty' },
+    });
+    expect(getCachedCursorModels(TOKEN)).toBeUndefined();
+    expect(existsSync(cursorLastKnownGoodModelListPath(stateDir, TOKEN))).toBe(false);
+
+    const second = await cursorFetch('https://cursor.local/v1/models', { headers: AUTH });
+    expect(second.status).toBe(503);
+    await second.json();
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not persist a list when the process is killed', async () => {
+    const snapshot = cursorLastKnownGoodModelListPath(stateDir, TOKEN);
+    mkdirSync(nodePath.dirname(snapshot), { recursive: true });
+    const saved = JSON.stringify({
+      models: [{ id: 'grok-4.7-high', name: 'Grok 4.7' }],
+    });
+    writeFileSync(snapshot, saved);
+    spawnMock.mockImplementation(() => {
+      const child = makeFakeChild();
+      emitThenClose(child, 'composer-2.5 - Composer 2.5\n', null);
+      return child;
+    });
+
+    const response = await cursorFetch('https://cursor.local/v1/models', { headers: AUTH });
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'cli_error' },
+    });
+    expect(readFileSync(snapshot, 'utf8')).toBe(saved);
+    expect(getCachedCursorModels(TOKEN)).toBeUndefined();
+  });
+
+  it('prunes list files older than 30 days when a clean list is saved', async () => {
+    const dir = join(stateDir, 'model-lists');
+    mkdirSync(dir, { recursive: true });
+    const stale = join(dir, `${'a'.repeat(64)}.json`);
+    const fresh = join(dir, `${'b'.repeat(64)}.json`);
+    const note = join(dir, 'notes.json');
+    writeFileSync(stale, JSON.stringify({ models: [{ id: 'old', name: 'Old' }] }));
+    writeFileSync(fresh, JSON.stringify({ models: [{ id: 'fresh', name: 'Fresh' }] }));
+    writeFileSync(note, 'keep');
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    const recent = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+    utimesSync(note, old, old);
+    utimesSync(fresh, recent, recent);
+    spawnMock.mockImplementation(() => {
+      const child = makeFakeChild();
+      emitThenClose(child, 'composer-2.5 - Composer 2.5\n');
+      return child;
+    });
+
+    const response = await cursorFetch('https://cursor.local/v1/models', { headers: AUTH });
+    expect(response.status).toBe(200);
+    await response.json();
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(note)).toBe(true);
+    expect(existsSync(cursorLastKnownGoodModelListPath(stateDir, TOKEN))).toBe(true);
   });
 
   it('returns 401 when a non-zero exit looks like auth failure', async () => {
@@ -557,6 +660,508 @@ describe('POST /v1/turn', () => {
 
     hanging.kill();
     await first;
+  });
+});
+
+describe('POST /v1/turn model resolution', () => {
+  const live = [
+    { id: 'grok-4.7-low', name: 'Grok 4.7 Low' },
+    { id: 'grok-4.7-high', name: 'Grok 4.7' },
+    { id: 'grok-4.7-xhigh', name: 'Grok 4.7 Extra High' },
+    { id: 'cursor-grok-4.6-high', name: 'Grok 4.6' },
+  ];
+
+  const postTurn = async (overrides: Record<string, unknown>) => {
+    let argv: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      argv = args;
+      const child = makeFakeChild();
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+    const response = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody(overrides),
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    if (response.ok) await response.text();
+    const modelFlag = argv.indexOf('--model');
+    return { argv, model: modelFlag >= 0 ? argv[modelFlag + 1] : undefined, response };
+  };
+
+  it('accepts every cursor effort level', async () => {
+    for (const effort of CURSOR_EFFORT_LEVELS) {
+      const { model, response } = await postTurn({ effort, model: 'composer-2.5' });
+      expect(response.status).toBe(200);
+      expect(model).toBe('composer-2.5');
+    }
+  });
+
+  it('rejects an effort outside the cursor enum before spawning', async () => {
+    for (const effort of ['ultra', 'extra-high', '', null, 1]) {
+      const response = await cursorFetch('https://cursor.local/v1/turn', {
+        body: turnBody({ effort, model: 'composer-2.5' }),
+        headers: { ...AUTH, 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'invalid_request', message: 'invalid effort' },
+      });
+    }
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('puts the resolved concrete id on --model', async () => {
+    setCachedCursorModels(TOKEN, live);
+    const { argv, model, response } = await postTurn({ effort: 'high', model: 'grok-4.7' });
+
+    expect(response.status).toBe(200);
+    expect(model).toBe('grok-4.7-high');
+    expect(argv).toContain('--model');
+    expect(argv).not.toContain('--effort');
+  });
+
+  it('keeps a legacy concrete id on --model', async () => {
+    setCachedCursorModels(TOKEN, live);
+    const { model, response } = await postTurn({
+      effort: 'low',
+      model: 'cursor-grok-4.6-high',
+    });
+
+    expect(response.status).toBe(200);
+    expect(model).toBe('cursor-grok-4.6-high');
+  });
+
+  it('uses the CLI name to pick the default level when no effort is sent', async () => {
+    setCachedCursorModels(TOKEN, [
+      { id: 'claude-opus-5-5-low', name: 'Claude Opus 5.5 1M Low' },
+      { id: 'claude-opus-5-5-medium', name: 'Claude Opus 5.5 1M' },
+      { id: 'claude-opus-5-5-high', name: 'Claude Opus 5.5 1M High' },
+      { id: 'claude-opus-5-5-xhigh', name: 'Claude Opus 5.5 1M Extra High' },
+      { id: 'claude-opus-5-5-max', name: 'Claude Opus 5.5 1M Max' },
+    ]);
+
+    const { model, response } = await postTurn({ model: 'claude-opus-5-5' });
+
+    expect(response.status).toBe(200);
+    expect(model).toBe('claude-opus-5-5-medium');
+  });
+
+  it('loads the live list once on a cold cache, then resolves later turns from that cache', async () => {
+    resetCursorModelsCache();
+    let listSpawns = 0;
+    let turnModel: string | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        emitThenClose(
+          child,
+          [
+            'grok-4.7-low - Grok 4.7 Low',
+            'grok-4.7-high - Grok 4.7',
+            'grok-4.7-xhigh - Grok 4.7 Extra High',
+          ].join('\n'),
+        );
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModel = args[modelFlag + 1];
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'high', model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(first.status).toBe(200);
+    await first.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('grok-4.7-high');
+
+    const second = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'xhigh', model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('grok-4.7-xhigh');
+  });
+
+  it('shares one in-flight list load across concurrent cold turns', async () => {
+    resetCursorModelsCache();
+    let listSpawns = 0;
+    let releaseList = () => undefined as void;
+    const held = new Promise<void>((resolve) => {
+      releaseList = () => resolve();
+    });
+    const turnModels: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        void held.then(() =>
+          emitThenClose(
+            child,
+            [
+              'grok-4.7-low - Grok 4.7 Low',
+              'grok-4.7-high - Grok 4.7',
+              'grok-4.7-xhigh - Grok 4.7 Extra High',
+            ].join('\n'),
+          ),
+        );
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModels.push(args[modelFlag + 1] ?? '');
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'high', model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    const second = cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'xhigh', model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    await vi.waitFor(() => expect(listSpawns).toBe(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(listSpawns).toBe(1);
+    expect(turnModels).toEqual([]);
+    releaseList();
+
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    await firstResponse.text();
+    await secondResponse.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModels.sort()).toEqual(['grok-4.7-high', 'grok-4.7-xhigh']);
+  });
+
+  it('persists the list and reuses it when a later live load fails', async () => {
+    resetCursorModelsCache();
+    const codexList = [
+      'gpt-5.3-codex-low - Codex 5.3 Low',
+      'gpt-5.3-codex - Codex 5.3',
+      'gpt-5.3-codex-high - Codex 5.3 High',
+      'grok-4.7-low - Grok 4.7 Low',
+      'grok-4.7-high - Grok 4.7 High',
+    ].join('\n');
+    let listSpawns = 0;
+    let turnModel: string | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        if (listSpawns === 1) emitThenClose(child, codexList);
+        else emitThenClose(child, '', 2, 'boom');
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModel = args[modelFlag + 1];
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'gpt-5.3-codex' }),
+      headers,
+      method: 'POST',
+    });
+    expect(first.status).toBe(200);
+    await first.text();
+    expect(turnModel).toBe('gpt-5.3-codex');
+    expect(listSpawns).toBe(1);
+
+    const snapshot = cursorLastKnownGoodModelListPath(stateDir, TOKEN);
+    expect(existsSync(snapshot)).toBe(true);
+    expect(statSync(snapshot).mode & 0o777).toBe(0o600);
+    const stored = readFileSync(snapshot, 'utf8');
+    expect(stored).toContain('gpt-5.3-codex');
+    expect(stored).not.toContain(TOKEN);
+
+    resetCursorModelsCache();
+    const second = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(listSpawns).toBe(2);
+    expect(turnModel).toBe('grok-4.7-high');
+
+    const third = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'gpt-5.3-codex' }),
+      headers,
+      method: 'POST',
+    });
+    expect(third.status).toBe(200);
+    await third.text();
+    expect(listSpawns).toBe(2);
+    expect(turnModel).toBe('gpt-5.3-codex');
+  });
+
+  it('does not remember a gate rejection, and still resolves from the saved list', async () => {
+    const snapshot = cursorLastKnownGoodModelListPath(stateDir, TOKEN);
+    mkdirSync(nodePath.dirname(snapshot), { recursive: true });
+    writeFileSync(
+      snapshot,
+      JSON.stringify({
+        models: [
+          { id: 'grok-4.7-low', name: 'Grok 4.7 Low' },
+          { id: 'grok-4.7-high', name: 'Grok 4.7 High' },
+        ],
+      }),
+    );
+    setCachedCursorModels(TOKEN, [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
+
+    const hanging = makeFakeChild();
+    let listSpawns = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        const child = makeFakeChild();
+        emitThenClose(child, 'grok-4.7-high - Grok 4.7 High\n');
+        return child;
+      }
+      return hanging;
+    });
+    const limited = createCursorAgentFetch({
+      maxConcurrency: 1,
+      maxQueue: 0,
+      queueTimeoutMs: 50,
+      turnTimeoutMs: 5_000,
+    });
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = limited('https://cursor.local/v1/turn', {
+      body: turnBody(),
+      headers,
+      method: 'POST',
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+
+    resetCursorModelsCache();
+    const blocked = await limited('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(blocked.status).toBe(503);
+    await blocked.json();
+    expect(listSpawns).toBe(0);
+
+    // The Response resolves when the turn is admitted, while the gate stays held
+    // until the stream finishes. Drain the body after kill so the slot is free
+    // before the follow-up, which must list again (the rejection is not remembered).
+    hanging.kill();
+    const admitted = await first;
+    await admitted.text();
+    let turnModel: string | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        emitThenClose(child, 'grok-4.7-high - Grok 4.7 High\n');
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModel = args[modelFlag + 1];
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+    const after = await limited('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(after.status).toBe(200);
+    await after.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('grok-4.7-high');
+  });
+
+  it('does not let an empty successful list hide the saved list', async () => {
+    resetCursorModelsCache();
+    const snapshot = cursorLastKnownGoodModelListPath(stateDir, TOKEN);
+    mkdirSync(nodePath.dirname(snapshot), { recursive: true });
+    const saved = JSON.stringify({
+      models: [
+        { id: 'grok-4.7-low', name: 'Grok 4.7 Low' },
+        { id: 'grok-4.7-high', name: 'Grok 4.7' },
+      ],
+    });
+    writeFileSync(snapshot, saved);
+    let listSpawns = 0;
+    let turnModel: string | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        emitThenClose(child, 'Available models\n');
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModel = args[modelFlag + 1];
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(first.status).toBe(200);
+    await first.text();
+    expect(turnModel).toBe('grok-4.7-high');
+    expect(listSpawns).toBe(1);
+    expect(readFileSync(snapshot, 'utf8')).toBe(saved);
+    expect(getCachedCursorModels(TOKEN)).toBeUndefined();
+
+    const second = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('grok-4.7-high');
+  });
+
+  it('caps the list-load wait and lets the load fill the cache afterwards', async () => {
+    resetCursorModelsCache();
+    const snapshot = cursorLastKnownGoodModelListPath(stateDir, TOKEN);
+    mkdirSync(nodePath.dirname(snapshot), { recursive: true });
+    writeFileSync(
+      snapshot,
+      JSON.stringify({
+        models: [
+          { id: 'grok-4.7-low', name: 'Grok 4.7 Low' },
+          { id: 'grok-4.7-high', name: 'Grok 4.7' },
+        ],
+      }),
+    );
+    const limited = createCursorAgentFetch({
+      listLoadWaitMs: 40,
+      maxConcurrency: 4,
+      queueTimeoutMs: 60_000,
+      turnTimeoutMs: 60_000,
+    });
+    let listSpawns = 0;
+    let listChild: FakeChild | undefined;
+    let turnModel: string | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        listChild = child;
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModel = args[modelFlag + 1];
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = await limited('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'grok-4.7' }),
+      headers,
+      method: 'POST',
+    });
+    expect(first.status).toBe(200);
+    await first.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('grok-4.7-high');
+    expect(listChild).toBeDefined();
+
+    emitThenClose(listChild!, 'composer-2.5 - Composer 2.5\n');
+    await vi.waitFor(() =>
+      expect(getCachedCursorModels(TOKEN)).toEqual([{ id: 'composer-2.5', name: 'Composer 2.5' }]),
+    );
+
+    const second = await limited('https://cursor.local/v1/turn', {
+      body: turnBody({ model: 'composer-2.5' }),
+      headers,
+      method: 'POST',
+    });
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('composer-2.5');
+  });
+
+  it('synthesizes a concrete id when the list load fails and does not load again', async () => {
+    resetCursorModelsCache();
+    let listSpawns = 0;
+    let turnModel: string | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const child = makeFakeChild();
+      if (args.includes('--list-models')) {
+        listSpawns += 1;
+        emitThenClose(child, '', 2, 'boom');
+        return child;
+      }
+      const modelFlag = args.indexOf('--model');
+      turnModel = args[modelFlag + 1];
+      emitThenClose(child, PRINT_STREAM_JSONL);
+      return child;
+    });
+
+    const headers = { ...AUTH, 'content-type': 'application/json' };
+    const first = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'xhigh', model: 'grok-4.7-fast' }),
+      headers,
+      method: 'POST',
+    });
+    expect(first.status).toBe(200);
+    await first.text();
+    expect(turnModel).toBe('grok-4.7-xhigh-fast');
+    expect(listSpawns).toBe(1);
+
+    const second = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'xhigh', model: 'grok-4.7-fast' }),
+      headers,
+      method: 'POST',
+    });
+    expect(second.status).toBe(200);
+    await second.text();
+    expect(listSpawns).toBe(1);
+    expect(turnModel).toBe('grok-4.7-xhigh-fast');
+  });
+
+  it('rejects a resolved id that fails model-id validation and does not spawn', async () => {
+    setCachedCursorModels(TOKEN, live);
+    resolveCachedCursorModelIdMock.mockReturnValueOnce('bad id');
+
+    const response = await cursorFetch('https://cursor.local/v1/turn', {
+      body: turnBody({ effort: 'high', model: 'grok-4.7' }),
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'invalid_request', message: 'invalid model id' },
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1543,6 +2148,8 @@ describe('per-connection config-seed isolation', () => {
 
   it('reuses the same seed dir for the same account across turns and a rotated token', async () => {
     const accountId = 'platform:cursor';
+    setCachedCursorModels('token-one', [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
+    setCachedCursorModels('token-two', [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
     spawnMock.mockImplementation(
       (_cmd: string, _args: string[], opts: { env: Record<string, string> }) => {
         const configDir = opts.env.CURSOR_CONFIG_DIR;
@@ -1638,6 +2245,8 @@ describe('per-connection config-seed isolation', () => {
   });
 
   it('falls back to the bearer digest so two tokens never share a seed', async () => {
+    setCachedCursorModels('token-a', [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
+    setCachedCursorModels('token-b', [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
     spawnMock.mockImplementation(
       (_cmd: string, _args: string[], opts: { env: Record<string, string> }) => {
         writeFileSync(
@@ -1685,6 +2294,7 @@ describe('per-connection config-seed isolation', () => {
   });
 
   it('keeps a bearer token equal to an account id out of that account seed dir', async () => {
+    setCachedCursorModels('platform:cursor', [{ id: 'composer-2.5', name: 'Composer 2.5' }]);
     spawnMock.mockImplementation(
       (_cmd: string, _args: string[], opts: { env: Record<string, string> }) => {
         writeFileSync(

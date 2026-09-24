@@ -1,25 +1,12 @@
 import type { LobeAgentChatConfig } from '@lobechat/types';
-import type { ExtendParamsType } from 'model-bank';
+import type { ExtendParamsType, ModelEffortLevel } from 'model-bank';
 
 /**
  * Superset of every discrete "thinking effort" level any model family exposes.
+ * Same union as model-bank `ModelEffortLevel` (settings must not import this package).
  * Individual controls only accept the subset listed in their registry entry.
  */
-export type EffortLevel =
-  | 'no_think'
-  | 'disabled'
-  | 'none'
-  | 'minimal'
-  | 'auto'
-  | 'low'
-  | 'standard'
-  | 'medium'
-  | 'extended'
-  | 'high'
-  | 'xhigh'
-  | 'max'
-  | 'ultra'
-  | 'enabled';
+export type EffortLevel = ModelEffortLevel;
 
 export interface EffortControlDefinition {
   /** The LobeAgentChatConfig field the chosen level is written to. */
@@ -45,6 +32,8 @@ export interface EffortControlDefinition {
  * Model-specific default overrides that this static table cannot express:
  * - `gpt5_2ReasoningEffort` defaults to `medium` for `gpt-5.5` (see ControlsForm).
  * - `thinkingLevel*` defaults come from `resolveDefaultThinkingLevelForModel`.
+ * - A card's `settings.effortLevels` / `settings.defaultEffortLevel` narrow any control
+ *   (`narrowEffortLevels`, `resolveModelDefaultEffort`).
  */
 export const EFFORT_CONTROL_REGISTRY = {
   codexMaxReasoningEffort: {
@@ -167,6 +156,11 @@ export const EFFORT_CONTROL_REGISTRY = {
     defaultLevel: 'minimal',
     levels: ['minimal', 'high'],
   },
+  cursorReasoningEffort: {
+    configKey: 'cursorReasoningEffort',
+    defaultLevel: 'high',
+    levels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  },
   // Kept last on purpose: `thinking` (OFF / Auto / ON) is closer to a mode than a
   // strength, so models that also expose a real effort key resolve to that key first.
   thinking: {
@@ -200,16 +194,120 @@ export const findEffortControl = (
 };
 
 /**
- * Clamp a persisted level onto what the control actually offers; returns the
- * control default when the stored level is not offered (e.g. model changed).
+ * Levels a card actually offers. `settings.effortLevels` is intersected with the
+ * control and returned weakest → strongest. An empty intersection, or no narrowing,
+ * keeps the control's full list.
+ */
+export const narrowEffortLevels = (
+  control: EffortControlDefinition,
+  settings?: { effortLevels?: readonly string[] | null } | null,
+): readonly EffortLevel[] => {
+  const requested = settings?.effortLevels;
+  if (!requested || requested.length === 0) return control.levels;
+
+  const narrowed = control.levels.filter((level) => requested.includes(level));
+  return narrowed.length > 0 ? narrowed : control.levels;
+};
+
+/**
+ * Nearest level in `offered`, ranked by `order` (weakest → strongest). A tie goes
+ * to the stronger level. `undefined` when `level` is not in `order` at all.
+ */
+const nearestEffortLevel = (
+  order: readonly EffortLevel[],
+  offered: readonly EffortLevel[],
+  level: string,
+): EffortLevel | undefined => {
+  if ((offered as readonly string[]).includes(level)) return level as EffortLevel;
+
+  const rankOf = (value: string) => (order as readonly string[]).indexOf(value);
+  const rank = rankOf(level);
+  if (rank === -1) return undefined;
+
+  let nearest: EffortLevel | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  let nearestRank = -1;
+
+  for (const candidate of offered) {
+    const candidateRank = rankOf(candidate);
+    if (candidateRank === -1) continue;
+
+    const distance = Math.abs(candidateRank - rank);
+    // Equal distance: the stronger level wins, same as the chat pill.
+    if (
+      distance < nearestDistance ||
+      (distance === nearestDistance && candidateRank > nearestRank)
+    ) {
+      nearest = candidate;
+      nearestDistance = distance;
+      nearestRank = candidateRank;
+    }
+  }
+
+  return nearest;
+};
+
+/**
+ * Clamp a persisted level onto what the control actually offers.
+ *
+ * `levels`, when passed, is the narrowed set (`narrowEffortLevels`). A stored
+ * level in that set is kept. A known level outside it maps to the nearest
+ * offered level, and a tie goes to the stronger one. A level the control does
+ * not know falls back to the control default, then that same nearest rule.
+ * Omitting `levels` keeps the previous behaviour (exact match, else the control
+ * default, else the middle level).
  */
 export const clampEffortLevel = (
   definition: EffortControlDefinition,
   level: string | undefined,
-): EffortLevel =>
-  level && (definition.levels as readonly string[]).includes(level)
-    ? (level as EffortLevel)
-    : definition.defaultLevel;
+  levels?: readonly EffortLevel[],
+): EffortLevel => {
+  const narrowed = levels && levels.length > 0 ? levels : undefined;
+  const offered = narrowed ?? definition.levels;
+  if (level && (offered as readonly string[]).includes(level)) return level as EffortLevel;
+
+  if (!narrowed) {
+    if ((definition.levels as readonly string[]).includes(definition.defaultLevel)) {
+      return definition.defaultLevel;
+    }
+    return definition.levels[Math.floor(definition.levels.length / 2)] ?? definition.defaultLevel;
+  }
+
+  const ordered = definition.levels.filter((candidate) =>
+    (narrowed as readonly string[]).includes(candidate),
+  );
+  if (level) {
+    const nearest = nearestEffortLevel(definition.levels, ordered, level);
+    if (nearest) return nearest;
+  }
+
+  return (
+    nearestEffortLevel(definition.levels, ordered, definition.defaultLevel) ??
+    ordered[0] ??
+    definition.defaultLevel
+  );
+};
+
+/**
+ * `settings.defaultEffortLevel` when it is one of the narrowed levels; otherwise
+ * the control default clamped onto that set (nearest, ties → stronger).
+ */
+export const resolveModelDefaultEffort = (
+  control: EffortControlDefinition,
+  settings?: {
+    defaultEffortLevel?: string | null;
+    effortLevels?: readonly string[] | null;
+  } | null,
+): EffortLevel => {
+  const offered = narrowEffortLevels(control, settings);
+  const pinned = settings?.defaultEffortLevel;
+  if (pinned && (offered as readonly string[]).includes(pinned)) return pinned as EffortLevel;
+
+  // No real subset: keep the control default, including when it is the full list.
+  if (offered.length === control.levels.length) return control.defaultLevel;
+
+  return clampEffortLevel(control, control.defaultLevel, offered);
+};
 
 /** Every `LobeAgentChatConfig` field the registry can write a level into. */
 export type EffortConfigKey = (typeof EFFORT_CONTROL_REGISTRY)[EffortControlKey]['configKey'];

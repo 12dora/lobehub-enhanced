@@ -10,6 +10,8 @@ import {
   EFFORT_CONFIG_KEYS,
   EFFORT_CONTROL_KEYS,
   EFFORT_CONTROL_REGISTRY,
+  narrowEffortLevels,
+  resolveModelDefaultEffort,
 } from './effortControlRegistry';
 import { applyModelExtendParams } from './modelExtendParams';
 
@@ -196,5 +198,74 @@ describe('live Codex effort levels', () => {
       'reasoningEffort',
     );
     expect(matchEffortControlForLevels(['future'])).toBeUndefined();
+  });
+});
+
+describe('cursorReasoningEffort', () => {
+  const control = EFFORT_CONTROL_REGISTRY.cursorReasoningEffort;
+
+  it('is registered before the thinking mode toggle', () => {
+    const keys = Object.keys(EFFORT_CONTROL_REGISTRY);
+    expect(keys.indexOf('cursorReasoningEffort')).toBeGreaterThan(-1);
+    expect(keys.indexOf('cursorReasoningEffort')).toBeLessThan(keys.indexOf('thinking'));
+    expect(control).toEqual({
+      configKey: 'cursorReasoningEffort',
+      defaultLevel: 'high',
+      levels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    });
+    expect(AgentChatConfigSchema.parse({ cursorReasoningEffort: 'xhigh' })).toHaveProperty(
+      'cursorReasoningEffort',
+      'xhigh',
+    );
+  });
+
+  it('narrows to the card levels in registry order', () => {
+    expect(narrowEffortLevels(control)).toEqual([...control.levels]);
+    expect(narrowEffortLevels(control, { effortLevels: [] })).toEqual([...control.levels]);
+    expect(
+      narrowEffortLevels(control, { effortLevels: ['xhigh', 'low', 'high', 'medium'] }),
+    ).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(
+      narrowEffortLevels(EFFORT_CONTROL_REGISTRY.grok4_5ReasoningEffort, {
+        effortLevels: ['xhigh', 'max'],
+      }),
+    ).toEqual(['low', 'medium', 'high']);
+  });
+
+  it('uses a card default only when that level is offered', () => {
+    expect(
+      resolveModelDefaultEffort(control, {
+        defaultEffortLevel: 'medium',
+        effortLevels: ['low', 'medium', 'high'],
+      }),
+    ).toBe('medium');
+    // `max` is not offered, and the control default `high` is not either.
+    // Nearest offered level to `high` is `medium`.
+    expect(
+      resolveModelDefaultEffort(control, {
+        defaultEffortLevel: 'max',
+        effortLevels: ['low', 'medium'],
+      }),
+    ).toBe('medium');
+    // `high` sits equally between `medium` and `xhigh`; the stronger level wins.
+    expect(
+      resolveModelDefaultEffort(control, {
+        effortLevels: ['medium', 'xhigh'],
+      }),
+    ).toBe('xhigh');
+    expect(resolveModelDefaultEffort(control)).toBe('high');
+  });
+
+  it('clamps onto an optional narrowed set by nearest level', () => {
+    expect(clampEffortLevel(control, 'low', ['low', 'high'])).toBe('low');
+    expect(clampEffortLevel(control, 'max', ['low', 'high'])).toBe('high');
+    // `minimal` is closer to `low` than to `xhigh`.
+    expect(clampEffortLevel(control, 'minimal', ['low', 'xhigh'])).toBe('low');
+    // `medium` is equally far from `low` and `high`; the stronger level wins.
+    expect(clampEffortLevel(control, 'medium', ['high', 'low'])).toBe('high');
+    // Unknown to this control: fall back to the default, then nearest.
+    expect(clampEffortLevel(control, 'ultra', ['low', 'high'])).toBe('high');
+    expect(clampEffortLevel(control, 'ultra', ['low', 'medium'])).toBe('medium');
+    expect(clampEffortLevel(control, 'ultra')).toBe('high');
   });
 });

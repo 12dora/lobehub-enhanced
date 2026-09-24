@@ -72,6 +72,36 @@ describe('useSyncUpstreamModels', () => {
       );
     });
 
+    it('also reports the rows the sync removed', async () => {
+      mocks.store.syncUpstreamModelList = vi
+        .fn()
+        .mockResolvedValue({ created: 46, deleted: 219, total: 67, updated: 21 });
+      const { result } = renderHook(() => useSyncUpstreamModels('cursor'));
+
+      await act(async () => {
+        await result.current.syncUpstream();
+      });
+
+      expect(mocks.message.success).toHaveBeenCalledWith(
+        `${KEY}.successWithDeleted|${JSON.stringify({ created: 46, deleted: 219, total: 67 })}`,
+      );
+    });
+
+    it('keeps the plain success copy when nothing was removed', async () => {
+      mocks.store.syncUpstreamModelList = vi
+        .fn()
+        .mockResolvedValue({ created: 3, deleted: 0, total: 14, updated: 11 });
+      const { result } = renderHook(() => useSyncUpstreamModels('cursor'));
+
+      await act(async () => {
+        await result.current.syncUpstream();
+      });
+
+      expect(mocks.message.success).toHaveBeenCalledWith(
+        `${KEY}.success|${JSON.stringify({ created: 3, total: 14 })}`,
+      );
+    });
+
     it('reports an upstream that enumerated nothing as an outcome, not a failure', async () => {
       mocks.store.syncUpstreamModelList = vi
         .fn()

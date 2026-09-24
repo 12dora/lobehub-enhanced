@@ -7,6 +7,12 @@ import { Button, Input, Select } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import { useTranslation } from 'react-i18next';
 
+import {
+  clampToOfferedLevel,
+  hasModelEffortNarrowing,
+  resolveDefaultEffortLevel,
+  resolveOfferedEffortLevels,
+} from '@/features/ChatInput/ActionBar/ThinkingEffort/resolveEffortLevel';
 import { effortLevelLabelKey } from '@/features/ServiceModel/effortLevelLabel';
 
 import type { PublishedProviderSummary, ResolvedProviderModelSource } from './dependencyCatalog';
@@ -257,6 +263,11 @@ const ModelPicker = ({
  * The default thinking effort for the chosen model. Which levels exist is decided by the model's
  * own `extendParams`, so the control is offered exactly when the selected model has one — and the
  * stored level is shown only while it still belongs to that control.
+ *
+ * A model that narrows its control (`settings.effortLevels` / `defaultEffortLevel`, e.g. a
+ * collapsed Cursor model) offers only its own levels, names its real default on the "model
+ * default" option, and shows a stored level it lacks as the nearest one it runs — the same
+ * resolution as the in-chat pill.
  */
 const ThinkingEffortPicker = ({
   editable,
@@ -274,8 +285,29 @@ const ThinkingEffortPicker = ({
     ? source.data?.chatModels.find((entry) => entry.modelKey === model.modelKey)
     : undefined;
   const control = findEffortControl(option?.extendParams);
-  const level =
+  const modelSettings = option?.effortSettings;
+  const levels = control ? resolveOfferedEffortLevels(control.definition, modelSettings) : [];
+  const storedLevel =
     control && thinkingEffort?.controlKey === control.key ? thinkingEffort.level : undefined;
+  const level =
+    control && storedLevel
+      ? clampToOfferedLevel(control.definition.levels, levels, storedLevel)
+      : undefined;
+  // Only a narrowing card states its own default; elsewhere "model default" is the provider's.
+  const modelDefaultLevel =
+    control && hasModelEffortNarrowing(modelSettings)
+      ? resolveDefaultEffortLevel({
+          definition: control.definition,
+          key: control.key,
+          model: model?.modelKey,
+          modelSettings,
+        })
+      : undefined;
+  const defaultOptionLabel = modelDefaultLevel
+    ? t('agentCatalog.editor.thinkingEffortDefaultLevel', {
+        level: t(effortLevelLabelKey(modelDefaultLevel), { ns: 'setting' }),
+      })
+    : t('agentCatalog.editor.thinkingEffortDefault');
 
   return (
     <div className={styles.field}>
@@ -299,12 +331,9 @@ const ThinkingEffortPicker = ({
         options={
           control
             ? [
-                {
-                  label: t('agentCatalog.editor.thinkingEffortDefault'),
-                  value: THINKING_EFFORT_UNSET,
-                },
+                { label: defaultOptionLabel, value: THINKING_EFFORT_UNSET },
                 // Values stay the raw registry levels; only the label is localized.
-                ...control.definition.levels.map((entry) => ({
+                ...levels.map((entry) => ({
                   label: t(effortLevelLabelKey(entry), { ns: 'setting' }),
                   value: entry,
                 })),

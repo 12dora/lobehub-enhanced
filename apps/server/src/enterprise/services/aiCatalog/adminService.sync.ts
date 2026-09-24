@@ -3,7 +3,7 @@ import { isProviderOAuthDeviceFlow } from 'model-bank/modelProviders';
 
 import { PlatformAiCatalogRepository } from '@/database/repositories/platformAiCatalog';
 import type { PlatformAiProviderSettings } from '@/database/schemas/platform';
-import type { LobeChatDatabase } from '@/database/type';
+import type { LobeChatDatabase, Transaction } from '@/database/type';
 import {
   buildPayloadFromKeyVaults,
   initModelRuntimeWithUserPayload,
@@ -12,15 +12,23 @@ import {
 
 import { PlatformAuditService } from '../platformAudit';
 import { AiCatalogAdminServiceModelOps } from './adminService.models';
-import { applyProviderCatalogSyncPolicy, mapCardsToBatchUpdate } from './adminService.sync.mapping';
+import {
+  applyProviderCatalogSyncPolicy,
+  cursorRetirementModelKeys,
+  isCursorCatalogProvider,
+  mapCardsToBatchUpdate,
+} from './adminService.sync.mapping';
 import { aiConnectionFailureCode, classifyAiConnectionFailure } from './connectionTestService';
 import { normalizeAiCatalogExecutionCredentials } from './credentialAdapter';
+import { resolveAiCatalogDependentsForModels } from './dependencies';
 import {
   AiCatalogCannotEnumerateError,
   AiCatalogNotFoundError,
+  AiCatalogResourceInUseError,
   AiCatalogUpstreamSyncError,
   AiCatalogValidationError,
 } from './errors';
+import { modelBatchDml } from './modelBatchDml';
 import type { AiCatalogSecretManager, PlatformProviderKeyVaults } from './secretManager';
 import {
   isOAuthAuthorizationExpiredError,
@@ -35,6 +43,27 @@ export {
 } from './adminService.sync.mapping';
 
 const SYNC_UPSTREAM_REASON = 'Sync models from upstream';
+
+/**
+ * Which of `modelKeys` a published platform agent or setting policy still pins.
+ * One query when nothing is pinned; otherwise a split until each pinned key is
+ * known. The shared resolver does not say which key matched.
+ */
+const findBlockedModelKeys = async (
+  db: LobeChatDatabase | Transaction,
+  providerKey: string,
+  modelKeys: readonly string[],
+): Promise<Set<string>> => {
+  const unique = [...new Set(modelKeys)];
+  if (unique.length === 0) return new Set();
+  const dependents = await resolveAiCatalogDependentsForModels(db, providerKey, unique);
+  if (!dependents.some((item) => item.blocking)) return new Set();
+  if (unique.length === 1) return new Set(unique);
+  const mid = Math.ceil(unique.length / 2);
+  const left = await findBlockedModelKeys(db, providerKey, unique.slice(0, mid));
+  const right = await findBlockedModelKeys(db, providerKey, unique.slice(mid));
+  return new Set([...left, ...right]);
+};
 
 const toUpstreamSyncError = (error: unknown): AiCatalogUpstreamSyncError => {
   if (error instanceof AiCatalogUpstreamSyncError) return error;
@@ -166,24 +195,83 @@ export abstract class AiCatalogAdminServiceSyncOps extends AiCatalogAdminService
       });
 
       const mapped = mapCardsToBatchUpdate(cards, detail.draft.models);
-      const { created, items, total, updated } = applyProviderCatalogSyncPolicy(
-        provider.providerKey,
-        detail.draft.models,
-        mapped,
-      );
+      const returnedModelKeys = cards.map((card) => card.id);
+      const cursorProvider = isCursorCatalogProvider(provider.providerKey, provider.settings);
+      const planFor = (blockedModelKeys?: ReadonlySet<string>) =>
+        applyProviderCatalogSyncPolicy({
+          existing: detail.draft.models,
+          mapped,
+          providerKey: provider.providerKey,
+          returnedModelKeys,
+          settings: provider.settings,
+          ...(blockedModelKeys && blockedModelKeys.size > 0 ? { blockedModelKeys } : {}),
+        });
+
+      let plan = planFor();
+      if (cursorProvider) {
+        const keys = cursorRetirementModelKeys(detail.draft.models, plan);
+        if (keys.length > 0) {
+          const blocked = await findBlockedModelKeys(this.db, provider.providerKey, keys);
+          if (blocked.size > 0) plan = planFor(blocked);
+        }
+      }
 
       const appendSyncSuccessAudit = (db: typeof this.db) =>
         new PlatformAuditService(db).append({
           action: 'admin.aiModels.syncUpstream',
           actorUserId,
-          afterDiff: { created, total, updated },
+          afterDiff: {
+            created: plan.created,
+            deleted: plan.deleted.length,
+            retained: plan.retained,
+            total: plan.total,
+            updated: plan.updated,
+          },
           reason,
           result: 'success',
           targetId: detail.draft.id,
           targetType: 'provider',
         });
 
-      if (items.length > 0) {
+      const applyPlan = async (scoped: this) => {
+        if (plan.items.length > 0) {
+          await scoped.applyModelMutation(
+            actorUserId,
+            {
+              expectedDraftToken: detail.draftToken,
+              models: plan.items,
+              operation: 'batchUpdate',
+              providerId: detail.draft.id,
+              reason,
+            },
+            { allowModelCreate: true },
+          );
+        }
+        if (plan.deleted.length > 0) {
+          const expectedDraftToken =
+            plan.items.length > 0
+              ? (await scoped.getDetail(detail.draft.id)).draftToken
+              : detail.draftToken;
+          const skipped = await scoped.removeSyncedCursorVariants(actorUserId, {
+            expectedDraftToken,
+            providerId: detail.draft.id,
+            reason,
+            variants: plan.deleted,
+          });
+          if (skipped.length > 0) {
+            const skippedKeys = new Set(skipped);
+            plan = {
+              ...plan,
+              deleted: plan.deleted.filter((row) => !skippedKeys.has(row.modelKey)),
+              retained: plan.retained + skipped.length,
+            };
+          }
+        }
+        await scoped.publishAfterMutation(actorUserId, detail.draft.id, reason);
+        await appendSyncSuccessAudit(scoped.db);
+      };
+
+      if (plan.items.length > 0 || plan.deleted.length > 0) {
         await this.runModelApplyTransaction(
           {
             action: 'admin.aiModels.applyImmediate',
@@ -193,26 +281,33 @@ export abstract class AiCatalogAdminServiceSyncOps extends AiCatalogAdminService
             secretTargetId: detail.draft.id,
           },
           async (scoped) => {
-            await scoped.applyModelMutation(
-              actorUserId,
-              {
-                expectedDraftToken: detail.draftToken,
-                models: items,
-                operation: 'batchUpdate',
-                providerId: detail.draft.id,
-                reason,
-              },
-              { allowModelCreate: true },
-            );
-            await scoped.publishAfterMutation(actorUserId, detail.draft.id, reason);
-            await appendSyncSuccessAudit(scoped.db);
+            try {
+              await applyPlan(scoped);
+            } catch (error) {
+              // A pin that appeared after the pre-check must not roll the
+              // collapsed cards back. Keep only the variants a published
+              // dependent actually blocks, and apply the rest.
+              if (!cursorProvider || !(error instanceof AiCatalogResourceInUseError)) throw error;
+              const keys = cursorRetirementModelKeys(detail.draft.models, planFor());
+              if (keys.length === 0) throw error;
+              const blocked = await findBlockedModelKeys(scoped.db, provider.providerKey, keys);
+              if (blocked.size === 0) throw error;
+              plan = planFor(blocked);
+              await applyPlan(scoped);
+            }
           },
         );
       } else {
         await appendSyncSuccessAudit(this.db);
       }
 
-      return { created, total, updated };
+      return {
+        created: plan.created,
+        deleted: plan.deleted.length,
+        retained: plan.retained,
+        total: plan.total,
+        updated: plan.updated,
+      };
     } catch (error) {
       await this.appendFailureAudit({
         action: 'admin.aiModels.syncUpstream',
@@ -222,6 +317,67 @@ export abstract class AiCatalogAdminServiceSyncOps extends AiCatalogAdminService
       });
       throw error;
     }
+  };
+
+  /**
+   * Drop never-enabled cursor variant rows inside the sync transaction.
+   * Each row is audited as `admin.aiModels.deleteFromDraft`, the same action a
+   * manual draft delete writes. A variant with a blocking dependent is left in
+   * place and returned; it does not abort the sync.
+   */
+  private removeSyncedCursorVariants = async (
+    actorUserId: string,
+    input: {
+      expectedDraftToken: string;
+      providerId: string;
+      reason: string;
+      variants: readonly { id: string; modelKey: string }[];
+    },
+  ): Promise<readonly string[]> => {
+    if (input.variants.length === 0) return [];
+    return this.db.transaction(async (tx) => {
+      const draft = await this.getLockedDraft(tx, input.providerId, input.expectedDraftToken);
+      const byId = new Map(draft.models.map((model) => [model.id, model]));
+      const targets = input.variants.map((variant) => {
+        const model = byId.get(variant.id);
+        if (!model) throw new AiCatalogNotFoundError();
+        return model;
+      });
+      const blocked = await findBlockedModelKeys(
+        tx,
+        draft.providerKey,
+        targets.map((model) => model.modelKey),
+      );
+      const removing = targets.filter((model) => !blocked.has(model.modelKey));
+      const kept = targets
+        .filter((model) => blocked.has(model.modelKey))
+        .map((model) => model.modelKey);
+      if (removing.length === 0) return kept;
+      const modelIds = removing.map((model) => model.id);
+      const removed = await modelBatchDml.bulkDeleteModels(tx, input.providerId, modelIds);
+      if (removed !== modelIds.length) throw new AiCatalogNotFoundError();
+      await modelBatchDml.bulkAppendAuditEntries(
+        tx,
+        removing.map((model) => ({
+          action: 'admin.aiModels.deleteFromDraft',
+          actorUserId,
+          beforeDiff: {
+            modelId: model.id,
+            modelKey: model.modelKey,
+            providerId: input.providerId,
+          },
+          reason: input.reason,
+          result: 'success' as const,
+          targetId: model.id,
+          targetType: 'model',
+        })),
+      );
+      await new PlatformAiCatalogRepository(tx).updateProvider(input.providerId, {
+        status: 'draft',
+        updatedBy: actorUserId,
+      });
+      return kept;
+    });
   };
 
   private resolveProviderDetail = async (providerId: string) => {

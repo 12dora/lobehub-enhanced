@@ -20,6 +20,8 @@ type LooseReturn<T extends (...args: never[]) => unknown> = (
  */
 export interface UpstreamModelSyncResult {
   created: number;
+  /** Rows removed because the upstream no longer lists them (absent where a sync never deletes). */
+  deleted?: number;
   total: number;
   updated: number;
 }

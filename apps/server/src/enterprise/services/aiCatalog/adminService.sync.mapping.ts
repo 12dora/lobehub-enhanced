@@ -1,3 +1,4 @@
+import { parseCursorModelId } from '@lobechat/model-runtime';
 import type { ChatModelCard } from 'model-bank';
 import { applyChatGPTWebModelPolicy } from 'model-bank';
 
@@ -40,6 +41,7 @@ const ABILITY_KEYS = [
 export const FAMILY_INHERITED_KEYS = Symbol.for('lobe.familyInheritedKeys');
 
 const CHATGPTWEB_PROVIDER = 'chatgptweb';
+const CURSOR_PROVIDER_KEY = 'cursor';
 
 type BatchUpdateItem = Extract<
   AdminAiModelApplyImmediateInput,
@@ -203,6 +205,39 @@ const omitKeys = (
   return Object.keys(next).length > 0 ? next : undefined;
 };
 
+const CURSOR_EFFORT_EXTEND_PARAM = 'cursorReasoningEffort';
+
+/**
+ * Selector keys the cursor catalog stamps after family inheritance. They are
+ * not donor settings. An edited row still receives them, merged onto the
+ * stored object so unrelated admin keys stay.
+ */
+const mergeLiveCursorEffortSettings = (
+  stored: Record<string, unknown>,
+  raw: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined => {
+  if (
+    !raw ||
+    !Array.isArray(raw.extendParams) ||
+    !raw.extendParams.includes(CURSOR_EFFORT_EXTEND_PARAM)
+  ) {
+    return undefined;
+  }
+  const merged: Record<string, unknown> = { ...stored };
+  const storedExtend = Array.isArray(merged.extendParams)
+    ? merged.extendParams.filter((item): item is string => typeof item === 'string')
+    : [];
+  if (!storedExtend.includes(CURSOR_EFFORT_EXTEND_PARAM)) {
+    storedExtend.push(CURSOR_EFFORT_EXTEND_PARAM);
+  }
+  merged.extendParams = storedExtend;
+  if (Array.isArray(raw.effortLevels)) merged.effortLevels = raw.effortLevels;
+  if (typeof raw.defaultEffortLevel === 'string' && raw.defaultEffortLevel.length > 0) {
+    merged.defaultEffortLevel = raw.defaultEffortLevel;
+  }
+  return sameJson(merged, stored) ? undefined : merged;
+};
+
 const cardToBatchUpdateItem = (
   card: ChatModelCard,
   id: string,
@@ -277,9 +312,10 @@ export const mapCardsToBatchUpdate = (
     if (untouched) {
       settings = rawSettings;
     } else if (inheritanceMarked && donor.settings.length === 0) {
-      // Abilities were inherited and no settings key was listed. The settings
-      // object on the card is the donor blob and must not replace the column.
-      settings = undefined;
+      // Abilities were inherited and no settings key was listed. The rest of
+      // the settings object is the donor blob and must not replace the column.
+      // Cursor selector keys are stamped after that mark; merge only those.
+      settings = mergeLiveCursorEffortSettings(storedSettings, rawSettings);
     } else {
       const liveSettings = omitKeys(rawSettings, donor.settings) ?? {};
       const merged = { ...storedSettings, ...liveSettings };
@@ -350,9 +386,163 @@ export const applyChatGPTWebCatalogSyncPolicy = (
   return { created: mapped.created, items: [...itemsById.values()], total: mapped.total, updated };
 };
 
-export const applyProviderCatalogSyncPolicy = (
+export interface CatalogSyncDeletion {
+  id: string;
+  modelKey: string;
+}
+
+export interface CatalogSyncPlan extends MappedCards {
+  /** Legacy cursor variant rows removed because they were never enabled. */
+  deleted: CatalogSyncDeletion[];
+  /**
+   * Legacy cursor variants left in place because a published dependent still
+   * references them. 0 for every other provider.
+   */
+  retained: number;
+}
+
+const readSdkType = (settings: { sdkType?: unknown } | null | undefined): string | undefined =>
+  typeof settings?.sdkType === 'string' ? settings.sdkType : undefined;
+
+/**
+ * Same recognition the runtime uses for a cursor CLI provider: the builtin key
+ * `cursor`, or a custom provider whose `settings.sdkType` is `cursor`.
+ */
+export const isCursorCatalogProvider = (
   providerKey: string,
+  settings?: { sdkType?: unknown } | null,
+): boolean => providerKey === CURSOR_PROVIDER_KEY || readSdkType(settings) === CURSOR_PROVIDER_KEY;
+
+/**
+ * After collapsed cards are upserted, legacy effort-variant rows that map to one
+ * of those bases are retired.
+ *
+ * A variant is `parseCursorModelId(modelKey)` with a non-null effort whose base
+ * id is in the returned card set and whose own id was not returned. There is no
+ * "ever enabled" column: `enabled === false` is treated as never enabled and the
+ * row is deleted; an enabled variant enables its base (so the following publish
+ * serves the base the way it served the variant) and is itself disabled.
+ * A key in `blockedModelKeys` is kept as it is (an enabled pin stays enabled)
+ * and counted in `retained`. The base is still enabled when any variant was
+ * enabled. Rows of other providers, and cursor rows whose base was not returned,
+ * are left alone.
+ */
+export const applyCursorCatalogSyncPolicy = (
   existing: readonly DraftModel[],
   mapped: MappedCards,
-): MappedCards =>
-  providerKey === CHATGPTWEB_PROVIDER ? applyChatGPTWebCatalogSyncPolicy(existing, mapped) : mapped;
+  returnedModelKeys: readonly string[],
+  blockedModelKeys?: ReadonlySet<string>,
+): CatalogSyncPlan => {
+  const returned = new Set<string>();
+  for (const raw of returnedModelKeys) {
+    const key = clip(raw, MODEL_KEY_MAX);
+    if (key) returned.add(key);
+  }
+
+  const existingByKey = new Map(existing.map((model) => [model.modelKey, model]));
+  const itemsById = new Map(mapped.items.map((item) => [item.id, { ...item }]));
+  let { updated } = mapped;
+  const deleted: CatalogSyncDeletion[] = [];
+  const basesToEnable = new Set<string>();
+  const blocked = blockedModelKeys ?? new Set<string>();
+  let retained = 0;
+
+  for (const model of existing) {
+    const parsed = parseCursorModelId(model.modelKey);
+    if (!parsed.effort) continue;
+    const baseId = clip(parsed.baseId, MODEL_KEY_MAX);
+    if (!baseId || baseId === model.modelKey || !returned.has(baseId)) continue;
+    if (returned.has(model.modelKey)) continue;
+
+    if (blocked.has(model.modelKey)) {
+      if (model.enabled) basesToEnable.add(baseId);
+      retained += 1;
+      continue;
+    }
+
+    if (model.enabled) {
+      basesToEnable.add(baseId);
+      const current = itemsById.get(model.id);
+      if (!current) updated += 1;
+      itemsById.set(model.id, { ...(current ?? { id: model.id }), enabled: false, id: model.id });
+      continue;
+    }
+
+    if (itemsById.delete(model.id)) updated = Math.max(0, updated - 1);
+    deleted.push({ id: model.id, modelKey: model.modelKey });
+  }
+
+  for (const baseId of basesToEnable) {
+    const baseRow = existingByKey.get(baseId);
+    if (baseRow) {
+      if (baseRow.enabled) continue;
+      const current = itemsById.get(baseRow.id);
+      if (!current) updated += 1;
+      itemsById.set(baseRow.id, {
+        ...(current ?? { id: baseRow.id }),
+        enabled: true,
+        id: baseRow.id,
+      });
+      continue;
+    }
+
+    const created = itemsById.get(baseId);
+    if (created) itemsById.set(baseId, { ...created, enabled: true });
+  }
+
+  return {
+    created: mapped.created,
+    deleted,
+    items: [...itemsById.values()],
+    retained,
+    total: mapped.total,
+    updated,
+  };
+};
+
+/**
+ * Model keys the cursor policy would disable or delete. Used to ask which of
+ * those rows have blocking dependents before the policy is applied again.
+ */
+export const cursorRetirementModelKeys = (
+  existing: readonly DraftModel[],
+  plan: CatalogSyncPlan,
+): string[] => {
+  const byId = new Map(existing.map((model) => [model.id, model]));
+  const keys: string[] = [];
+  for (const item of plan.items) {
+    if (item.enabled !== false) continue;
+    const row = byId.get(item.id);
+    if (!row?.enabled) continue;
+    if (!parseCursorModelId(row.modelKey).effort) continue;
+    keys.push(row.modelKey);
+  }
+  for (const row of plan.deleted) keys.push(row.modelKey);
+  return keys;
+};
+
+export const applyProviderCatalogSyncPolicy = (params: {
+  blockedModelKeys?: ReadonlySet<string>;
+  existing: readonly DraftModel[];
+  mapped: MappedCards;
+  providerKey: string;
+  returnedModelKeys: readonly string[];
+  settings?: { sdkType?: unknown } | null;
+}): CatalogSyncPlan => {
+  if (params.providerKey === CHATGPTWEB_PROVIDER) {
+    return {
+      ...applyChatGPTWebCatalogSyncPolicy(params.existing, params.mapped),
+      deleted: [],
+      retained: 0,
+    };
+  }
+  if (isCursorCatalogProvider(params.providerKey, params.settings)) {
+    return applyCursorCatalogSyncPolicy(
+      params.existing,
+      params.mapped,
+      params.returnedModelKeys,
+      params.blockedModelKeys,
+    );
+  }
+  return { ...params.mapped, deleted: [], retained: 0 };
+};

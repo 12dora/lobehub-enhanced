@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChatGPTWebProThinkingEffortSlider } from '../ChatGPTWebProThinkingEffortSlider';
 import { ChatGPTWebThinkingEffortSlider } from '../ChatGPTWebThinkingEffortSlider';
 import CodexMaxReasoningEffortSlider from '../CodexMaxReasoningEffortSlider';
+import CursorReasoningEffortSlider from '../CursorReasoningEffortSlider';
 import DeepSeekReasoningEffortSlider from '../DeepSeekReasoningEffortSlider';
 import EffortSlider from '../EffortSlider';
 import GLM52ReasoningEffortSlider from '../GLM52ReasoningEffortSlider';
@@ -37,6 +38,7 @@ import ThinkingSlider from '../ThinkingSlider';
 
 const cases: [EffortControlKey, ComponentType<any>][] = [
   ['codexMaxReasoningEffort', CodexMaxReasoningEffortSlider],
+  ['cursorReasoningEffort', CursorReasoningEffortSlider],
   ['deepseekV4ReasoningEffort', DeepSeekReasoningEffortSlider],
   ['effort', EffortSlider],
   ['glm5_2ReasoningEffort', GLM52ReasoningEffortSlider],
@@ -97,5 +99,35 @@ describe('effort sliders follow EFFORT_CONTROL_REGISTRY', () => {
     expect(labels).toEqual([...levels]);
     expect(labels).not.toContain('OFF');
     expect(screen.getByText(defaultLevel)).toHaveAttribute('aria-current', 'true');
+  });
+
+  // A collapsed Cursor card offers only the levels its upstream variants exist for;
+  // ControlsForm hands those to the slider through the `levels` prop.
+  describe('cursorReasoningEffort narrowed to a card', () => {
+    const cardLevels = ['low', 'medium', 'high', 'xhigh'] as const;
+    const shownLabels = () =>
+      [...document.querySelectorAll('button[type="button"]')].map((node) => node.textContent);
+
+    it('renders only the card levels with the registry default', () => {
+      const { unmount } = render(
+        <CursorReasoningEffortSlider levels={cardLevels} onChange={vi.fn()} />,
+      );
+
+      expect(shownLabels()).toEqual([...cardLevels]);
+      expect(screen.getByText('high')).toHaveAttribute('aria-current', 'true');
+
+      unmount();
+    });
+
+    it('shows a stored level the card lacks as the nearest offered level', () => {
+      const { unmount } = render(
+        <CursorReasoningEffortSlider levels={cardLevels} value="max" onChange={vi.fn()} />,
+      );
+
+      expect(screen.getByText('xhigh')).toHaveAttribute('aria-current', 'true');
+      expect(screen.queryByText('max')).toBeNull();
+
+      unmount();
+    });
   });
 });

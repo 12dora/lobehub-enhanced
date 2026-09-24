@@ -1173,6 +1173,32 @@ describe('AiCatalogRuntimeAdapter', () => {
     );
   });
 
+  it('accepts a legacy cursor id when the collapsed base is published', async () => {
+    const allowed = [{ modelKey: 'cursor-grok-4.6', type: 'chat' }];
+    const hooks = createAiCatalogModelAllowlistHooks(allowed, { cursorProvider: true });
+
+    await expect(
+      hooks.beforeChat?.({ model: 'cursor-grok-4.6-high' } as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      hooks.beforeGenerateObject?.({ model: 'cursor-grok-4.6-low' } as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      hooks.beforeChat?.({ model: 'cursor-grok-4.6' } as never),
+    ).resolves.toBeUndefined();
+    await expect(hooks.beforeChat?.({ model: 'grok-4.7-high' } as never)).rejects.toMatchObject({
+      errorType: 'PLATFORM_AI_MODEL_NOT_PUBLISHED',
+    });
+    await expect(
+      hooks.beforeCreateImage?.({ model: 'cursor-grok-4.6-high' } as never),
+    ).rejects.toMatchObject({ errorType: 'PLATFORM_AI_MODEL_NOT_PUBLISHED' });
+
+    const other = createAiCatalogModelAllowlistHooks(allowed);
+    await expect(
+      other.beforeChat?.({ model: 'cursor-grok-4.6-high' } as never),
+    ).rejects.toMatchObject({ errorType: 'PLATFORM_AI_MODEL_NOT_PUBLISHED' });
+  });
+
   it('produces a bounded secret-free shadow comparison', () => {
     const managed = {
       ...upstreamState,

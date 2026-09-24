@@ -43,6 +43,10 @@ export interface LobeAgentChatConfig extends AgentMemoryChatConfig, AgentSelfIte
    * Model ID to use for generating compression summaries
    */
   compressionModelId?: string;
+  /**
+   * Cursor collapsed models. The concrete CLI id is chosen from this level.
+   */
+  cursorReasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
   deepseekV4ReasoningEffort?: 'none' | 'high' | 'max';
   /**
@@ -251,6 +255,9 @@ export const AgentChatConfigSchema = z
     chatgptWebProThinkingEffort: z.enum(['standard']).optional(),
     chatgptWebThinkingEffort: z.enum(['standard', 'extended', 'max']).optional(),
     codexMaxReasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+    cursorReasoningEffort: z
+      .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+      .optional(),
     deepseekV4ReasoningEffort: z.enum(['none', 'high', 'max']).optional(),
     compressionModelId: z.string().optional(),
     disableContextCaching: z.boolean().optional(),

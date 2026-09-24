@@ -12,12 +12,14 @@ import { AiModelTypeSchema, ModelProvider } from 'model-bank';
 
 import type { ModelProviderKey } from '../types';
 import {
+  excludeCursorBankCards,
   FAMILY_INHERITED_KEYS,
   type FamilyKnownCard,
   type InheritedFamilyCard,
   inheritFamilyCard,
   readFamilyInheritedKeys,
   stampFamilyInheritedKeys,
+  stripCursorPrivateSettings,
 } from './familyInherit';
 import { EMBEDDING_MODEL_KEYWORDS } from './modelTypeKeywords';
 
@@ -428,28 +430,34 @@ const mergeExtendParams = (
   return Array.from(new Set(combined));
 };
 
+const isCursorProvider = (provider: string | undefined): boolean => provider === 'cursor';
+
 const mergeSettings = (
   modelSettings?: AiModelSettings,
   knownSettings?: AiModelSettings,
-  options?: { includeKnownExtendParams?: boolean; includeSearchSettings?: boolean },
+  options?: {
+    allowCursorSettings?: boolean;
+    includeKnownExtendParams?: boolean;
+    includeSearchSettings?: boolean;
+  },
 ): AiModelSettings | undefined => {
-  if (!modelSettings && !knownSettings) return undefined;
+  const known =
+    knownSettings && options?.allowCursorSettings !== true
+      ? stripCursorPrivateSettings(knownSettings)
+      : knownSettings;
+  if (!modelSettings && !known) return undefined;
 
   const merged: AiModelSettings = {};
 
-  if (knownSettings) {
-    Object.assign(merged, knownSettings);
+  if (known) {
+    Object.assign(merged, known);
   }
 
   if (modelSettings) {
     Object.assign(merged, modelSettings);
   }
 
-  const extendParams = mergeExtendParams(
-    modelSettings?.extendParams,
-    knownSettings?.extendParams,
-    options,
-  );
+  const extendParams = mergeExtendParams(modelSettings?.extendParams, known?.extendParams, options);
   if (extendParams) {
     merged.extendParams = extendParams;
   } else {
@@ -459,14 +467,14 @@ const mergeSettings = (
   const includeSearchSettings = options?.includeSearchSettings ?? true;
 
   if (includeSearchSettings) {
-    const searchImpl = modelSettings?.searchImpl ?? knownSettings?.searchImpl;
+    const searchImpl = modelSettings?.searchImpl ?? known?.searchImpl;
     if (searchImpl) {
       merged.searchImpl = searchImpl;
     } else {
       delete merged.searchImpl;
     }
 
-    const searchProvider = modelSettings?.searchProvider ?? knownSettings?.searchProvider;
+    const searchProvider = modelSettings?.searchProvider ?? known?.searchProvider;
     if (searchProvider) {
       merged.searchProvider = searchProvider;
     } else {
@@ -477,7 +485,7 @@ const mergeSettings = (
     delete merged.searchProvider;
   }
 
-  const carried = knownSettings ? readFamilyInheritedKeys(knownSettings) : undefined;
+  const carried = known ? readFamilyInheritedKeys(known) : undefined;
   if (carried) {
     const upstreamExtend = modelSettings?.extendParams;
     const settings = carried.settings.filter((key) => {
@@ -490,6 +498,23 @@ const mergeSettings = (
       return true;
     });
     stampFamilyInheritedKeys(merged, { abilities: [], settings });
+  }
+
+  if (options?.allowCursorSettings !== true) {
+    const stripped = stripCursorPrivateSettings(merged);
+    if (stripped !== merged) {
+      const mark = readFamilyInheritedKeys(merged);
+      delete merged.defaultEffortLevel;
+      delete merged.effortLevels;
+      if (stripped.extendParams) merged.extendParams = stripped.extendParams;
+      else delete merged.extendParams;
+      if (mark) {
+        stampFamilyInheritedKeys(merged, {
+          abilities: mark.abilities,
+          settings: mark.settings.filter((key) => Object.hasOwn(merged, key)),
+        });
+      }
+    }
   }
 
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -550,7 +575,11 @@ const processModelCard = (
   model: ProcessableModelCard,
   config: ModelProcessorConfig,
   knownModel?: any,
-  options?: { includeKnownExtendParams?: boolean; includeSearchSettings?: boolean },
+  options?: {
+    allowCursorSettings?: boolean;
+    includeKnownExtendParams?: boolean;
+    includeSearchSettings?: boolean;
+  },
 ): ChatModelCard | undefined => {
   const {
     functionCallKeywords = [],
@@ -771,12 +800,16 @@ const lookupKnownModel = (
   exact: unknown,
   providerCards: readonly FamilyKnownCard[],
   globalCards: readonly FamilyKnownCard[],
+  targetProvider?: string,
 ): { inherited?: InheritedFamilyCard; knownModel: unknown } => {
   if (exact) return { knownModel: exact };
   const inherited = inheritFamilyCard(
     model.id,
     { globalCards, providerCards },
-    { type: resolveInheritType(model) },
+    {
+      includeCursorDonors: isCursorProvider(targetProvider),
+      type: resolveInheritType(model),
+    },
   );
   if (!inherited) return { knownModel: null };
   const settings = inherited.settings ? { ...inherited.settings } : undefined;
@@ -830,6 +863,8 @@ export const processModelList = async (
 ): Promise<ChatModelCard[]> => {
   const modelBank = await import('model-bank');
   const builtinModels = await modelBank.loadModels();
+  const cursorTarget = isCursorProvider(provider);
+  const globalCards = cursorTarget ? builtinModels : excludeCursorBankCards(builtinModels);
   const providerCards = provider ? toFamilyCards(readModuleExport(modelBank, provider)) : [];
 
   // If provider is provided, try to get the local configuration for that provider
@@ -842,17 +877,18 @@ export const processModelList = async (
       }
 
       let exact: unknown = provider ? (findCardById(providerCards, model.id) ?? null) : null;
-      if (!exact) exact = findCardById(builtinModels, model.id) ?? null;
+      if (!exact) exact = findCardById(globalCards, model.id) ?? null;
 
       const { inherited, knownModel } = lookupKnownModel(
         model,
         exact,
         providerCards,
-        builtinModels,
+        globalCards,
+        provider,
       );
       const processedModel = stampFamilyInheritance(
         model,
-        processModelCard(model, config, knownModel),
+        processModelCard(model, config, knownModel, { allowCursorSettings: cursorTarget }),
         exact ? undefined : inherited,
       );
 
@@ -890,6 +926,7 @@ export const processMultiProviderModelList = async (
     (await import('@lobechat/business-model-bank/model-config')) as BusinessModelConfigModule;
   const modelBank = await import('model-bank');
   const builtinModels = await loadModels();
+  const nonCursorModels = excludeCursorBankCards(builtinModels);
   const providerCardCache = new Map<string, FamilyKnownCard[]>();
   const cardsFor = (key: string): FamilyKnownCard[] => {
     const cached = providerCardCache.get(key);
@@ -907,14 +944,17 @@ export const processMultiProviderModelList = async (
       const detectedProvider = detectModelProvider(model.id);
       const config = MODEL_LIST_CONFIGS[detectedProvider];
 
+      const cursorTarget = isCursorProvider(detectedProvider);
+      const globalCards = cursorTarget ? builtinModels : nonCursorModels;
       let exact: unknown = findCardById(cardsFor(detectedProvider), model.id) ?? null;
-      if (!exact) exact = findCardById(builtinModels, model.id) ?? null;
+      if (!exact) exact = findCardById(globalCards, model.id) ?? null;
 
       const { inherited, knownModel } = lookupKnownModel(
         model,
         exact,
         cardsFor(detectedProvider),
-        builtinModels,
+        globalCards,
+        detectedProvider,
       );
 
       const includeKnownExtendParams =
@@ -933,6 +973,7 @@ export const processMultiProviderModelList = async (
       const processedModel = stampFamilyInheritance(
         model,
         processModelCard(model, config, knownModel, {
+          allowCursorSettings: cursorTarget,
           includeKnownExtendParams,
           includeSearchSettings,
         }),
