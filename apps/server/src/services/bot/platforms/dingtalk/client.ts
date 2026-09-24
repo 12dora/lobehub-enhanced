@@ -1,7 +1,7 @@
 import {
   createDingTalkAdapter,
   decodeDingTalkThreadId,
-  DingTalkApiClient,
+  type DingTalkApiClient,
   downloadMediaFromRawMessage,
   getDingTalkSession,
   isSessionWebhookLive,
@@ -16,6 +16,7 @@ import {
   getRuntimeStatusErrorMessage,
   updateBotRuntimeStatus,
 } from '@/server/services/gateway/runtimeStatus';
+import { sharedDingTalkApiClient } from '@/server/services/messenger/platforms/dingtalk/tokenCache';
 
 import {
   type BotPlatformRuntimeContext,
@@ -45,8 +46,16 @@ function resolveRobotCode(config: BotProviderConfig): string {
   return String(config.settings?.robotCode ?? '').trim();
 }
 
+function dingtalkApi(config: BotProviderConfig): DingTalkApiClient {
+  return sharedDingTalkApiClient({
+    appKey: config.applicationId,
+    appSecret: String(config.credentials.clientSecret ?? ''),
+    robotCode: resolveRobotCode(config),
+  });
+}
+
 function createMessenger(config: BotProviderConfig, platformThreadId: string): PlatformMessenger {
-  const api = new DingTalkApiClient(config.applicationId, config.credentials.clientSecret);
+  const api = dingtalkApi(config);
   const decoded = decodeDingTalkThreadId(platformThreadId);
   const session =
     getDingTalkSession(platformThreadId) ?? getDingTalkSession(decoded.conversationId);
@@ -162,12 +171,7 @@ class DingTalkWSClientImpl implements PlatformClient {
   }
 
   private get api(): DingTalkApiClient {
-    if (!this._api) {
-      this._api = new DingTalkApiClient(
-        this.config.applicationId,
-        this.config.credentials.clientSecret,
-      );
-    }
+    if (!this._api) this._api = dingtalkApi(this.config);
     return this._api;
   }
 
@@ -194,6 +198,7 @@ class DingTalkWSClientImpl implements PlatformClient {
 
       const adapter = createDingTalkAdapter({
         aiCardTemplateId: this.config.settings?.aiCardTemplateId as string | undefined,
+        apiClient: dingtalkApi(this.config),
         clientId: this.config.applicationId,
         clientSecret: this.config.credentials.clientSecret,
         robotCode: resolveRobotCode(this.config),
@@ -325,6 +330,7 @@ class DingTalkWSClientImpl implements PlatformClient {
     return {
       dingtalk: createDingTalkAdapter({
         aiCardTemplateId: this.config.settings?.aiCardTemplateId as string | undefined,
+        apiClient: dingtalkApi(this.config),
         clientId: this.config.applicationId,
         clientSecret: this.config.credentials.clientSecret,
         robotCode: resolveRobotCode(this.config),
@@ -375,7 +381,14 @@ export class DingTalkClientFactory extends ClientFactory {
     if (errors.length > 0) return { errors, valid: false };
 
     try {
-      const api = new DingTalkApiClient(applicationId!, credentials.clientSecret);
+      // Uncached: a cached org token must not make a wrong secret look valid,
+      // and this probe must not join another caller's in-flight refresh.
+      const api = sharedDingTalkApiClient({
+        appKey: applicationId!,
+        appSecret: credentials.clientSecret,
+        robotCode: String(_settings?.robotCode ?? ''),
+        uncached: true,
+      });
       await api.getAccessToken();
       return { valid: true };
     } catch {

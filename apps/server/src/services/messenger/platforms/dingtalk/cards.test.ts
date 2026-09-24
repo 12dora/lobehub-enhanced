@@ -9,6 +9,7 @@ const sendBySessionWebhook = vi.fn();
 const recallMessage = vi.fn();
 const mockResolveDingTalkBrandingDisplayName = vi.fn();
 const mockSetDingTalkLastList = vi.fn();
+const mockGetAgentRuntimeRedis = vi.hoisted(() => vi.fn());
 
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
@@ -44,6 +45,10 @@ vi.mock('@/server/services/bot/platforms/dingtalk/sendAttachments', () => ({
   sendDingTalkAttachments: vi.fn(),
 }));
 
+vi.mock('@/server/modules/AgentRuntime/redis', () => ({
+  getAgentRuntimeRedisClient: () => mockGetAgentRuntimeRedis(),
+}));
+
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
 const {
   DingTalkCardUnavailableError,
@@ -54,7 +59,11 @@ const {
 const { sendDingTalkAttachments } =
   await import('@/server/services/bot/platforms/dingtalk/sendAttachments');
 const {
+  clearDingTalkReplySink,
   createDingTalkReplySink,
+  dingtalkTurnDoneRedisKey,
+  DINGTALK_THINKING_DELAY_MS,
+  DINGTALK_TURN_EPOCH_TTL_SECONDS,
   paginateEntries,
   parseDingTalkAskerCommand,
   sendDingTalkActionCardToThread,
@@ -89,6 +98,8 @@ const CONFIG = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetAgentRuntimeRedis.mockReset();
+  mockGetAgentRuntimeRedis.mockReturnValue(null);
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(CONFIG as any);
   create.mockResolvedValue(undefined);
   replace.mockResolvedValue(undefined);
@@ -151,15 +162,47 @@ describe('DingTalk AI-card reply sink', () => {
     expect(recallMessage).not.toHaveBeenCalled();
     expect(sendOtoMessage).not.toHaveBeenCalled();
   });
+
+  it('refreshes the turn-epoch TTL on each partial', async () => {
+    const expire = vi.fn(async () => 1);
+    mockGetAgentRuntimeRedis.mockReturnValue({
+      expire,
+      get: async () => '1',
+      incr: async () => 1,
+      set: async () => 'OK',
+    });
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    expire.mockClear();
+    await sink?.onPartial?.('片段');
+    expect(expire).toHaveBeenCalledWith(
+      expect.stringContaining('turn-epoch'),
+      DINGTALK_TURN_EPOCH_TTL_SECONDS,
+    );
+  });
 });
 
 describe('DingTalk markdown thinking placeholder', () => {
   const TEXT_CONFIG = { ...CONFIG, aiCardTemplateId: null };
 
-  it('recalls the thinking placeholder before sending the answer', async () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const armThinking = async (threadId = 'dingtalk:cid') => {
     vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
-    const sink = await createDingTalkReplySink('dingtalk:cid');
+    const sink = await createDingTalkReplySink(threadId);
     await sink?.onStart?.();
+    await vi.advanceTimersByTimeAsync(DINGTALK_THINKING_DELAY_MS);
+    return sink;
+  };
+
+  it('recalls the thinking placeholder before sending the answer', async () => {
+    const sink = await armThinking();
     expect(sendOtoMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         msgKey: 'sampleMarkdown',
@@ -185,9 +228,7 @@ describe('DingTalk markdown thinking placeholder', () => {
   });
 
   it('recalls the thinking placeholder before sending an error reply', async () => {
-    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
-    const sink = await createDingTalkReplySink('dingtalk:cid');
-    await sink?.onStart?.();
+    const sink = await armThinking();
     await sink?.onError?.('执行失败');
     expect(recallMessage).toHaveBeenCalledWith({
       openConversationId: undefined,
@@ -201,18 +242,14 @@ describe('DingTalk markdown thinking placeholder', () => {
   });
 
   it('swallows recall failures and still sends the answer', async () => {
-    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
     recallMessage.mockRejectedValueOnce(new Error('recall 500'));
-    const sink = await createDingTalkReplySink('dingtalk:cid');
-    await sink?.onStart?.();
+    const sink = await armThinking();
     await expect(sink?.onComplete?.('最终回答')).resolves.toBeUndefined();
     expect(sendOtoMessage).toHaveBeenCalledTimes(2);
   });
 
   it('recalls group thinking placeholders via groupMessages/recall', async () => {
-    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
-    const sink = await createDingTalkReplySink('dingtalk:cid_group:staff_a');
-    await sink?.onStart?.();
+    const sink = await armThinking('dingtalk:cid_group:staff_a');
     expect(sendGroupMessage).toHaveBeenCalled();
     await sink?.onComplete?.('群回复');
     expect(recallMessage).toHaveBeenCalledWith({
@@ -229,8 +266,7 @@ describe('DingTalk markdown thinking placeholder', () => {
       sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
     } as any);
 
-    const sink = await createDingTalkReplySink('dingtalk:cid');
-    await sink?.onStart?.();
+    const sink = await armThinking();
 
     expect(sendBySessionWebhook).not.toHaveBeenCalled();
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
@@ -250,9 +286,7 @@ describe('DingTalk markdown thinking placeholder', () => {
   });
 
   it('recalls thinking and does not post a whitespace-only answer', async () => {
-    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
-    const sink = await createDingTalkReplySink('dingtalk:cid');
-    await sink?.onStart?.();
+    const sink = await armThinking();
     await sink?.onComplete?.('\n  ');
     expect(recallMessage).toHaveBeenCalledWith({
       openConversationId: undefined,
@@ -260,6 +294,167 @@ describe('DingTalk markdown thinking placeholder', () => {
       robotCode: 'robot',
     });
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('clearDingTalkReplySink cancels a pending thinking timer', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    clearDingTalkReplySink('dingtalk:cid');
+    await vi.advanceTimersByTimeAsync(DINGTALK_THINKING_DELAY_MS);
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(recallMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips the thinking placeholder when another replica already finished the turn', async () => {
+    const store = new Map<string, string>();
+    let epoch = 0;
+    mockGetAgentRuntimeRedis.mockReturnValue({
+      del: async (key: string) => {
+        store.delete(key);
+        return 1;
+      },
+      expire: async () => 1,
+      get: async (key: string) => store.get(key) ?? null,
+      incr: async (key: string) => {
+        epoch += 1;
+        store.set(key, String(epoch));
+        return epoch;
+      },
+      set: async (key: string, value: string) => {
+        store.set(key, value);
+        return 'OK';
+      },
+    });
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    // Completion landed on another replica: same epoch, turn marked done.
+    store.set(dingtalkTurnDoneRedisKey('dingtalk:cid'), '1');
+    await vi.advanceTimersByTimeAsync(DINGTALK_THINKING_DELAY_MS);
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not send or recall the placeholder when the reply finishes before the delay', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await sink?.onComplete?.('最终回答');
+    await vi.advanceTimersByTimeAsync(DINGTALK_THINKING_DELAY_MS);
+    expect(recallMessage).not.toHaveBeenCalled();
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    const answerParam = JSON.parse(
+      (sendOtoMessage.mock.calls[0] as [{ msgParam: string }])[0].msgParam,
+    ) as { text: string };
+    expect(answerParam.text).toBe('最终回答');
+  });
+
+  it('does not send the placeholder after an error reply that finished early', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    await sink?.onError?.('执行失败');
+    await vi.advanceTimersByTimeAsync(DINGTALK_THINKING_DELAY_MS);
+    expect(recallMessage).not.toHaveBeenCalled();
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('recalls a placeholder whose send is still in flight when the answer is ready', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    let releaseThinking: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseThinking = resolve;
+    });
+    const order: string[] = [];
+    sendOtoMessage.mockImplementation(async (params: { msgParam: string }) => {
+      const text = (JSON.parse(params.msgParam) as { text: string }).text;
+      if (text === DINGTALK_THINKING_REPLY) {
+        order.push('thinking-start');
+        await gate;
+        order.push('thinking-sent');
+        return { processQueryKey: 'pqk-1' };
+      }
+      order.push('answer');
+      return { processQueryKey: 'pqk-ans' };
+    });
+    recallMessage.mockImplementation(async () => {
+      order.push('recall');
+    });
+
+    const sink = await createDingTalkReplySink('dingtalk:cid');
+    await sink?.onStart?.();
+    vi.advanceTimersByTime(DINGTALK_THINKING_DELAY_MS);
+    for (let i = 0; i < 20 && !order.includes('thinking-start'); i += 1) {
+      await Promise.resolve();
+    }
+    expect(order).toEqual(['thinking-start']);
+    const completing = sink?.onComplete?.('最终回答');
+    releaseThinking();
+    await completing;
+    expect(order).toEqual(['thinking-start', 'thinking-sent', 'recall', 'answer']);
+    expect(sendOtoMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends thinking on the next turn after the previous one ran longer than 120s', async () => {
+    const store = new Map<string, { expiresAt: number; value: string }>();
+    const expireTtls: number[] = [];
+    const live = (key: string) => {
+      const row = store.get(key);
+      if (!row) return undefined;
+      if (row.expiresAt <= Date.now()) {
+        store.delete(key);
+        return undefined;
+      }
+      return row;
+    };
+    mockGetAgentRuntimeRedis.mockReturnValue({
+      del: async (key: string) => {
+        store.delete(key);
+        return 1;
+      },
+      expire: async (key: string, ttl: number) => {
+        expireTtls.push(ttl);
+        const row = live(key);
+        if (!row) return 0;
+        row.expiresAt = Date.now() + ttl * 1000;
+        return 1;
+      },
+      get: async (key: string) => live(key)?.value ?? null,
+      incr: async (key: string) => {
+        const row = live(key);
+        const next = Number(row?.value ?? '0') + 1;
+        store.set(key, {
+          expiresAt: row?.expiresAt ?? Date.now() + 120_000,
+          value: String(next),
+        });
+        return next;
+      },
+      set: async (key: string, value: string, mode?: string, ttl?: number) => {
+        const expiresAt =
+          mode === 'EX' && typeof ttl === 'number'
+            ? Date.now() + ttl * 1000
+            : Number.POSITIVE_INFINITY;
+        store.set(key, { expiresAt, value });
+        return 'OK';
+      },
+    });
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(TEXT_CONFIG as any);
+    const first = await createDingTalkReplySink('dingtalk:long');
+    await first?.onStart?.();
+    await vi.advanceTimersByTimeAsync(180_000);
+    await first?.onComplete?.('慢回答');
+    sendOtoMessage.mockClear();
+    const second = await createDingTalkReplySink('dingtalk:long');
+    await second?.onStart?.();
+    await vi.advanceTimersByTimeAsync(DINGTALK_THINKING_DELAY_MS);
+    expect(DINGTALK_TURN_EPOCH_TTL_SECONDS).toBeGreaterThanOrEqual(2 * 60 * 60);
+    expect(expireTtls).toContain(DINGTALK_TURN_EPOCH_TTL_SECONDS);
+    const texts = sendOtoMessage.mock.calls.map((call) => {
+      const params = call[0] as { msgParam: string };
+      return (JSON.parse(params.msgParam) as { text: string }).text;
+    });
+    expect(texts).toContain(DINGTALK_THINKING_REPLY);
   });
 });
 

@@ -31,7 +31,7 @@ import {
   listRunningInstanceIds,
   redirectTaskAs,
 } from '../approval/api';
-import { invalidatePendingCaches } from '../approval/pending';
+import { invalidateApprovalInstanceCache, invalidatePendingCaches } from '../approval/pending';
 import { getDingtalkWorkspaceCapabilities } from '../capabilities';
 import { DingtalkWorkspaceError } from '../errors';
 import { resolveVerifiedDingtalkIdentity } from '../identity';
@@ -63,7 +63,7 @@ const identityInvalidLine = (name: string): string => {
   return `规则「${name}」已停用：钉钉身份已失效。${guidance}`;
 };
 
-export const APPROVAL_RULE_SWEEP_INTERVAL_MS = 180_000;
+export const APPROVAL_RULE_SWEEP_INTERVAL_MS = 600_000;
 export const APPROVAL_RULE_SWEEP_JITTER_MS = 30_000;
 export const APPROVAL_RULE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 export const APPROVAL_RULE_INSTANCE_CAP = 300;
@@ -510,8 +510,13 @@ export const runApprovalRulesCycle = async (
     });
   };
 
-  const loadDetailCounted = async (instanceId: string): Promise<ApprovalInstanceDetail> => {
-    const loaded = (await callDingTalk(() => loadDetail(instanceId))) as ApprovalInstanceDetail;
+  const loadDetailCounted = async (
+    instanceId: string,
+    fresh = false,
+  ): Promise<ApprovalInstanceDetail> => {
+    const loaded = (await callDingTalk(() =>
+      fresh ? loadDetail(instanceId, { fresh: true }) : loadDetail(instanceId),
+    )) as ApprovalInstanceDetail;
     detailCache.set(instanceId, loaded);
     return loaded;
   };
@@ -741,7 +746,7 @@ export const runApprovalRulesCycle = async (
             try {
               let fresh: ApprovalInstanceDetail;
               try {
-                fresh = await loadDetailCounted(instanceId);
+                fresh = await loadDetailCounted(instanceId, true);
               } catch (error) {
                 if (isRateLimited(error) || errorCodeOf(error) === 'DINGTALK_UNAVAILABLE') {
                   await releaseClaim(rule, taskId);
@@ -836,6 +841,7 @@ export const runApprovalRulesCycle = async (
             }
 
             invalidatePendingCaches(rule.userId);
+            invalidateApprovalInstanceCache(instanceId);
 
             const finalized = await updateRun(db, {
               errorCode: null,

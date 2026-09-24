@@ -123,7 +123,9 @@ describe('ReminderService', () => {
     expect(result.users).toEqual([]);
     expect(result.departments).toEqual([]);
     // The hook is a fire-and-forget dynamic import: wait for it instead of guessing ticks.
-    await vi.waitFor(() => expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(db));
+    await vi.waitFor(() =>
+      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(db, {}, '新同事'),
+    );
   });
 
   it('rejects a fireAt that is not more than 30s in the future', async () => {

@@ -5,6 +5,7 @@ import { platformAiModels, platformAiProviders } from '@/database/schemas/platfo
 import type { LobeChatDatabase } from '@/database/type';
 import type { AdminSystemSandboxHealth } from '@/server/enterprise/contracts/adminSystem';
 import { parseEnterpriseFeatureFlags } from '@/server/enterprise/featureFlags';
+import { readDingtalkApiDailyAlertThreshold } from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
 import { isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 import { parseSystemAgent } from '@/server/globalConfig/parseSystemAgent';
 
@@ -244,7 +245,11 @@ export const projectDingtalkCapability = (input: {
   if (!input.configured) {
     return report('dingtalk_connector', 'disabled', { reason: '未配置钉钉连接器' });
   }
-  const calls = `今日 API 调用 ${input.callsToday} 次`;
+  const alertThreshold = readDingtalkApiDailyAlertThreshold();
+  const calls =
+    alertThreshold > 0
+      ? `今日 API 调用 ${input.callsToday} 次（告警阈值 ${alertThreshold}）`
+      : `今日 API 调用 ${input.callsToday} 次`;
   if (input.lastError && input.errors10m >= 3) {
     return report('dingtalk_connector', 'unavailable', {
       detail: input.lastError,

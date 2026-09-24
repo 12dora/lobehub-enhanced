@@ -308,7 +308,7 @@ describe('ReminderTaskService', () => {
         unknown: ['不存在的人'],
       });
       await flushLookupMissSync();
-      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(mockDb);
+      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(mockDb, {}, '不存在的人');
     });
 
     it('requests a directory sync when a name·dept lookup is unknown', async () => {
@@ -320,7 +320,7 @@ describe('ReminderTaskService', () => {
         unknown: ['胡玉琴A·不存在的部门'],
       });
       await flushLookupMissSync();
-      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(mockDb);
+      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(mockDb, {}, '胡玉琴A');
     });
 
     it('does not request a directory sync for a unique name hit', async () => {

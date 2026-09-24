@@ -181,6 +181,62 @@ export interface DingTalkUploadMediaParams {
   type: 'image' | 'file';
 }
 
+/** New-API `oauth2/accessToken` vs legacy oapi `gettoken`. */
+export type DingTalkTokenKind = 'accessToken' | 'gettoken';
+
+export interface DingTalkCachedToken {
+  expiresAt: number;
+  token: string;
+}
+
+/**
+ * Process- or Redis-backed token store. `ttlMs` is how long the token stays
+ * valid (already skew-adjusted by the caller). Implementations must not throw.
+ */
+export interface DingTalkTokenCache {
+  delete?: (kind: DingTalkTokenKind) => Promise<void> | void;
+  get: (
+    kind: DingTalkTokenKind,
+  ) => Promise<DingTalkCachedToken | null> | DingTalkCachedToken | null;
+  set: (kind: DingTalkTokenKind, token: string, ttlMs: number) => Promise<void> | void;
+}
+
+export interface DingTalkRequestInfo {
+  method: string;
+  url: string;
+}
+
+export interface DingTalkApiClientOptions {
+  /** Fired for every HTTP request this client makes. Must not throw. */
+  onRequest?: (info: DingTalkRequestInfo) => void;
+  /**
+   * Dedupes concurrent refreshes for one kind. The server passes a
+   * process-wide implementation (in-process promise + Redis NX lock).
+   * The map must be filled before the first await so two callers in the
+   * same turn share one flight.
+   */
+  singleFlight?: (kind: DingTalkTokenKind, task: () => Promise<string>) => Promise<string>;
+  tokenCache?: DingTalkTokenCache;
+}
+
+const safeRequestUrl = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    const query = url.indexOf('?');
+    return query >= 0 ? url.slice(0, query) : url;
+  }
+};
+
+const isInvalidTokenError = (error: unknown): boolean => {
+  if (!(error instanceof DingTalkApiError)) return false;
+  if (error.code === '40014' || error.code === '401' || error.code === 'http_401') return true;
+  return /InvalidAuthentication|InvalidAccessToken|invalid.?token/i.test(error.code);
+};
+
 /**
  * Lightweight wrapper around DingTalk Open APIs. All HTTP goes through global
  * `fetch` so Node 24 `HTTP(S)_PROXY` / `NODE_USE_ENV_PROXY` is honoured.
@@ -191,79 +247,40 @@ export interface DingTalkUploadMediaParams {
 export class DingTalkApiClient {
   private readonly appKey: string;
   private readonly appSecret: string;
+  private readonly options?: DingTalkApiClientOptions;
 
   private newToken?: TokenCache;
   private legacyToken?: TokenCache;
+  private readonly inflight = new Map<DingTalkTokenKind, Promise<string>>();
 
-  constructor(clientId: string, clientSecret: string) {
+  constructor(clientId: string, clientSecret: string, options?: DingTalkApiClientOptions) {
     this.appKey = clientId;
     this.appSecret = clientSecret;
+    this.options = options;
   }
 
   async getAccessToken(): Promise<string> {
-    if (this.newToken && Date.now() < this.newToken.expiresAt) {
-      return this.newToken.token;
-    }
-
-    const response = await fetch(`${DINGTALK_API_BASE}/v1.0/oauth2/accessToken`, {
-      body: JSON.stringify({ appKey: this.appKey, appSecret: this.appSecret }),
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      method: 'POST',
-    });
-
-    if (!response.ok) {
-      await throwApiError('POST', '/v1.0/oauth2/accessToken', response);
-    }
-
-    const data = (await response.json()) as { accessToken?: string; expireIn?: number };
-    if (!data.accessToken) {
-      throw new DingTalkApiError('DingTalk auth error: missing accessToken', {
-        code: 'missing_token',
-      });
-    }
-
-    const expireInSec = data.expireIn ?? 7200;
-    this.newToken = {
-      expiresAt: Date.now() + expireInSec * 1000 - TOKEN_REFRESH_SKEW_MS,
-      token: data.accessToken,
-    };
-    return data.accessToken;
+    return this.resolveToken('accessToken', () => this.fetchAccessToken());
   }
 
   async getLegacyAccessToken(): Promise<string> {
-    if (this.legacyToken && Date.now() < this.legacyToken.expiresAt) {
-      return this.legacyToken.token;
+    return this.resolveToken('gettoken', () => this.fetchLegacyAccessToken());
+  }
+
+  /** Drop one cached token so the next call refetches. */
+  async invalidateToken(kind: DingTalkTokenKind): Promise<void> {
+    if (kind === 'accessToken') this.newToken = undefined;
+    else this.legacyToken = undefined;
+    try {
+      await this.options?.tokenCache?.delete?.(kind);
+    } catch {
+      // cache errors must not surface on the send path
     }
-
-    const url = new URL(`${DINGTALK_OAPI_BASE}/gettoken`);
-    url.searchParams.set('appkey', this.appKey);
-    url.searchParams.set('appsecret', this.appSecret);
-
-    const response = await fetch(url, { headers: { Accept: 'application/json' }, method: 'GET' });
-    const data = (await response.json()) as {
-      access_token?: string;
-      errcode?: number;
-      errmsg?: string;
-      expires_in?: number;
-    };
-
-    if (!response.ok || (data.errcode !== undefined && data.errcode !== 0) || !data.access_token) {
-      throw new DingTalkApiError(
-        `DingTalk legacy auth failed: ${data.errcode ?? response.status} ${data.errmsg ?? ''}`,
-        { code: String(data.errcode ?? `http_${response.status}`), status: response.status },
-      );
-    }
-
-    const expireInSec = data.expires_in ?? 7200;
-    this.legacyToken = {
-      expiresAt: Date.now() + expireInSec * 1000 - TOKEN_REFRESH_SKEW_MS,
-      token: data.access_token,
-    };
-    return data.access_token;
   }
 
   async sendBySessionWebhook(webhook: string, payload: Record<string, unknown>): Promise<void> {
     assertDingTalkSessionWebhook(webhook);
+    this.noteRequest('POST', webhook);
     const response = await fetch(webhook, {
       body: JSON.stringify(payload),
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
@@ -350,6 +367,7 @@ export class DingTalkApiClient {
       });
     }
 
+    this.noteRequest('GET', data.downloadUrl);
     const fileResponse = await fetch(data.downloadUrl);
     if (!fileResponse.ok) {
       const text = await fileResponse.text();
@@ -366,31 +384,13 @@ export class DingTalkApiClient {
   }
 
   async uploadMedia(params: DingTalkUploadMediaParams): Promise<string> {
-    const token = await this.getLegacyAccessToken();
-    const url = `${DINGTALK_OAPI_BASE}/media/upload?access_token=${encodeURIComponent(token)}&type=${params.type}`;
-    const form = new FormData();
-    form.append('type', params.type);
-    form.append(
-      'media',
-      new Blob([new Uint8Array(params.buffer)], { type: 'application/octet-stream' }),
-      params.filename,
-    );
-
-    const response = await fetch(url, { body: form, method: 'POST' });
-    const data = (await response.json()) as {
-      errcode?: number;
-      errmsg?: string;
-      media_id?: string;
-    };
-
-    if (!response.ok || (data.errcode !== undefined && data.errcode !== 0) || !data.media_id) {
-      throw new DingTalkApiError(
-        `DingTalk media/upload failed: ${data.errcode ?? response.status} ${data.errmsg ?? ''}`,
-        { code: String(data.errcode ?? `http_${response.status}`), status: response.status },
-      );
+    try {
+      return await this.uploadMediaOnce(params);
+    } catch (error) {
+      if (!isInvalidTokenError(error)) throw error;
+      await this.invalidateToken('gettoken');
+      return this.uploadMediaOnce(params);
     }
-
-    return data.media_id;
   }
 
   async createAndDeliverCard(params: DingTalkCreateCardParams): Promise<unknown> {
@@ -447,6 +447,19 @@ export class DingTalkApiClient {
     }
   }
 
+  /**
+   * Counted JSON call on api.dingtalk.com. Same token, retry, and `onRequest`
+   * path as the other OpenAPI methods. Confirm cards use this so create and
+   * update are included in the DingTalk call counter.
+   */
+  async countedRequest(
+    method: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.call(method, path, body);
+  }
+
   private wrapCardError(op: string, error: unknown): DingTalkCardUnavailableError {
     if (error instanceof DingTalkCardUnavailableError) return error;
     if (error instanceof DingTalkApiError) {
@@ -466,8 +479,177 @@ export class DingTalkApiClient {
     path: string,
     body: Record<string, unknown>,
   ): Promise<unknown> {
+    try {
+      return await this.callOnce(method, path, body);
+    } catch (error) {
+      if (!isInvalidTokenError(error)) throw error;
+      await this.invalidateToken('accessToken');
+      return this.callOnce(method, path, body);
+    }
+  }
+
+  private noteRequest(method: string, url: string): void {
+    const hook = this.options?.onRequest;
+    if (!hook) return;
+    try {
+      hook({ method, url: safeRequestUrl(url) });
+    } catch {
+      // counting must never throw or block the request
+    }
+  }
+
+  private localToken(kind: DingTalkTokenKind): TokenCache | undefined {
+    return kind === 'accessToken' ? this.newToken : this.legacyToken;
+  }
+
+  private rememberLocal(kind: DingTalkTokenKind, cache: TokenCache | undefined): void {
+    if (kind === 'accessToken') this.newToken = cache;
+    else this.legacyToken = cache;
+  }
+
+  private async readToken(kind: DingTalkTokenKind): Promise<string | null> {
+    const now = Date.now();
+    const local = this.localToken(kind);
+    if (local && now < local.expiresAt) return local.token;
+    const cache = this.options?.tokenCache;
+    if (!cache) return null;
+    try {
+      const hit = await cache.get(kind);
+      if (!hit || now >= hit.expiresAt || !hit.token) return null;
+      this.rememberLocal(kind, { expiresAt: hit.expiresAt, token: hit.token });
+      return hit.token;
+    } catch {
+      return local && now < local.expiresAt ? local.token : null;
+    }
+  }
+
+  private async storeToken(kind: DingTalkTokenKind, token: string, ttlMs: number): Promise<void> {
+    if (ttlMs <= 0) {
+      this.rememberLocal(kind, undefined);
+      return;
+    }
+    const stored = { expiresAt: Date.now() + ttlMs, token };
+    this.rememberLocal(kind, stored);
+    try {
+      await this.options?.tokenCache?.set(kind, token, ttlMs);
+    } catch {
+      // Redis down: the in-instance cache above still serves this process.
+    }
+  }
+
+  private resolveToken(
+    kind: DingTalkTokenKind,
+    fetchFresh: () => Promise<{ token: string; ttlMs: number }>,
+  ): Promise<string> {
+    const pending = this.inflight.get(kind);
+    if (pending) return pending;
+    const load = async (): Promise<string> => {
+      const hit = await this.readToken(kind);
+      if (hit) return hit;
+      const run = async (): Promise<string> => {
+        const again = await this.readToken(kind);
+        if (again) return again;
+        const fresh = await fetchFresh();
+        await this.storeToken(kind, fresh.token, fresh.ttlMs);
+        return fresh.token;
+      };
+      if (this.options?.singleFlight) return this.options.singleFlight(kind, run);
+      return run();
+    };
+    const promise = load().finally(() => {
+      if (this.inflight.get(kind) === promise) this.inflight.delete(kind);
+    });
+    this.inflight.set(kind, promise);
+    return promise;
+  }
+
+  private async fetchAccessToken(): Promise<{ token: string; ttlMs: number }> {
+    const url = `${DINGTALK_API_BASE}/v1.0/oauth2/accessToken`;
+    this.noteRequest('POST', url);
+    const response = await fetch(url, {
+      body: JSON.stringify({ appKey: this.appKey, appSecret: this.appSecret }),
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      await throwApiError('POST', '/v1.0/oauth2/accessToken', response);
+    }
+
+    const data = (await response.json()) as { accessToken?: string; expireIn?: number };
+    if (!data.accessToken) {
+      throw new DingTalkApiError('DingTalk auth error: missing accessToken', {
+        code: 'missing_token',
+      });
+    }
+
+    const expireInSec = data.expireIn ?? 7200;
+    return { token: data.accessToken, ttlMs: expireInSec * 1000 - TOKEN_REFRESH_SKEW_MS };
+  }
+
+  private async fetchLegacyAccessToken(): Promise<{ token: string; ttlMs: number }> {
+    const url = new URL(`${DINGTALK_OAPI_BASE}/gettoken`);
+    url.searchParams.set('appkey', this.appKey);
+    url.searchParams.set('appsecret', this.appSecret);
+    this.noteRequest('GET', `${DINGTALK_OAPI_BASE}/gettoken`);
+
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, method: 'GET' });
+    const data = (await response.json()) as {
+      access_token?: string;
+      errcode?: number;
+      errmsg?: string;
+      expires_in?: number;
+    };
+
+    if (!response.ok || (data.errcode !== undefined && data.errcode !== 0) || !data.access_token) {
+      throw new DingTalkApiError(
+        `DingTalk legacy auth failed: ${data.errcode ?? response.status} ${data.errmsg ?? ''}`,
+        { code: String(data.errcode ?? `http_${response.status}`), status: response.status },
+      );
+    }
+
+    const expireInSec = data.expires_in ?? 7200;
+    return { token: data.access_token, ttlMs: expireInSec * 1000 - TOKEN_REFRESH_SKEW_MS };
+  }
+
+  private async uploadMediaOnce(params: DingTalkUploadMediaParams): Promise<string> {
+    const token = await this.getLegacyAccessToken();
+    const url = `${DINGTALK_OAPI_BASE}/media/upload?access_token=${encodeURIComponent(token)}&type=${params.type}`;
+    this.noteRequest('POST', `${DINGTALK_OAPI_BASE}/media/upload`);
+    const form = new FormData();
+    form.append('type', params.type);
+    form.append(
+      'media',
+      new Blob([new Uint8Array(params.buffer)], { type: 'application/octet-stream' }),
+      params.filename,
+    );
+
+    const response = await fetch(url, { body: form, method: 'POST' });
+    const data = (await response.json()) as {
+      errcode?: number;
+      errmsg?: string;
+      media_id?: string;
+    };
+
+    if (!response.ok || (data.errcode !== undefined && data.errcode !== 0) || !data.media_id) {
+      throw new DingTalkApiError(
+        `DingTalk media/upload failed: ${data.errcode ?? response.status} ${data.errmsg ?? ''}`,
+        { code: String(data.errcode ?? `http_${response.status}`), status: response.status },
+      );
+    }
+
+    return data.media_id;
+  }
+
+  private async callOnce(
+    method: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
     const token = await this.getAccessToken();
-    const response = await fetch(`${DINGTALK_API_BASE}${path}`, {
+    const url = `${DINGTALK_API_BASE}${path}`;
+    this.noteRequest(method, url);
+    const response = await fetch(url, {
       body: JSON.stringify(body),
       headers: {
         'Accept': 'application/json',

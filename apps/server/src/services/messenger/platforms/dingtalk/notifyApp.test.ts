@@ -63,6 +63,7 @@ const {
   sendRobotMessage,
   sendWorkNotice,
 } = await import('./notifyApp');
+const { hashDingTalkCredential } = await import('./tokenCache');
 
 const NOTIFY_APP = {
   agentId: '4617854001',
@@ -157,7 +158,12 @@ describe('getNotifyAppToken', () => {
 
   it('reuses a still-valid Redis token without refetching', async () => {
     mockRedisGet.mockResolvedValueOnce(
-      JSON.stringify({ appKey: NOTIFY_APP.appKey, expiresAt: 50_000, token: 'cached' }),
+      JSON.stringify({
+        appKey: NOTIFY_APP.appKey,
+        expiresAt: 50_000,
+        secretHash: hashDingTalkCredential(NOTIFY_APP.appKey, NOTIFY_APP.appSecret),
+        token: 'cached',
+      }),
     );
     const token = await getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 });
     expect(token).toBe('cached');
@@ -166,7 +172,12 @@ describe('getNotifyAppToken', () => {
 
   it('hydrates memory from Redis expiresAt and refetches after that instant', async () => {
     mockRedisGet.mockResolvedValue(
-      JSON.stringify({ appKey: NOTIFY_APP.appKey, expiresAt: 2_000, token: 'cached' }),
+      JSON.stringify({
+        appKey: NOTIFY_APP.appKey,
+        expiresAt: 2_000,
+        secretHash: hashDingTalkCredential(NOTIFY_APP.appKey, NOTIFY_APP.appSecret),
+        token: 'cached',
+      }),
     );
     await expect(getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 })).resolves.toBe('cached');
     expect(tokenFetch).not.toHaveBeenCalled();
@@ -185,6 +196,24 @@ describe('getNotifyAppToken', () => {
     );
     await getNotifyAppToken({ fetchImpl: tokenFetch, now: 2_000 });
     expect(tokenFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('single-flights two concurrent gettoken refreshes', async () => {
+    let fetches = 0;
+    tokenFetch.mockImplementation(async () => {
+      fetches += 1;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      return jsonResponse({ access_token: 'tok', errcode: 0, expires_in: 7200 });
+    });
+    const [a, b] = await Promise.all([
+      getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 }),
+      getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 }),
+    ]);
+    expect(a).toBe('tok');
+    expect(b).toBe('tok');
+    expect(fetches).toBe(1);
   });
 
   it('throws with errcode/errmsg when gettoken fails', async () => {
@@ -269,6 +298,45 @@ describe('probeNotifyAppToken', () => {
     expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes('/oToMessages'))).toBe(
       false,
     );
+  });
+
+  it('does not treat an in-flight refresh as proof that a different secret is valid', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    tokenFetch.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('notify-secret')) {
+        await gate;
+        if (url.includes('/gettoken')) {
+          return jsonResponse({ access_token: 'real', errcode: 0, expires_in: 7200 });
+        }
+        return jsonResponse({ accessToken: 'real-new', expireIn: 7200 });
+      }
+      return jsonResponse({ errcode: 40001, errmsg: 'invalid appsecret' }, 200);
+    });
+
+    const pending = getNotifyAppToken({ fetchImpl: tokenFetch, now: 1_000 });
+    try {
+      for (let i = 0; i < 50 && tokenFetch.mock.calls.length === 0; i += 1) {
+        await Promise.resolve();
+      }
+      expect(tokenFetch).toHaveBeenCalled();
+      const result = await probeNotifyAppToken({
+        appKey: 'notify-key',
+        appSecret: 'wrong-secret',
+        fetchImpl: tokenFetch,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe('auth_failed');
+      expect(tokenFetch.mock.calls.some((call) => String(call[0]).includes('wrong-secret'))).toBe(
+        true,
+      );
+    } finally {
+      release?.();
+      await pending;
+    }
   });
 
   it('maps invalid secret to auth_failed', async () => {

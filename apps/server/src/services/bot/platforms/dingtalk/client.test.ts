@@ -9,9 +9,13 @@ const mockGatewayClose = vi.hoisted(() => vi.fn());
 const mockGatewayState = vi.hoisted(() => ({ value: 'connected' as string }));
 const mockGatewayCtorOptions = vi.hoisted(() => ({ last: undefined as any }));
 const mockChatShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockConstructedApi = vi.hoisted(() => ({
+  options: undefined as { singleFlight?: unknown; tokenCache?: unknown } | undefined,
+}));
 
 vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   createDingTalkAdapter: mockCreateDingTalkAdapter,
+  setDingTalkStreamRequestHook: vi.fn(),
   decodeDingTalkThreadId: (threadId: string) => {
     const rest = threadId.startsWith('dingtalk:') ? threadId.slice('dingtalk:'.length) : threadId;
     const last = rest.lastIndexOf(':');
@@ -22,6 +26,13 @@ vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   // afterEach(restoreAllMocks) drops an arrow implementation so the instance
   // has no sendGroupMessage.
   DingTalkApiClient: class {
+    constructor(
+      _appKey: string,
+      _appSecret: string,
+      options?: { singleFlight?: unknown; tokenCache?: unknown },
+    ) {
+      mockConstructedApi.options = options;
+    }
     getAccessToken = mockGetAccessToken;
     sendBySessionWebhook = vi.fn();
     sendGroupMessage = mockSendGroupMessage;
@@ -82,6 +93,7 @@ describe('DingTalkClientFactory', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConstructedApi.options = undefined;
     mockGatewayState.value = 'connected';
     mockGatewayStart.mockResolvedValue(undefined);
     mockChatShutdown.mockResolvedValue(undefined);
@@ -107,6 +119,20 @@ describe('DingTalkClientFactory', () => {
     const result = await factory.validateCredentials({ clientSecret: 'sec' }, {}, 'app_key');
     expect(mockGetAccessToken).toHaveBeenCalled();
     expect(result.valid).toBe(true);
+    expect(mockConstructedApi.options?.tokenCache).toBeUndefined();
+    expect(mockConstructedApi.options?.singleFlight).toBeUndefined();
+  });
+
+  it('validateCredentials reports a wrong secret as invalid and does not reuse a cached token', async () => {
+    mockGetAccessToken.mockRejectedValueOnce(new Error('InvalidAuthentication'));
+    const factory = new DingTalkClientFactory();
+    const result = await factory.validateCredentials({ clientSecret: 'wrong' }, {}, 'app_key');
+    expect(result).toEqual({
+      errors: [{ field: 'credentials', message: 'Failed to authenticate with DingTalk API' }],
+      valid: false,
+    });
+    expect(mockConstructedApi.options?.tokenCache).toBeUndefined();
+    expect(mockConstructedApi.options?.singleFlight).toBeUndefined();
   });
 
   it('extractFiles delegates to downloadMediaFromRawMessage', async () => {

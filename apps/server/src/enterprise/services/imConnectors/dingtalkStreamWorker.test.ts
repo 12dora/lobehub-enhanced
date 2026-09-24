@@ -1,9 +1,25 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as TokenCacheModule from '@/server/services/messenger/platforms/dingtalk/tokenCache';
+
 const mockConnect = vi.fn().mockResolvedValue(undefined);
 const mockDisconnect = vi.fn();
 let capturedOptions: any;
+
+const streamAccounting = vi.hoisted(() => ({
+  recordDingTalkHttpCallSafely: vi.fn(),
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/tokenCache', async (importOriginal) => {
+  const actual = await importOriginal<typeof TokenCacheModule>();
+  return {
+    ...actual,
+    recordDingTalkHttpCallSafely: (method: string, url: string) => {
+      streamAccounting.recordDingTalkHttpCallSafely(method, url);
+    },
+  };
+});
 
 const mockWebhookHandler = vi.fn();
 const mockGetWebhookHandler = vi.fn(() => mockWebhookHandler);
@@ -307,5 +323,20 @@ describe('DingTalkStreamWorker', () => {
       expect.stringMatching(/webhook handler returned 401.*unauthorized/),
     );
     warn.mockRestore();
+  });
+
+  it('counts the stream gateway open on the connection', async () => {
+    const worker = new DingTalkStreamWorker();
+    await worker.tickForTest();
+
+    expect(capturedOptions.onRequest).toBeTypeOf('function');
+    capturedOptions.onRequest({
+      method: 'POST',
+      url: 'https://api.dingtalk.com/v1.0/gateway/connections/open',
+    });
+    expect(streamAccounting.recordDingTalkHttpCallSafely).toHaveBeenCalledWith(
+      'POST',
+      'https://api.dingtalk.com/v1.0/gateway/connections/open',
+    );
   });
 });

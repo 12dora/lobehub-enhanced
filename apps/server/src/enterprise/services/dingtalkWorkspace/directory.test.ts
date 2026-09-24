@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockSearch = vi.hoisted(() => vi.fn());
 const mockGetUsers = vi.hoisted(() => vi.fn());
 const mockNear = vi.hoisted(() => vi.fn());
+const mockRequestDirectorySyncOnLookupMiss = vi.hoisted(() => vi.fn());
 
 vi.mock('@/database/models/dingtalkDirectory', () => ({
   DingTalkDirectoryModel: class {
@@ -11,6 +12,11 @@ vi.mock('@/database/models/dingtalkDirectory', () => ({
     listActiveUsersNearName = mockNear;
     search = mockSearch;
   },
+}));
+
+vi.mock('@/server/enterprise/services/dingtalkDirectory/sync', () => ({
+  requestDirectorySyncOnLookupMiss: (...args: unknown[]) =>
+    mockRequestDirectorySyncOnLookupMiss(...args),
 }));
 
 const { resolveStaff } = await import('./directory');
@@ -29,6 +35,7 @@ describe('resolveStaff', () => {
     mockSearch.mockResolvedValue({ departments: [], users: [] });
     mockGetUsers.mockResolvedValue([]);
     mockNear.mockResolvedValue([]);
+    mockRequestDirectorySyncOnLookupMiss.mockResolvedValue('throttled');
   });
 
   it('resolves a staff:<id> token without guessing', async () => {
@@ -39,6 +46,7 @@ describe('resolveStaff', () => {
       staffId: 'staff-1',
       unionId: 'union-1',
     });
+    expect(mockRequestDirectorySyncOnLookupMiss).not.toHaveBeenCalled();
   });
 
   it('returns ambiguous when two directory users share a name', async () => {
@@ -60,6 +68,7 @@ describe('resolveStaff', () => {
         { staffId: 'staff-2', unionId: 'union-2' },
       ],
     });
+    expect(mockRequestDirectorySyncOnLookupMiss).not.toHaveBeenCalled();
   });
 
   it('returns notFound with near-name suggestions', async () => {
@@ -70,5 +79,12 @@ describe('resolveStaff', () => {
       notFound: true,
       suggestions: [{ deptPath: '研发', name: 'Ada', staffId: 'staff-1', unionId: 'union-1' }],
     });
+    await vi.waitFor(() =>
+      expect(mockRequestDirectorySyncOnLookupMiss).toHaveBeenCalledWith(
+        expect.anything(),
+        {},
+        'Adx',
+      ),
+    );
   });
 });

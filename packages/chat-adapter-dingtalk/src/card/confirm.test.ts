@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { DingTalkApiClient } from '../api';
+import { DingTalkApiClient, type DingTalkApiClient as DingTalkApiClientType } from '../api';
 import {
   buildDingTalkConfirmCardParamMap,
   buildDingTalkConfirmCardUpdateParamMap,
@@ -173,6 +173,20 @@ describe('buildDingTalkConfirmDeliverBody', () => {
   });
 });
 
+const countingClient = () => {
+  const seen: Array<{ method: string; url: string }> = [];
+  const api = new DingTalkApiClient('app', 'secret', {
+    onRequest: (info) => {
+      seen.push(info);
+    },
+    tokenCache: {
+      get: () => ({ expiresAt: Date.now() + 60_000, token: 'token' }),
+      set: () => undefined,
+    },
+  });
+  return { api, seen };
+};
+
 describe('sendDingTalkStreamConfirmCard', () => {
   const previous = process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
 
@@ -184,7 +198,10 @@ describe('sendDingTalkStreamConfirmCard', () => {
   it('does not call DingTalk when no template id is configured', async () => {
     delete process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
     const fetchMock = vi.spyOn(globalThis, 'fetch');
-    const api = { getAccessToken: vi.fn() } as unknown as DingTalkApiClient;
+    const api = {
+      countedRequest: vi.fn(),
+      getAccessToken: vi.fn(),
+    } as unknown as DingTalkApiClientType;
     await expect(
       sendDingTalkStreamConfirmCard(api, {
         card: { content: '正文', status: '待确认', title: '标题' },
@@ -193,6 +210,7 @@ describe('sendDingTalkStreamConfirmCard', () => {
       }),
     ).rejects.toThrow(/DINGTALK_CONFIRM_CARD_TEMPLATE_ID/);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(api.countedRequest).not.toHaveBeenCalled();
     expect(api.getAccessToken).not.toHaveBeenCalled();
   });
 
@@ -200,9 +218,7 @@ describe('sendDingTalkStreamConfirmCard', () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
-    const api = {
-      getAccessToken: vi.fn().mockResolvedValue('token'),
-    } as unknown as DingTalkApiClient;
+    const { api, seen } = countingClient();
     await sendDingTalkStreamConfirmCard(api, {
       card: { content: '正文', status: '待确认', title: '标题' },
       cardTemplateId: 'tpl-1',
@@ -212,6 +228,9 @@ describe('sendDingTalkStreamConfirmCard', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain('/v1.0/card/instances/createAndDeliver');
+    expect(seen).toEqual([
+      { method: 'POST', url: 'https://api.dingtalk.com/v1.0/card/instances/createAndDeliver' },
+    ]);
     const body = JSON.parse(String(init?.body)) as {
       callbackType: string;
       cardData: { cardParamMap: Record<string, string> };
@@ -236,9 +255,7 @@ describe('updateDingTalkConfirmCard', () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
-    const api = {
-      getAccessToken: vi.fn().mockResolvedValue('token'),
-    } as unknown as DingTalkApiClient;
+    const { api, seen } = countingClient();
     await updateDingTalkConfirmCard(api, 'confirm-1', {
       status: 'agree',
       statusText: DINGTALK_CONFIRM_STATUS_TEXT.approved,
@@ -246,6 +263,7 @@ describe('updateDingTalkConfirmCard', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe('https://api.dingtalk.com/v1.0/card/instances');
+    expect(seen).toEqual([{ method: 'PUT', url: 'https://api.dingtalk.com/v1.0/card/instances' }]);
     expect(init?.method).toBe('PUT');
     expect(JSON.parse(String(init?.body))).toEqual({
       cardData: {

@@ -38,11 +38,6 @@ vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
     return { conversationId: rest };
   },
   DingTalkAiCardStream: vi.fn(),
-  DingTalkApiClient: vi.fn().mockImplementation(() => ({
-    sendBySessionWebhook,
-    sendGroupMessage,
-    sendOtoMessage,
-  })),
   DingTalkCardUnavailableError: class extends Error {},
   getDingTalkCard: (...args: unknown[]) => mockGetDingTalkCard(...args),
   getDingTalkSession: vi.fn().mockReturnValue(undefined),
@@ -55,6 +50,14 @@ vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
     return action === 'reject' ? action : undefined;
   },
   rememberDingTalkCard: vi.fn(),
+}));
+
+vi.mock('./tokenCache', () => ({
+  sharedDingTalkApiClient: vi.fn(() => ({
+    sendBySessionWebhook,
+    sendGroupMessage,
+    sendOtoMessage,
+  })),
 }));
 
 vi.mock('./approvalStore', () => ({
@@ -75,6 +78,7 @@ vi.mock('@/server/services/bot/platforms/dingtalk/client', () => ({
 }));
 
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
+const { sharedDingTalkApiClient } = await import('./tokenCache');
 const { getDingTalkSession, isSessionWebhookLive } =
   await import('@lobechat/chat-adapter-dingtalk');
 const { MessengerDingTalkBinder } = await import('./binder');
@@ -120,6 +124,16 @@ describe('MessengerDingTalkBinder.sendDmText', () => {
       msgParam: JSON.stringify({ content: 'hello' }),
       robotCode: 'robot_1',
       userIds: ['staff_1'],
+    });
+  });
+
+  it('sends through the shared DingTalk client', async () => {
+    await new MessengerDingTalkBinder().sendDmText('staff_1', 'hello');
+
+    expect(sharedDingTalkApiClient).toHaveBeenCalledWith({
+      appKey: 'app_key',
+      appSecret: 'app_secret',
+      robotCode: 'robot_1',
     });
   });
 

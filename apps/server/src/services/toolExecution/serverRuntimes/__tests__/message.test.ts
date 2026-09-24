@@ -60,8 +60,18 @@ vi.mock('@/database/schemas', async (importOriginal) => {
 vi.mock('@/database/models/systemBotProvider', () => ({
   SystemBotProviderModel: { findEnabledByPlatform: vi.fn().mockResolvedValue(undefined) },
 }));
+const sharedDingTalkApiClient = vi.hoisted(() => vi.fn());
+
 vi.mock('@lobechat/chat-adapter-dingtalk', () => ({
   DingTalkApiClient: vi.fn(),
+}));
+vi.mock('@/server/services/bot/platforms/dingtalk/client', () => ({
+  DingTalkClientFactory: vi.fn(),
+}));
+vi.mock('@/server/services/messenger/platforms/dingtalk/tokenCache', () => ({
+  installDingTalkRequestAccounting: vi.fn(),
+  recordDingTalkHttpCallSafely: vi.fn(),
+  sharedDingTalkApiClient,
 }));
 vi.mock('@/server/services/bot/platforms/dingtalk/service', () => ({
   DingTalkMessageService: vi.fn(),
@@ -207,6 +217,7 @@ vi.mock('@lobechat/chat-adapter-qq', () => ({
 }));
 
 // Import after mocks
+const { DingTalkMessageService } = await import('@/server/services/bot/platforms/dingtalk/service');
 const { messageRuntime } = await import('../message');
 
 // ==================== Helpers ====================
@@ -264,6 +275,37 @@ describe('messageRuntime', () => {
       expect(typeof runtime.readMessages).toBe('function');
       expect(typeof runtime.editMessage).toBe('function');
       expect(typeof runtime.deleteMessage).toBe('function');
+    });
+  });
+
+  describe('DingTalk adapter', () => {
+    it('sends through the shared DingTalk API client', async () => {
+      const api = { sendGroupMessage: vi.fn() };
+      sharedDingTalkApiClient.mockReturnValue(api);
+      const sendMessage = vi.fn().mockResolvedValue({
+        channelId: 'cid-1',
+        platform: 'dingtalk',
+      });
+      vi.mocked(DingTalkMessageService).mockImplementation(() => ({ sendMessage }) as never);
+      mockProviderFor('dingtalk', { clientSecret: 'sec', robotCode: 'robot_1' });
+
+      const runtime = await messageRuntime.factory(validContext);
+      const result = await runtime.sendMessage({
+        channelId: 'cid-1',
+        content: 'hello',
+        platform: 'dingtalk',
+      });
+
+      expect(result).toMatchObject({
+        state: { channelId: 'cid-1', platform: 'dingtalk' },
+        success: true,
+      });
+      expect(sharedDingTalkApiClient).toHaveBeenCalledWith({
+        appKey: 'app-1',
+        appSecret: 'sec',
+        robotCode: 'robot_1',
+      });
+      expect(DingTalkMessageService).toHaveBeenCalledWith(api, 'robot_1');
     });
   });
 

@@ -1,3 +1,4 @@
+export type { DingTalkAdapterClientConfig } from './adapter';
 export {
   chunkMarkdown,
   createDingTalkAdapter,
@@ -9,10 +10,15 @@ export {
   extractText,
 } from './adapter';
 export type {
+  DingTalkApiClientOptions,
+  DingTalkCachedToken,
   DingTalkRecallMessageParams,
+  DingTalkRequestInfo,
   DingTalkSendGroupParams,
   DingTalkSendOtoParams,
   DingTalkSendResult,
+  DingTalkTokenCache,
+  DingTalkTokenKind,
 } from './api';
 export { assertDingTalkSessionWebhook, DingTalkApiClient, extractProcessQueryKey } from './api';
 export type { DingTalkConfirmCardContent, DingTalkConfirmCardTarget } from './card/confirm';
@@ -43,8 +49,12 @@ export {
   verifyDingTalkForwardHeaders,
 } from './forwardAuth';
 export { convertGfmTablesForDingTalk } from './markdownTables';
-export type { DingTalkStreamFrame, DingTalkStreamOptions } from './stream';
-export { DingTalkStreamConnection } from './stream';
+export type {
+  DingTalkStreamFrame,
+  DingTalkStreamOptions,
+  DingTalkStreamRequestInfo,
+} from './stream';
+export { DingTalkStreamConnection, setDingTalkStreamRequestHook } from './stream';
 export type { DingTalkCardMemory, RememberDingTalkCardInput } from './threadId';
 export {
   clearDingTalkCards,

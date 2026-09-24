@@ -3,7 +3,7 @@ import {
   chunkMarkdown,
   decodeDingTalkThreadId,
   DingTalkAiCardStream,
-  DingTalkApiClient,
+  type DingTalkApiClient,
   DingTalkCardUnavailableError,
   getDingTalkSession,
   isSessionWebhookLive,
@@ -14,6 +14,7 @@ import { isRecord } from '@lobechat/utils/object';
 import debug from 'debug';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
+import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import type { AgentReplySink } from '@/server/services/bot/AgentBridgeService';
 import { sendDingTalkAttachments } from '@/server/services/bot/platforms/dingtalk/sendAttachments';
 
@@ -34,8 +35,106 @@ import {
   formatDingTalkWelcomeTitle,
 } from './const';
 import { setDingTalkLastList } from './redis';
+import { sharedDingTalkApiClient } from './tokenCache';
+
+/** Text-mode 「思考中」 placeholder waits this long before it is sent. */
+export const DINGTALK_THINKING_DELAY_MS = 5_000;
+/**
+ * How long a completed / failed / waiting turn stays marked done.
+ * Long enough that a timer armed on another replica (queue mode) still
+ * sees it, short enough that a later turn can mint a new epoch.
+ */
+export const DINGTALK_TURN_DONE_TTL_SECONDS = 30;
+/**
+ * Turn-epoch key lifetime. 120 s expired on a long turn, so the done marker
+ * fell back to `1` and the next turn's INCR collided with it — 「正在思考…」
+ * was never sent. 2 h covers a long run; onStart, onPartial, and
+ * {@link markDingTalkTurnDone} refresh the TTL as well.
+ */
+export const DINGTALK_TURN_EPOCH_TTL_SECONDS = 2 * 60 * 60;
 
 const log = debug('lobe-server:messenger:dingtalk:cards');
+
+/** Redis key: epoch of the turn that already finished (complete / error / waiting). */
+export const dingtalkTurnDoneRedisKey = (threadId: string): string =>
+  `messenger:dingtalk:turn-done:${threadId}`;
+
+const turnEpochRedisKey = (threadId: string): string => `messenger:dingtalk:turn-epoch:${threadId}`;
+
+const thinkingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const refreshDingTalkTurnEpochTtl = async (threadId: string): Promise<void> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return;
+  try {
+    await redis.expire(turnEpochRedisKey(threadId), DINGTALK_TURN_EPOCH_TTL_SECONDS);
+  } catch (error) {
+    log('refreshDingTalkTurnEpochTtl failed: %O', error);
+  }
+};
+
+const bumpDingTalkTurnEpoch = async (threadId: string): Promise<number | null> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return null;
+  try {
+    const epoch = await redis.incr(turnEpochRedisKey(threadId));
+    await refreshDingTalkTurnEpochTtl(threadId);
+    const numeric = typeof epoch === 'number' ? epoch : Number(epoch);
+    return Number.isFinite(numeric) ? numeric : null;
+  } catch (error) {
+    log('bumpDingTalkTurnEpoch failed: %O', error);
+    return null;
+  }
+};
+
+/** Record that this thread's current turn finished, so a late thinking send is skipped. */
+export const markDingTalkTurnDone = async (threadId: string): Promise<void> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return;
+  try {
+    // Keep the epoch key alive so the stored done value is this turn's epoch,
+    // not the fallback `1` that collides with the next turn.
+    await refreshDingTalkTurnEpochTtl(threadId);
+    const epoch = await redis.get(turnEpochRedisKey(threadId));
+    const value = epoch == null || epoch === '' ? '1' : String(epoch);
+    await redis.set(
+      dingtalkTurnDoneRedisKey(threadId),
+      value,
+      'EX',
+      DINGTALK_TURN_DONE_TTL_SECONDS,
+    );
+  } catch (error) {
+    log('markDingTalkTurnDone failed: %O', error);
+  }
+};
+
+const readDingTalkTurnDoneEpoch = async (threadId: string): Promise<number | null> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return null;
+  try {
+    const raw = await redis.get(dingtalkTurnDoneRedisKey(threadId));
+    if (raw == null || raw === '') return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch (error) {
+    log('readDingTalkTurnDoneEpoch failed: %O', error);
+    return null;
+  }
+};
+
+const clearRegisteredThinkingTimer = (threadId: string): void => {
+  const timer = thinkingTimers.get(threadId);
+  if (!timer) return;
+  clearTimeout(timer);
+  thinkingTimers.delete(threadId);
+};
+
+const apiFor = (config: { clientId: string; clientSecret: string; robotCode: string }) =>
+  sharedDingTalkApiClient({
+    appKey: config.clientId,
+    appSecret: config.clientSecret,
+    robotCode: config.robotCode,
+  });
 
 const liveSinks = new Map<string, AgentReplySink>();
 
@@ -44,6 +143,10 @@ export const getDingTalkReplySink = (threadId: string): AgentReplySink | undefin
 
 export const clearDingTalkReplySink = (threadId: string): void => {
   liveSinks.delete(threadId);
+  clearRegisteredThinkingTimer(threadId);
+  // Queue-mode completion / waiting can land on a replica that does not own
+  // the timer. The flag lets that timer skip 「正在思考…」.
+  void markDingTalkTurnDone(threadId);
 };
 
 export interface DingTalkChoiceEntry {
@@ -129,7 +232,7 @@ export const sendDingTalkMarkdown = async (
   if (!text) return;
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = apiFor(config);
   const resolved = resolveSendTarget(threadId);
   const { decoded, isGroup, session } = resolved;
   const staffId = options?.staffId || resolved.staffId;
@@ -212,7 +315,7 @@ export const sendDingTalkActionCardToThread = async (
     const config = await getMessengerDingTalkConfig();
     if (!config) return { sent: false };
 
-    const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+    const api = apiFor(config);
     await api.sendBySessionWebhook(session.sessionWebhook, {
       msgtype: 'actionCard',
       actionCard: {
@@ -255,7 +358,7 @@ const sendActionCard = async (params: {
 }): Promise<boolean> => {
   const config = await getMessengerDingTalkConfig();
   if (!config) return false;
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = apiFor(config);
   const { staffId, decoded, isGroup } = resolveSendTarget(params.threadId);
   const text =
     isGroup && staffId && !params.text.includes(`@${staffId}`)
@@ -345,7 +448,7 @@ const sendSelectCard = async (params: {
 }): Promise<boolean> => {
   const config = await getMessengerDingTalkConfig();
   if (!config) return false;
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = apiFor(config);
   const { decoded, isGroup, staffId } = resolveSendTarget(params.threadId);
   const outTrackId = `select-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   try {
@@ -455,7 +558,7 @@ const sendOutboundAttachments = async (
   if (!outbound.length) return;
   const config = await getMessengerDingTalkConfig();
   if (!config) return;
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = apiFor(config);
   const { decoded, isGroup, session, staffId } = resolveSendTarget(threadId);
   try {
     await sendDingTalkAttachments(
@@ -480,11 +583,17 @@ export const createDingTalkReplySink = async (
   if (!config) return undefined;
 
   const { decoded, isGroup, staffId } = resolveSendTarget(threadId);
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = apiFor(config);
   let mode: 'card' | 'text' = config.aiCardTemplateId ? 'card' : 'text';
   let stream: DingTalkAiCardStream | undefined;
   let finalized = false;
   let thinkingProcessQueryKey: string | undefined;
+  let replyClosed = false;
+  let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
+  let thinkingFlight: Promise<void> | undefined;
+  let turnEpoch: number | null = null;
+
+  clearRegisteredThinkingTimer(threadId);
 
   const recallThinking = async () => {
     const key = thinkingProcessQueryKey;
@@ -498,9 +607,55 @@ export const createDingTalkReplySink = async (
   };
 
   const sendThinkingPlaceholder = async () => {
-    thinkingProcessQueryKey = await sendDingTalkMarkdown(threadId, DINGTALK_THINKING_REPLY, {
+    if (replyClosed) return;
+    const doneEpoch = await readDingTalkTurnDoneEpoch(threadId);
+    // Skip when this turn (or a later one) already finished on any replica.
+    if (turnEpoch !== null && doneEpoch !== null && doneEpoch >= turnEpoch) return;
+    if (replyClosed) return;
+    const key = await sendDingTalkMarkdown(threadId, DINGTALK_THINKING_REPLY, {
       recallable: true,
     });
+    if (replyClosed) {
+      if (key) {
+        await recallDingTalkMessage(api, {
+          isGroup,
+          openConversationId: decoded.conversationId,
+          processQueryKey: key,
+          robotCode: config.robotCode,
+        });
+      }
+      return;
+    }
+    thinkingProcessQueryKey = key;
+  };
+
+  const disarmThinkingTimer = () => {
+    const local = thinkingTimer;
+    thinkingTimer = undefined;
+    if (local) clearTimeout(local);
+    clearRegisteredThinkingTimer(threadId);
+  };
+
+  const armThinkingTimer = () => {
+    if (replyClosed || thinkingTimer || thinkingFlight) return;
+    const timer = setTimeout(() => {
+      if (thinkingTimer === timer) thinkingTimer = undefined;
+      if (thinkingTimers.get(threadId) === timer) thinkingTimers.delete(threadId);
+      if (replyClosed) return;
+      thinkingFlight = sendThinkingPlaceholder().finally(() => {
+        thinkingFlight = undefined;
+      });
+    }, DINGTALK_THINKING_DELAY_MS);
+    thinkingTimer = timer;
+    thinkingTimers.set(threadId, timer);
+  };
+
+  const finishTextReply = async (text: string) => {
+    replyClosed = true;
+    disarmThinkingTimer();
+    if (thinkingFlight) await thinkingFlight;
+    await recallThinking();
+    await sendDingTalkMarkdown(threadId, text);
   };
 
   const fallbackToText = async (content?: string) => {
@@ -530,29 +685,34 @@ export const createDingTalkReplySink = async (
 
   const sink: AgentReplySink = {
     onComplete: async (content, extras) => {
+      replyClosed = true;
+      disarmThinkingTimer();
+      await markDingTalkTurnDone(threadId);
       // Whitespace-only is not a real answer — recall/finalize still run,
       // but markdown send no-ops on falsy text instead of a blank bubble.
       const text = content.trim() ? content : '';
       if (mode === 'card') {
         await finalizeCard(text);
       } else {
-        await recallThinking();
-        await sendDingTalkMarkdown(threadId, text);
+        await finishTextReply(text);
       }
       if (extras?.attachments?.length) {
         await sendOutboundAttachments(threadId, extras.attachments);
       }
     },
     onError: async (errorText) => {
+      replyClosed = true;
+      disarmThinkingTimer();
+      await markDingTalkTurnDone(threadId);
       const text = errorText || '执行失败';
       if (mode === 'card') {
         await finalizeCard(text);
         return;
       }
-      await recallThinking();
-      await sendDingTalkMarkdown(threadId, text);
+      await finishTextReply(text);
     },
     onPartial: async (content) => {
+      await refreshDingTalkTurnEpochTtl(threadId);
       if (mode !== 'card' || !stream || finalized) return;
       try {
         await stream.replace(content);
@@ -565,9 +725,10 @@ export const createDingTalkReplySink = async (
       }
     },
     onStart: async () => {
+      turnEpoch = await bumpDingTalkTurnEpoch(threadId);
       if (mode !== 'card' || !config.aiCardTemplateId) {
         mode = 'text';
-        await sendThinkingPlaceholder();
+        armThinkingTimer();
         return;
       }
       stream = new DingTalkAiCardStream(api, {

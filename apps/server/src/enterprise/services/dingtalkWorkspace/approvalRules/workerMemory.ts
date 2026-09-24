@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 /** In-memory TTL for owner tasks that need no further work this cycle. */
 export const APPROVAL_RULE_EVALUATED_TTL_MS = 24 * 60 * 60 * 1000;
 /** Safety-net rescan when pending count does not exceed remembered task ids. */
-export const APPROVAL_RULE_REVERIFY_MS = 30 * 60 * 1000;
+export const APPROVAL_RULE_REVERIFY_MS = 60 * 60 * 1000;
 
 export interface ApprovalRuleFingerprintSource {
   conditions: unknown;

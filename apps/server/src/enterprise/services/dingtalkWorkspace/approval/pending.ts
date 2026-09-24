@@ -9,7 +9,22 @@ import {
   listInstanceIds,
   listPremiumTodoTasks,
   listVisibleTemplates,
+  type PremiumTodoTask,
 } from './api';
+import {
+  acquireApprovalSweepLock,
+  approvalSweepEpochIsCurrent,
+  bumpApprovalSweepEpoch,
+  bumpApprovalUserGeneration,
+  captureApprovalCacheGeneration,
+  invalidateAllApprovalListCaches,
+  invalidateApprovalInstanceCache,
+  invalidateApprovalUserCache,
+  readApprovalScopedCache,
+  resetApprovalCacheForTest,
+  waitForApprovalScopedCache,
+  writeApprovalScopedCache,
+} from './cache';
 import { formSummary } from './formValues';
 import { isRateLimitedError } from './scanPace';
 import {
@@ -33,24 +48,6 @@ import {
   SWEEP_CACHE_TTL_MS,
   type VisibleTemplate,
 } from './types';
-
-type CacheEntry<T> = { expiresAt: number; value: T };
-
-const cache = new Map<string, CacheEntry<unknown>>();
-
-const cacheGet = <T>(key: string, now: number): T | undefined => {
-  const entry = cache.get(key);
-  if (!entry) return undefined;
-  if (entry.expiresAt <= now) {
-    cache.delete(key);
-    return undefined;
-  }
-  return entry.value as T;
-};
-
-const cacheSet = <T>(key: string, value: T, ttlMs: number, now: number): void => {
-  cache.set(key, { expiresAt: now + ttlMs, value });
-};
 
 /** AIHub user plus the verified DingTalk staff id. Identity changes must not share rows. */
 const scopeOf = (userId: string, staffId: string): string => `${userId}:${staffId}`;
@@ -96,8 +93,8 @@ const sweepEpochs = new Map<string, number>();
  * list that started earlier cannot write its rows back over the refresh.
  */
 const pendingWriteTokens = new Map<string, number>();
-/** Bumped on invalidate so an in-flight list/sweep cannot write a stale result back. */
-const cacheGenerations = new Map<string, number>();
+
+const SWEEP_SUFFIX = 'sweep';
 
 const beginPendingWrite = (scope: string, refresh: boolean): number => {
   const current = pendingWriteTokens.get(scope) ?? 0;
@@ -110,31 +107,14 @@ const beginPendingWrite = (scope: string, refresh: boolean): number => {
 const pendingWriteIsCurrent = (scope: string, token: number): boolean =>
   (pendingWriteTokens.get(scope) ?? 0) === token;
 
-const cacheGenerationOf = (userId: string): number => cacheGenerations.get(userId) ?? 0;
-
-const bumpCacheGeneration = (userId: string): void => {
-  cacheGenerations.set(userId, cacheGenerationOf(userId) + 1);
-};
-
-const cacheSetIfCurrent = <T>(
-  userId: string,
-  generation: number,
-  key: string,
-  value: T,
-  ttlMs: number,
-  now: number,
-): void => {
-  if (cacheGenerationOf(userId) !== generation) return;
-  cacheSet(key, value, ttlMs, now);
-};
-
 const dropUserPendingCaches = (userId: string): void => {
-  bumpCacheGeneration(userId);
-  dropMapKeysForUser(cache, userId);
+  invalidateApprovalUserCache(userId);
   dropMapKeysForUser(sweepFlights, userId);
   dropMapKeysForUser(sweepEpochs, userId);
   dropMapKeysForUser(pendingWriteTokens, userId);
 };
+
+export { invalidateApprovalInstanceCache };
 
 /**
  * Drop the per-user pending/initiated result cache, shared sweep, and any
@@ -153,11 +133,10 @@ export const invalidatePendingCaches = (userId: string): void => {
 export const invalidateApprovalListCache = (userId?: string): void => {
   try {
     if (!userId?.trim()) {
-      cache.clear();
+      invalidateAllApprovalListCaches();
       sweepFlights.clear();
       sweepEpochs.clear();
       pendingWriteTokens.clear();
-      cacheGenerations.clear();
       return;
     }
     dropUserPendingCaches(userId.trim());
@@ -169,11 +148,10 @@ export const invalidateApprovalListCache = (userId?: string): void => {
 let scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
 
 export const resetApprovalListCacheForTest = (): void => {
-  cache.clear();
+  resetApprovalCacheForTest();
   sweepFlights.clear();
   sweepEpochs.clear();
   pendingWriteTokens.clear();
-  cacheGenerations.clear();
   scanTimeBudgetMs = SCAN_TIME_BUDGET_MS;
 };
 
@@ -296,6 +274,7 @@ const runSharedSweep = async (
   staffId: string,
   templatesInput: VisibleTemplate[],
   session: SweepSession,
+  fresh = false,
 ): Promise<SharedSweepResult> => {
   const deadlineMs = Date.now() + scanTimeBudgetMs;
   const templates = sortTemplatesForScan(templatesInput);
@@ -346,7 +325,7 @@ const runSharedSweep = async (
         }
         pageIds.push({ id, processCode: template.processCode });
       }
-      const loaded = await loadInstanceDetails(pageIds, deadlineMs, mark);
+      const loaded = await loadInstanceDetails(pageIds, deadlineMs, mark, fresh);
       for (const item of loaded) {
         if (!item) continue;
         details.push(item);
@@ -376,6 +355,58 @@ const runSharedSweep = async (
   return { details, incomplete };
 };
 
+/** Ids and the fields the pending / initiated rows actually read. Drops records that blow the 1 MB cap. */
+const compactDetailForSweepCache = (detail: ProcessInstanceDetail): ProcessInstanceDetail => ({
+  ccUserIds: [],
+  ...(detail.createTime ? { createTime: detail.createTime } : {}),
+  formComponentValues: formSummary(detail.formComponentValues, SUMMARY_FIELD_LIMIT).map((item) => ({
+    name: item.label,
+    value: item.value,
+  })),
+  operationRecords: [],
+  originatorUserId: detail.originatorUserId,
+  processInstanceId: detail.processInstanceId,
+  ...(detail.result ? { result: detail.result } : {}),
+  ...(detail.status ? { status: detail.status } : {}),
+  tasks: detail.tasks.map((task) => ({
+    status: task.status,
+    taskId: task.taskId,
+    userId: task.userId,
+  })),
+  title: detail.title,
+});
+
+const compactSweepForCache = (result: SharedSweepResult): SharedSweepResult => ({
+  ...(result.incomplete ? { incomplete: result.incomplete } : {}),
+  details: result.details.map((item) => ({
+    detail: compactDetailForSweepCache(item.detail),
+    processCode: item.processCode,
+  })),
+});
+
+const rememberSweep = async (
+  input: { staffId: string; userId: string },
+  generation: string,
+  redisEpoch: string | undefined,
+  epoch: number,
+  key: string,
+  result: SharedSweepResult,
+): Promise<void> => {
+  if (sweepEpochs.get(key) !== epoch) return;
+  if (redisEpoch && !(await approvalSweepEpochIsCurrent(input.userId, input.staffId, redisEpoch))) {
+    return;
+  }
+  await writeApprovalScopedCache({
+    generation,
+    now: Date.now(),
+    staffId: input.staffId,
+    suffix: SWEEP_SUFFIX,
+    ttlMs: result.incomplete ? INCOMPLETE_CACHE_TTL_MS : SWEEP_CACHE_TTL_MS,
+    userId: input.userId,
+    value: compactSweepForCache(result),
+  });
+};
+
 const loadSharedSweep = async (input: {
   pendingTarget?: number;
   refresh?: boolean;
@@ -387,7 +418,12 @@ const loadSharedSweep = async (input: {
   const now = Date.now();
   const key = sweepKeyFor(input.userId, input.staffId);
   if (!input.refresh) {
-    const cached = cacheGet<SharedSweepResult>(key, now);
+    const cached = await readApprovalScopedCache<SharedSweepResult>(
+      input.userId,
+      input.staffId,
+      SWEEP_SUFFIX,
+      now,
+    );
     if (cached) return cached;
   }
 
@@ -406,30 +442,59 @@ const loadSharedSweep = async (input: {
     return existing.promise;
   }
 
+  // The cache read above already awaited. Register the flight in this turn,
+  // before the lock await, so the next caller joins instead of scanning.
   const epoch = (sweepEpochs.get(key) ?? 0) + 1;
   sweepEpochs.set(key, epoch);
   const nextSession: SweepSession = {
     pendingTarget: input.pendingTarget,
     wantInitiated: input.wantInitiated === true,
   };
-  const generation = cacheGenerationOf(input.userId);
-  const promise = runSharedSweep(input.staffId, input.templates, nextSession)
-    .then((result) => {
-      if (sweepEpochs.get(key) !== epoch) return result;
-      cacheSetIfCurrent(
-        input.userId,
-        generation,
-        key,
-        result,
-        result.incomplete ? INCOMPLETE_CACHE_TTL_MS : SWEEP_CACHE_TTL_MS,
-        Date.now(),
+  const promise = (async (): Promise<SharedSweepResult> => {
+    let lock = await acquireApprovalSweepLock(
+      input.userId,
+      input.staffId,
+      input.refresh ? 'refresh' : 'scan',
+    );
+    let release = lock.kind === 'acquired' ? lock.release : undefined;
+    try {
+      if (lock.kind === 'busy') {
+        const waited = await waitForApprovalScopedCache<SharedSweepResult>(
+          input.userId,
+          input.staffId,
+          SWEEP_SUFFIX,
+        );
+        if (waited) return waited;
+        lock = await acquireApprovalSweepLock(
+          input.userId,
+          input.staffId,
+          input.refresh ? 'refresh' : 'scan',
+        );
+        release = lock.kind === 'acquired' ? lock.release : undefined;
+      }
+      // Epoch moves only while this process holds the lock. An unlocked sweep
+      // must not discard the holder's cached result.
+      const holdsLock = lock.kind === 'acquired';
+      const redisEpoch = holdsLock
+        ? await bumpApprovalSweepEpoch(input.userId, input.staffId)
+        : undefined;
+      const generation = await captureApprovalCacheGeneration(input.userId);
+      const result = await runSharedSweep(
+        input.staffId,
+        input.templates,
+        nextSession,
+        input.refresh === true,
       );
+      if (holdsLock || lock.kind === 'down') {
+        await rememberSweep(input, generation, redisEpoch, epoch, key, result);
+      }
       return result;
-    })
-    .finally(() => {
+    } finally {
       const current = sweepFlights.get(key);
       if (current?.epoch === epoch) sweepFlights.delete(key);
-    });
+      if (release) void release();
+    }
+  })();
   sweepFlights.set(key, {
     epoch,
     promise,
@@ -533,6 +598,7 @@ async function loadInstanceDetails(
   ids: Array<{ id: string; processCode: string }>,
   deadlineMs: number,
   mark: (reason: ApprovalScanIncompleteReason) => void,
+  fresh = false,
 ): Promise<Array<{ detail: ProcessInstanceDetail; processCode: string } | undefined>> {
   return mapWithConcurrency(ids, INSTANCE_DETAIL_CONCURRENCY, async (item) => {
     if (Date.now() >= deadlineMs) {
@@ -540,7 +606,9 @@ async function loadInstanceDetails(
       return undefined;
     }
     try {
-      const detail = await getInstanceDetail(item.id);
+      const detail = fresh
+        ? await getInstanceDetail(item.id, { fresh: true })
+        : await getInstanceDetail(item.id);
       return { detail, processCode: item.processCode };
     } catch (error) {
       if (isRateLimitedError(error)) mark('rate_limited');
@@ -614,19 +682,23 @@ const listPendingByScan = async (
   return pendingRowsFromSweep(sweep, staffId, templates, names, limit, pendingTarget);
 };
 
+/**
+ * Detail fills gaps the premium row does not already carry.
+ * Originator and create time are part of the tool row, same as title and the form summary.
+ */
+const premiumRowNeedsInstanceDetail = (item: PremiumTodoTask): boolean =>
+  !item.title.trim() ||
+  !item.formMassage?.trim() ||
+  !item.originatorName?.trim() ||
+  !item.processCreateTime?.trim();
+
 const enrichPremiumRows = async (
   db: LobeChatDatabase,
-  list: Array<{
-    formMassage?: string;
-    originatorName?: string;
-    processCreateTime?: string;
-    processInstanceId: string;
-    taskId: string;
-    title: string;
-  }>,
+  list: PremiumTodoTask[],
   processNameByInstance: Map<string, string>,
 ): Promise<PendingApprovalRow[]> => {
   const details = await mapWithConcurrency(list, INSTANCE_DETAIL_CONCURRENCY, async (item) => {
+    if (!premiumRowNeedsInstanceDetail(item)) return undefined;
     try {
       return await getInstanceDetail(item.processInstanceId);
     } catch {
@@ -668,17 +740,36 @@ export const listPendingApprovals = async (input: {
 }): Promise<ApprovalListResult<PendingApprovalRow>> => {
   const limit = clampLimit(input.limit);
   const now = Date.now();
-  const cacheKey = scopedKey(input.userId, input.staffId, `pending:${limit}`);
+  const cacheSuffix = `pending:${limit}`;
   if (!input.refresh) {
-    const cached = cacheGet<ApprovalListResult<PendingApprovalRow>>(cacheKey, now);
+    const cached = await readApprovalScopedCache<ApprovalListResult<PendingApprovalRow>>(
+      input.userId,
+      input.staffId,
+      cacheSuffix,
+      now,
+    );
     if (cached) return cached;
   }
   const scope = scopeOf(input.userId, input.staffId);
+  // Redis generation, not only the in-process token: a slower list on another
+  // replica captured the old generation and must not overwrite this refresh.
+  if (input.refresh) await bumpApprovalUserGeneration(input.userId);
   const writeToken = beginPendingWrite(scope, input.refresh === true);
-  const generation = cacheGenerationOf(input.userId);
-  const storePending = (value: ApprovalListResult<PendingApprovalRow>, ttlMs: number): void => {
+  const generation = await captureApprovalCacheGeneration(input.userId);
+  const storePending = async (
+    value: ApprovalListResult<PendingApprovalRow>,
+    ttlMs: number,
+  ): Promise<void> => {
     if (!pendingWriteIsCurrent(scope, writeToken)) return;
-    cacheSetIfCurrent(input.userId, generation, cacheKey, value, ttlMs, Date.now());
+    await writeApprovalScopedCache({
+      generation,
+      now: Date.now(),
+      staffId: input.staffId,
+      suffix: cacheSuffix,
+      ttlMs,
+      userId: input.userId,
+      value,
+    });
   };
 
   let pendingTarget: number | undefined;
@@ -689,7 +780,7 @@ export const listPendingApprovals = async (input: {
   }
   if (pendingTarget === 0) {
     const empty: ApprovalListResult<PendingApprovalRow> = { rows: [], truncated: false };
-    storePending(empty, PENDING_CACHE_TTL_MS);
+    await storePending(empty, PENDING_CACHE_TTL_MS);
     return empty;
   }
 
@@ -724,7 +815,7 @@ export const listPendingApprovals = async (input: {
     );
   }
 
-  storePending(result, result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS);
+  await storePending(result, result.incomplete ? INCOMPLETE_CACHE_TTL_MS : PENDING_CACHE_TTL_MS);
   return result;
 };
 
@@ -821,14 +912,21 @@ export const listInitiatedApprovals = async (input: {
     q: input.q,
   });
   const now = Date.now();
-  const cacheKey = scopedKey(
+  const cacheSuffix = [
+    'initiated',
+    input.status ?? 'all',
+    input.processCode ?? '',
+    input.q ?? '',
+    String(limit),
+  ].join(':');
+  const cached = await readApprovalScopedCache<ApprovalListResult<InitiatedApprovalRow>>(
     input.userId,
     input.staffId,
-    `initiated:${input.status ?? 'all'}:${input.processCode ?? ''}:${input.q ?? ''}:${limit}`,
+    cacheSuffix,
+    now,
   );
-  const cached = cacheGet<ApprovalListResult<InitiatedApprovalRow>>(cacheKey, now);
   if (cached) return cached;
-  const generation = cacheGenerationOf(input.userId);
+  const generation = await captureApprovalCacheGeneration(input.userId);
 
   const targeted = Boolean(input.processCode?.trim() || input.q?.trim());
   const otherStatus = Boolean(input.status && input.status !== 'RUNNING');
@@ -865,14 +963,15 @@ export const listInitiatedApprovals = async (input: {
     });
   }
 
-  cacheSetIfCurrent(
-    input.userId,
+  await writeApprovalScopedCache({
     generation,
-    cacheKey,
-    result,
-    result.incomplete ? INCOMPLETE_CACHE_TTL_MS : INITIATED_CACHE_TTL_MS,
-    Date.now(),
-  );
+    now: Date.now(),
+    staffId: input.staffId,
+    suffix: cacheSuffix,
+    ttlMs: result.incomplete ? INCOMPLETE_CACHE_TTL_MS : INITIATED_CACHE_TTL_MS,
+    userId: input.userId,
+    value: result,
+  });
   return result;
 };
 
@@ -883,13 +982,26 @@ export const loadVisibleTemplatesCached = async (
   refresh = false,
 ): Promise<VisibleTemplate[]> => {
   const now = Date.now();
-  const cacheKey = scopedKey(userId, staffId, 'templates');
+  const cacheSuffix = 'templates';
   if (!refresh) {
-    const cached = cacheGet<VisibleTemplate[]>(cacheKey, now);
+    const cached = await readApprovalScopedCache<VisibleTemplate[]>(
+      userId,
+      staffId,
+      cacheSuffix,
+      now,
+    );
     if (cached) return cached;
   }
-  const generation = cacheGenerationOf(userId);
+  const generation = await captureApprovalCacheGeneration(userId);
   const templates = await listVisibleTemplates(staffId);
-  cacheSetIfCurrent(userId, generation, cacheKey, templates, ttlMs, now);
+  await writeApprovalScopedCache({
+    generation,
+    now,
+    staffId,
+    suffix: cacheSuffix,
+    ttlMs,
+    userId,
+    value: templates,
+  });
   return templates;
 };

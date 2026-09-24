@@ -292,6 +292,8 @@ export const INITIATED_CACHE_TTL_MS = 60_000;
 /** Shared sweep also feeds 我发起的, so its TTL stays at 1 minute. */
 export const SWEEP_CACHE_TTL_MS = 60_000;
 export const INCOMPLETE_CACHE_TTL_MS = 30_000;
+/** One processInstances GET, shared across replicas. Dropped when a write targets that instance. */
+export const INSTANCE_DETAIL_CACHE_TTL_MS = 10 * 60_000;
 export const PENDING_INSTANCE_CAP = 300;
 export const INSTANCE_DETAIL_CONCURRENCY = 2;
 export const INSTANCE_IDS_QUERY_CONCURRENCY = 2;

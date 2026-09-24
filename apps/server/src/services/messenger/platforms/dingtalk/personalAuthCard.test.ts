@@ -54,24 +54,20 @@ vi.mock('./cards', () => ({
   sendDingTalkActionCardToThread: cardDeps.sendDingTalkActionCardToThread,
 }));
 
+vi.mock('./tokenCache', () => ({
+  sharedDingTalkApiClient: vi.fn(() => ({ sendOtoMessage })),
+}));
+
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/identity', () => ({
   requireVerifiedDingtalkIdentity: cardDeps.requireVerifiedDingtalkIdentity,
 }));
-
-vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    DingTalkApiClient: vi.fn().mockImplementation(() => ({ sendOtoMessage })),
-  };
-});
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: () => (redisState.useClient ? redisState.client : null),
 }));
 
-const { DingTalkApiClient } = await import('@lobechat/chat-adapter-dingtalk');
 const { getMessengerDingTalkConfig } = await import('@/config/messenger');
+const { sharedDingTalkApiClient } = await import('./tokenCache');
 const { notifyDingtalkPersonalLoginResult, sendDingtalkPersonalAuthCard } =
   await import('./personalAuthCard');
 
@@ -123,7 +119,6 @@ describe('sendDingtalkPersonalAuthCard', () => {
     expect(result).toEqual({ sent: true, via: 'oto' });
     expect(cardDeps.sendDingTalkActionCardToThread).not.toHaveBeenCalled();
     expect(cardDeps.requireVerifiedDingtalkIdentity).not.toHaveBeenCalled();
-    expect(DingTalkApiClient).toHaveBeenCalledWith('app_key', 'app_secret');
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
     expect(sendOtoMessage).toHaveBeenCalledWith({
       msgKey: 'sampleActionCard',
@@ -150,6 +145,24 @@ describe('sendDingtalkPersonalAuthCard', () => {
       'NX',
     );
     expect(redisState.client?.incr).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the 1:1 card through the shared DingTalk client', async () => {
+    await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      userId: 'user_1',
+    });
+
+    expect(sharedDingTalkApiClient).toHaveBeenCalledWith({
+      appKey: 'app_key',
+      appSecret: 'app_secret',
+      robotCode: 'robot_1',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ robotCode: 'robot_1', userIds: ['staff_9'] }),
+    );
   });
 
   it('does not send a second card for the same job', async () => {

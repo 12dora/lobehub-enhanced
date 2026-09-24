@@ -1,5 +1,5 @@
 import type { DingTalkApiClient } from '../api';
-import { DINGTALK_API_BASE, DingTalkApiError, DingTalkCardUnavailableError } from '../types';
+import { DingTalkApiError, DingTalkCardUnavailableError } from '../types';
 
 /**
  * Built-in StandardCard (`/v1.0/im/v1.0/robot/interactiveCards/send`) does not
@@ -266,16 +266,53 @@ export const buildDingTalkConfirmDeliverBody = (params: {
   return body;
 };
 
-const readError = async (response: Response): Promise<{ code: string; message: string }> => {
-  const raw = await response.text();
-  try {
-    const json = JSON.parse(raw) as Record<string, unknown>;
-    const code = json.code ?? json.errcode ?? `http_${response.status}`;
-    const message = json.message ?? json.errmsg ?? raw;
-    return { code: String(code), message: String(message) };
-  } catch {
-    return { code: `http_${response.status}`, message: raw || response.statusText };
+const assertCardPayload = (data: unknown, label: string): void => {
+  if (!data || typeof data !== 'object') return;
+  const record = data as Record<string, unknown>;
+  if (record.success === false) {
+    throw new DingTalkCardUnavailableError(
+      `DingTalk ${label} failed: ${String(record.result ?? record.message ?? 'success=false')}`,
+      { code: 'card_unavailable' },
+    );
   }
+};
+
+/**
+ * One counted OpenAPI call. HTTP and `code` failures come back as
+ * `DingTalkApiError` from the client; this maps them onto the card error
+ * the confirm path already throws. `success: false` is checked here because
+ * the shared request path only rejects a non-zero `code`.
+ */
+const countedCardRequest = async (
+  api: DingTalkApiClient,
+  method: string,
+  path: string,
+  body: Record<string, unknown>,
+  label: string,
+): Promise<void> => {
+  let data: unknown;
+  try {
+    data = await api.countedRequest(method, path, body);
+  } catch (error) {
+    if (error instanceof DingTalkCardUnavailableError) throw error;
+    if (error instanceof DingTalkApiError) {
+      throw new DingTalkCardUnavailableError(`DingTalk ${label} failed: ${error.message}`, {
+        cause: error,
+        code: error.code,
+        status: error.status,
+      });
+    }
+    const invalidJson = error instanceof SyntaxError;
+    throw new DingTalkCardUnavailableError(
+      invalidJson
+        ? `DingTalk ${label} returned invalid JSON`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+      { cause: error, code: 'card_unavailable' },
+    );
+  }
+  assertCardPayload(data, label);
 };
 
 /**
@@ -299,97 +336,19 @@ export const sendDingTalkStreamConfirmCard = async (
     });
   }
 
-  const token = await api.getAccessToken();
   const body = buildDingTalkConfirmDeliverBody({
     card: params.card,
     cardTemplateId,
     outTrackId: params.outTrackId,
     target: params.target,
   });
-
-  let response: Response;
-  try {
-    response = await fetch(`${DINGTALK_API_BASE}/v1.0/card/instances/createAndDeliver`, {
-      body: JSON.stringify(body),
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'x-acs-dingtalk-access-token': token,
-      },
-      method: 'POST',
-    });
-  } catch (error) {
-    throw new DingTalkCardUnavailableError(error instanceof Error ? error.message : String(error), {
-      cause: error,
-      code: 'card_unavailable',
-    });
-  }
-
-  if (!response.ok) {
-    const parsed = await readError(response);
-    throw new DingTalkCardUnavailableError(
-      `DingTalk confirm card failed: ${parsed.code} ${parsed.message}`,
-      { code: parsed.code, status: response.status },
-    );
-  }
-
-  const raw = await response.text();
-  if (!raw) return;
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(raw) as Record<string, unknown>;
-  } catch (error) {
-    throw new DingTalkCardUnavailableError('DingTalk confirm card returned invalid JSON', {
-      cause: error,
-      code: 'card_unavailable',
-    });
-  }
-  if (data.success === false) {
-    throw new DingTalkCardUnavailableError(
-      `DingTalk confirm card failed: ${String(data.result ?? data.message ?? 'success=false')}`,
-      { code: 'card_unavailable' },
-    );
-  }
-  if (data.code !== undefined && data.code !== '0' && data.code !== 0) {
-    throw new DingTalkCardUnavailableError(
-      `DingTalk confirm card failed: ${String(data.code)} ${String(data.message ?? '')}`,
-      { code: String(data.code) },
-    );
-  }
-};
-
-const assertCardOk = async (response: Response, label: string): Promise<void> => {
-  if (!response.ok) {
-    const parsed = await readError(response);
-    throw new DingTalkCardUnavailableError(
-      `DingTalk ${label} failed: ${parsed.code} ${parsed.message}`,
-      { code: parsed.code, status: response.status },
-    );
-  }
-
-  const raw = await response.text();
-  if (!raw) return;
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(raw) as Record<string, unknown>;
-  } catch (error) {
-    throw new DingTalkCardUnavailableError(`DingTalk ${label} returned invalid JSON`, {
-      cause: error,
-      code: 'card_unavailable',
-    });
-  }
-  if (data.success === false) {
-    throw new DingTalkCardUnavailableError(
-      `DingTalk ${label} failed: ${String(data.result ?? data.message ?? 'success=false')}`,
-      { code: 'card_unavailable' },
-    );
-  }
-  if (data.code !== undefined && data.code !== '0' && data.code !== 0) {
-    throw new DingTalkCardUnavailableError(
-      `DingTalk ${label} failed: ${String(data.code)} ${String(data.message ?? '')}`,
-      { code: String(data.code) },
-    );
-  }
+  await countedCardRequest(
+    api,
+    'POST',
+    '/v1.0/card/instances/createAndDeliver',
+    body,
+    'confirm card',
+  );
 };
 
 /**
@@ -401,42 +360,17 @@ export const updateDingTalkConfirmCard = async (
   outTrackId: string,
   card: DingTalkConfirmCardPatch,
 ): Promise<void> => {
-  try {
-    const token = await api.getAccessToken();
-    let response: Response;
-    try {
-      response = await fetch(`${DINGTALK_API_BASE}/v1.0/card/instances`, {
-        body: JSON.stringify({
-          cardData: { cardParamMap: buildDingTalkConfirmCardUpdateParamMap(card) },
-          cardUpdateOptions: { updateCardDataByKey: true },
-          outTrackId,
-        }),
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'x-acs-dingtalk-access-token': token,
-        },
-        method: 'PUT',
-      });
-    } catch (error) {
-      throw new DingTalkCardUnavailableError(
-        error instanceof Error ? error.message : String(error),
-        { cause: error, code: 'card_unavailable' },
-      );
-    }
-    await assertCardOk(response, 'confirm card update');
-  } catch (error) {
-    if (error instanceof DingTalkCardUnavailableError) throw error;
-    if (error instanceof DingTalkApiError) {
-      throw new DingTalkCardUnavailableError(
-        `DingTalk confirm card update failed: ${error.message}`,
-        { cause: error, code: error.code, status: error.status },
-      );
-    }
-    throw new DingTalkCardUnavailableError(error instanceof Error ? error.message : String(error), {
-      cause: error,
-    });
-  }
+  await countedCardRequest(
+    api,
+    'PUT',
+    '/v1.0/card/instances',
+    {
+      cardData: { cardParamMap: buildDingTalkConfirmCardUpdateParamMap(card) },
+      cardUpdateOptions: { updateCardDataByKey: true },
+      outTrackId,
+    },
+    'confirm card update',
+  );
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>

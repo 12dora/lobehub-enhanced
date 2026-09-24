@@ -617,6 +617,38 @@ describe('DingTalk unionId → corp userId lookup', () => {
     errorSpy.mockRestore();
   });
 
+  it('invalidates the shared gettoken when getbyunionid returns 40014', async () => {
+    let tokenCalls = 0;
+    let userCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.origin + url.pathname === DINGTALK_LEGACY_TOKEN_ENDPOINT) {
+        tokenCalls += 1;
+        return jsonFetchResponse({
+          access_token: `legacy-${tokenCalls}`,
+          errcode: 0,
+          expires_in: 7200,
+        });
+      }
+      if (url.origin + url.pathname === DINGTALK_GET_BY_UNIONID_ENDPOINT) {
+        userCalls += 1;
+        if (userCalls === 1) {
+          return jsonFetchResponse({ errcode: 40014, errmsg: '不合法的access_token' });
+        }
+        return jsonFetchResponse({
+          errcode: 0,
+          result: { contact_type: 0, userid: 'staff-1' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(resolveDingTalkCorpUserId(creds)).resolves.toBeUndefined();
+    await expect(resolveDingTalkCorpUserId(creds)).resolves.toBe('staff-1');
+    expect(tokenCalls).toBe(2);
+    expect(userCalls).toBe(2);
+  });
+
   it('reuses a cached legacy app token across lookups', async () => {
     let tokenCalls = 0;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

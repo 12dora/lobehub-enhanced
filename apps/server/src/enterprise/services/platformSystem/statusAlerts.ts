@@ -4,6 +4,11 @@ import { PLATFORM_SYSTEM_ROLES } from '@/const/platform/roles';
 import { users } from '@/database/schemas';
 import { roles, userRoles } from '@/database/schemas/rbac';
 import type { LobeChatDatabase } from '@/database/type';
+import {
+  getDingtalkApiCallTotal,
+  readDingtalkApiDailyAlertThreshold,
+  topDingtalkApiCallEndpoints,
+} from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 import type { CapabilityReport } from './capabilities';
@@ -25,6 +30,10 @@ export const PLATFORM_ADMIN_ALERT_ROLES = [
 
 export const STATUS_ALERT_INTERVAL_MS = 60_000;
 export const STATUS_ALERT_DEDUP_MS = 6 * 60 * 60 * 1000;
+export const DINGTALK_API_BUDGET_ALERT_ID = 'budget:dingtalk_api';
+export const DINGTALK_API_BUDGET_ALERT_LABEL = '钉钉 API 今日调用量';
+/** Stored next to the budget tile so a midnight counter reset is not a recovery. */
+const BUDGET_ALERT_DAY_FIELD = `${DINGTALK_API_BUDGET_ALERT_ID}:day`;
 const LOCK_KEY = 'platform:status-alert:lock';
 const LOCK_TTL_SECONDS = 50;
 const STATE_KEY = 'platform:status-alert:state';
@@ -41,6 +50,8 @@ const RELEASE_LOCK =
 export type AlertHealth = 'healthy' | 'unhealthy';
 
 export interface AlertComponent {
+  /** Shanghai calendar day this reading belongs to. Set on the API budget tile. */
+  day?: string;
   detail?: string;
   id: string;
   label: string;
@@ -48,11 +59,15 @@ export interface AlertComponent {
 }
 
 export interface AlertTransition {
+  /** Day of this reading. Compared with {@link previousDay} for the API budget tile. */
+  day?: string;
   detail?: string;
   id: string;
   label: string;
   next: AlertHealth;
   previous?: AlertHealth;
+  /** Day stored with the previous budget tile. A different day is a counter reset, not a drop. */
+  previousDay?: string;
   status: string;
 }
 
@@ -77,6 +92,7 @@ const WORKER_LABELS: Record<string, string> = {
   directory_sync: '钉钉通讯录同步',
   dingtalk_stream: '钉钉 Stream',
   document_render: '文档渲染任务',
+  global_file_orphan_gc: '孤儿文件清理',
   reminder: '提醒任务',
   task_scheduler: '定时任务',
   task_sweep: '定时扫描',
@@ -211,6 +227,7 @@ const presentComponents = (components: readonly AlertComponent[]): Map<string, A
 export const selectAlertTransitions = (
   previous: ReadonlyMap<string, AlertHealth>,
   components: readonly AlertComponent[],
+  options?: { previousBudgetDay?: string },
 ): AlertTransition[] => {
   const next = presentComponents(components);
   const transitions: AlertTransition[] = [];
@@ -232,11 +249,16 @@ export const selectAlertTransitions = (
     const was = previous.get(component.id);
     if (was === health) continue;
     if (!was && health === 'healthy') continue;
+    const day = component.day;
+    const previousDay =
+      component.id === DINGTALK_API_BUDGET_ALERT_ID ? options?.previousBudgetDay : undefined;
     transitions.push({
+      ...(day ? { day } : {}),
       detail: component.detail,
       id: component.id,
       label: component.label,
       next: health,
+      ...(previousDay ? { previousDay } : {}),
       ...(was ? { previous: was } : {}),
       status: component.status,
     });
@@ -267,16 +289,33 @@ export interface StatusAlertLine {
   text: string;
 }
 
+/** Midnight replaces today's counter. That healthy flip is not a same-day drop. */
+const budgetRecoveryIsCounterReset = (transition: AlertTransition): boolean =>
+  transition.id === DINGTALK_API_BUDGET_ALERT_ID &&
+  transition.next === 'healthy' &&
+  Boolean(transition.day) &&
+  Boolean(transition.previousDay) &&
+  transition.day !== transition.previousDay;
+
 export const formatStatusAlertLines = (
   transitions: readonly AlertTransition[],
 ): StatusAlertLine[] =>
-  transitions.map((transition) => {
+  transitions.flatMap((transition): StatusAlertLine[] => {
+    if (budgetRecoveryIsCounterReset(transition)) return [];
+    const budget = transition.id === DINGTALK_API_BUDGET_ALERT_ID;
     if (transition.next === 'healthy') {
-      return { recovered: true, text: `${transition.label}已恢复` };
+      return [
+        {
+          recovered: true,
+          text: budget ? `${transition.label}已回落到告警阈值以下` : `${transition.label}已恢复`,
+        },
+      ];
     }
     const detail = scrubRuntimeErrorMessage(transition.detail ?? '');
-    const head = `${transition.label}${stateWord(transition.status)}`;
-    return { recovered: false, text: detail ? `${head} — ${detail}` : head };
+    const head = budget
+      ? `${transition.label}超出告警阈值`
+      : `${transition.label}${stateWord(transition.status)}`;
+    return [{ recovered: false, text: detail ? `${head} — ${detail}` : head }];
   });
 
 const statusAlertOverflow = (hidden: number): string => `另有 ${hidden} 项异常/恢复，详见状态页`;
@@ -387,6 +426,7 @@ export interface StatusAlertDeps {
   enabled: () => boolean;
   link: () => string;
   listStaffIds: () => Promise<string[]>;
+  loadApiBudget?: () => Promise<AlertComponent | null>;
   loadPrevious: () => Promise<Map<string, AlertHealth>>;
   loadSnapshot: () => Promise<StatusAlertSnapshot>;
   now: () => number;
@@ -401,6 +441,12 @@ export interface StatusAlertDeps {
 }
 
 const memoryState = new Map<string, AlertHealth>();
+/** Day loaded with the previous budget tile. Set only by the default state reader. */
+let loadedBudgetDay: string | undefined;
+/** In-process copy of that day, used when Redis cannot be read. */
+let memoryBudgetDay: string | undefined;
+/** Day to persist with the next default state write. */
+let budgetDayToSave: string | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let started = false;
 let lockToken: string | null = null;
@@ -414,6 +460,9 @@ const warnRedisUnavailable = (reason: 'dedup' | 'lock'): void => {
 
 export const resetStatusAlertsForTest = (): void => {
   memoryState.clear();
+  loadedBudgetDay = undefined;
+  memoryBudgetDay = undefined;
+  budgetDayToSave = undefined;
   lastRedisUnavailableWarnAt = 0;
   if (timer) clearInterval(timer);
   timer = undefined;
@@ -460,22 +509,30 @@ const parseHealth = (value: string | undefined): AlertHealth | null =>
   value === 'healthy' || value === 'unhealthy' ? value : null;
 
 const defaultLoadPrevious = async (): Promise<Map<string, AlertHealth>> => {
+  loadedBudgetDay = memoryBudgetDay;
   const redis = redisClient();
   if (!redis) return new Map(memoryState);
   try {
     const hash = (await redis.hgetall(STATE_KEY)) ?? {};
+    loadedBudgetDay = undefined;
     const next = new Map<string, AlertHealth>();
     for (const [id, raw] of Object.entries(hash)) {
+      if (id === BUDGET_ALERT_DAY_FIELD) {
+        if (raw) loadedBudgetDay = raw;
+        continue;
+      }
       const health = parseHealth(raw);
       if (health) next.set(id, health);
     }
     return next;
   } catch {
+    loadedBudgetDay = memoryBudgetDay;
     return new Map(memoryState);
   }
 };
 
 const defaultSaveState = async (state: Map<string, AlertHealth>): Promise<void> => {
+  memoryBudgetDay = budgetDayToSave;
   memoryState.clear();
   for (const [id, health] of state) memoryState.set(id, health);
   const redis = redisClient();
@@ -487,6 +544,7 @@ const defaultSaveState = async (state: Map<string, AlertHealth>): Promise<void> 
     tx.del(STATE_KEY);
     if (state.size > 0) {
       for (const [id, health] of state) tx.hset(STATE_KEY, id, health);
+      if (budgetDayToSave) tx.hset(STATE_KEY, BUDGET_ALERT_DAY_FIELD, budgetDayToSave);
       tx.expire(STATE_KEY, STATE_TTL_SECONDS);
     }
     const replaced = await tx.exec();
@@ -494,6 +552,33 @@ const defaultSaveState = async (state: Map<string, AlertHealth>): Promise<void> 
   } catch {
     // in-process map still dedups this replica
   }
+};
+
+export const formatDingtalkApiBudgetDetail = (
+  total: number,
+  threshold: number,
+  endpoints: readonly { api: string; count: number }[],
+): string => {
+  const top = topDingtalkApiCallEndpoints(endpoints)
+    .map((row) => `${row.api} ${row.count} 次`)
+    .join('、');
+  const head = `今日 API 调用 ${total} 次，超过告警阈值 ${threshold}`;
+  return top ? `${head}。最多：${top}` : head;
+};
+
+const loadDingtalkApiBudget = async (): Promise<AlertComponent | null> => {
+  const threshold = readDingtalkApiDailyAlertThreshold();
+  if (threshold <= 0) return null;
+  const day = await getDingtalkApiCallTotal();
+  if (!day) return null;
+  const over = day.total >= threshold;
+  return {
+    day: day.date,
+    id: DINGTALK_API_BUDGET_ALERT_ID,
+    label: DINGTALK_API_BUDGET_ALERT_LABEL,
+    status: over ? 'unavailable' : 'healthy',
+    ...(over ? { detail: formatDingtalkApiBudgetDetail(day.total, threshold, day.byApi) } : {}),
+  };
 };
 
 const defaultClaimDedup = async (
@@ -536,9 +621,21 @@ export const runStatusAlertEvaluation = async (
   }
   try {
     const snapshot = await (deps.loadSnapshot ?? loadSnapshotFromStatus)();
+    loadedBudgetDay = undefined;
     const previous = await (deps.loadPrevious ?? defaultLoadPrevious)();
+    const previousBudgetDay = loadedBudgetDay;
     const components = deriveAlertComponents(snapshot);
-    const transitions = selectAlertTransitions(previous, components);
+    try {
+      const budget = await (deps.loadApiBudget ?? loadDingtalkApiBudget)();
+      if (budget) components.push(budget);
+    } catch (error) {
+      console.warn('[status-alert] dingtalk api budget read failed', {
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+    const transitions = selectAlertTransitions(previous, components, {
+      previousBudgetDay,
+    }).filter((transition) => formatStatusAlertLines([transition]).length > 0);
     const claim = deps.claimDedup ?? defaultClaimDedup;
     const notify: AlertTransition[] = [];
     for (const transition of transitions) {
@@ -579,9 +676,12 @@ export const runStatusAlertEvaluation = async (
         });
       }
     }
+    budgetDayToSave = components.find((item) => item.id === DINGTALK_API_BUDGET_ALERT_ID)?.day;
     await (deps.saveState ?? defaultSaveState)(nextAlertState(previous, components));
     return { sent, transitions: notify.length };
   } finally {
+    budgetDayToSave = undefined;
+    loadedBudgetDay = undefined;
     await release();
   }
 };

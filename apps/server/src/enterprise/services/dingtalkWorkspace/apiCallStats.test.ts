@@ -18,12 +18,16 @@ const {
   DINGTALK_API_CALL_STATS_MAX_APIS_PER_DAY,
   DINGTALK_API_CALL_STATS_MAX_DAYS,
   DINGTALK_API_CALL_STATS_TTL_SECONDS,
+  DINGTALK_API_DAILY_ALERT_THRESHOLD_DEFAULT,
   dingtalkApiCallStatsRedisKey,
   formatDingtalkApiCallStatsDate,
   getDingtalkApiCallStats,
+  getDingtalkApiCallTotal,
+  readDingtalkApiDailyAlertThreshold,
   recordDingtalkApiCall,
   resetDingtalkApiCallStatsForTest,
   toDingtalkApiCallKey,
+  topDingtalkApiCallEndpoints,
 } = await import('./apiCallStats');
 
 describe('toDingtalkApiCallKey', () => {
@@ -302,5 +306,82 @@ describe('recordDingtalkApiCall / getDingtalkApiCallStats', () => {
         (row) => row.api === `GET /api-${DINGTALK_API_CALL_STATS_MAX_APIS_PER_DAY}`,
       ),
     ).toBe(true);
+  });
+});
+
+describe('getDingtalkApiCallTotal', () => {
+  beforeEach(() => {
+    resetDingtalkApiCallStatsForTest();
+    redisMocks.getRedis.mockReset();
+    redisMocks.hgetall.mockReset().mockResolvedValue({});
+    redisMocks.getRedis.mockReturnValue({ hgetall: redisMocks.hgetall });
+  });
+
+  afterEach(() => {
+    resetDingtalkApiCallStatsForTest();
+  });
+
+  it('sums every field of the Shanghai-day hash and ranks endpoints', async () => {
+    const now = new Date('2026-09-21T16:30:00.000Z');
+    vi.useFakeTimers({ now });
+    try {
+      const date = formatDingtalkApiCallStatsDate(now);
+      expect(date).toBe('2026-09-22');
+      redisMocks.hgetall.mockResolvedValue({
+        'GET /c': '40',
+        'GET /f': '5',
+        'POST /a': '3000',
+        'POST /b': '800',
+        'POST /d': '20',
+        'POST /e': '10',
+      });
+      redisMocks.getRedis.mockReturnValueOnce(null);
+      await recordDingtalkApiCall('GET /memory-only');
+      redisMocks.getRedis.mockReturnValue({ hgetall: redisMocks.hgetall });
+      const total = await getDingtalkApiCallTotal(date);
+      expect(total).toEqual({
+        byApi: [
+          { api: 'POST /a', count: 3000 },
+          { api: 'POST /b', count: 800 },
+          { api: 'GET /c', count: 40 },
+          { api: 'POST /d', count: 20 },
+          { api: 'POST /e', count: 10 },
+          { api: 'GET /f', count: 5 },
+        ],
+        date,
+        total: 3875,
+      });
+      expect(topDingtalkApiCallEndpoints(total?.byApi ?? []).map((row) => row.api)).toEqual([
+        'POST /a',
+        'POST /b',
+        'GET /c',
+        'POST /d',
+        'POST /e',
+      ]);
+      expect(redisMocks.hgetall).toHaveBeenCalledWith(dingtalkApiCallStatsRedisKey(date));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns null when Redis cannot be read', async () => {
+    redisMocks.getRedis.mockReturnValue(null);
+    await recordDingtalkApiCall('POST /a');
+    await expect(getDingtalkApiCallTotal('2026-09-22')).resolves.toBeNull();
+  });
+
+  it('reads the daily alert threshold, with 0 as off and garbage as the default', () => {
+    expect(DINGTALK_API_DAILY_ALERT_THRESHOLD_DEFAULT).toBe(5000);
+    expect(readDingtalkApiDailyAlertThreshold({})).toBe(5000);
+    expect(readDingtalkApiDailyAlertThreshold({ DINGTALK_API_DAILY_ALERT_THRESHOLD: '0' })).toBe(0);
+    expect(readDingtalkApiDailyAlertThreshold({ DINGTALK_API_DAILY_ALERT_THRESHOLD: '8000' })).toBe(
+      8000,
+    );
+    expect(readDingtalkApiDailyAlertThreshold({ DINGTALK_API_DAILY_ALERT_THRESHOLD: 'nope' })).toBe(
+      5000,
+    );
+    expect(readDingtalkApiDailyAlertThreshold({ DINGTALK_API_DAILY_ALERT_THRESHOLD: '-3' })).toBe(
+      5000,
+    );
   });
 });

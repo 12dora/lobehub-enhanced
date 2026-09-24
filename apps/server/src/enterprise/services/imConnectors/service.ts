@@ -49,7 +49,11 @@ import {
 } from '../../contracts/adminImConnectors';
 import { AUDIT_ACTION } from '../audit/auditActionCatalog';
 import type { DingTalkDirectoryStatus } from '../dingtalkDirectory/sync';
-import { readDingTalkDirectoryStatus, runGuardedDirectorySync } from '../dingtalkDirectory/sync';
+import {
+  DIRECTORY_SYNC_LOCK_FAILED,
+  readDingTalkDirectoryStatus,
+  runGuardedDirectorySync,
+} from '../dingtalkDirectory/sync';
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
 import { PlatformAuditService } from '../platformAudit';
 import {
@@ -61,6 +65,9 @@ import { probeDingTalkCredentials } from './dingtalkProbe';
 import { lookupDingTalkStaff } from './dingtalkStaffLookup';
 import { getImConnectorStats } from './stats';
 import { readImConnectorStatus } from './status';
+
+/** Shown when the admin sync cannot take the Redis lock. Not a running walk. */
+export const DIRECTORY_SYNC_LOCK_FAILED_ERROR = '同步未启动：缓存服务暂时不可用，请稍后重试';
 
 export const IM_CONNECTOR_PLATFORMS = imConnectorPlatformSchema.options;
 export const IM_CONNECTOR_CONNECTION_MODE = 'websocket';
@@ -84,7 +91,9 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   selectCardTemplateId: null,
   personalChatEnabled: false,
   personalDataEnabled: false,
+  personalDocsEnabled: false,
   personalReportEnabled: false,
+  personalSheetsEnabled: false,
   personalTodoEnabled: false,
   personalWriteEnabled: false,
   workspaceApprovalEnabled: false,
@@ -184,10 +193,18 @@ const parseDingTalkSettings = (
       typeof raw?.personalDataEnabled === 'boolean'
         ? raw.personalDataEnabled
         : DEFAULT_SETTINGS.personalDataEnabled,
+    personalDocsEnabled:
+      typeof raw?.personalDocsEnabled === 'boolean'
+        ? raw.personalDocsEnabled
+        : DEFAULT_SETTINGS.personalDocsEnabled,
     personalReportEnabled:
       typeof raw?.personalReportEnabled === 'boolean'
         ? raw.personalReportEnabled
         : DEFAULT_SETTINGS.personalReportEnabled,
+    personalSheetsEnabled:
+      typeof raw?.personalSheetsEnabled === 'boolean'
+        ? raw.personalSheetsEnabled
+        : DEFAULT_SETTINGS.personalSheetsEnabled,
     personalTodoEnabled:
       typeof raw?.personalTodoEnabled === 'boolean'
         ? raw.personalTodoEnabled
@@ -238,7 +255,9 @@ const settingsFromUpsert = (
     selectCardTemplateId: emptyToNull(input.selectCardTemplateId),
     personalChatEnabled: input.personalChatEnabled ?? false,
     personalDataEnabled: input.personalDataEnabled ?? false,
+    personalDocsEnabled: input.personalDocsEnabled ?? false,
     personalReportEnabled: input.personalReportEnabled ?? false,
+    personalSheetsEnabled: input.personalSheetsEnabled ?? false,
     personalTodoEnabled: input.personalTodoEnabled ?? false,
     personalWriteEnabled: input.personalWriteEnabled ?? false,
     workspaceApprovalEnabled: input.workspaceApprovalEnabled ?? false,
@@ -294,7 +313,9 @@ const unconfiguredView = async (
     personal,
     personalChatEnabled: DEFAULT_SETTINGS.personalChatEnabled,
     personalDataEnabled: DEFAULT_SETTINGS.personalDataEnabled,
+    personalDocsEnabled: DEFAULT_SETTINGS.personalDocsEnabled,
     personalReportEnabled: DEFAULT_SETTINGS.personalReportEnabled,
+    personalSheetsEnabled: DEFAULT_SETTINGS.personalSheetsEnabled,
     personalTodoEnabled: DEFAULT_SETTINGS.personalTodoEnabled,
     personalWriteEnabled: DEFAULT_SETTINGS.personalWriteEnabled,
     pushEnabled: DEFAULT_SETTINGS.pushEnabled,
@@ -348,7 +369,9 @@ const toView = async (
     personal,
     personalChatEnabled: settings.personalChatEnabled,
     personalDataEnabled: settings.personalDataEnabled,
+    personalDocsEnabled: settings.personalDocsEnabled,
     personalReportEnabled: settings.personalReportEnabled,
+    personalSheetsEnabled: settings.personalSheetsEnabled,
     personalTodoEnabled: settings.personalTodoEnabled,
     personalWriteEnabled: settings.personalWriteEnabled,
     pushEnabled: settings.pushEnabled,
@@ -480,7 +503,9 @@ export class ImConnectorsAdminService {
           selectCardTemplateId: settings.selectCardTemplateId,
           personalChatEnabled: settings.personalChatEnabled,
           personalDataEnabled: settings.personalDataEnabled,
+          personalDocsEnabled: settings.personalDocsEnabled,
           personalReportEnabled: settings.personalReportEnabled,
+          personalSheetsEnabled: settings.personalSheetsEnabled,
           personalTodoEnabled: settings.personalTodoEnabled,
           personalWriteEnabled: settings.personalWriteEnabled,
           workspaceApprovalEnabled: settings.workspaceApprovalEnabled,
@@ -549,6 +574,14 @@ export class ImConnectorsAdminService {
   syncDirectory = async (): Promise<DingTalkDirectoryStatus> => {
     try {
       const result = await runGuardedDirectorySync(this.db);
+      if (result === DIRECTORY_SYNC_LOCK_FAILED) {
+        const status = await readDingTalkDirectoryStatus(this.db);
+        return {
+          ...status,
+          lastError: DIRECTORY_SYNC_LOCK_FAILED_ERROR,
+          state: 'error',
+        };
+      }
       if (result === null) {
         const status = await readDingTalkDirectoryStatus(this.db);
         return { ...status, state: 'running' };

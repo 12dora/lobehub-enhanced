@@ -99,9 +99,19 @@ describe('capability readiness', () => {
         lastError: 'invalid access_token',
       }),
     ).toMatchObject({ status: 'unavailable', detail: 'invalid access_token' });
+    vi.stubEnv('DINGTALK_API_DAILY_ALERT_THRESHOLD', '5000');
+    expect(
+      projectDingtalkCapability({ callsToday: 2, configured: true, errors10m: 0 }).detail,
+    ).toBe('今日 API 调用 2 次（告警阈值 5000）');
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps the call-count line unchanged when the daily alert is disabled', () => {
+    vi.stubEnv('DINGTALK_API_DAILY_ALERT_THRESHOLD', '0');
     expect(
       projectDingtalkCapability({ callsToday: 2, configured: true, errors10m: 0 }).detail,
     ).toBe('今日 API 调用 2 次');
+    vi.unstubAllEnvs();
   });
 
   it('keeps the DingTalk personal-data status key inside the status array cap', () => {

@@ -1,4 +1,4 @@
-import { buildSampleActionCardParam, DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
+import { buildSampleActionCardParam } from '@lobechat/chat-adapter-dingtalk';
 import { decodeDingTalkThreadId } from '@lobechat/chat-adapter-dingtalk/threadId';
 import { APP_LINK_PATHS, cliSettingsMarkdownLink, markdownLink } from '@lobechat/utils/appLink';
 import debug from 'debug';
@@ -12,6 +12,7 @@ import { serverAppLink } from '@/server/utils/appLinks';
 
 import { sendDingTalkActionCardToThread } from './cards';
 import { incrementDingTalkDailyCounter } from './redis';
+import { sharedDingTalkApiClient } from './tokenCache';
 
 const log = debug('lobe-server:messenger:dingtalk:personal-auth');
 
@@ -219,7 +220,11 @@ const sendRobotOto = async (params: {
     log('skip: missing staffId user=%s', params.userId);
     return false;
   }
-  const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  const api = sharedDingTalkApiClient({
+    appKey: config.clientId,
+    appSecret: config.clientSecret,
+    robotCode: config.robotCode,
+  });
   await api.sendOtoMessage({
     msgKey: params.msgKey,
     msgParam: params.msgParam,

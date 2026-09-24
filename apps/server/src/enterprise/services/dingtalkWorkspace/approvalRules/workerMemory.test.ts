@@ -81,7 +81,7 @@ describe('approval rule worker memory', () => {
     expect(ownerTaskIsRemembered('staff_me', '99', nowMs, nextFingerprint)).toBe(false);
   });
 
-  it('prunes expired task ids and requires a 30 minute gap before the same-count re-verify', () => {
+  it('prunes expired task ids and requires a 60 minute gap before the same-count re-verify', () => {
     const fingerprint = fingerprintEnabledApprovalRules([baseRule]);
     const nowMs = Date.parse('2026-03-01T00:00:00.000Z');
     rememberOwnerTask('staff_me', '99', nowMs + 10, fingerprint);
@@ -95,5 +95,6 @@ describe('approval rule worker memory', () => {
     const synced = syncOwnerTaskMemory('staff_me', fingerprint, reverifyAt);
     expect(synced.rememberedCount).toBe(1);
     expect(reverifyAt - synced.lastReverifyAtMs < APPROVAL_RULE_REVERIFY_MS).toBe(true);
+    expect(APPROVAL_RULE_REVERIFY_MS).toBe(60 * 60 * 1000);
   });
 });

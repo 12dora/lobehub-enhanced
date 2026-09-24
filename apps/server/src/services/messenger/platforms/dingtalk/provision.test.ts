@@ -209,6 +209,38 @@ describe('ensureDingTalkUser', () => {
     });
   });
 
+  it('drops the shared gettoken when the contact API returns 40014', async () => {
+    let tokenCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.startsWith(DINGTALK_LEGACY_TOKEN_URL)) {
+          tokenCalls += 1;
+          return jsonResponse({
+            access_token: `legacy-${tokenCalls}`,
+            errcode: 0,
+            expires_in: 7200,
+          });
+        }
+        if (tokenCalls === 1) {
+          return jsonResponse({ errcode: 40014, errmsg: '不合法的access_token' });
+        }
+        return jsonResponse({
+          errcode: 0,
+          result: { name: '张三', userid: 'staff_1' },
+        });
+      }),
+    );
+
+    await expect(ensureDingTalkUser(serverDB, { staffId: 'staff_1' })).resolves.toBeNull();
+    expect(tokenCalls).toBe(1);
+
+    const user = await ensureDingTalkUser(serverDB, { staffId: 'staff_1' });
+    expect(user?.id).toBe('user_new');
+    expect(tokenCalls).toBe(2);
+  });
+
   it('returns null when the DingTalk contact API fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.stubGlobal(

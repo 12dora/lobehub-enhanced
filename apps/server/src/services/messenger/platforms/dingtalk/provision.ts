@@ -11,6 +11,12 @@ import type { LobeChatDatabase } from '@/database/type';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 import { buildDingTalkIdentityEmail, isValidDingTalkStaffId } from './const';
+import {
+  getOrRefreshSharedDingTalkToken,
+  invalidateSharedDingTalkToken,
+  recordDingTalkHttpCallSafely,
+  resetSharedDingTalkTokenCacheForTest,
+} from './tokenCache';
 
 const log = debug('lobe-server:messenger:dingtalk:provision');
 
@@ -34,15 +40,8 @@ return count
 export const RELEASE_DINGTALK_PROVISION_LOCK_SCRIPT =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
-interface LegacyTokenCache {
-  expiresAt: number;
-  token: string;
-}
-
-const legacyTokenCache = new Map<string, LegacyTokenCache>();
-
 export const resetDingTalkProvisionStateForTest = (): void => {
-  legacyTokenCache.clear();
+  resetSharedDingTalkTokenCacheForTest();
 };
 
 export interface EnsureDingTalkUserInput {
@@ -114,41 +113,59 @@ export const fetchLegacyAppToken = async (
   clientSecret: string,
   now = Date.now(),
 ): Promise<string | null> => {
-  const cached = legacyTokenCache.get(clientId);
-  if (cached && cached.expiresAt > now) return cached.token;
-
-  const url = new URL(DINGTALK_LEGACY_TOKEN_URL);
-  url.searchParams.set('appkey', clientId);
-  url.searchParams.set('appsecret', clientSecret);
-
-  let response: Response;
   try {
-    response = await fetch(url.toString(), { cache: 'no-store', method: 'GET', redirect: 'error' });
+    return await getOrRefreshSharedDingTalkToken({
+      appKey: clientId,
+      appSecret: clientSecret,
+      kind: 'gettoken',
+      now,
+      refresh: async () => {
+        recordDingTalkHttpCallSafely('GET', DINGTALK_LEGACY_TOKEN_URL);
+        const url = new URL(DINGTALK_LEGACY_TOKEN_URL);
+        url.searchParams.set('appkey', clientId);
+        url.searchParams.set('appsecret', clientSecret);
+
+        let response: Response;
+        try {
+          response = await fetch(url.toString(), {
+            cache: 'no-store',
+            method: 'GET',
+            redirect: 'error',
+          });
+        } catch (error) {
+          log('fetchLegacyAppToken network error: %O', error);
+          throw new Error('network', { cause: error });
+        }
+
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch (error) {
+          log('fetchLegacyAppToken invalid json: %O', error);
+          throw new Error('invalid_json', { cause: error });
+        }
+
+        const record = jsonRecord(body);
+        const token = record?.access_token;
+        if (
+          isDingTalkErrcodeFailure(record?.errcode) ||
+          typeof token !== 'string' ||
+          !token.trim()
+        ) {
+          log('fetchLegacyAppToken failed errcode=%s', record?.errcode);
+          throw new Error('token_rejected');
+        }
+        const expiresInSec =
+          typeof record?.expires_in === 'number' && Number.isFinite(record.expires_in)
+            ? record.expires_in
+            : 7200;
+        return { expiresInSec, token: token.trim() };
+      },
+    });
   } catch (error) {
-    log('fetchLegacyAppToken network error: %O', error);
+    log('fetchLegacyAppToken failed: %O', error);
     return null;
   }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (error) {
-    log('fetchLegacyAppToken invalid json: %O', error);
-    return null;
-  }
-
-  const record = jsonRecord(body);
-  const token = record?.access_token;
-  if (isDingTalkErrcodeFailure(record?.errcode) || typeof token !== 'string' || !token.trim()) {
-    log('fetchLegacyAppToken failed errcode=%s', record?.errcode);
-    return null;
-  }
-
-  legacyTokenCache.set(clientId, {
-    expiresAt: now + DINGTALK_LEGACY_TOKEN_CACHE_MS,
-    token: token.trim(),
-  });
-  return token.trim();
 };
 
 export interface DingTalkContact {
@@ -168,6 +185,7 @@ export const fetchDingTalkContact = async (staffId: string): Promise<DingTalkCon
 
   const url = new URL(DINGTALK_USER_GET_URL);
   url.searchParams.set('access_token', accessToken);
+  recordDingTalkHttpCallSafely('POST', DINGTALK_USER_GET_URL);
 
   let response: Response;
   try {
@@ -194,6 +212,10 @@ export const fetchDingTalkContact = async (staffId: string): Promise<DingTalkCon
   const record = jsonRecord(body);
   if (isDingTalkErrcodeFailure(record?.errcode)) {
     log('fetchDingTalkContact failed errcode=%s', record?.errcode);
+    // 40014 = invalid access_token. Drop the shared gettoken so the next attempt refetches.
+    if (record?.errcode === 40014 || record?.errcode === '40014') {
+      await invalidateSharedDingTalkToken(config.clientId, config.clientSecret, 'gettoken');
+    }
     return null;
   }
   const result = jsonRecord(record?.result);

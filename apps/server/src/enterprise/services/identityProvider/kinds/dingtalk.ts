@@ -11,6 +11,13 @@ import {
 } from '@lobechat/types';
 import { z } from 'zod';
 
+import {
+  getOrRefreshSharedDingTalkToken,
+  invalidateSharedDingTalkToken,
+  recordDingTalkHttpCallSafely,
+  resetSharedDingTalkTokenCacheForTest,
+} from '@/server/services/messenger/platforms/dingtalk/tokenCache';
+
 import type { SafeOutboundHttpClient } from '../../../security/outboundHttp';
 
 /**
@@ -213,6 +220,7 @@ export const exchangeDingTalkAuthorizationCode = async (input: {
 }): Promise<DingTalkTokenResult> => {
   const errorCode = input.errorCode ?? 'PLATFORM_DINGTALK_TOKEN_RESPONSE_INVALID';
   try {
+    recordDingTalkHttpCallSafely('POST', DINGTALK_TOKEN_ENDPOINT);
     const response = await input.outbound.fetch(DINGTALK_TOKEN_ENDPOINT, {
       body: JSON.stringify({
         clientId: input.clientId,
@@ -261,6 +269,7 @@ export const fetchDingTalkUserProfile = async (input: {
 }): Promise<DingTalkUserProfile> => {
   const errorCode = input.errorCode ?? 'PLATFORM_DINGTALK_USERINFO_INVALID';
   try {
+    recordDingTalkHttpCallSafely('GET', DINGTALK_USERINFO_ENDPOINT);
     const response = await input.outbound.fetch(DINGTALK_USERINFO_ENDPOINT, {
       headers: {
         'Accept': 'application/json',
@@ -377,28 +386,59 @@ export const fetchDingTalkCorpName = async (input: {
   outbound: SafeOutboundHttpClient;
 }): Promise<DingTalkCorpNameLookup> => {
   try {
-    const tokenResponse = await input.outbound.fetch(DINGTALK_APP_TOKEN_ENDPOINT, {
-      body: JSON.stringify({ appKey: input.clientId, appSecret: input.clientSecret }),
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      maxRedirects: 0,
-      maxResponseBytes: RESPONSE_MAX_BYTES,
-      method: 'POST',
-      secretBearing: true,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-    });
-    if (!tokenResponse.ok || tokenResponse.truncated || !isJsonResponse(tokenResponse)) {
-      logCorpNameLookupUnavailable({ reason: 'app_token_rejected', status: tokenResponse.status });
-      return { reason: 'app_token_rejected' };
-    }
     let accessToken: string;
     try {
-      ({ accessToken } = appTokenResponseSchema.parse(await tokenResponse.json()));
-    } catch {
-      logCorpNameLookupUnavailable({ reason: 'app_token_rejected', status: tokenResponse.status });
-      return { reason: 'app_token_rejected' };
+      accessToken = await getOrRefreshSharedDingTalkToken({
+        appKey: input.clientId,
+        appSecret: input.clientSecret,
+        kind: 'accessToken',
+        refresh: async () => {
+          recordDingTalkHttpCallSafely('POST', DINGTALK_APP_TOKEN_ENDPOINT);
+          const tokenResponse = await input.outbound.fetch(DINGTALK_APP_TOKEN_ENDPOINT, {
+            body: JSON.stringify({ appKey: input.clientId, appSecret: input.clientSecret }),
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            maxRedirects: 0,
+            maxResponseBytes: RESPONSE_MAX_BYTES,
+            method: 'POST',
+            secretBearing: true,
+            timeoutMs: REQUEST_TIMEOUT_MS,
+          });
+          if (!tokenResponse.ok || tokenResponse.truncated || !isJsonResponse(tokenResponse)) {
+            logCorpNameLookupUnavailable({
+              reason: 'app_token_rejected',
+              status: tokenResponse.status,
+            });
+            throw new Error('app_token_rejected');
+          }
+          let parsed: { accessToken: string; expireIn?: number };
+          try {
+            parsed = appTokenResponseSchema.parse(await tokenResponse.json()) as {
+              accessToken: string;
+              expireIn?: number;
+            };
+          } catch {
+            logCorpNameLookupUnavailable({
+              reason: 'app_token_rejected',
+              status: tokenResponse.status,
+            });
+            throw new Error('app_token_rejected');
+          }
+          const expiresInSec =
+            typeof parsed.expireIn === 'number' && Number.isFinite(parsed.expireIn)
+              ? parsed.expireIn
+              : 7200;
+          return { expiresInSec, token: parsed.accessToken };
+        },
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'app_token_rejected') {
+        return { reason: 'app_token_rejected' };
+      }
+      throw error;
     }
     const url = new URL(DINGTALK_ORG_AUTH_INFO_ENDPOINT);
     url.searchParams.set('targetCorpId', input.corpId);
+    recordDingTalkHttpCallSafely('GET', DINGTALK_ORG_AUTH_INFO_ENDPOINT);
     const response = await input.outbound.fetch(url.toString(), {
       headers: { 'Accept': 'application/json', 'x-acs-dingtalk-access-token': accessToken },
       maxRedirects: 0,
@@ -512,53 +552,50 @@ const readCappedJsonBody = async (response: Response): Promise<unknown> => {
   return JSON.parse(text);
 };
 
-/** Refresh 5 min early relative to the typical 7200 s legacy token lifetime. */
-const LEGACY_APP_TOKEN_CACHE_MS = 55 * 60 * 1000;
-
-interface CachedLegacyAppToken {
-  expiresAt: number;
-  token: string;
-}
-
-const legacyAppTokenCache = new Map<string, CachedLegacyAppToken>();
-
 export const resetDingTalkIdpLegacyTokenCacheForTest = (): void => {
-  legacyAppTokenCache.clear();
+  resetSharedDingTalkTokenCacheForTest();
 };
 
 const fetchDingTalkLegacyAppToken = async (input: {
   clientId: string;
   clientSecret: string;
 }): Promise<string | undefined> => {
-  const now = Date.now();
-  const cached = legacyAppTokenCache.get(input.clientId);
-  if (cached && cached.expiresAt > now) return cached.token;
-
-  const url = new URL(DINGTALK_LEGACY_TOKEN_ENDPOINT);
-  url.searchParams.set('appkey', input.clientId);
-  url.searchParams.set('appsecret', input.clientSecret);
   try {
-    // Native fetch: SafeOutboundHttpClient rejects credential-bearing query strings
-    // (`appsecret`). Same gettoken pattern as messenger SSO (`sso.ts`).
-    const response = await fetch(url.toString(), {
-      cache: 'no-store',
-      method: 'GET',
-      redirect: 'error',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    return await getOrRefreshSharedDingTalkToken({
+      appKey: input.clientId,
+      appSecret: input.clientSecret,
+      kind: 'gettoken',
+      refresh: async () => {
+        recordDingTalkHttpCallSafely('GET', DINGTALK_LEGACY_TOKEN_ENDPOINT);
+        const url = new URL(DINGTALK_LEGACY_TOKEN_ENDPOINT);
+        url.searchParams.set('appkey', input.clientId);
+        url.searchParams.set('appsecret', input.clientSecret);
+        // Native fetch: SafeOutboundHttpClient rejects credential-bearing query strings
+        // (`appsecret`). Same gettoken pattern as messenger SSO (`sso.ts`).
+        const response = await fetch(url.toString(), {
+          cache: 'no-store',
+          method: 'GET',
+          redirect: 'error',
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        if (!response.ok) {
+          logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
+          throw new Error('app_token_rejected');
+        }
+        const parsed = legacyTokenResponseSchema.parse(await readCappedJsonBody(response));
+        if (isDingTalkOapiFailure(parsed.errcode) || !parsed.access_token?.trim()) {
+          logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
+          throw new Error('app_token_rejected');
+        }
+        const expiresIn =
+          typeof (parsed as { expires_in?: unknown }).expires_in === 'number'
+            ? (parsed as { expires_in: number }).expires_in
+            : 7200;
+        return { expiresInSec: expiresIn, token: parsed.access_token.trim() };
+      },
     });
-    if (!response.ok) {
-      logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
-      return undefined;
-    }
-    const parsed = legacyTokenResponseSchema.parse(await readCappedJsonBody(response));
-    if (isDingTalkOapiFailure(parsed.errcode) || !parsed.access_token?.trim()) {
-      logCorpUserIdLookupUnavailable({ reason: 'app_token_rejected', status: response.status });
-      return undefined;
-    }
-    const token = parsed.access_token.trim();
-    legacyAppTokenCache.set(input.clientId, { expiresAt: now + LEGACY_APP_TOKEN_CACHE_MS, token });
-    return token;
   } catch (error) {
+    if (error instanceof Error && error.message === 'app_token_rejected') return undefined;
     logCorpUserIdLookupUnavailable({
       errorClass: lookupErrorClass(error),
       reason: isLookupBodyError(error) ? 'app_token_rejected' : 'network',
@@ -585,6 +622,7 @@ export const resolveDingTalkCorpUserId = async (input: {
   if (!accessToken) return undefined;
   const url = new URL(DINGTALK_GET_BY_UNIONID_ENDPOINT);
   url.searchParams.set('access_token', accessToken);
+  recordDingTalkHttpCallSafely('POST', DINGTALK_GET_BY_UNIONID_ENDPOINT);
   try {
     const response = await fetch(url.toString(), {
       body: JSON.stringify({ unionid: unionId }),
@@ -600,6 +638,10 @@ export const resolveDingTalkCorpUserId = async (input: {
     }
     const parsed = getByUnionIdResponseSchema.parse(await readCappedJsonBody(response));
     if (isDingTalkOapiFailure(parsed.errcode)) {
+      // 40014 = invalid access_token. Drop the shared gettoken so the next attempt refetches.
+      if (parsed.errcode === 40014) {
+        await invalidateSharedDingTalkToken(input.clientId, input.clientSecret, 'gettoken');
+      }
       logCorpUserIdLookupUnavailable({ reason: 'userid_absent', status: response.status });
       return undefined;
     }

@@ -28,8 +28,15 @@ import {
   rememberDingTalkCorpId,
   writeDingTalkStreamStatus,
 } from '@/server/services/messenger/platforms/dingtalk/redis';
+import {
+  installDingTalkRequestAccounting,
+  recordDingTalkHttpCallSafely,
+} from '@/server/services/messenger/platforms/dingtalk/tokenCache';
 
 registerDingTalkMessengerPushProvider();
+
+/** Count gateway opens even when the bot client module was not imported first. */
+installDingTalkRequestAccounting();
 
 const log = debug('lobe-server:messenger:dingtalk-stream');
 
@@ -207,6 +214,9 @@ export class DingTalkStreamWorker {
         ack({});
         this.lastEventAt = new Date().toISOString();
         await this.forward(DINGTALK_CARD_CALLBACK_EVENT, payload, webhookUrl, config);
+      },
+      onRequest: (info) => {
+        recordDingTalkHttpCallSafely(info.method, info.url);
       },
       onRobotMessage: async (payload, ack) => {
         ack({});

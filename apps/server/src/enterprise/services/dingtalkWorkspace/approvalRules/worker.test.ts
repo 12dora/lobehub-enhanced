@@ -20,6 +20,7 @@ vi.mock('../capabilities', () => ({ getDingtalkWorkspaceCapabilities: vi.fn() })
 vi.mock('../notify', () => ({ notifyUser: vi.fn() }));
 vi.mock('../identity', () => ({ resolveVerifiedDingtalkIdentity: vi.fn() }));
 const mockInvalidatePendingCaches = vi.hoisted(() => vi.fn());
+const mockInvalidateInstanceCache = vi.hoisted(() => vi.fn());
 
 vi.mock('../approval/api', () => ({
   addCommentAs: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('../approval/api', () => ({
   redirectTaskAs: vi.fn(),
 }));
 vi.mock('../approval/pending', () => ({
+  invalidateApprovalInstanceCache: (...args: unknown[]) => mockInvalidateInstanceCache(...args),
   invalidatePendingCaches: (...args: unknown[]) => mockInvalidatePendingCaches(...args),
 }));
 vi.mock('./todoCount', () => ({
@@ -159,6 +161,7 @@ describe('runApprovalRulesCycle', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockInvalidateInstanceCache.mockReset();
     mockInvalidatePendingCaches.mockReset();
     stopDingtalkApprovalRuleWorkerForTest();
     rule.dailyCount = 0;
@@ -243,6 +246,7 @@ describe('runApprovalRulesCycle', () => {
       }),
     );
     expect(mockInvalidatePendingCaches).toHaveBeenCalledWith('user_1');
+    expect(mockInvalidateInstanceCache).toHaveBeenCalledWith('inst_1');
   });
 
   it('stores instance title and rule name on the default rule_executed audit append', async () => {
@@ -358,6 +362,8 @@ describe('runApprovalRulesCycle', () => {
       });
     const result = await run({ getInstanceDetail });
     expect(getInstanceDetail).toHaveBeenCalledTimes(2);
+    expect(getInstanceDetail).toHaveBeenNthCalledWith(1, 'inst_1');
+    expect(getInstanceDetail).toHaveBeenNthCalledWith(2, 'inst_1', { fresh: true });
     expect(executeTaskAs).not.toHaveBeenCalled();
     expect(deleteRun).toHaveBeenCalledWith(
       expect.anything(),
@@ -483,6 +489,7 @@ describe('runApprovalRulesCycle', () => {
     expect(notify).not.toHaveBeenCalled();
     expect(writeAudit).not.toHaveBeenCalled();
     expect(mockInvalidatePendingCaches).toHaveBeenCalledWith('user_1');
+    expect(mockInvalidateInstanceCache).toHaveBeenCalledWith('inst_1');
   });
 
   it('keeps the unique row on a definitive DingTalk rejection and releases the slot', async () => {
@@ -500,6 +507,7 @@ describe('runApprovalRulesCycle', () => {
     expect(rollbackDailyCount).toHaveBeenCalled();
     expect(result.counts.failed).toBe(1);
     expect(mockInvalidatePendingCaches).not.toHaveBeenCalled();
+    expect(mockInvalidateInstanceCache).not.toHaveBeenCalled();
   });
 
   it('reclaims a stale IN_PROGRESS row without bumping the daily counter again', async () => {
@@ -674,12 +682,13 @@ describe('runApprovalRulesCycle', () => {
     await first;
   });
 
-  it('uses a 3 minute base interval with jitter', () => {
-    expect(APPROVAL_RULE_SWEEP_INTERVAL_MS).toBe(180_000);
+  it('uses a 10 minute base interval with jitter', () => {
+    expect(APPROVAL_RULE_SWEEP_INTERVAL_MS).toBe(600_000);
     expect(APPROVAL_RULE_SWEEP_JITTER_MS).toBe(30_000);
-    expect(nextApprovalRuleSweepDelayMs(() => 0.5)).toBe(180_000);
-    expect(nextApprovalRuleSweepDelayMs(() => 0)).toBe(150_000);
-    expect(nextApprovalRuleSweepDelayMs(() => 1)).toBe(210_000);
+    expect(APPROVAL_RULE_REVERIFY_MS).toBe(60 * 60 * 1000);
+    expect(nextApprovalRuleSweepDelayMs(() => 0.5)).toBe(600_000);
+    expect(nextApprovalRuleSweepDelayMs(() => 0)).toBe(570_000);
+    expect(nextApprovalRuleSweepDelayMs(() => 1)).toBe(630_000);
   });
 
   it('logs the DingTalk call count once per cycle', async () => {
@@ -854,7 +863,7 @@ describe('runApprovalRulesCycle', () => {
     expect(getInstanceDetail).toHaveBeenCalledTimes(1);
   });
 
-  it('re-verifies at most once every 30 minutes when pending count is not higher than remembered tasks', async () => {
+  it('re-verifies at most once every 60 minutes when pending count is not higher than remembered tasks', async () => {
     const listRunningInstanceIds = vi.fn(async () => ['inst_1']);
     const getInstanceDetail = vi.fn(async (_id: string) => detail);
     const deps = {
@@ -873,6 +882,12 @@ describe('runApprovalRulesCycle', () => {
     await run({
       ...deps,
       now: new Date('2026-03-01T00:10:00.000Z'),
+    });
+    expect(listRunningInstanceIds).not.toHaveBeenCalled();
+
+    await run({
+      ...deps,
+      now: new Date('2026-03-01T00:30:00.000Z'),
     });
     expect(listRunningInstanceIds).not.toHaveBeenCalled();
 

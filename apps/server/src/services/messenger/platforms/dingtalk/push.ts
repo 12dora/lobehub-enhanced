@@ -1,4 +1,4 @@
-import { buildSampleActionCardParam, DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
+import { buildSampleActionCardParam } from '@lobechat/chat-adapter-dingtalk';
 import debug from 'debug';
 
 import { getMessengerDingTalkConfig } from '@/config/messenger';
@@ -22,6 +22,7 @@ import {
 } from './notifyApp';
 import { incrementDingTalkDailyCounter } from './redis';
 import { resolveDingTalkStaffId } from './resolveStaffId';
+import { sharedDingTalkApiClient } from './tokenCache';
 
 const log = debug('lobe-server:messenger:dingtalk:push');
 
@@ -338,7 +339,11 @@ class DingTalkMessengerPushProvider implements MessengerPushProvider {
         return taskId ? { providerMessageId: taskId, status: 'sent' } : { status: 'sent' };
       }
 
-      const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+      const api = sharedDingTalkApiClient({
+        appKey: config.clientId,
+        appSecret: config.clientSecret,
+        robotCode: config.robotCode,
+      });
       if (wrappedUrl) {
         const displayName = await resolveDingTalkBrandingDisplayName();
         const card = buildSampleActionCardParam({

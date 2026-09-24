@@ -12,6 +12,12 @@ import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis'
 
 import { DINGTALK_CORP_ID_KEY, resolveDingTalkIdentityEmailDomain } from './const';
 import { ensureDingTalkUser } from './provision';
+import {
+  getOrRefreshSharedDingTalkToken,
+  invalidateSharedDingTalkToken,
+  recordDingTalkHttpCallSafely,
+  resetSharedDingTalkTokenCacheForTest,
+} from './tokenCache';
 
 const log = debug('lobe-server:messenger:dingtalk:sso');
 
@@ -72,18 +78,21 @@ export type DingTalkSsoExchangeResult =
  */
 export const DINGTALK_SSO_TWO_FACTOR_SESSION_PATH = '/callback/dingtalk';
 
-interface LegacyTokenCache {
-  expiresAt: number;
-  token: string;
-}
-
 interface RateLimitEntry {
   count: number;
   windowStartedAt: number;
 }
 
-const legacyTokenCache = new Map<string, LegacyTokenCache>();
 const rateLimitMemory = new Map<string, RateLimitEntry>();
+
+class DingTalkTokenFetchFailed extends Error {
+  readonly detail: string;
+
+  constructor(detail: string) {
+    super(detail);
+    this.detail = detail;
+  }
+}
 
 interface BetterAuthSessionCookieSpec {
   attributes: {
@@ -109,8 +118,8 @@ interface BetterAuthSsoContext {
 }
 
 export const resetDingTalkSsoStateForTest = (): void => {
-  legacyTokenCache.clear();
   rateLimitMemory.clear();
+  resetSharedDingTalkTokenCacheForTest();
 };
 
 const emptyToNull = (value: string | null | undefined): string | null => {
@@ -252,52 +261,68 @@ const fetchLegacyAppToken = async (
   clientSecret: string,
   now = Date.now(),
 ): Promise<DingTalkOapiToken | DingTalkOapiFailure> => {
-  const cached = legacyTokenCache.get(clientId);
-  if (cached && cached.expiresAt > now) return { ok: true, token: cached.token };
-
-  const url = new URL(DINGTALK_LEGACY_TOKEN_URL);
-  url.searchParams.set('appkey', clientId);
-  url.searchParams.set('appsecret', clientSecret);
-
-  let response: Response;
   try {
-    // `redirect: 'error'` so a 30x off oapi.dingtalk.com cannot forward appsecret in the query.
-    response = await fetch(url.toString(), { cache: 'no-store', method: 'GET', redirect: 'error' });
+    const token = await getOrRefreshSharedDingTalkToken({
+      appKey: clientId,
+      appSecret: clientSecret,
+      kind: 'gettoken',
+      now,
+      refresh: async () => {
+        recordDingTalkHttpCallSafely('GET', DINGTALK_LEGACY_TOKEN_URL);
+        const url = new URL(DINGTALK_LEGACY_TOKEN_URL);
+        url.searchParams.set('appkey', clientId);
+        url.searchParams.set('appsecret', clientSecret);
+
+        let response: Response;
+        try {
+          // `redirect: 'error'` so a 30x off oapi.dingtalk.com cannot forward appsecret in the query.
+          response = await fetch(url.toString(), {
+            cache: 'no-store',
+            method: 'GET',
+            redirect: 'error',
+          });
+        } catch (error) {
+          log('fetchLegacyAppToken network error: %O', error);
+          warnDingTalkSso('gettoken', { errmsg: 'network' });
+          throw new DingTalkTokenFetchFailed('network');
+        }
+
+        const status = responseStatus(response);
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch (error) {
+          log('fetchLegacyAppToken invalid json: %O', error);
+          warnDingTalkSso('gettoken', { errmsg: 'invalid_json', status });
+          throw new DingTalkTokenFetchFailed(dingTalkOapiDetail(null, status));
+        }
+
+        const record = jsonRecord(body);
+        const errcode = record?.errcode;
+        const errmsg = record?.errmsg;
+        const accessToken = record?.access_token;
+        if (isDingTalkErrcodeFailure(errcode)) {
+          warnDingTalkSso('gettoken', { errcode, errmsg, status });
+          throw new DingTalkTokenFetchFailed(String(errcode));
+        }
+        if (typeof accessToken !== 'string' || accessToken.trim().length === 0) {
+          warnDingTalkSso('gettoken', { errcode, errmsg, status });
+          throw new DingTalkTokenFetchFailed(dingTalkOapiDetail(record, status));
+        }
+
+        const expiresInSec =
+          typeof record?.expires_in === 'number' && Number.isFinite(record.expires_in)
+            ? record.expires_in
+            : 7200;
+        return { expiresInSec, token: accessToken.trim() };
+      },
+    });
+    return { ok: true, token };
   } catch (error) {
-    log('fetchLegacyAppToken network error: %O', error);
-    warnDingTalkSso('gettoken', { errmsg: 'network' });
+    if (error instanceof DingTalkTokenFetchFailed) return { detail: error.detail, ok: false };
+    log('fetchLegacyAppToken failed: %O', error);
     return { detail: 'network', ok: false };
   }
-
-  const status = responseStatus(response);
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (error) {
-    log('fetchLegacyAppToken invalid json: %O', error);
-    warnDingTalkSso('gettoken', { errmsg: 'invalid_json', status });
-    return { detail: dingTalkOapiDetail(null, status), ok: false };
-  }
-
-  const record = jsonRecord(body);
-  const errcode = record?.errcode;
-  const errmsg = record?.errmsg;
-  const token = record?.access_token;
-  if (isDingTalkErrcodeFailure(errcode)) {
-    warnDingTalkSso('gettoken', { errcode, errmsg, status });
-    return { detail: String(errcode), ok: false };
-  }
-  if (typeof token !== 'string' || token.trim().length === 0) {
-    warnDingTalkSso('gettoken', { errcode, errmsg, status });
-    return { detail: dingTalkOapiDetail(record, status), ok: false };
-  }
-
-  const next: LegacyTokenCache = {
-    expiresAt: now + DINGTALK_LEGACY_TOKEN_CACHE_MS,
-    token: token.trim(),
-  };
-  legacyTokenCache.set(clientId, next);
-  return { ok: true, token: next.token };
 };
 
 const exchangeAuthCodeForUserId = async (
@@ -306,6 +331,7 @@ const exchangeAuthCodeForUserId = async (
 ): Promise<DingTalkOapiUserId | DingTalkOapiFailure> => {
   const url = new URL(DINGTALK_GETUSERINFO_URL);
   url.searchParams.set('access_token', accessToken);
+  recordDingTalkHttpCallSafely('POST', DINGTALK_GETUSERINFO_URL);
 
   let response: Response;
   try {
@@ -458,8 +484,10 @@ export const exchangeDingTalkSso = async (input: {
 
   const staffId = await exchangeAuthCodeForUserId(accessToken.token, code);
   if (!staffId.ok) {
-    // 40014 = invalid access_token. Drop the 1h cache so the next attempt refetches.
-    if (staffId.detail === '40014') legacyTokenCache.delete(config.clientId);
+    // 40014 = invalid access_token. Drop the shared cache so the next attempt refetches.
+    if (staffId.detail === '40014') {
+      await invalidateSharedDingTalkToken(config.clientId, config.clientSecret, 'gettoken');
+    }
     return { detail: staffId.detail, ok: false, reason: 'exchange_failed' };
   }
 

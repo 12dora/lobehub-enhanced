@@ -86,7 +86,7 @@
 
 ### 通讯录同步
 
-进程内 `dingtalkDirectorySyncWorker` 在启动 60 s 后跑一次，之后每小时走一遍部门树（`topapi/v2/department/listsub` 从部门 `1` 开始，根部门名用 `topapi/v2/department/get`）和部门成员（`topapi/v2/user/list`，cursor 分页，每页 100）。结果写入 `dingtalk_departments` / `dingtalk_directory_users` / `dingtalk_user_departments`（拼音列用 `pinyinFull` / `pinyinInitials`）。未配置通知应用时跳过。管理端「立即同步」走同一套逻辑（Redis 锁 `messenger:dingtalk:directory-sync-lock`）。状态在 Redis `messenger:dingtalk:directory-status`（无 TTL）：`idle` / `running` / `ok` / `error`，含部门数、人员数、上次同步时间。
+进程内 `dingtalkDirectorySyncWorker` 每 12 小时走一遍部门树（`topapi/v2/department/listsub` 从部门 `1` 开始，根部门名用 `topapi/v2/department/get`）和部门成员（`topapi/v2/user/list`，cursor 分页，每页 100）。启动后的第一次：没有上次成功记录时仍等 60 s；Redis `messenger:dingtalk:directory-sync-last-success`（无 TTL）有值时，推迟到距上次成功满 12 小时，且不少于 60 s。名字查不到触发的补同步全局最多每 6 小时一次，同一个名字（规范化后）6 小时内不再触发。Redis 锁 `messenger:dingtalk:directory-sync-lock` 的 `SET` 抛错时跳过本次，不在无锁情况下跑。结果写入 `dingtalk_departments` / `dingtalk_directory_users` / `dingtalk_user_departments`（拼音列用 `pinyinFull` / `pinyinInitials`）。未配置通知应用时跳过。管理端「立即同步」不受补同步冷却限制，成功后同样写入上次成功时间。状态在 Redis `messenger:dingtalk:directory-status`（无 TTL）：`idle` / `running` / `ok` / `error`，含部门数、人员数、上次同步时间。
 
 ### 定时提醒数据模型（提醒即任务）
 
@@ -133,6 +133,7 @@ Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTas
 ## 运维要点
 
 - 容器出网经 `HTTP(S)_PROXY`，`NODE_USE_ENV_PROXY=1` 使 Node 的 fetch 与 WebSocket 均经代理；`NO_PROXY` 需包含 `localhost,127.0.0.1`。
+- `DINGTALK_API_DAILY_ALERT_THRESHOLD`：钉钉 OpenAPI 当日（Asia/Shanghai）调用次数告警阈值，默认 `5000`。设为 `0` 关闭。统计 Redis `dingtalk:api-calls:<YYYY-MM-DD>` 全部字段之和，达到阈值时经状态告警通知管理员（含调用最多的 5 个接口，6 小时内不重复；次日低于阈值时发恢复）。
 - 单实例部署：Stream 连接与调度 worker 都在服务进程内，多副本时分别依赖钉钉的多连接分发与 Redis 锁。
 - 排查：`DEBUG=lobe-server:messenger:*,lobe-server:task-scheduling` 查看连接 / 转发 / 调度日志；Redis 键 `messenger:dingtalk:*`；`notification_deliveries` 表的 `failed_reason`。
 - reminder never reaches DingTalk → check `notification_deliveries` for `status=skipped`/`failed_reason=user_not_mapped`; the task owner must be a DingTalk-linked account.

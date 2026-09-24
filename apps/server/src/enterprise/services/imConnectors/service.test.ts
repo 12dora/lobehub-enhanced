@@ -7,7 +7,11 @@ import { SystemBotProviderModel } from '@/database/models/systemBotProvider';
 import type { LobeChatDatabase } from '@/database/type';
 
 import { InfraSettingsSecretRequiredError } from '../infraSettings/errors';
-import { fingerprintClientSecret, ImConnectorsAdminService } from './service';
+import {
+  DIRECTORY_SYNC_LOCK_FAILED_ERROR,
+  fingerprintClientSecret,
+  ImConnectorsAdminService,
+} from './service';
 
 const invalidateMessengerConfigCache = vi.hoisted(() => vi.fn());
 const appendAudit = vi.hoisted(() => vi.fn());
@@ -89,6 +93,7 @@ vi.mock('./status', () => ({
 }));
 
 vi.mock('../dingtalkDirectory/sync', () => ({
+  DIRECTORY_SYNC_LOCK_FAILED: 'lock_failed',
   readDingTalkDirectoryStatus,
   runGuardedDirectorySync,
   syncDingTalkDirectory,
@@ -215,7 +220,14 @@ describe('ImConnectorsAdminService', () => {
     getDingtalkPersonalConfig.mockReset().mockResolvedValue({
       brokerConfigured: true,
       enabled: false,
-      features: { chat: false, report: false, todo: false, write: false },
+      features: {
+        chat: false,
+        docs: false,
+        report: false,
+        sheets: false,
+        todo: false,
+        write: false,
+      },
     });
     countActiveDingtalkPersonal.mockReset().mockResolvedValue(4);
     applyAutomationTierChange.mockResolvedValue({ rows: [], truncated: 0 });
@@ -830,6 +842,26 @@ describe('ImConnectorsAdminService', () => {
     expect(readDingTalkDirectoryStatus).toHaveBeenCalledWith(db);
   });
 
+  it('syncDirectory returns an error when the directory lock cannot be taken', async () => {
+    runGuardedDirectorySync.mockResolvedValueOnce('lock_failed');
+    readDingTalkDirectoryStatus.mockResolvedValueOnce({
+      departments: 2,
+      lastError: null,
+      lastRunAt: '2026-09-16T04:00:00.000Z',
+      state: 'ok',
+      users: 9,
+    });
+    const service = new ImConnectorsAdminService(createDb());
+    await expect(service.syncDirectory()).resolves.toEqual({
+      departments: 2,
+      lastError: DIRECTORY_SYNC_LOCK_FAILED_ERROR,
+      lastRunAt: '2026-09-16T04:00:00.000Z',
+      state: 'error',
+      users: 9,
+    });
+    expect(syncDingTalkDirectory).not.toHaveBeenCalled();
+  });
+
   it('syncDirectory returns running when the directory lock is held', async () => {
     runGuardedDirectorySync.mockResolvedValueOnce(null);
     readDingTalkDirectoryStatus.mockResolvedValueOnce({
@@ -873,7 +905,9 @@ describe('ImConnectorsAdminService', () => {
     expect(view.personalDataEnabled).toBe(false);
     expect(view.personalTodoEnabled).toBe(false);
     expect(view.personalChatEnabled).toBe(false);
+    expect(view.personalDocsEnabled).toBe(false);
     expect(view.personalReportEnabled).toBe(false);
+    expect(view.personalSheetsEnabled).toBe(false);
     expect(view.personalWriteEnabled).toBe(false);
     expect(countActiveDingtalkPersonal).toHaveBeenCalled();
   });
@@ -894,7 +928,9 @@ describe('ImConnectorsAdminService', () => {
         ...upsertInput,
         personalChatEnabled: true,
         personalDataEnabled: true,
+        personalDocsEnabled: true,
         personalReportEnabled: false,
+        personalSheetsEnabled: true,
         personalTodoEnabled: true,
         personalWriteEnabled: true,
       },
@@ -907,7 +943,9 @@ describe('ImConnectorsAdminService', () => {
         settings: expect.objectContaining({
           personalChatEnabled: true,
           personalDataEnabled: true,
+          personalDocsEnabled: true,
           personalReportEnabled: false,
+          personalSheetsEnabled: true,
           personalTodoEnabled: true,
           personalWriteEnabled: true,
         }),
@@ -919,6 +957,8 @@ describe('ImConnectorsAdminService', () => {
         afterDiff: expect.objectContaining({
           personalChatEnabled: true,
           personalDataEnabled: true,
+          personalDocsEnabled: true,
+          personalSheetsEnabled: true,
           personalWriteEnabled: true,
         }),
       }),

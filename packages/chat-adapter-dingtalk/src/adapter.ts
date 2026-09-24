@@ -16,7 +16,7 @@ import type {
 } from 'chat';
 import { BaseFormatConverter, Message, parseMarkdown, stringifyMarkdown } from 'chat';
 
-import { DingTalkApiClient } from './api';
+import { DingTalkApiClient, type DingTalkApiClientOptions } from './api';
 import { verifyDingTalkForwardHeaders } from './forwardAuth';
 import { convertGfmTablesForDingTalk } from './markdownTables';
 import {
@@ -369,6 +369,12 @@ const extractCardCommand = (body: Record<string, unknown>): string | undefined =
   return undefined;
 };
 
+export interface DingTalkAdapterClientConfig extends DingTalkAdapterConfig {
+  /** Reuse a process-wide client (shared token cache + request counter). */
+  apiClient?: DingTalkApiClient;
+  apiOptions?: DingTalkApiClientOptions;
+}
+
 export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotMessage> {
   readonly name = 'dingtalk';
   readonly persistThreadHistory = true;
@@ -384,8 +390,10 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
   private chat!: ChatInstance;
   private logger!: Logger;
 
-  constructor(config: DingTalkAdapterConfig) {
-    this.api = new DingTalkApiClient(config.clientId, config.clientSecret);
+  constructor(config: DingTalkAdapterClientConfig) {
+    this.api =
+      config.apiClient ??
+      new DingTalkApiClient(config.clientId, config.clientSecret, config.apiOptions);
     this.clientId = config.clientId;
     this.clientSecret = config.clientSecret;
     this.robotCode = config.robotCode;
@@ -749,7 +757,7 @@ export class DingTalkAdapter implements Adapter<DingTalkThreadId, DingTalkRobotM
   }
 }
 
-export function createDingTalkAdapter(config: DingTalkAdapterConfig): DingTalkAdapter {
+export function createDingTalkAdapter(config: DingTalkAdapterClientConfig): DingTalkAdapter {
   return new DingTalkAdapter(config);
 }
 

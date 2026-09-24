@@ -7,6 +7,15 @@ import { resolveServerRuntimeBranding } from '@/server/enterprise/services/brand
 import { recordDingtalkHttpCall } from '@/server/enterprise/services/dingtalkWorkspace/apiCallStats';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
+import {
+  getOrRefreshSharedDingTalkToken,
+  hashDingTalkCredential,
+  invalidateSharedDingTalkToken,
+  readSharedDingTalkTokenEntry,
+  resetSharedDingTalkTokenCacheForTest,
+  writeSharedDingTalkTokenAt,
+} from './tokenCache';
+
 const log = debug('lobe-server:messenger:dingtalk:notify-app');
 
 export const DINGTALK_OAPI_BASE = 'https://oapi.dingtalk.com';
@@ -181,6 +190,7 @@ export class DingTalkNotifyAppError extends Error {
 
 interface NotifyTokenCache {
   appKey: string;
+  appSecret: string;
   expiresAt: number;
   token: string;
 }
@@ -191,6 +201,7 @@ let memoryNewToken: NotifyTokenCache | null = null;
 export const resetNotifyAppStateForTest = (): void => {
   memoryToken = null;
   memoryNewToken = null;
+  resetSharedDingTalkTokenCacheForTest();
 };
 
 const isInvalidAccessTokenErrcode = (errcode: unknown, errmsg?: string | null): boolean => {
@@ -215,22 +226,55 @@ const delRedisKeys = async (keys: string[]): Promise<void> => {
   }
 };
 
-/** Drop the in-process + Redis new-API (oauth2) token so the next refetch is forced. */
-export const invalidateNotifyAppNewApiToken = async (): Promise<void> => {
-  memoryNewToken = null;
-  await delRedisKeys([DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY]);
+const secretFor = (
+  appKey: string | undefined,
+  appSecret: string | undefined,
+  memory: NotifyTokenCache | null,
+): { appKey?: string; appSecret?: string } => {
+  const key = appKey ?? memory?.appKey;
+  const secret =
+    appSecret ?? (memory && (!key || memory.appKey === key) ? memory.appSecret : undefined);
+  return { appKey: key, appSecret: secret };
 };
 
-const invalidateNotifyAppOapiToken = async (): Promise<void> => {
+/** Drop the in-process + Redis new-API (oauth2) token so the next refetch is forced. */
+export const invalidateNotifyAppNewApiToken = async (
+  appKey?: string,
+  appSecret?: string,
+): Promise<void> => {
+  const creds = secretFor(appKey, appSecret, memoryNewToken);
+  memoryNewToken = null;
+  await delRedisKeys([DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY]);
+  if (creds.appKey && creds.appSecret) {
+    await invalidateSharedDingTalkToken(creds.appKey, creds.appSecret, 'accessToken');
+  }
+};
+
+const invalidateNotifyAppOapiToken = async (appKey?: string, appSecret?: string): Promise<void> => {
+  const creds = secretFor(appKey, appSecret, memoryToken);
   memoryToken = null;
   await delRedisKeys([DINGTALK_NOTIFY_TOKEN_REDIS_KEY]);
+  if (creds.appKey && creds.appSecret) {
+    await invalidateSharedDingTalkToken(creds.appKey, creds.appSecret, 'gettoken');
+  }
 };
 
 /** Drop both notify-app tokens (oapi gettoken + new-API oauth2) after credential rotation. */
 export const invalidateNotifyAppToken = async (): Promise<void> => {
+  const creds = [memoryToken, memoryNewToken].filter((entry): entry is NotifyTokenCache =>
+    Boolean(entry),
+  );
   memoryToken = null;
   memoryNewToken = null;
   await delRedisKeys([DINGTALK_NOTIFY_TOKEN_REDIS_KEY, DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY]);
+  const seen = new Set<string>();
+  for (const entry of creds) {
+    const id = `${entry.appKey}\0${entry.appSecret}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    await invalidateSharedDingTalkToken(entry.appKey, entry.appSecret, 'gettoken');
+    await invalidateSharedDingTalkToken(entry.appKey, entry.appSecret, 'accessToken');
+  }
 };
 
 const emptyToNull = (value: string | null | undefined): string | null => {
@@ -428,7 +472,7 @@ const fetchOapiGettoken = async (
   appSecret: string,
   fetchImpl: DingTalkNotifyFetch,
   now: number,
-): Promise<{ expiresAt: number; token: string }> => {
+): Promise<{ expiresAt: number; expiresInSec: number; token: string }> => {
   const url = new URL(DINGTALK_OAPI_GETTOKEN_URL);
   url.searchParams.set('appkey', appKey);
   url.searchParams.set('appsecret', appSecret);
@@ -470,11 +514,12 @@ const fetchOapiGettoken = async (
     DINGTALK_NOTIFY_TOKEN_CACHE_MS,
     Math.max(0, expiresIn * 1000 - 5 * 60_000),
   );
-  return { expiresAt: now + ttlMs, token };
+  return { expiresAt: now + ttlMs, expiresInSec: expiresIn, token };
 };
 
 const readRedisToken = async (
   appKey: string,
+  appSecret: string,
   now: number,
   redisKey: string,
 ): Promise<NotifyTokenCache | null> => {
@@ -486,10 +531,14 @@ const readRedisToken = async (
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return null;
     if (pickTrimmedString(parsed.appKey) !== appKey) return null;
+    // Entries written before the secret was part of the key are a miss.
+    if (pickTrimmedString(parsed.secretHash) !== hashDingTalkCredential(appKey, appSecret)) {
+      return null;
+    }
     const token = pickTrimmedString(parsed.token);
     const expiresAt = typeof parsed.expiresAt === 'number' ? parsed.expiresAt : 0;
     if (!token || expiresAt <= now) return null;
-    return { appKey, expiresAt, token };
+    return { appKey, appSecret, expiresAt, token };
   } catch (error) {
     log('readRedisToken failed: %O', error);
     return null;
@@ -507,7 +556,12 @@ const writeRedisToken = async (
   try {
     await redis.set(
       redisKey,
-      JSON.stringify({ appKey: cache.appKey, expiresAt: cache.expiresAt, token: cache.token }),
+      JSON.stringify({
+        appKey: cache.appKey,
+        expiresAt: cache.expiresAt,
+        secretHash: hashDingTalkCredential(cache.appKey, cache.appSecret),
+        token: cache.token,
+      }),
       'EX',
       ttlSeconds,
     );
@@ -533,21 +587,74 @@ export const getNotifyAppToken = async (params?: {
   const now = params?.now ?? Date.now();
   const fetchImpl = params?.fetchImpl ?? doFetch;
 
+  if (
+    !params?.skipCache &&
+    memoryToken &&
+    memoryToken.appKey === config.appKey &&
+    memoryToken.appSecret === config.appSecret &&
+    memoryToken.expiresAt > now
+  ) {
+    return memoryToken.token;
+  }
+
   if (!params?.skipCache) {
-    if (memoryToken && memoryToken.appKey === config.appKey && memoryToken.expiresAt > now) {
-      return memoryToken.token;
-    }
-    const redisToken = await readRedisToken(config.appKey, now, DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
-    if (redisToken) {
-      memoryToken = redisToken;
-      return redisToken.token;
+    const legacy = await readRedisToken(
+      config.appKey,
+      config.appSecret,
+      now,
+      DINGTALK_NOTIFY_TOKEN_REDIS_KEY,
+    );
+    if (legacy) {
+      memoryToken = legacy;
+      await writeSharedDingTalkTokenAt(
+        config.appKey,
+        config.appSecret,
+        'gettoken',
+        legacy.token,
+        legacy.expiresAt,
+        now,
+      );
+      return legacy.token;
     }
   }
 
-  const fetched = await fetchOapiGettoken(config.appKey, config.appSecret, fetchImpl, now);
-  memoryToken = { appKey: config.appKey, expiresAt: fetched.expiresAt, token: fetched.token };
-  await writeRedisToken(memoryToken, now, DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
-  return fetched.token;
+  const token = await getOrRefreshSharedDingTalkToken({
+    appKey: config.appKey,
+    appSecret: config.appSecret,
+    kind: 'gettoken',
+    now,
+    refresh: async () => {
+      const fetched = await fetchOapiGettoken(config.appKey, config.appSecret, fetchImpl, now);
+      const stored = {
+        appKey: config.appKey,
+        appSecret: config.appSecret,
+        expiresAt: fetched.expiresAt,
+        token: fetched.token,
+      };
+      memoryToken = stored;
+      // Keep the legacy notify key so existing readers still hit Redis.
+      await writeRedisToken(stored, now, DINGTALK_NOTIFY_TOKEN_REDIS_KEY);
+      return { expiresInSec: fetched.expiresInSec, token: fetched.token };
+    },
+    skipCache: params?.skipCache,
+  });
+  if (!params?.skipCache) {
+    const shared = await readSharedDingTalkTokenEntry(
+      config.appKey,
+      config.appSecret,
+      'gettoken',
+      now,
+    );
+    if (shared) {
+      memoryToken = {
+        appKey: config.appKey,
+        appSecret: config.appSecret,
+        expiresAt: shared.expiresAt,
+        token: shared.token,
+      };
+    }
+  }
+  return token;
 };
 
 const tokenTtlMs = (expiresInSec: number): number =>
@@ -585,7 +692,7 @@ const fetchNewApiAccessToken = async (
   appSecret: string,
   fetchImpl: DingTalkNotifyFetch,
   now: number,
-): Promise<{ expiresAt: number; token: string }> => {
+): Promise<{ expiresAt: number; expiresInSec: number; token: string }> => {
   const timeout = withTimeout(DINGTALK_NOTIFY_APP_FETCH_TIMEOUT_MS);
 
   let response: Pick<Response, 'ok' | 'json' | 'status'>;
@@ -627,7 +734,7 @@ const fetchNewApiAccessToken = async (
       : typeof record.expires_in === 'number' && Number.isFinite(record.expires_in)
         ? record.expires_in
         : 7200;
-  return { expiresAt: now + tokenTtlMs(expiresIn), token };
+  return { expiresAt: now + tokenTtlMs(expiresIn), expiresInSec: expiresIn, token };
 };
 
 export const getNotifyAppNewApiToken = async (params?: {
@@ -647,29 +754,73 @@ export const getNotifyAppNewApiToken = async (params?: {
   const now = params?.now ?? Date.now();
   const fetchImpl = params?.fetchImpl ?? doFetch;
 
+  if (
+    !params?.skipCache &&
+    memoryNewToken &&
+    memoryNewToken.appKey === config.appKey &&
+    memoryNewToken.appSecret === config.appSecret &&
+    memoryNewToken.expiresAt > now
+  ) {
+    return memoryNewToken.token;
+  }
+
   if (!params?.skipCache) {
-    if (
-      memoryNewToken &&
-      memoryNewToken.appKey === config.appKey &&
-      memoryNewToken.expiresAt > now
-    ) {
-      return memoryNewToken.token;
-    }
-    const redisToken = await readRedisToken(
+    const legacy = await readRedisToken(
       config.appKey,
+      config.appSecret,
       now,
       DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY,
     );
-    if (redisToken) {
-      memoryNewToken = redisToken;
-      return redisToken.token;
+    if (legacy) {
+      memoryNewToken = legacy;
+      await writeSharedDingTalkTokenAt(
+        config.appKey,
+        config.appSecret,
+        'accessToken',
+        legacy.token,
+        legacy.expiresAt,
+        now,
+      );
+      return legacy.token;
     }
   }
 
-  const fetched = await fetchNewApiAccessToken(config.appKey, config.appSecret, fetchImpl, now);
-  memoryNewToken = { appKey: config.appKey, expiresAt: fetched.expiresAt, token: fetched.token };
-  await writeRedisToken(memoryNewToken, now, DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY);
-  return fetched.token;
+  const token = await getOrRefreshSharedDingTalkToken({
+    appKey: config.appKey,
+    appSecret: config.appSecret,
+    kind: 'accessToken',
+    now,
+    refresh: async () => {
+      const fetched = await fetchNewApiAccessToken(config.appKey, config.appSecret, fetchImpl, now);
+      const stored = {
+        appKey: config.appKey,
+        appSecret: config.appSecret,
+        expiresAt: fetched.expiresAt,
+        token: fetched.token,
+      };
+      memoryNewToken = stored;
+      await writeRedisToken(stored, now, DINGTALK_NOTIFY_NEW_TOKEN_REDIS_KEY);
+      return { expiresInSec: fetched.expiresInSec, token: fetched.token };
+    },
+    skipCache: params?.skipCache,
+  });
+  if (!params?.skipCache) {
+    const shared = await readSharedDingTalkTokenEntry(
+      config.appKey,
+      config.appSecret,
+      'accessToken',
+      now,
+    );
+    if (shared) {
+      memoryNewToken = {
+        appKey: config.appKey,
+        appSecret: config.appSecret,
+        expiresAt: shared.expiresAt,
+        token: shared.token,
+      };
+    }
+  }
+  return token;
 };
 
 export type NotifyAppProbeErrorCode = 'auth_failed' | 'missing_credentials' | 'network' | 'unknown';
@@ -807,7 +958,7 @@ const oapiPostWithTokenRetry = async (
     ) {
       throw error;
     }
-    await invalidateNotifyAppOapiToken();
+    await invalidateNotifyAppOapiToken(ctx.config.appKey, ctx.config.appSecret);
     ctx.tokenRef.current = await getNotifyAppToken({
       config: ctx.config,
       fetchImpl: ctx.fetchImpl,
@@ -1019,7 +1170,7 @@ const newApiPostWithTokenRetry = async (
     ) {
       throw error;
     }
-    await invalidateNotifyAppNewApiToken();
+    await invalidateNotifyAppNewApiToken(ctx.config.appKey, ctx.config.appSecret);
     ctx.tokenRef.current = await getNotifyAppNewApiToken({
       config: ctx.config,
       fetchImpl: ctx.fetchImpl,

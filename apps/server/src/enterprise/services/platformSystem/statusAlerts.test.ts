@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  dingtalkApiCallStatsRedisKey,
+  formatDingtalkApiCallStatsDate,
+  resetDingtalkApiCallStatsForTest,
+} from '../dingtalkWorkspace/apiCallStats';
 import type { CapabilityReport } from './capabilities';
 import {
   collectVerifiedAdminStaffIds,
   deriveAlertComponents,
+  DINGTALK_API_BUDGET_ALERT_ID,
+  formatStatusAlertLines,
   formatStatusAlertMessage,
   nextAlertState,
   REDIS_UNAVAILABLE_WARN_MS,
@@ -343,13 +350,16 @@ describe('status alert redis gate', () => {
 
   beforeEach(() => {
     resetStatusAlertsForTest();
+    resetDingtalkApiCallStatsForTest();
     redis = new FakeAlertRedis();
     redisBox.current = redis;
+    vi.unstubAllEnvs();
   });
 
   afterEach(() => {
     redisBox.current = null;
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('does not send when the shared lock is missing or already held', async () => {
@@ -464,5 +474,157 @@ describe('status alert redis gate', () => {
       }),
     );
     expect(sent.some((text) => text.includes('沙箱已恢复'))).toBe(false);
+  });
+
+  it('alerts when today exceeds the threshold, dedupes, and recovers once under it', async () => {
+    const date = formatDingtalkApiCallStatsDate(new Date());
+    const key = dingtalkApiCallStatsRedisKey(date);
+    redis.hashes.set(
+      key,
+      new Map([
+        ['GET /c', '300'],
+        ['GET /d', '150'],
+        ['GET /f', '40'],
+        ['POST /a', '4000'],
+        ['POST /b', '500'],
+        ['POST /e', '80'],
+      ]),
+    );
+    const sent: string[] = [];
+    const run = () =>
+      runStatusAlertEvaluation({
+        enabled: () => true,
+        link: () => '/admin/system/status',
+        listStaffIds: async () => ['staff-1'],
+        loadSnapshot: async () => baseSnapshot(),
+        recordEvent: async () => undefined,
+        send: async (input: { text: string }) => {
+          sent.push(input.text);
+        },
+      });
+
+    const first = await run();
+    expect(first.sent).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('钉钉 API 今日调用量超出告警阈值');
+    expect(sent[0]).toContain('今日 API 调用 5070 次，超过告警阈值 5000');
+    expect(sent[0]).toContain('POST /a 4000 次');
+    expect(sent[0]).toContain('POST /e 80 次');
+    expect(sent[0]).not.toContain('GET /f');
+
+    const again = await run();
+    expect(again.sent).toBe(false);
+    expect(sent).toHaveLength(1);
+
+    redis.hashes.delete('platform:status-alert:state');
+    const deduped = await run();
+    expect(deduped.sent).toBe(false);
+    expect(sent).toHaveLength(1);
+    expect(
+      redis.kv.has(`platform:status-alert:dedup:${DINGTALK_API_BUDGET_ALERT_ID}:unhealthy`),
+    ).toBe(true);
+
+    redis.hashes.set(key, new Map([['POST /a', '10']]));
+    const recovered = await run();
+    expect(recovered.sent).toBe(true);
+    expect(sent.at(-1)).toContain('钉钉 API 今日调用量已回落到告警阈值以下');
+    expect(
+      redis.hashes.get('platform:status-alert:state')?.get(`${DINGTALK_API_BUDGET_ALERT_ID}:day`),
+    ).toBe(date);
+  });
+
+  it('does not send a recovery when the budget counter resets on a new day', async () => {
+    redis.hashes.set(
+      'platform:status-alert:state',
+      new Map([
+        [DINGTALK_API_BUDGET_ALERT_ID, 'unhealthy'],
+        [`${DINGTALK_API_BUDGET_ALERT_ID}:day`, '2000-01-01'],
+      ]),
+    );
+    const today = formatDingtalkApiCallStatsDate(new Date());
+    redis.hashes.set(dingtalkApiCallStatsRedisKey(today), new Map([['POST /a', '1']]));
+    const sent: string[] = [];
+    const result = await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSnapshot: async () => baseSnapshot(),
+      recordEvent: async () => undefined,
+      send: async (input: { text: string }) => {
+        sent.push(input.text);
+      },
+    });
+    expect(result).toEqual({ sent: false, transitions: 0 });
+    expect(sent).toHaveLength(0);
+    expect(redis.hashes.get('platform:status-alert:state')?.get(DINGTALK_API_BUDGET_ALERT_ID)).toBe(
+      'healthy',
+    );
+    expect(
+      redis.kv.has(`platform:status-alert:dedup:${DINGTALK_API_BUDGET_ALERT_ID}:healthy`),
+    ).toBe(false);
+    expect(
+      formatStatusAlertLines([
+        {
+          day: today,
+          id: DINGTALK_API_BUDGET_ALERT_ID,
+          label: '钉钉 API 今日调用量',
+          next: 'healthy',
+          previous: 'unhealthy',
+          previousDay: '2000-01-01',
+          status: 'healthy',
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('stays quiet under the threshold and when the alert is disabled', async () => {
+    const key = dingtalkApiCallStatsRedisKey(formatDingtalkApiCallStatsDate(new Date()));
+    redis.hashes.set(key, new Map([['POST /a', '4999']]));
+    const send = vi.fn();
+    const under = await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSnapshot: async () => baseSnapshot(),
+      send,
+    });
+    expect(under).toEqual({ sent: false, transitions: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(redis.hashes.get('platform:status-alert:state')?.get(DINGTALK_API_BUDGET_ALERT_ID)).toBe(
+      'healthy',
+    );
+
+    resetStatusAlertsForTest();
+    redis.hashes.clear();
+    redis.kv.clear();
+    redis.hashes.set(key, new Map([['POST /a', '5000']]));
+    const atThreshold = vi.fn();
+    const exact = await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSnapshot: async () => baseSnapshot(),
+      send: atThreshold,
+    });
+    expect(exact.sent).toBe(true);
+    expect(String(atThreshold.mock.calls[0]?.[0]?.text)).toContain('今日 API 调用 5000 次');
+
+    resetStatusAlertsForTest();
+    redis.hashes.clear();
+    redis.kv.clear();
+    vi.stubEnv('DINGTALK_API_DAILY_ALERT_THRESHOLD', '0');
+    redis.hashes.set(key, new Map([['POST /a', '90000']]));
+    const disabled = await runStatusAlertEvaluation({
+      enabled: () => true,
+      link: () => '/admin/system/status',
+      listStaffIds: async () => ['staff-1'],
+      loadSnapshot: async () => baseSnapshot(),
+      send,
+    });
+    expect(disabled).toEqual({ sent: false, transitions: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(redis.hashes.get('platform:status-alert:state')?.has(DINGTALK_API_BUDGET_ALERT_ID)).toBe(
+      false,
+    );
   });
 });

@@ -23,12 +23,22 @@ const log = debug('lobe-server:messenger:dingtalk:directory-sync');
 export const DINGTALK_DIRECTORY_STATUS_KEY = 'messenger:dingtalk:directory-status';
 export const DINGTALK_DIRECTORY_SYNC_LOCK_KEY = 'messenger:dingtalk:directory-sync-lock';
 export const DINGTALK_DIRECTORY_SYNC_LOCK_TTL_SECONDS = 30 * 60;
+/** No TTL: a restart within 12 h of a walk must still see this timestamp. */
+export const DINGTALK_DIRECTORY_SYNC_LAST_SUCCESS_KEY =
+  'messenger:dingtalk:directory-sync-last-success';
 export const DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS = 60_000;
-/** Periodic walk. Miss-triggered refresh is capped separately at 1 h. */
+/** Periodic walk. Miss-triggered refresh is capped separately at 6 h. */
 export const DINGTALK_DIRECTORY_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
-export const DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS = 60 * 60 * 1000;
+export const DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 export const DINGTALK_DIRECTORY_SYNC_MISS_COOLDOWN_KEY =
   'messenger:dingtalk:directory-sync-miss-cooldown';
+export const DINGTALK_DIRECTORY_SYNC_MISS_NAME_PREFIX =
+  'messenger:dingtalk:directory-sync-miss-name:';
+export const DINGTALK_DIRECTORY_SYNC_MISS_NAME_TTL_SECONDS = 6 * 60 * 60;
+/** Periodic ticks inside this slack of the 12 h mark wait, so replicas do not double-walk. */
+export const DINGTALK_DIRECTORY_SYNC_TICK_SLACK_MS = 15 * 60 * 1000;
+/** `runGuardedDirectorySync` returns this when the Redis lock SET throws. The walk did not start. */
+export const DIRECTORY_SYNC_LOCK_FAILED = 'lock_failed' as const;
 
 export const RELEASE_DIRECTORY_SYNC_LOCK_SCRIPT =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
@@ -160,7 +170,7 @@ export const readDingTalkDirectoryStatus = async (
 
 const noopRelease = async (): Promise<void> => {};
 
-export type DirectorySyncLockResult = 'acquired' | 'held' | 'unavailable';
+export type DirectorySyncLockResult = 'acquired' | 'failed' | 'held' | 'unavailable';
 
 export const acquireDirectorySyncLock = async (): Promise<{
   release: () => Promise<void>;
@@ -185,10 +195,11 @@ export const acquireDirectorySyncLock = async (): Promise<{
       return { release: noopRelease, result: 'held' };
     }
   } catch (error) {
-    console.warn('[dingtalk-directory] Redis lock failed; running sync anyway', {
+    log('directory sync lock SET threw, skip walk: %O', error);
+    console.warn('[dingtalk-directory] Redis lock SET failed; skipping sync', {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     });
-    return { release: noopRelease, result: 'unavailable' };
+    return { release: noopRelease, result: 'failed' };
   }
 
   return {
@@ -209,6 +220,53 @@ export const acquireDirectorySyncLock = async (): Promise<{
     result: 'acquired',
   };
 };
+
+/**
+ * First walk after boot. Missing or unreadable last-success stays at 60 s.
+ * A recent success waits until that walk is 12 h old, and never less than 60 s.
+ */
+export const computeDirectorySyncBootDelayMs = (
+  lastSuccessMs: number | null,
+  nowMs: number,
+): number => {
+  if (lastSuccessMs === null || !Number.isFinite(lastSuccessMs)) {
+    return DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS;
+  }
+  const wait = lastSuccessMs + DINGTALK_DIRECTORY_SYNC_INTERVAL_MS - nowMs;
+  return Math.max(DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS, wait);
+};
+
+const readDirectorySyncLastSuccessMs = async (): Promise<number | null> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return null;
+  try {
+    const raw = await redis.get(DINGTALK_DIRECTORY_SYNC_LAST_SUCCESS_KEY);
+    if (!raw) return null;
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch (error) {
+    log('read directory sync last-success failed: %O', error);
+    return null;
+  }
+};
+
+const writeDirectorySyncLastSuccess = async (at: Date): Promise<void> => {
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return;
+  try {
+    await redis.set(DINGTALK_DIRECTORY_SYNC_LAST_SUCCESS_KEY, at.toISOString());
+    scheduleNextDirectorySync(at.getTime(), Date.now());
+  } catch (error) {
+    log('write directory sync last-success failed: %O', error);
+  }
+};
+
+/** Trim, NFKC, collapse whitespace, lowercase. Empty means the caller had no name. */
+export const normalizeDirectoryLookupName = (name: string): string =>
+  name.normalize('NFKC').trim().replaceAll(/\s+/g, ' ').toLowerCase();
+
+export const directorySyncMissNameKey = (normalisedName: string): string =>
+  `${DINGTALK_DIRECTORY_SYNC_MISS_NAME_PREFIX}${normalisedName}`;
 
 export const syncDingTalkDirectory = async (
   db: LobeChatDatabase,
@@ -247,13 +305,15 @@ export const syncDingTalkDirectory = async (
       durationMs,
       users: snapshot.users.length,
     };
+    const finishedAt = deps.now?.() ?? new Date();
     await writeDingTalkDirectoryStatus({
       departments: result.departments,
       lastError: null,
-      lastRunAt: (deps.now?.() ?? new Date()).toISOString(),
+      lastRunAt: finishedAt.toISOString(),
       state: 'ok',
       users: result.users,
     });
+    await writeDirectorySyncLastSuccess(finishedAt);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -267,11 +327,17 @@ export const syncDingTalkDirectory = async (
   }
 };
 
+export type DirectorySyncGuardedResult =
+  DingTalkDirectorySyncResult | typeof DIRECTORY_SYNC_LOCK_FAILED | null;
+
 export const runGuardedDirectorySync = async (
   db: LobeChatDatabase,
   deps: DingTalkDirectorySyncDeps = {},
-): Promise<DingTalkDirectorySyncResult | null> => {
+): Promise<DirectorySyncGuardedResult> => {
   const lock = await acquireDirectorySyncLock();
+  // `unavailable` is "no Redis client": keep the previous unlocked run.
+  // `failed` is a thrown SET: do not walk without the lock.
+  if (lock.result === 'failed') return DIRECTORY_SYNC_LOCK_FAILED;
   if (lock.result === 'held') return null;
   try {
     return await syncDingTalkDirectory(db, deps);
@@ -281,8 +347,9 @@ export const runGuardedDirectorySync = async (
 };
 
 let started = false;
-let bootTimer: ReturnType<typeof setTimeout> | undefined;
-let interval: ReturnType<typeof setInterval> | undefined;
+let nextTimer: ReturnType<typeof setTimeout> | undefined;
+/** Set while the worker is running so a manual or miss walk can pull the next tick forward. */
+let scheduleNextDirectorySync: (lastSuccessMs: number | null, nowMs: number) => void = () => {};
 
 export const isDingTalkDirectorySyncWorkerStarted = (): boolean => started;
 
@@ -296,11 +363,33 @@ export const isDingTalkDirectorySyncWorkerRuntime = (
   return true;
 };
 
+/**
+ * True when a periodic tick should walk. Manual sync and lookup-miss walks do not use this.
+ * A success newer than (12 h − 15 min) means another replica already walked.
+ */
+export const directorySyncPeriodicTickIsDue = (
+  lastSuccessMs: number | null,
+  nowMs: number,
+): boolean => {
+  if (lastSuccessMs === null || !Number.isFinite(lastSuccessMs)) return true;
+  return (
+    nowMs - lastSuccessMs >=
+    DINGTALK_DIRECTORY_SYNC_INTERVAL_MS - DINGTALK_DIRECTORY_SYNC_TICK_SLACK_MS
+  );
+};
+
 const tickDirectorySync = async (deps: DingTalkDirectorySyncDeps = {}): Promise<void> => {
   markWorkerTick('directory_sync', DINGTALK_DIRECTORY_SYNC_INTERVAL_MS);
   const getNotifyApp = deps.getNotifyApp ?? resolveNotifyAppConfig;
   if (!(await getNotifyApp())) {
     log('skip: notify app not configured');
+    return;
+  }
+
+  const nowMs = Date.now();
+  const lastSuccessMs = await readDirectorySyncLastSuccessMs();
+  if (!directorySyncPeriodicTickIsDue(lastSuccessMs, nowMs)) {
+    log('skip: last success still inside the 12 h window');
     return;
   }
 
@@ -319,6 +408,39 @@ const tickDirectorySync = async (deps: DingTalkDirectorySyncDeps = {}): Promise<
 export type DirectorySyncOnLookupMissResult = 'running' | 'throttled' | 'triggered';
 
 let memoryMissCooldownUntil = 0;
+const memoryMissNames = new Map<string, number>();
+
+const directoryMissNameCached = async (name: string, now: number): Promise<boolean> => {
+  const until = memoryMissNames.get(name) ?? 0;
+  if (until > now) return true;
+  if (until) memoryMissNames.delete(name);
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return false;
+  try {
+    const hit = await redis.get(directorySyncMissNameKey(name));
+    return Boolean(hit);
+  } catch (error) {
+    log('miss-name redis get failed: %O', error);
+    return false;
+  }
+};
+
+const rememberDirectoryMissName = async (name: string, now: number): Promise<void> => {
+  memoryMissNames.set(name, now + DINGTALK_DIRECTORY_SYNC_MISS_NAME_TTL_SECONDS * 1000);
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) return;
+  try {
+    await redis.set(
+      directorySyncMissNameKey(name),
+      '1',
+      'EX',
+      DINGTALK_DIRECTORY_SYNC_MISS_NAME_TTL_SECONDS,
+      'NX',
+    );
+  } catch (error) {
+    log('miss-name redis set failed: %O', error);
+  }
+};
 
 const acquireMissCooldown = async (now: number): Promise<boolean> => {
   if (memoryMissCooldownUntil > now) return false;
@@ -346,14 +468,19 @@ const acquireMissCooldown = async (now: number): Promise<boolean> => {
 
 /**
  * Early directory refresh when a reminder/approval name lookup misses.
- * At most once per hour. Admin 「同步」 still goes through
- * {@link runGuardedDirectorySync} and is not gated here.
+ * At most one walk per 6 h, and the same normalised name does not ask again
+ * for 6 h. Admin 「同步」 still goes through {@link runGuardedDirectorySync}
+ * and is not gated here. `name` is optional so older callers stay valid.
  */
 export const requestDirectorySyncOnLookupMiss = async (
   db: LobeChatDatabase,
   deps: DingTalkDirectorySyncDeps = {},
+  name?: string,
 ): Promise<DirectorySyncOnLookupMissResult> => {
   const now = deps.now?.().getTime() ?? Date.now();
+  const normalised = normalizeDirectoryLookupName(name ?? '');
+  if (normalised && (await directoryMissNameCached(normalised, now))) return 'throttled';
+
   const status = await readDingTalkDirectoryStatus(db, deps);
   if (status.state === 'running') return 'running';
   if (status.lastRunAt) {
@@ -364,6 +491,9 @@ export const requestDirectorySyncOnLookupMiss = async (
   }
   if (!(await acquireMissCooldown(now))) return 'throttled';
 
+  // Only a walk that is actually starting should hide this name for 6 h.
+  if (normalised) await rememberDirectoryMissName(normalised, now);
+
   void runGuardedDirectorySync(db, deps).catch((error) => {
     console.error('[dingtalk-directory] miss-triggered sync failed', {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
@@ -372,10 +502,42 @@ export const requestDirectorySyncOnLookupMiss = async (
   return 'triggered';
 };
 
+const clearDirectorySyncTimer = (): void => {
+  if (!nextTimer) return;
+  clearTimeout(nextTimer);
+  nextTimer = undefined;
+};
+
 /**
- * 12-hour directory walk. First run is delayed 60 s after boot so the process
- * can finish listening. Skipped when the notify app (服务号) is not configured.
- * A name-lookup miss may trigger an extra walk at most once per hour.
+ * Delay until the next periodic walk. Missing last-success (failed walk, or
+ * Redis could not be read) waits a full 12 h so a failure cannot tight-loop.
+ * A recent success — manual, lookup-miss, or the periodic walk — waits until
+ * that success is 12 h old, instead of keeping the timer's old phase.
+ */
+export const computeDirectorySyncRearmDelayMs = (
+  lastSuccessMs: number | null,
+  nowMs: number,
+): number => {
+  if (lastSuccessMs === null || !Number.isFinite(lastSuccessMs)) {
+    return DINGTALK_DIRECTORY_SYNC_INTERVAL_MS;
+  }
+  const wait = lastSuccessMs + DINGTALK_DIRECTORY_SYNC_INTERVAL_MS - nowMs;
+  return wait > 0 ? wait : DINGTALK_DIRECTORY_SYNC_INTERVAL_MS;
+};
+
+const armDirectorySyncSchedule = (delayMs: number, run: () => void): void => {
+  if (!started) return;
+  clearDirectorySyncTimer();
+  nextTimer = setTimeout(run, delayMs);
+  nextTimer.unref?.();
+  log('next directory sync in %dms', delayMs);
+};
+
+/**
+ * 12-hour directory walk. The first run is at least 60 s after boot, and later
+ * than that when the previous success is still inside the 12 h window.
+ * Skipped when the notify app (服务号) is not configured.
+ * A name-lookup miss may trigger an extra walk at most once per 6 h.
  */
 export const ensureDingTalkDirectorySyncWorkerStarted = (
   deps: DingTalkDirectorySyncDeps = {},
@@ -388,34 +550,37 @@ export const ensureDingTalkDirectorySyncWorkerStarted = (
 
   started = true;
   markWorkerStarted('directory_sync', DINGTALK_DIRECTORY_SYNC_INTERVAL_MS);
-  const run = () => {
-    void tickDirectorySync(deps);
+  const run = (): void => {
+    void (async () => {
+      try {
+        await tickDirectorySync(deps);
+      } finally {
+        if (started) {
+          const lastSuccessMs = await readDirectorySyncLastSuccessMs();
+          armDirectorySyncSchedule(
+            computeDirectorySyncRearmDelayMs(lastSuccessMs, Date.now()),
+            run,
+          );
+        }
+      }
+    })();
+  };
+  scheduleNextDirectorySync = (lastSuccessMs, nowMs) => {
+    armDirectorySyncSchedule(computeDirectorySyncRearmDelayMs(lastSuccessMs, nowMs), run);
   };
 
-  bootTimer = setTimeout(() => {
-    run();
-    interval = setInterval(run, DINGTALK_DIRECTORY_SYNC_INTERVAL_MS);
-    interval.unref?.();
-  }, DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS);
-  bootTimer.unref?.();
-  log(
-    'started bootDelay=%dms interval=%dms',
-    DINGTALK_DIRECTORY_SYNC_BOOT_DELAY_MS,
-    DINGTALK_DIRECTORY_SYNC_INTERVAL_MS,
-  );
+  void readDirectorySyncLastSuccessMs().then((lastSuccessMs) => {
+    const now = deps.now?.().getTime() ?? Date.now();
+    armDirectorySyncSchedule(computeDirectorySyncBootDelayMs(lastSuccessMs, now), run);
+  });
 };
 
 export const stopDingTalkDirectorySyncWorker = (): void => {
   started = false;
   memoryMissCooldownUntil = 0;
-  if (bootTimer) {
-    clearTimeout(bootTimer);
-    bootTimer = undefined;
-  }
-  if (interval) {
-    clearInterval(interval);
-    interval = undefined;
-  }
+  memoryMissNames.clear();
+  scheduleNextDirectorySync = () => {};
+  clearDirectorySyncTimer();
 };
 
 /** Test helper — drop the process-once latch and timers. */

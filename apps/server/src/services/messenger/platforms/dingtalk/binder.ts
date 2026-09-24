@@ -1,6 +1,5 @@
 import {
   decodeDingTalkThreadId,
-  DingTalkApiClient,
   getDingTalkCard,
   getDingTalkSession,
   isSessionWebhookLive,
@@ -29,6 +28,7 @@ import {
   DINGTALK_MARKDOWN_TITLE_FALLBACK,
   formatDingTalkUnknownUserReply,
 } from './const';
+import { sharedDingTalkApiClient } from './tokenCache';
 
 const log = debug('lobe-server:messenger:dingtalk');
 
@@ -99,7 +99,11 @@ export class MessengerDingTalkBinder implements MessengerPlatformBinder {
     const config = await getMessengerDingTalkConfig();
     if (!config) return;
 
-    const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+    const api = sharedDingTalkApiClient({
+      appKey: config.clientId,
+      appSecret: config.clientSecret,
+      robotCode: config.robotCode,
+    });
     const { decoded, session, staffId } = resolveRobotTarget(chatId);
 
     try {

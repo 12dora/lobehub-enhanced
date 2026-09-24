@@ -6,7 +6,6 @@ import type {
 import {
   buildDingTalkForwardHeaders,
   DINGTALK_NOT_ASKER_REPLY,
-  DingTalkApiClient,
   DingTalkStreamConnection,
   getDingTalkCard,
   getDingTalkSession,
@@ -14,7 +13,16 @@ import {
 } from '@lobechat/chat-adapter-dingtalk';
 import debug from 'debug';
 
+import {
+  installDingTalkRequestAccounting,
+  recordDingTalkHttpCallSafely,
+  sharedDingTalkApiClient,
+} from '@/server/services/messenger/platforms/dingtalk/tokenCache';
+
 const log = debug('bot-platform:dingtalk:gateway');
+
+/** Count gateway opens even when the bot client module was not imported first. */
+installDingTalkRequestAccounting();
 
 export interface DingTalkWSOptions {
   clientId: string;
@@ -49,6 +57,9 @@ export class DingTalkWSConnection {
       onCardCallback: async (payload, ack) => {
         ack({});
         await this.forward('card.callback', payload);
+      },
+      onRequest: (info) => {
+        recordDingTalkHttpCallSafely(info.method, info.url);
       },
       onRobotMessage: async (payload, ack) => {
         ack({});
@@ -119,7 +130,11 @@ export class DingTalkWSConnection {
     const session = card
       ? (getDingTalkSession(card.threadId) ?? getDingTalkSession(card.conversationId))
       : undefined;
-    const api = new DingTalkApiClient(this.options.clientId, this.options.clientSecret);
+    const api = sharedDingTalkApiClient({
+      appKey: this.options.clientId,
+      appSecret: this.options.clientSecret,
+      robotCode: session?.robotCode ?? '',
+    });
     const atUserIds = payload.userId ? [payload.userId] : [];
     const text = payload.userId
       ? `@${payload.userId} ${DINGTALK_NOT_ASKER_REPLY}`

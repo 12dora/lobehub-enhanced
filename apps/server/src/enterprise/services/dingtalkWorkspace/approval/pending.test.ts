@@ -17,6 +17,51 @@ const mockListTemplates = vi.fn();
 const mockGetUsers = vi.fn();
 const mockCountPending = vi.fn();
 
+const redisBag = vi.hoisted(() => ({ current: null as FakeRedis | null }));
+
+class FakeRedis {
+  readonly store = new Map<string, { expiresAt: number; value: string }>();
+
+  private live(key: string) {
+    const row = this.store.get(key);
+    if (!row) return undefined;
+    if (row.expiresAt <= Date.now()) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return row;
+  }
+
+  async get(key: string) {
+    return this.live(key)?.value ?? null;
+  }
+
+  async set(key: string, value: string, mode?: string, ttl?: number, nx?: string) {
+    if (nx === 'NX' && this.live(key)) return null;
+    let expiresAt = Number.POSITIVE_INFINITY;
+    if (mode === 'EX' && typeof ttl === 'number') expiresAt = Date.now() + ttl * 1000;
+    if (mode === 'PX' && typeof ttl === 'number') expiresAt = Date.now() + ttl;
+    this.store.set(key, { expiresAt, value });
+    return 'OK';
+  }
+
+  async incr(key: string) {
+    const next = Number(this.live(key)?.value ?? '0') + 1;
+    const existing = this.live(key);
+    this.store.set(key, {
+      expiresAt: existing?.expiresAt ?? Number.POSITIVE_INFINITY,
+      value: String(next),
+    });
+    return next;
+  }
+
+  async del(...keys: string[]) {
+    let count = 0;
+    for (const key of keys) if (this.store.delete(key)) count += 1;
+    return count;
+  }
+}
+
 vi.mock('@/database/models/dingtalkDirectory', () => ({
   DingTalkDirectoryModel: class {
     getUsers = (...args: unknown[]) => mockGetUsers(...args);
@@ -24,6 +69,9 @@ vi.mock('@/database/models/dingtalkDirectory', () => ({
 }));
 
 vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
+vi.mock('@/server/modules/AgentRuntime/redis', () => ({
+  getAgentRuntimeRedisClient: () => redisBag.current,
+}));
 vi.mock('./api', () => ({
   countPendingTasks: (...args: unknown[]) => mockCountPending(...args),
   getInstanceDetail: (...args: unknown[]) => mockGetDetail(...args),
@@ -44,6 +92,13 @@ const {
   setApprovalScanTimeBudgetForTest,
 } = await import('./pending');
 
+const {
+  approvalSweepLockKey,
+  captureApprovalCacheGeneration,
+  setApprovalSweepLockTimingForTest,
+  writeApprovalScopedCache,
+} = await import('./cache');
+
 const templates = [{ name: '请假', processCode: 'PROC-1' }];
 const db = {} as never;
 
@@ -51,6 +106,7 @@ describe('pending listing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+    redisBag.current = null;
     resetApprovalListCacheForTest();
     mockGetUsers.mockResolvedValue([]);
     mockCountPending.mockResolvedValue(1);
@@ -84,10 +140,41 @@ describe('pending listing', () => {
         },
       ],
     });
+    const result = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(result.rows[0]).toMatchObject({
+      originatorName: '李四',
+      processInstanceId: 'inst-1',
+      summary: [{ label: '表单', value: '3天' }],
+      taskId: 't-1',
+      title: '请假',
+    });
+    expect(result.truncated).toBe(false);
+    expect(mockListInstanceIds).not.toHaveBeenCalled();
+    expect(mockGetDetail).not.toHaveBeenCalled();
+  });
+
+  it('fetches instance detail only when a premium row is missing title or form summary', async () => {
+    mockListPremium.mockResolvedValueOnce({
+      hasMore: false,
+      list: [
+        {
+          originatorName: '李四',
+          processCreateTime: '2026-01-01T00:00Z',
+          processInstanceId: 'inst-missing',
+          taskId: 't-missing',
+          title: '请假',
+        },
+      ],
+    });
     mockGetDetail.mockResolvedValueOnce({
       formComponentValues: [{ name: '天数', value: '3' }],
       originatorUserId: 'other',
-      processInstanceId: 'inst-1',
+      processInstanceId: 'inst-missing',
       tasks: [],
       title: '请假',
     });
@@ -98,14 +185,55 @@ describe('pending listing', () => {
       templates,
       userId: 'user-1',
     });
-    expect(result.rows[0]).toMatchObject({
-      originatorName: '李四',
-      processInstanceId: 'inst-1',
-      taskId: 't-1',
-      title: '请假',
+    expect(mockGetDetail).toHaveBeenCalledTimes(1);
+    expect(mockGetDetail).toHaveBeenCalledWith('inst-missing');
+    expect(result.rows[0]?.summary).toEqual([{ label: '天数', value: '3' }]);
+  });
+
+  it('fetches instance detail when a premium row is missing the originator or the create time', async () => {
+    mockListPremium.mockResolvedValueOnce({
+      hasMore: false,
+      list: [
+        {
+          formMassage: '3天',
+          processInstanceId: 'inst-who',
+          taskId: 't-who',
+          title: '请假',
+        },
+        {
+          formMassage: '1天',
+          originatorName: '李四',
+          processInstanceId: 'inst-when',
+          taskId: 't-when',
+          title: '出差',
+        },
+      ],
     });
-    expect(result.truncated).toBe(false);
-    expect(mockListInstanceIds).not.toHaveBeenCalled();
+    mockGetDetail.mockImplementation(async (id: string) => ({
+      createTime: id === 'inst-when' ? '2026-02-02T00:00:00.000Z' : '2026-03-03T00:00:00.000Z',
+      formComponentValues: [],
+      originatorUserId: 'staff-9',
+      processInstanceId: id,
+      tasks: [],
+      title: id,
+    }));
+    mockGetUsers.mockResolvedValueOnce([{ name: '赵六', staffId: 'staff-9' }]);
+
+    const result = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockGetDetail).toHaveBeenCalledTimes(2);
+    expect(result.rows.find((row) => row.processInstanceId === 'inst-who')).toMatchObject({
+      createdAt: '2026-03-03T00:00:00.000Z',
+      originatorName: '赵六',
+    });
+    expect(result.rows.find((row) => row.processInstanceId === 'inst-when')).toMatchObject({
+      createdAt: '2026-02-02T00:00:00.000Z',
+      originatorName: '李四',
+    });
   });
 
   it('falls back to a bounded scan on premium-required', async () => {
@@ -798,5 +926,267 @@ describe('pending listing', () => {
     expect(left.rows).toHaveLength(1);
     expect(right.rows).toHaveLength(1);
     expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a pending list from Redis after the local cache is dropped', async () => {
+    redisBag.current = new FakeRedis();
+    mockListPremium.mockResolvedValue({ hasMore: false, list: [] });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    resetApprovalListCacheForTest();
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockListPremium).toHaveBeenCalledTimes(1);
+    expect(mockCountPending).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidating a user drops the Redis pending list', async () => {
+    redisBag.current = new FakeRedis();
+    mockListPremium.mockResolvedValue({ hasMore: false, list: [] });
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    invalidatePendingCaches('user-1');
+    await listPendingApprovals({ db, staffId: 'me', templates, userId: 'user-1' });
+    expect(mockCountPending).toHaveBeenCalledTimes(2);
+    expect(mockListPremium).toHaveBeenCalledTimes(2);
+  });
+
+  it('refresh reuses an in-flight sweep held by another process', async () => {
+    const redis = new FakeRedis();
+    redisBag.current = redis;
+    await redis.set(
+      approvalSweepLockKey('user-1', 'me'),
+      JSON.stringify({ mode: 'refresh', token: 'other-process' }),
+      'PX',
+      70_000,
+      'NX',
+    );
+    setApprovalSweepLockTimingForTest({
+      pollMs: 1,
+      sleep: async () => {
+        const generation = await captureApprovalCacheGeneration('user-1');
+        await writeApprovalScopedCache({
+          generation,
+          now: Date.now(),
+          staffId: 'me',
+          suffix: 'sweep',
+          ttlMs: 60_000,
+          userId: 'user-1',
+          value: {
+            details: [
+              {
+                detail: {
+                  createTime: '2026-01-01T00:00Z',
+                  formComponentValues: [],
+                  originatorUserId: 'other',
+                  processInstanceId: 'inst-remote',
+                  tasks: [{ status: 'RUNNING', taskId: 't-remote', userId: 'me' }],
+                  title: 'remote',
+                },
+                processCode: 'PROC-1',
+              },
+            ],
+          },
+        });
+      },
+      waitMs: 1_000,
+    });
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    const result = await listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).not.toHaveBeenCalled();
+    expect(result.rows.map((row) => row.processInstanceId)).toEqual(['inst-remote']);
+  });
+
+  it('scans when Redis cannot answer the sweep lock', async () => {
+    redisBag.current = {
+      del: async () => {
+        throw new Error('redis down');
+      },
+      get: async () => {
+        throw new Error('redis down');
+      },
+      incr: async () => {
+        throw new Error('redis down');
+      },
+      set: async () => {
+        throw new Error('redis down');
+      },
+    } as unknown as FakeRedis;
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: 'title-inst-1',
+    });
+    const result = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    expect(result.rows).toHaveLength(1);
+  });
+
+  it('refetches instance details on a refresh sweep', async () => {
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: '请假',
+    });
+    await listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(mockGetDetail).toHaveBeenCalledWith('inst-1', { fresh: true });
+  });
+
+  it('caches a sweep whose full details would exceed the payload cap', async () => {
+    redisBag.current = new FakeRedis();
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-1'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [{ name: '事由', value: '出差' }],
+      operationRecords: [{ remark: 'x'.repeat(1_200_000) }],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-1',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'me' }],
+      title: '请假',
+    });
+    const first = await listPendingApprovals({
+      db,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(first.rows[0]).toMatchObject({
+      summary: [{ label: '事由', value: '出差' }],
+      title: '请假',
+    });
+    const second = await listPendingApprovals({
+      db,
+      limit: 21,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(second.rows[0]?.title).toBe('请假');
+    expect(mockGetDetail).toHaveBeenCalledTimes(1);
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not return a pre-refresh sweep or bump the epoch while another replica holds the lock', async () => {
+    const redis = new FakeRedis();
+    redisBag.current = redis;
+    await redis.set(
+      approvalSweepLockKey('user-1', 'me'),
+      JSON.stringify({ mode: 'scan', token: 'other-process' }),
+      'PX',
+      70_000,
+      'NX',
+    );
+    const generation = await captureApprovalCacheGeneration('user-1');
+    await writeApprovalScopedCache({
+      generation,
+      now: Date.now(),
+      staffId: 'me',
+      suffix: 'sweep',
+      ttlMs: 60_000,
+      userId: 'user-1',
+      value: {
+        details: [
+          {
+            detail: {
+              createTime: '2026-01-01T00:00Z',
+              formComponentValues: [],
+              originatorUserId: 'other',
+              processInstanceId: 'inst-stale',
+              tasks: [{ status: 'RUNNING', taskId: 't-stale', userId: 'me' }],
+              title: 'stale',
+            },
+            processCode: 'PROC-1',
+          },
+        ],
+      },
+    });
+    setApprovalSweepLockTimingForTest({ pollMs: 1, sleep: async () => undefined, waitMs: 5 });
+    mockListPremium.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_PREMIUM_REQUIRED'));
+    mockListInstanceIds.mockResolvedValue({ ids: ['inst-new'], truncated: false });
+    mockGetDetail.mockResolvedValue({
+      createTime: '2026-01-01T00:00Z',
+      formComponentValues: [],
+      originatorUserId: 'other',
+      processInstanceId: 'inst-new',
+      tasks: [{ status: 'RUNNING', taskId: 't-new', userId: 'me' }],
+      title: 'new',
+    });
+    const result = await listPendingApprovals({
+      db,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(result.rows.map((row) => row.processInstanceId)).toEqual(['inst-new']);
+    expect(mockListInstanceIds).toHaveBeenCalledTimes(1);
+    expect([...redis.store.keys()].some((key) => key.includes('sweep-epoch'))).toBe(false);
+  });
+
+  it('a refresh generation bump discards a stale pending write from an earlier capture', async () => {
+    const redis = new FakeRedis();
+    redisBag.current = redis;
+    const stale = await captureApprovalCacheGeneration('user-1');
+    mockListPremium.mockResolvedValue({ hasMore: false, list: [] });
+    await listPendingApprovals({
+      db,
+      limit: 20,
+      refresh: true,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    await writeApprovalScopedCache({
+      generation: stale,
+      now: Date.now(),
+      staffId: 'me',
+      suffix: 'pending:20',
+      ttlMs: 60_000,
+      userId: 'user-1',
+      value: {
+        rows: [
+          {
+            processInstanceId: 'inst-stale',
+            taskId: 't-stale',
+            title: '过期',
+          },
+        ],
+        truncated: false,
+      },
+    });
+    const cached = await listPendingApprovals({
+      db,
+      limit: 20,
+      staffId: 'me',
+      templates,
+      userId: 'user-1',
+    });
+    expect(cached.rows).toEqual([]);
+    expect(mockListPremium).toHaveBeenCalledTimes(1);
   });
 });

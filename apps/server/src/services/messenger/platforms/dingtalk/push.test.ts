@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const sendOtoMessage = vi.fn();
+import type * as TokenCacheModule from './tokenCache';
+
+const sendOtoMessage = vi.hoisted(() => vi.fn());
+const sharedDingTalkApiClient = vi.hoisted(() => vi.fn(() => ({ sendOtoMessage })));
 const mockFindByPlatform = vi.fn();
 const mockFindById = vi.fn();
 const mockIncr = vi.fn();
@@ -20,11 +23,11 @@ vi.mock('@/envs/app', () => ({
   appEnv: { APP_URL: 'https://app.example.com' },
 }));
 
-vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock('./tokenCache', async (importOriginal) => {
+  const actual = await importOriginal<typeof TokenCacheModule>();
   return {
     ...actual,
-    DingTalkApiClient: vi.fn().mockImplementation(() => ({ sendOtoMessage })),
+    sharedDingTalkApiClient,
   };
 });
 
@@ -283,6 +286,26 @@ describe('DingTalkMessengerPushProvider', () => {
     expect(sendOtoMessage).toHaveBeenCalledWith(
       expect.objectContaining({ msgKey: 'sampleMarkdown' }),
     );
+  });
+
+  it('sends the chat-robot fallback through the shared DingTalk client', async () => {
+    await dingtalkMessengerPushProvider.pushToUser({
+      db: {} as any,
+      message: { markdown: 'body', title: '提醒' },
+      userId: 'user_1',
+    });
+
+    expect(sharedDingTalkApiClient).toHaveBeenCalledWith({
+      appKey: 'app_key',
+      appSecret: 'app_secret',
+      robotCode: 'robot_1',
+    });
+    expect(sendOtoMessage).toHaveBeenCalledWith({
+      msgKey: 'sampleMarkdown',
+      msgParam: JSON.stringify({ text: 'body', title: '提醒' }),
+      robotCode: 'robot_1',
+      userIds: ['staff_1'],
+    });
   });
 
   it('resolves staffId from the identity-email prefix when no link exists', async () => {

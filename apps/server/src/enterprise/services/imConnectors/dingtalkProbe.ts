@@ -1,3 +1,8 @@
+import {
+  recordDingTalkHttpCallSafely,
+  writeSharedDingTalkToken,
+} from '@/server/services/messenger/platforms/dingtalk/tokenCache';
+
 import type { AdminImConnectorTestOutput } from '../../contracts/adminImConnectors';
 
 export const DINGTALK_APP_TOKEN_ENDPOINT = 'https://api.dingtalk.com/v1.0/oauth2/accessToken';
@@ -76,6 +81,7 @@ export const probeDingTalkCredentials = async (params: {
   const timer = setTimeout(() => controller.abort(), DINGTALK_PROBE_TIMEOUT_MS);
 
   try {
+    recordDingTalkHttpCallSafely('POST', DINGTALK_APP_TOKEN_ENDPOINT);
     const response = await doFetch(DINGTALK_APP_TOKEN_ENDPOINT, {
       body: JSON.stringify({ appKey: params.clientId, appSecret: params.clientSecret }),
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
@@ -88,6 +94,17 @@ export const probeDingTalkCredentials = async (params: {
       try {
         const body = (await response.json()) as { accessToken?: unknown };
         if (typeof body.accessToken === 'string' && body.accessToken.length > 0) {
+          const expireIn =
+            typeof (body as { expireIn?: unknown }).expireIn === 'number'
+              ? (body as { expireIn: number }).expireIn
+              : 7200;
+          void writeSharedDingTalkToken(
+            params.clientId,
+            params.clientSecret,
+            'accessToken',
+            body.accessToken,
+            expireIn,
+          ).catch(() => undefined);
           return emptyResult({ errorCode: null, errorMessage: null, latencyMs, ok: true });
         }
       } catch {

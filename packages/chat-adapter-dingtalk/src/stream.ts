@@ -34,6 +34,24 @@ export interface DingTalkStreamFrame {
   type: 'SYSTEM' | 'EVENT' | 'CALLBACK' | string;
 }
 
+export interface DingTalkStreamRequestInfo {
+  method: string;
+  url: string;
+}
+
+/**
+ * Process-wide hook for the gateway open. The package must not import server
+ * code; the server registers `recordDingtalkHttpCall` here (or passes
+ * `onRequest` on the connection).
+ */
+let streamRequestHook: ((info: DingTalkStreamRequestInfo) => void) | undefined;
+
+export const setDingTalkStreamRequestHook = (
+  hook: ((info: DingTalkStreamRequestInfo) => void) | undefined,
+): void => {
+  streamRequestHook = hook;
+};
+
 export interface DingTalkStreamOptions {
   clientId: string;
   clientSecret: string;
@@ -45,6 +63,8 @@ export interface DingTalkStreamOptions {
   gatewayOpenTimeoutMs?: number;
   logger?: { warn?: (...args: unknown[]) => void };
   onCardCallback?: (payload: DingTalkCardCallback, ack: DingTalkAck) => void | Promise<void>;
+  /** Fired for the gateway HTTP open. Must not throw. */
+  onRequest?: (info: DingTalkStreamRequestInfo) => void;
   onRobotMessage?: (payload: DingTalkRobotMessage, ack: DingTalkAck) => void | Promise<void>;
   onStateChange?: (state: DingTalkStreamState, error?: Error) => void;
   /** @internal test hook — default 1000 */
@@ -213,6 +233,16 @@ export class DingTalkStreamConnection {
     }
   }
 
+  private noteGatewayRequest(): void {
+    const hook = this.options.onRequest ?? streamRequestHook;
+    if (!hook) return;
+    try {
+      hook({ method: 'POST', url: DINGTALK_GATEWAY_URL });
+    } catch {
+      // counting must never throw or block the gateway open
+    }
+  }
+
   private setState(state: DingTalkStreamState, error?: Error): void {
     this.currentState = state;
     this.options.onStateChange?.(state, error);
@@ -239,6 +269,7 @@ export class DingTalkStreamConnection {
     if (this.connectAbort?.signal.aborted) controller.abort();
 
     try {
+      this.noteGatewayRequest();
       const response = await this.fetchFn(DINGTALK_GATEWAY_URL, {
         body: JSON.stringify({
           clientId: this.options.clientId,

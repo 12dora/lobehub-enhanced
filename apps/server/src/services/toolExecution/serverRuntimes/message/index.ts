@@ -1,7 +1,6 @@
 import { MessageToolIdentifier } from '@lobechat/builtin-tool-message';
 import type { BotProviderQuery } from '@lobechat/builtin-tool-message/executionRuntime';
 import { MessageExecutionRuntime } from '@lobechat/builtin-tool-message/executionRuntime';
-import { DingTalkApiClient } from '@lobechat/chat-adapter-dingtalk';
 import { LarkApiClient } from '@lobechat/chat-adapter-feishu';
 import { QQApiClient } from '@lobechat/chat-adapter-qq';
 import { WechatApiClient } from '@lobechat/chat-adapter-wechat';
@@ -46,6 +45,7 @@ import { GatewayService } from '@/server/services/gateway';
 import { getBotRuntimeStatus } from '@/server/services/gateway/runtimeStatus';
 import { messengerPlatformRegistry } from '@/server/services/messenger';
 import { TELEGRAM_INSTALLATION_KEY } from '@/server/services/messenger/installations/telegram';
+import { sharedDingTalkApiClient } from '@/server/services/messenger/platforms/dingtalk/tokenCache';
 import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import type { ServerRuntimeRegistration } from '../types';
@@ -223,9 +223,14 @@ export const messageRuntime: ServerRuntimeRegistration = {
           context.agentId,
           context.botPlatform,
         );
+        const robotCode = String(credentials.robotCode || applicationId);
         return new DingTalkMessageService(
-          new DingTalkApiClient(applicationId, String(credentials.clientSecret ?? '')),
-          String(credentials.robotCode || applicationId),
+          sharedDingTalkApiClient({
+            appKey: applicationId,
+            appSecret: String(credentials.clientSecret ?? ''),
+            robotCode,
+          }),
+          robotCode,
         );
       },
       discord: async () => {

@@ -1,6 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as TokenCacheModule from '@/server/services/messenger/platforms/dingtalk/tokenCache';
+
 let capturedOptions: any;
+
+const streamAccounting = vi.hoisted(() => ({
+  recordDingTalkHttpCallSafely: vi.fn(),
+  sharedDingTalkApiClient: vi.fn(),
+}));
+
+vi.mock('@/server/services/messenger/platforms/dingtalk/tokenCache', async (importOriginal) => {
+  const actual = await importOriginal<typeof TokenCacheModule>();
+  return {
+    ...actual,
+    recordDingTalkHttpCallSafely: (method: string, url: string) => {
+      streamAccounting.recordDingTalkHttpCallSafely(method, url);
+    },
+    sharedDingTalkApiClient: (params: Parameters<typeof actual.sharedDingTalkApiClient>[0]) => {
+      streamAccounting.sharedDingTalkApiClient(params);
+      return actual.sharedDingTalkApiClient(params);
+    },
+  };
+});
 
 vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -128,6 +149,49 @@ describe('DingTalkWSConnection', () => {
     const secondInit = vi.mocked(fetch).mock.calls[1][1] as RequestInit;
     const secondBody = JSON.parse(secondInit.body as string);
     expect(secondBody.markdown.text).toContain('仅提问人可操作');
+  });
+
+  it('counts the gateway open and replies to not_asker through the shared client', async () => {
+    rememberDingTalkSession({
+      conversationId: 'cid_1',
+      conversationType: '2',
+      robotCode: 'robot',
+      senderStaffId: 'staff_alice',
+      sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=abc',
+      sessionWebhookExpiredTime: Date.now() + 60_000,
+    });
+    rememberDingTalkCard('out_1', {
+      askerStaffId: 'staff_alice',
+      conversationId: 'cid_1',
+      conversationType: '2',
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ ignored: 'not_asker', ok: true }), { status: 200 }),
+    );
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('{"errcode":0}', { status: 200 }));
+
+    const conn = new DingTalkWSConnection({
+      clientId: 'app_key',
+      clientSecret: 'secret',
+      webhookUrl: 'http://localhost:3000/api/agent/webhooks/dingtalk/app_key',
+    });
+    await conn.start();
+    capturedOptions.onRequest({
+      method: 'POST',
+      url: 'https://api.dingtalk.com/v1.0/gateway/connections/open',
+    });
+    await capturedOptions.onCardCallback({ outTrackId: 'out_1', userId: 'staff_bob' }, vi.fn());
+
+    expect(streamAccounting.recordDingTalkHttpCallSafely).toHaveBeenCalledWith(
+      'POST',
+      'https://api.dingtalk.com/v1.0/gateway/connections/open',
+    );
+    expect(streamAccounting.sharedDingTalkApiClient).toHaveBeenCalledWith({
+      appKey: 'app_key',
+      appSecret: 'secret',
+      robotCode: 'robot',
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('does not send again when the webhook already replied to not_asker', async () => {

@@ -1,5 +1,11 @@
 import { dingtalkWorkspaceRequest } from '../client';
 import { DingtalkWorkspaceError } from '../errors';
+import {
+  captureApprovalInstanceGeneration,
+  invalidateApprovalInstanceCache,
+  readApprovalInstanceCache,
+  writeApprovalInstanceCache,
+} from './cache';
 import { remapFormsInvalidError } from './formError';
 import { isRateLimitedError, paceInstanceDetail, paceInstanceIdsQuery } from './scanPace';
 import {
@@ -236,9 +242,20 @@ export const parseTemplateSchema = (processCode: string, body: unknown): Templat
   };
 };
 
+export interface InstanceDetailOptions {
+  /** Bypass the 10 min cache and rewrite it when no invalidate landed during the GET. */
+  fresh?: boolean;
+}
+
 export const getInstanceDetail = async (
   processInstanceId: string,
+  options?: InstanceDetailOptions,
 ): Promise<ProcessInstanceDetail> => {
+  if (!options?.fresh) {
+    const cached = await readApprovalInstanceCache<ProcessInstanceDetail>(processInstanceId);
+    if (cached) return cached;
+  }
+  const generation = await captureApprovalInstanceGeneration(processInstanceId);
   const body = await paceInstanceDetail(() =>
     dingtalkWorkspaceRequest<unknown>({
       api: 'v1',
@@ -247,7 +264,9 @@ export const getInstanceDetail = async (
       query: { processInstanceId },
     }),
   );
-  return parseInstanceDetail(processInstanceId, body);
+  const detail = parseInstanceDetail(processInstanceId, body);
+  await writeApprovalInstanceCache(processInstanceId, detail, generation);
+  return detail;
 };
 
 export type InstanceIdScanStop = 'cap' | 'rate_limited' | 'time_budget';
@@ -452,6 +471,7 @@ export const startProcessInstance = async (input: {
   const instanceId =
     asString(record?.instanceId) ?? asString(asRecord(unwrapResult(body))?.instanceId);
   if (!instanceId) throw new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE');
+  invalidateApprovalInstanceCache(instanceId);
   return { instanceId };
 };
 
@@ -464,20 +484,25 @@ export const executeTaskAs = async (
     taskId: string | number;
   },
 ): Promise<{ result: boolean }> => {
-  const body = await dingtalkWorkspaceRequest<unknown>({
-    api: 'v1',
-    body: {
-      actionerUserId: staffId,
-      processInstanceId: input.processInstanceId,
-      remark: input.remark,
-      result: input.result,
-      taskId: Number(input.taskId),
-    },
-    method: 'POST',
-    path: '/v1.0/workflow/processInstances/execute',
-  });
-  const record = asRecord(body) ?? {};
-  return { result: asBoolean(record.result) === true || asBoolean(record.success) === true };
+  try {
+    const body = await dingtalkWorkspaceRequest<unknown>({
+      api: 'v1',
+      body: {
+        actionerUserId: staffId,
+        processInstanceId: input.processInstanceId,
+        remark: input.remark,
+        result: input.result,
+        taskId: Number(input.taskId),
+      },
+      method: 'POST',
+      path: '/v1.0/workflow/processInstances/execute',
+    });
+    const record = asRecord(body) ?? {};
+    return { result: asBoolean(record.result) === true || asBoolean(record.success) === true };
+  } finally {
+    // A failed execute can still have changed the instance. Drop the detail either way.
+    invalidateApprovalInstanceCache(input.processInstanceId);
+  }
 };
 
 export const redirectTaskAs = async (
@@ -514,6 +539,7 @@ export const addCommentAs = async (
     path: '/v1.0/workflow/processInstances/comments',
   });
   const record = asRecord(body) ?? {};
+  invalidateApprovalInstanceCache(input.processInstanceId);
   return { result: asBoolean(record.result) === true || asBoolean(record.success) === true };
 };
 
@@ -533,6 +559,7 @@ export const terminateProcessInstance = async (input: {
     method: 'POST',
     path: '/v1.0/workflow/processInstances/terminate',
   });
+  invalidateApprovalInstanceCache(input.processInstanceId);
 };
 
 export const revertTaskAs = async (
@@ -560,6 +587,7 @@ export const revertTaskAs = async (
       path: '/v1.0/workflow/premium/tasks/revert',
     });
     const record = asRecord(body) ?? asRecord(unwrapResult(body)) ?? {};
+    invalidateApprovalInstanceCache(input.processInstanceId);
     return { result: asBoolean(record.result) !== false };
   } catch (error) {
     return remapPremiumError(error);
@@ -595,6 +623,7 @@ export const appendTaskAs = async (
       path: '/v1.0/workflow/premium/tasks/append',
     });
     const record = asRecord(body) ?? asRecord(unwrapResult(body)) ?? {};
+    invalidateApprovalInstanceCache(input.processInstanceId);
     return { result: asBoolean(record.result) !== false };
   } catch (error) {
     return remapPremiumError(error);

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type WebSocket from 'ws';
 
-import { DingTalkStreamConnection } from './stream';
+import { DingTalkStreamConnection, setDingTalkStreamRequestHook } from './stream';
 import {
   DINGTALK_GATEWAY_OPEN_TIMEOUT_MS,
   DINGTALK_GATEWAY_URL,
@@ -110,6 +110,7 @@ describe('DingTalkStreamConnection', () => {
   });
 
   afterEach(() => {
+    setDingTalkStreamRequestHook(undefined);
     for (const conn of connections) conn.disconnect();
     connections.length = 0;
     vi.useRealTimers();
@@ -133,6 +134,24 @@ describe('DingTalkStreamConnection', () => {
       { topic: '/v1.0/card/instances/callback', type: 'CALLBACK' },
     ]);
     expect(sockets[0].url).toContain('ticket=tix');
+  });
+
+  it('counts the gateway open and ignores a throwing hook', async () => {
+    const seen: Array<{ method: string; url: string }> = [];
+    const conn = create({
+      onRequest: (info) => {
+        seen.push(info);
+      },
+    });
+    await conn.connect();
+    expect(seen).toEqual([{ method: 'POST', url: DINGTALK_GATEWAY_URL }]);
+
+    setDingTalkStreamRequestHook(() => {
+      throw new Error('counter down');
+    });
+    const fallback = create();
+    await expect(fallback.connect()).resolves.toBeUndefined();
+    setDingTalkStreamRequestHook(undefined);
   });
 
   it('encodes the gateway ticket in the websocket URL', async () => {

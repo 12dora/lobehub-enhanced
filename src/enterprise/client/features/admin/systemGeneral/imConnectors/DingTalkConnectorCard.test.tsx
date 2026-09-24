@@ -209,7 +209,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   personal: { authorizedCount: 0, brokerConfigured: true },
   personalChatEnabled: false,
   personalDataEnabled: false,
+  personalDocsEnabled: false,
   personalReportEnabled: false,
+  personalSheetsEnabled: false,
   personalTodoEnabled: false,
   personalWriteEnabled: false,
   platform: 'dingtalk',
@@ -909,6 +911,29 @@ describe('DingTalkConnectorCard', () => {
       expect(mocks.toastError).toHaveBeenCalledWith(
         'systemGeneral.imConnectors.notifyApp.directory.error:errcode 60011',
       );
+    });
+
+    it('shows a sync that never started in its own words, not as a failed sync', async () => {
+      const lastError = '同步未启动：缓存服务暂时不可用，请稍后重试';
+      const notify = notifyService({
+        syncDirectory: vi.fn().mockResolvedValue(directoryStatus({ lastError, state: 'error' })),
+      });
+      render(<DingTalkConnectorCard canOperate notifyAppService={notify} view={view()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'),
+        ).toBeTruthy(),
+      );
+
+      fireEvent.click(screen.getByText('systemGeneral.imConnectors.notifyApp.directory.sync'));
+
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+      // No 「上次同步失败：」 wrapper and no double colon: the server sentence stands alone.
+      expect(mocks.toastError).toHaveBeenCalledWith(lastError);
+      expect(mocks.toastSuccess).not.toHaveBeenCalled();
+      // Nothing ran, so the polled status keeps the last real run and no failure line appears.
+      expect(screen.queryByText(/notifyApp\.directory\.error/)).toBeNull();
     });
 
     it('will not queue a second sync while one is already running', async () => {

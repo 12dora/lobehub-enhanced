@@ -35,6 +35,13 @@ export interface NotifyAppSectionProps {
 }
 
 /**
+ * Opening of the server's "nothing ran" answer to 同步 (it could not take the sync lock). That
+ * message is a complete sentence about a sync that never started, so it is shown on its own
+ * rather than under 「上次同步失败：」, which would claim a failed run.
+ */
+const SYNC_NOT_STARTED_PREFIX = '同步未启动';
+
+/**
  * 通知应用（服务号） — the second DingTalk app beside the chat robot.
  *
  * It exists for two jobs the robot cannot do: sending 工作通知 (task notices and scheduled
@@ -95,6 +102,8 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
             } else if (result.state === 'running') {
               // Another sync holds the lock: not an error, the polled status will catch up.
               toast.info(t('systemGeneral.imConnectors.notifyApp.directory.syncing'));
+            } else if (result.lastError?.startsWith(SYNC_NOT_STARTED_PREFIX)) {
+              toast.error(result.lastError);
             } else {
               toast.error(
                 result.lastError

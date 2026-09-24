@@ -15,6 +15,9 @@ class DingtalkWorkspaceError extends Error {
 vi.mock('../client', () => ({
   dingtalkWorkspaceRequest: (...args: unknown[]) => mockRequest(...args),
 }));
+vi.mock('@/server/modules/AgentRuntime/redis', () => ({
+  getAgentRuntimeRedisClient: () => null,
+}));
 
 vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
 

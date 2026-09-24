@@ -4,6 +4,23 @@ import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis'
 
 const log = debug('lobe-server:dingtalk-workspace:api-call-stats');
 
+/** 0 disables the status-page budget alert. Unset or invalid values use the default. */
+export const DINGTALK_API_DAILY_ALERT_THRESHOLD_DEFAULT = 5000;
+
+export const readDingtalkApiDailyAlertThreshold = (
+  env: Partial<NodeJS.ProcessEnv> = process.env,
+): number => {
+  const raw = env.DINGTALK_API_DAILY_ALERT_THRESHOLD;
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return DINGTALK_API_DAILY_ALERT_THRESHOLD_DEFAULT;
+  }
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DINGTALK_API_DAILY_ALERT_THRESHOLD_DEFAULT;
+  }
+  return Math.floor(parsed);
+};
+
 export const DINGTALK_API_CALL_STATS_TIMEZONE = 'Asia/Shanghai';
 export const DINGTALK_API_CALL_STATS_KEY_PREFIX = 'dingtalk:api-calls:';
 export const DINGTALK_API_CALL_STATS_TTL_SECONDS = 40 * 24 * 60 * 60;
@@ -212,6 +229,29 @@ const hgetallDay = async (date: string): Promise<Record<string, string> | null> 
     return null;
   }
 };
+
+/**
+ * Sum every field of `dingtalk:api-calls:<date>`. `date` defaults to today in
+ * Asia/Shanghai, the same key the recorder writes. `null` when Redis cannot be
+ * read — callers must not treat a missing hash as zero.
+ * `byApi` is highest count first.
+ */
+export const getDingtalkApiCallTotal = async (
+  date?: string,
+): Promise<DingtalkApiCallStatsDay | null> => {
+  const day = date?.trim() || formatDingtalkApiCallStatsDate(new Date());
+  const hash = await hgetallDay(day);
+  if (!hash) return null;
+  const byApi = mergeByApi(hash, new Map());
+  const total = byApi.reduce((sum, row) => sum + row.count, 0);
+  return { byApi, date: day, total };
+};
+
+/** Highest-count endpoints from {@link getDingtalkApiCallTotal}. */
+export const topDingtalkApiCallEndpoints = (
+  byApi: readonly DingtalkApiCallStatsByApi[],
+  limit = 5,
+): DingtalkApiCallStatsByApi[] => byApi.slice(0, Math.max(0, limit));
 
 export const getDingtalkApiCallStats = async (input?: {
   days?: number;
