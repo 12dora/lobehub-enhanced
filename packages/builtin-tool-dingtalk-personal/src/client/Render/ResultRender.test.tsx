@@ -79,8 +79,9 @@ const props = (
 const HOUR = 60 * 60 * 1000;
 
 describe('DingtalkPersonalRenders registry', () => {
-  it('registers the result view for all 14 APIs', () => {
-    expect(Object.keys(DingtalkPersonalRenders)).toHaveLength(14);
+  it('registers the result view for all 15 APIs, the batch write included', () => {
+    expect(Object.keys(DingtalkPersonalRenders)).toHaveLength(15);
+    expect(DingtalkPersonalRenders.completeTodos).toBe(ResultRender);
     expect(new Set(Object.values(DingtalkPersonalRenders)).size).toBe(1);
   });
 });
@@ -554,5 +555,210 @@ describe('ResultRender', () => {
     const link = screen.getByText('在钉钉中查看').closest('a');
     expect(link?.getAttribute('href')).toBe('https://example.dingtalk.com/report/r1');
     expect(link?.getAttribute('target')).toBe('_blank');
+  });
+});
+
+describe('ResultRender batch write', () => {
+  const batch = (overrides: Record<string, unknown> = {}) => ({
+    action: 'completeTodos',
+    failed: 1,
+    items: [
+      { id: '1001', ok: true, title: '交库存日报' },
+      { id: '1002', ok: true, title: '测试待办 123' },
+      {
+        error: '待办不存在或已删除（DINGTALK_PERSONAL_UPSTREAM）',
+        id: '1003',
+        ok: false,
+        title: '写周报',
+      },
+    ],
+    kind: 'batchWrite',
+    succeeded: 2,
+    summary: '已完成 2 项待办，1 项失败',
+    total: 3,
+    ...overrides,
+  });
+
+  it('shows the summary and one ✓ / ✗ row per todo, with the reason for a failure', () => {
+    const { container } = render(<ResultRender {...props('completeTodos', batch())} />);
+
+    expect(screen.getByText('已完成 2 项待办，1 项失败')).toBeTruthy();
+    const rows = [...container.querySelectorAll('[data-status]')];
+    expect(rows.map((row) => row.getAttribute('data-status'))).toEqual(['ok', 'ok', 'failed']);
+    expect(rows[0].textContent).toBe('交库存日报');
+    // The reason reads as plain Chinese: the trailing code is for the model.
+    expect(rows[2].textContent).toBe('写周报待办不存在或已删除');
+    // Ids stay React keys.
+    expect(container.textContent).not.toMatch(/100[123]/);
+  });
+
+  it('names an untitled todo and an unexplained failure with neutral copy', () => {
+    render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          batch({ items: [{ id: '57475254077', ok: false }], summary: '1 项待办未完成' }),
+        )}
+      />,
+    );
+
+    expect(screen.getByText(zh('render.unnamed.todo'))).toBeTruthy();
+    expect(screen.getByText(zh('render.error.unknown'))).toBeTruthy();
+    expect(screen.queryByText('57475254077')).toBeNull();
+  });
+
+  it('keeps the rows under the mapped error when every item failed', () => {
+    const { container } = render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          batch({
+            failed: 2,
+            items: [
+              { error: '请求过于频繁', id: '1001', ok: false, title: '交库存日报' },
+              { error: '未执行', id: '1002', ok: false, title: '测试待办 123' },
+            ],
+            succeeded: 0,
+            summary: '2 项待办均未完成',
+          }),
+          { body: { code: 'DINGTALK_PERSONAL_RATE_LIMITED' } },
+        )}
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toBe(
+      zh('render.error.DINGTALK_PERSONAL_RATE_LIMITED'),
+    );
+    expect(screen.getByText('2 项待办均未完成')).toBeTruthy();
+    expect(screen.getByText('未执行')).toBeTruthy();
+    expect(container.querySelectorAll('[data-status="failed"]')).toHaveLength(2);
+  });
+
+  it('falls back to the counts without a summary and survives malformed items', () => {
+    const { container } = render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          batch({
+            items: [null, 'oops', { id: '1001', ok: true, title: '交库存日报' }],
+            summary: '  ',
+          }),
+        )}
+      />,
+    );
+
+    expect(screen.getByText(zh('render.batch.result', { failed: 0, succeeded: 1 }))).toBeTruthy();
+    expect(container.querySelectorAll('[data-status]')).toHaveLength(1);
+  });
+
+  it('renders nothing for an empty batch without a summary', () => {
+    const { container } = render(
+      <ResultRender {...props('completeTodos', batch({ items: [], summary: '' }))} />,
+    );
+
+    expect(container.innerHTML).toBe('');
+  });
+
+  const AUTH_URL = 'https://aihub.example.com/settings/connector?dingtalkPersonal=authorize';
+
+  const failedRow = (container: HTMLElement) =>
+    container.querySelector('[data-status="failed"]') as HTMLElement;
+
+  const oneFailure = (item: Record<string, unknown>) =>
+    batch({
+      items: [{ id: '1003', ok: false, title: '写周报', ...item }],
+      summary: '1 项待办未完成',
+    });
+
+  it('cleans the legacy authorize sentence and keeps its link', () => {
+    const { container } = render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          oneFailure({
+            error: `你还没有授权 AI 助手读取你的钉钉个人数据。请点击下方卡片的「授权」按钮，或打开： [点此前往授权](${AUTH_URL}) 授权后再问我一次即可。`,
+          }),
+        )}
+      />,
+    );
+    const failed = failedRow(container);
+
+    expect(failed.textContent).toBe('写周报你还没有授权 AI 助手读取你的钉钉个人数据。点此前往授权');
+    expect(failed.textContent).not.toContain('下方卡片');
+    expect(within(failed).getByRole('link', { name: '点此前往授权' }).getAttribute('href')).toBe(
+      AUTH_URL,
+    );
+  });
+
+  it('shows the translated message of a known code instead of the sentence', () => {
+    const { container } = render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          oneFailure({
+            error: '钉钉授权已失效',
+            errorCode: 'DINGTALK_PERSONAL_EXPIRED',
+          }),
+        )}
+      />,
+    );
+
+    expect(failedRow(container).textContent).toBe(
+      `写周报${zh('render.error.DINGTALK_PERSONAL_EXPIRED')}`,
+    );
+  });
+
+  it('links the https page where the failure is fixed, with the server label', () => {
+    const { container } = render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          oneFailure({
+            actionLabel: '去授权',
+            actionUrl: AUTH_URL,
+            error: '尚未授权',
+            errorCode: 'DINGTALK_PERSONAL_UNAUTHORIZED',
+          }),
+        )}
+      />,
+    );
+    const failed = failedRow(container);
+    const link = within(failed).getByRole('link', { name: '去授权' });
+
+    expect(link.getAttribute('href')).toBe(AUTH_URL);
+    expect(failed.textContent).toBe(
+      `写周报${zh('render.error.DINGTALK_PERSONAL_UNAUTHORIZED')} 去授权`,
+    );
+  });
+
+  it('falls back to 「去处理」 for an unlabeled link and never links a non-https target', () => {
+    const { container } = render(
+      <ResultRender
+        {...props('completeTodos', oneFailure({ actionUrl: AUTH_URL, error: '需要授权' }))}
+      />,
+    );
+
+    expect(
+      within(failedRow(container)).getByRole('link', {
+        name: translate('builtins.dingtalk.action.resolve'),
+      }),
+    ).toBeTruthy();
+    cleanup();
+
+    const unsafe = render(
+      <ResultRender
+        {...props(
+          'completeTodos',
+          oneFailure({
+            actionLabel: '去授权',
+            actionUrl: 'javascript:alert(1)',
+            error: '需要授权',
+          }),
+        )}
+      />,
+    );
+
+    expect(failedRow(unsafe.container).querySelector('a')).toBeNull();
+    expect(failedRow(unsafe.container).textContent).toBe('写周报需要授权');
   });
 });

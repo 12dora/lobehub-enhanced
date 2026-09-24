@@ -1,3 +1,4 @@
+export { BatchFailureReason } from './BatchFailureReason';
 export type { DingtalkWorkspacePreview } from './ConfirmCard';
 export {
   CONFIRM_BEFORE_APPROVE_ID,
@@ -12,10 +13,17 @@ export {
 export type { MaskIdentifiersOptions } from './displayText';
 export { maskIdentifiers } from './displayText';
 export { default as ErrorNotice } from './ErrorNotice';
-export { default as LinkedText } from './LinkedText';
+export { default as LinkedText, TextLink } from './LinkedText';
 export type { LinkTextSegment } from './linkText';
 export { splitMarkdownLinks, toInAppPath, toSafeLinkHref } from './linkText';
 export type { DingtalkErrorCode } from './previewError';
 export { DINGTALK_ERROR_CODES, resolveDingtalkErrorCode } from './previewError';
+export {
+  BATCH_ACTION_LABEL_LIMIT,
+  BATCH_SKIPPED_REASON,
+  toBatchActionHref,
+  toBatchActionLabel,
+  toReaderReason,
+} from './reasonText';
 export { ResultCard, ResultField, ResultRow } from './ResultCard';
 export { cardStyles } from './styles';

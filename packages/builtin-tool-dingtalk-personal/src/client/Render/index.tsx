@@ -13,6 +13,7 @@ export const DingtalkPersonalRenders: Record<string, BuiltinRender> = Object.fro
 );
 
 export { default as DingtalkPersonalAuthorizationRequiredRender } from './AuthorizationRequired';
+export { default as DingtalkPersonalBatchWriteRender } from './BatchWriteResult';
 export { default as DingtalkPersonalFileRender } from './FileResult';
 export { default as DingtalkPersonalGroupListRender } from './GroupList';
 export { default as DingtalkPersonalMessageListRender } from './MessageList';

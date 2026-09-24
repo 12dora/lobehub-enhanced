@@ -37,6 +37,11 @@ import { DingtalkApprovalApiName } from '../../types';
 
 const log = debug('lobe-dingtalk-approval:executor');
 
+/** Batch params exactly as the runtime declares them (`{ tasks, remark }`). */
+type BatchParams<K extends 'approveTasks' | 'refuseTasks'> = Parameters<
+  DingtalkApprovalExecutionRuntime[K]
+>[0];
+
 const loadApprovalService = async (): Promise<IDingtalkApprovalService> => {
   return {
     addApprover: (params) => dingtalkApprovalService.addApprover(params),
@@ -146,6 +151,16 @@ class DingtalkApprovalExecutor extends BaseExecutor<typeof DingtalkApprovalApiNa
   refuseTask = async (params: RefuseTaskParams): Promise<BuiltinToolResult> => {
     log('refuseTask taskId=%s', params.taskId);
     return this.call((runtime) => runtime.refuseTask(params), 'RefuseTaskFailed');
+  };
+
+  approveTasks = async (params: BatchParams<'approveTasks'>): Promise<BuiltinToolResult> => {
+    log('approveTasks count=%d', params?.tasks?.length ?? 0);
+    return this.call((runtime) => runtime.approveTasks(params), 'ApproveTasksFailed');
+  };
+
+  refuseTasks = async (params: BatchParams<'refuseTasks'>): Promise<BuiltinToolResult> => {
+    log('refuseTasks count=%d', params?.tasks?.length ?? 0);
+    return this.call((runtime) => runtime.refuseTasks(params), 'RefuseTasksFailed');
   };
 
   transferTask = async (params: TransferTaskParams): Promise<BuiltinToolResult> => {

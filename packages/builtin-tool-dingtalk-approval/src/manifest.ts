@@ -314,7 +314,7 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Agree a pending task. Caller must be the current RUNNING handler. One call per task; never parallel.',
+        'Agree one pending task. Caller must be the current RUNNING handler. 多项同一操作请一次调用 approveTasks，不要并行或逐条多次调用本接口。',
       humanIntervention: always,
       name: DingtalkApprovalWriteApiName.approveTask,
       parameters: {
@@ -330,7 +330,36 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Refuse a pending task. A reason from the user is required (remark). One refuse ends the instance. One call per task; never parallel.',
+        '一次同意多个待审批任务。tasks 为 1 到 20 个互不重复的 {processInstanceId, taskId}。可选 remark 会写到每一项。对多个审批做同一操作时，必须一次调用本接口，不要并行或逐条多次调用 approveTask。',
+      humanIntervention: always,
+      name: DingtalkApprovalWriteApiName.approveTasks,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          remark: { description: 'Optional comment, applied to every task.', type: 'string' },
+          tasks: {
+            description: '1–20 distinct pending tasks.',
+            items: {
+              additionalProperties: false,
+              properties: {
+                processInstanceId: { type: 'string' },
+                taskId: { type: 'string' },
+              },
+              required: ['processInstanceId', 'taskId'],
+              type: 'object',
+            },
+            maxItems: 20,
+            minItems: 1,
+            type: 'array',
+          },
+        },
+        required: ['tasks'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        'Refuse one pending task. A reason from the user is required (remark). One refuse ends the instance. 多项同一操作请一次调用 refuseTasks，不要并行或逐条多次调用本接口。',
       humanIntervention: always,
       name: DingtalkApprovalWriteApiName.refuseTask,
       parameters: {
@@ -345,6 +374,39 @@ export const DingtalkApprovalManifest: BuiltinToolManifest = {
           taskId: { type: 'string' },
         },
         required: ['processInstanceId', 'taskId', 'remark'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        '一次拒绝多个待审批任务。tasks 为 1 到 20 个互不重复的 {processInstanceId, taskId}。remark 必填，并写到每一项。拒绝后对应审批单结束。对多个审批做同一操作时，必须一次调用本接口，不要并行或逐条多次调用 refuseTask。',
+      humanIntervention: always,
+      name: DingtalkApprovalWriteApiName.refuseTasks,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          remark: {
+            description: 'Required refusal reason from the user, shared by every task.',
+            minLength: 1,
+            type: 'string',
+          },
+          tasks: {
+            description: '1–20 distinct pending tasks.',
+            items: {
+              additionalProperties: false,
+              properties: {
+                processInstanceId: { type: 'string' },
+                taskId: { type: 'string' },
+              },
+              required: ['processInstanceId', 'taskId'],
+              type: 'object',
+            },
+            maxItems: 20,
+            minItems: 1,
+            type: 'array',
+          },
+        },
+        required: ['tasks', 'remark'],
         type: 'object',
       },
     },

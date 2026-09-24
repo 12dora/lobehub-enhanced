@@ -1,5 +1,7 @@
 import {
   type AuthRequiredState,
+  type BatchWriteItem,
+  type BatchWriteState,
   DingtalkPersonalApiName as DingtalkPersonalApi,
   type DingtalkPersonalApiName,
   type DingtalkPersonalLoginView,
@@ -15,7 +17,9 @@ import {
   type AppLinkResolver,
   buildAppUrl,
   cliSettingsMarkdownLink,
+  DINGTALK_CONSOLE_LINKS,
   dingtalkIdentityGuidance,
+  identitySignInPath,
   markdownLink,
   oaAdminMarkdownLink,
 } from '@lobechat/utils/appLink';
@@ -48,6 +52,7 @@ import {
   projectTodoList,
   projectWriteSubject,
 } from './projection';
+import type { DingtalkPersonalExecOptions } from './service';
 
 const log = debug('lobe-server:dingtalk-personal');
 
@@ -93,7 +98,9 @@ const PRIORITY_LABEL: Record<number, string> = {
 
 const FEATURE_LABEL: Record<string, string> = {
   chat: '群聊消息',
+  docs: '钉钉文档',
   report: '工作日志',
+  sheets: '钉钉表格',
   todo: '待办',
   write: '写操作',
 };
@@ -116,6 +123,7 @@ export const DINGTALK_PERSONAL_API_NAMES = [
   DingtalkPersonalApi.getReportTemplate,
   DingtalkPersonalApi.updateTodo,
   DingtalkPersonalApi.completeTodo,
+  DingtalkPersonalApi.completeTodos,
   DingtalkPersonalApi.submitReport,
 ] as [DingtalkPersonalApiName, ...DingtalkPersonalApiName[]];
 
@@ -139,7 +147,15 @@ interface WriteAudit {
 
 interface ToolSuccess {
   audit?: WriteAudit;
+  audits?: WriteAudit[];
+  /**
+   * Auth stopped the batch and nothing succeeded. The runner returns this
+   * instead of the batch failure so the auth card wins over earlier item errors.
+   */
+  authResult?: BuiltinServerRuntimeOutput;
   content?: string;
+  /** Set when every batch item failed. `content` stays the model summary. */
+  failure?: { code: string; message: string };
   state: Exclude<DingtalkPersonalToolState, AuthRequiredState>;
 }
 
@@ -226,6 +242,28 @@ const listTodosSchema = z
   .strict();
 
 const taskSchema = z.object({ taskId: idField('taskId') }).strict();
+
+const completeTodosSchema = z
+  .object({
+    taskIds: z
+      .array(idField('taskId'), {
+        invalid_type_error: 'taskIds 必须是数组',
+        required_error: '缺少 taskIds',
+      })
+      .min(1, '至少指定一项待办')
+      .max(20, '一次最多完成 20 项待办'),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>();
+    for (const id of value.taskIds) {
+      if (seen.has(id)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `待办「${id}」重复` });
+        return;
+      }
+      seen.add(id);
+    }
+  });
 
 const searchGroupsSchema = z.object({ query: lineText('关键词', 500) }).strict();
 
@@ -457,23 +495,63 @@ const failure = (
 });
 
 const isPersonalWriteApi = (apiName?: DingtalkPersonalApiName): boolean =>
-  apiName === 'updateTodo' || apiName === 'completeTodo' || apiName === 'submitReport';
+  apiName === 'updateTodo' ||
+  apiName === 'completeTodo' ||
+  apiName === 'completeTodos' ||
+  apiName === 'submitReport';
+
+/**
+ * Stop the rest of a batch. Per-item upstream failures continue.
+ * Feature/disabled stops too: the admin write switch applies to the whole call.
+ * Broker-down and timeout stop immediately: a hung sidecar must not walk the
+ * rest of the list, and a timeout may already have completed the write.
+ */
+const BATCH_STOP_CODES = new Set<string>([
+  'DINGTALK_IDENTITY_INACTIVE',
+  'DINGTALK_IDENTITY_UNBOUND',
+  'DINGTALK_IDENTITY_UNVERIFIED',
+  'DINGTALK_PERSONAL_BROKER_UNAVAILABLE',
+  'DINGTALK_PERSONAL_DISABLED',
+  'DINGTALK_PERSONAL_EXPIRED',
+  'DINGTALK_PERSONAL_FEATURE_DISABLED',
+  'DINGTALK_PERSONAL_ORG_POLICY_DENIED',
+  'DINGTALK_PERSONAL_PAT_REQUIRED',
+  'DINGTALK_PERSONAL_RATE_LIMITED',
+  'DINGTALK_PERSONAL_TIMEOUT',
+  'DINGTALK_PERSONAL_UNAUTHORIZED',
+]);
+
+const oneLine = (text: string): string => text.replaceAll(/\s+/g, ' ').trim();
+
+const emptySearchHint = (query: string): string =>
+  `近 7 天（或所给时间段）没有消息正文包含「${query}」。关键词只匹配消息正文，不匹配群名；总结某个群请先 searchGroups 再 listGroupMessages。`;
 
 const linksOf = (ctx?: DingtalkPersonalToolContext): AppLinkResolver =>
   ctx?.resolveLink ?? serverAppLinkResolver(ctx?.botPlatform);
+
+const authorizeUrlFor = (ctx?: DingtalkPersonalToolContext): string =>
+  linksOf(ctx)(APP_LINK_PATHS.dingtalkPersonalAuthorize);
+
+const webAuthContent = (authUrl: string): string =>
+  [
+    '你还没有授权 AI 助手读取你的钉钉个人数据。请点击下方卡片的「授权」按钮，或打开：',
+    markdownLink('点此前往授权', authUrl),
+    '授权后再问我一次即可。',
+  ].join('\n');
 
 const contentFor = (
   code: string,
   details: Record<string, unknown> | undefined,
   apiName: DingtalkPersonalApiName | undefined,
   ctx?: DingtalkPersonalToolContext,
+  write = false,
 ): string | undefined => {
   const resolveLink = linksOf(ctx);
   const platform = ctx?.botPlatform;
   const admin = adminEntrySuffix(resolveLink);
   if (
     (code === 'DINGTALK_PERSONAL_TIMEOUT' || code === 'DINGTALK_PERSONAL_BROKER_UNAVAILABLE') &&
-    isPersonalWriteApi(apiName)
+    (write || isPersonalWriteApi(apiName))
   ) {
     return WRITE_UNKNOWN_CONTENT;
   }
@@ -503,6 +581,10 @@ const contentFor = (
     }
     case 'DINGTALK_PERSONAL_DISABLED': {
       return `管理员未开启钉钉个人数据（DINGTALK_PERSONAL_DISABLED）。请联系管理员在即时通讯连接器中开启${admin}。`;
+    }
+    case 'DINGTALK_PERSONAL_EXPIRED':
+    case 'DINGTALK_PERSONAL_UNAUTHORIZED': {
+      return webAuthContent(authorizeUrlFor(ctx));
     }
     case 'DINGTALK_PERSONAL_FEATURE_DISABLED': {
       const feature =
@@ -556,10 +638,13 @@ const mapFailure = (
   error: unknown,
   apiName?: DingtalkPersonalApiName,
   ctx?: DingtalkPersonalToolContext,
+  write = false,
 ): BuiltinServerRuntimeOutput => {
   const personal = readPersonalError(error);
   if (personal && isAuthCode(personal.code)) return webAuthResult(personal.code, ctx);
-  const content = personal ? contentFor(personal.code, personal.details, apiName, ctx) : undefined;
+  const content = personal
+    ? contentFor(personal.code, personal.details, apiName, ctx, write)
+    : undefined;
   if (!personal || !content) {
     logFailure('tool failed', error);
     return failure(INTERNAL_CONTENT, 'DINGTALK_PERSONAL_INTERNAL');
@@ -691,9 +776,6 @@ const priorityLabel = (priority: number | null | undefined): string => {
 export const dingtalkPersonalWebAuthorizeUrl = (appUrl?: string | null): string =>
   buildAppUrl(appUrl, APP_LINK_PATHS.dingtalkPersonalAuthorize);
 
-const authorizeUrlFor = (ctx?: DingtalkPersonalToolContext): string =>
-  linksOf(ctx)(APP_LINK_PATHS.dingtalkPersonalAuthorize);
-
 const authState = (
   code: string,
   authUrl: string,
@@ -716,13 +798,6 @@ const authResult = (
   state: authState(code, authUrl, login),
   success: false,
 });
-
-const webAuthContent = (authUrl: string): string =>
-  [
-    '你还没有授权 AI 助手读取你的钉钉个人数据。请点击下方卡片的「授权」按钮，或打开：',
-    markdownLink('点此前往授权', authUrl),
-    '授权后再问我一次即可。',
-  ].join('\n');
 
 const webAuthResult = (
   code: string,
@@ -805,6 +880,250 @@ const handleAuth = async (
   return authResult(dingtalkAuthContent(linked.login, via), code, linked.url, linked.login);
 };
 
+/**
+ * Shared failure path for lobe-dingtalk-personal and lobe-dingtalk-docs.
+ * Auth errors with a service start the same login card. A docs write passes
+ * `write` so a timeout says the result is unknown.
+ */
+export const settleDingtalkPersonalToolError = async (
+  error: unknown,
+  options: {
+    apiName?: string;
+    ctx?: DingtalkPersonalToolContext;
+    db: LobeChatDatabase;
+    service?: DingtalkPersonalService;
+    userId: string;
+    write?: boolean;
+  },
+): Promise<BuiltinServerRuntimeOutput> => {
+  const personal = readPersonalError(error);
+  if (personal && isAuthCode(personal.code) && options.service) {
+    return handleAuth(
+      options.service,
+      options.db,
+      options.userId,
+      options.ctx ?? {},
+      personal.code,
+    );
+  }
+  return mapFailure(
+    error,
+    options.apiName as DingtalkPersonalApiName | undefined,
+    options.ctx,
+    options.write === true,
+  );
+};
+
+const completeOneTodo = async (
+  service: DingtalkPersonalService,
+  taskId: string,
+  options?: DingtalkPersonalExecOptions,
+): Promise<{ audit: WriteAudit; subject?: string }> => {
+  const raw = options
+    ? await service.exec('todo.complete', { taskId }, options)
+    : await service.exec('todo.complete', { taskId });
+  const subject = projectWriteSubject(raw);
+  return {
+    audit: {
+      action: 'todo.complete',
+      afterDiff: auditDiff({ subject, taskId }),
+      targetId: taskId,
+    },
+    ...(subject ? { subject } : {}),
+  };
+};
+
+/** Short card copy. No codes, API names, or instructions aimed at the model. */
+const PERSONAL_USER_ERROR: Record<string, string> = {
+  DINGTALK_IDENTITY_INACTIVE: '钉钉账号已停用',
+  DINGTALK_IDENTITY_UNBOUND: '当前账号未绑定钉钉',
+  DINGTALK_IDENTITY_UNVERIFIED: '钉钉身份未经验证',
+  DINGTALK_PERSONAL_BROKER_UNAVAILABLE: '钉钉服务暂时不可用',
+  DINGTALK_PERSONAL_CORP_ID_MISSING: '钉钉连接器未配置企业',
+  DINGTALK_PERSONAL_DISABLED: '管理员未开启钉钉个人数据',
+  DINGTALK_PERSONAL_EXPIRED: '需要重新授权钉钉个人数据',
+  DINGTALK_PERSONAL_FEATURE_DISABLED: '该能力未开启',
+  DINGTALK_PERSONAL_FILE_TOO_LARGE: '文件超过 20 MB，无法下载',
+  DINGTALK_PERSONAL_INTERNAL: '操作失败，请稍后重试',
+  DINGTALK_PERSONAL_INVALID_ARGS: '参数无效',
+  DINGTALK_PERSONAL_LOGIN_NOT_FOUND: '授权已结束，请重新授权',
+  DINGTALK_PERSONAL_ORG_POLICY_DENIED: '贵司未开放该功能',
+  DINGTALK_PERSONAL_OUTPUT_TOO_LARGE: '返回内容过大',
+  DINGTALK_PERSONAL_PAT_REQUIRED: '需要在钉钉确认权限',
+  DINGTALK_PERSONAL_RATE_LIMITED: '请求过于频繁',
+  DINGTALK_PERSONAL_TIMEOUT: '钉钉服务暂时不可用',
+  DINGTALK_PERSONAL_UNAUTHORIZED: '需要重新授权钉钉个人数据',
+  DINGTALK_PERSONAL_UPSTREAM: '钉钉接口返回错误',
+};
+
+const REAUTH_USER_ERROR = '需要重新授权钉钉个人数据';
+
+interface BatchAction {
+  actionLabel: string;
+  actionUrl: string;
+}
+
+const safeResolvedAppLink = (resolved: string, path: string): string | undefined => {
+  const trimmed = resolved.trim();
+  if (!trimmed || trimmed.length > 2000 || /\s/.test(trimmed)) return undefined;
+  if (trimmed === path && (path === '/' || (path.startsWith('/') && !path.startsWith('//')))) {
+    return trimmed;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') return undefined;
+    if (url.searchParams.get('redirect') === path) return trimmed;
+    if (`${url.pathname}${url.search}` === path) return trimmed;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const safeDingtalkHttps = (value: string | undefined): string | undefined => {
+  if (!value || value.length > 2000 || !isDingtalkVerificationUrl(value)) return undefined;
+  return value.trim();
+};
+
+const appAction = (
+  label: string,
+  path: string,
+  ctx?: DingtalkPersonalToolContext,
+): BatchAction | undefined => {
+  const actionUrl = safeResolvedAppLink(linksOf(ctx)(path), path);
+  return actionUrl ? { actionLabel: label, actionUrl } : undefined;
+};
+
+const consoleAction = (label: string, url: string): BatchAction | undefined => {
+  const actionUrl = safeDingtalkHttps(url);
+  return actionUrl ? { actionLabel: label, actionUrl } : undefined;
+};
+
+const personalBatchAction = (
+  code: string,
+  details: Record<string, unknown> | undefined,
+  ctx: DingtalkPersonalToolContext,
+): BatchAction | undefined => {
+  switch (code) {
+    case 'DINGTALK_PERSONAL_EXPIRED':
+    case 'DINGTALK_PERSONAL_UNAUTHORIZED':
+    case 'DINGTALK_PERSONAL_LOGIN_NOT_FOUND': {
+      return appAction('去授权', APP_LINK_PATHS.dingtalkPersonalAuthorize, ctx);
+    }
+    case 'DINGTALK_PERSONAL_PAT_REQUIRED': {
+      return consoleAction('申请权限', httpUri(details?.uri) ?? '');
+    }
+    case 'DINGTALK_PERSONAL_ORG_POLICY_DENIED': {
+      return consoleAction('前往设置', DINGTALK_CONSOLE_LINKS.cliSettings);
+    }
+    case 'DINGTALK_PERSONAL_DISABLED':
+    case 'DINGTALK_PERSONAL_FEATURE_DISABLED':
+    case 'DINGTALK_PERSONAL_CORP_ID_MISSING': {
+      return appAction('前往设置', APP_LINK_PATHS.adminImConnectors, ctx);
+    }
+    case 'DINGTALK_IDENTITY_UNBOUND':
+    case 'DINGTALK_IDENTITY_UNVERIFIED': {
+      return appAction('去授权', identitySignInPath(ctx.botPlatform), ctx);
+    }
+    case 'DINGTALK_IDENTITY_INACTIVE': {
+      return consoleAction('前往设置', DINGTALK_CONSOLE_LINKS.oaAdmin);
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const personalUserError = (
+  code: string,
+  details: Record<string, unknown> | undefined,
+  write: boolean,
+): string => {
+  if (
+    write &&
+    (code === 'DINGTALK_PERSONAL_TIMEOUT' || code === 'DINGTALK_PERSONAL_BROKER_UNAVAILABLE')
+  ) {
+    return WRITE_UNKNOWN_CONTENT;
+  }
+  if (code === 'DINGTALK_PERSONAL_FEATURE_DISABLED') {
+    const feature =
+      typeof details?.feature === 'string' ? FEATURE_LABEL[details.feature] : undefined;
+    if (feature) return `管理员未开启${feature}`;
+  }
+  if (code === 'DINGTALK_PERSONAL_UPSTREAM') {
+    const detail = upstreamDetail(details);
+    if (detail && detail.length <= 80 && !/DINGTALK_|https?:\/\/|[A-Za-z]{6,}/.test(detail)) {
+      return detail;
+    }
+  }
+  return PERSONAL_USER_ERROR[code] ?? '操作失败，请稍后重试';
+};
+
+/**
+ * Card fields for an auth result. Prefer the DingTalk verification URL; otherwise
+ * the in-app authorize page the auth flow already resolved.
+ */
+const authBatchAction = (output: BuiltinServerRuntimeOutput): BatchAction | undefined => {
+  const state = output.state;
+  if (
+    !state ||
+    typeof state !== 'object' ||
+    (state as { kind?: unknown }).kind !== 'authorizationRequired'
+  ) {
+    return undefined;
+  }
+  const record = state as {
+    authUrl?: unknown;
+    login?: { verificationUrl?: unknown };
+  };
+  const verification =
+    record.login && typeof record.login.verificationUrl === 'string'
+      ? safeDingtalkHttps(record.login.verificationUrl)
+      : undefined;
+  if (verification) return { actionLabel: '去授权', actionUrl: verification };
+  if (typeof record.authUrl !== 'string') return undefined;
+  const authUrl =
+    safeDingtalkHttps(record.authUrl) ??
+    safeResolvedAppLink(record.authUrl, APP_LINK_PATHS.dingtalkPersonalAuthorize);
+  return authUrl ? { actionLabel: '去授权', actionUrl: authUrl } : undefined;
+};
+
+const batchItemError = (
+  error: unknown,
+  ctx: DingtalkPersonalToolContext,
+): { action?: BatchAction; code: string; model: string; user: string } => {
+  const personal = readPersonalError(error);
+  const code = personal?.code ?? 'DINGTALK_PERSONAL_INTERNAL';
+  const text = personal
+    ? contentFor(code, personal.details, 'completeTodos', ctx, true)
+    : undefined;
+  // Same rule as mapFailure: domain errors already have a sentence; everything else is logged.
+  if (!personal || !text) logFailure('batch item failed', error);
+  return {
+    action: personal ? personalBatchAction(code, personal.details, ctx) : undefined,
+    code,
+    model: oneLine(text || '操作失败（内部错误），请稍后重试。'),
+    user: personal ? personalUserError(code, personal.details, true) : '操作失败，请稍后重试',
+  };
+};
+
+const batchSummary = (succeeded: number, failed: number): string =>
+  failed === 0 ? `已完成 ${succeeded} 项待办` : `已完成 ${succeeded} 项待办，${failed} 项失败`;
+
+const batchModelContent = (
+  summary: string,
+  items: BatchWriteItem[],
+  modelById: ReadonlyMap<string, string>,
+): string =>
+  [
+    summary,
+    ...items.map((item) => {
+      const name = item.title || item.id;
+      const reason = modelById.get(item.id) ?? item.error ?? '操作失败';
+      return item.ok ? `✓ ${name}` : `✗ ${name}：${reason}`;
+    }),
+  ].join('\n');
+
 const writeState = (
   action: WriteState['action'],
   summary: string,
@@ -828,18 +1147,112 @@ const execute = async (
   switch (apiName) {
     case 'completeTodo': {
       const parsed = parseArgs(taskSchema, args);
-      const raw = await service.exec('todo.complete', { taskId: parsed.taskId });
-      const subject = projectWriteSubject(raw);
+      const done = await completeOneTodo(service, parsed.taskId);
       return {
-        audit: {
-          action: 'todo.complete',
-          afterDiff: auditDiff({ subject, taskId: parsed.taskId }),
-          targetId: parsed.taskId,
-        },
-        state: writeState('completeTodo', subject ? `已完成待办「${subject}」` : '已完成待办', {
-          taskId: parsed.taskId,
-        }),
+        audit: done.audit,
+        state: writeState(
+          'completeTodo',
+          done.subject ? `已完成待办「${done.subject}」` : '已完成待办',
+          { taskId: parsed.taskId },
+        ),
       };
+    }
+    case 'completeTodos': {
+      const parsed = parseArgs(completeTodosSchema, args);
+      await service.beginTodoBatch();
+      const items: BatchWriteItem[] = [];
+      const modelById = new Map<string, string>();
+      const audits: WriteAudit[] = [];
+      let firstFailure: { code: string; error: unknown; message: string } | undefined;
+      let authHit: { code: string; taskId: string } | undefined;
+      let stop = false;
+      for (const taskId of parsed.taskIds) {
+        if (stop) {
+          items.push({ error: '未执行', id: taskId, ok: false });
+          modelById.set(taskId, '未执行');
+          continue;
+        }
+        try {
+          const done = await completeOneTodo(service, taskId, {
+            skipCacheInvalidation: true,
+            skipRateLimit: true,
+          });
+          audits.push(done.audit);
+          items.push({
+            id: taskId,
+            ok: true,
+            ...(done.subject ? { title: done.subject } : {}),
+          });
+        } catch (error) {
+          const personal = readPersonalError(error);
+          if (personal && isAuthCode(personal.code) && !authHit) {
+            authHit = { code: personal.code, taskId };
+          }
+          const mapped = batchItemError(error, ctx);
+          if (!firstFailure) firstFailure = { code: mapped.code, error, message: mapped.model };
+          items.push({
+            error: mapped.user,
+            errorCode: mapped.code,
+            id: taskId,
+            ok: false,
+            ...mapped.action,
+          });
+          modelById.set(taskId, mapped.model);
+          if (BATCH_STOP_CODES.has(mapped.code)) stop = true;
+        }
+      }
+      const succeeded = items.filter((item) => item.ok).length;
+      const failed = items.length - succeeded;
+      if (succeeded > 0) await service.commitTodoBatch();
+      // One auth flow for the stopping item. Nothing succeeded → that result wins
+      // over earlier per-item errors. A partial batch keeps the successes and
+      // still carries the guidance in the model text; the card row stays short.
+      let authOutput: BuiltinServerRuntimeOutput | undefined;
+      if (authHit) {
+        const hit = authHit;
+        authOutput = await handleAuth(service, db, userId, ctx, hit.code);
+        const row = items.find((item) => item.id === hit.taskId && !item.ok);
+        if (row) {
+          row.error = REAUTH_USER_ERROR;
+          row.errorCode = hit.code;
+          const action = authBatchAction(authOutput);
+          if (action) {
+            row.actionLabel = action.actionLabel;
+            row.actionUrl = action.actionUrl;
+          }
+          modelById.set(hit.taskId, oneLine(authOutput.content));
+        }
+      }
+      const summary = batchSummary(succeeded, failed);
+      const state: BatchWriteState = {
+        action: 'completeTodos',
+        failed,
+        items,
+        kind: 'batchWrite',
+        succeeded,
+        summary,
+        total: items.length,
+      };
+      const itemContent = batchModelContent(summary, items, modelById);
+      if (authOutput && succeeded === 0) {
+        return {
+          authResult: { ...authOutput, content: `${itemContent}\n${authOutput.content}` },
+          content: itemContent,
+          state,
+        };
+      }
+      const content = authOutput ? `${itemContent}\n${authOutput.content}` : itemContent;
+      if (succeeded === 0) {
+        return {
+          content,
+          failure: {
+            code: firstFailure?.code ?? 'DINGTALK_PERSONAL_UPSTREAM',
+            message: firstFailure?.message ?? '操作失败',
+          },
+          state,
+        };
+      }
+      return { audits, content, state };
     }
     case 'downloadMessageFile': {
       const parsed = parseArgs(downloadSchema, args);
@@ -946,13 +1359,13 @@ const execute = async (
           start: parsed.startTime,
         }),
       );
-      return {
-        state: projectMessages(raw, {
-          conversationId: parsed.conversationId,
-          endTime: parsed.endTime,
-          startTime: parsed.startTime,
-        }),
-      };
+      const state = projectMessages(raw, {
+        conversationId: parsed.conversationId,
+        endTime: parsed.endTime,
+        startTime: parsed.startTime,
+      });
+      if (state.count === 0) state.hint = emptySearchHint(parsed.query);
+      return { state };
     }
     case 'submitReport': {
       const parsed = parseArgs(submitSchema, args);
@@ -1086,6 +1499,28 @@ const previewComplete = async (
   };
 };
 
+const previewCompleteTodos = async (
+  service: DingtalkPersonalService,
+  userId: string,
+  args: unknown,
+): Promise<DingtalkPersonalPreview> => {
+  const parsed = parseArgs(completeTodosSchema, args);
+  await service.reserveRateLimit();
+  const lines: string[] = [];
+  for (const [index, taskId] of parsed.taskIds.entries()) {
+    const detail = projectTodoDetail(
+      await service.exec('todo.get', { taskId }, { skipRateLimit: true }),
+    );
+    lines.push(`${index + 1}. ${detail.todo.subject || taskId}`);
+  }
+  return {
+    danger: false,
+    lines,
+    title: `完成 ${parsed.taskIds.length} 项待办`,
+    warnings: ['完成后该待办会标记为已完成。'],
+  };
+};
+
 const previewSubmit = async (
   service: DingtalkPersonalService,
   db: LobeChatDatabase,
@@ -1140,19 +1575,30 @@ export const runDingtalkPersonalTool = async (
 
   try {
     const outcome = await execute(service, db, userId, apiName, args ?? {}, ctx);
-    if (outcome.audit) {
+    if (outcome.authResult) return outcome.authResult;
+    const audits = outcome.audits ?? (outcome.audit ? [outcome.audit] : []);
+    for (const item of audits) {
       try {
-        await appendDingtalkPersonalAudit(db, userId, outcome.audit.action, {
-          afterDiff: outcome.audit.afterDiff ?? null,
+        await appendDingtalkPersonalAudit(db, userId, item.action, {
+          afterDiff: item.afterDiff ?? null,
           result: 'success',
-          targetId: outcome.audit.targetId,
+          targetId: item.targetId,
         });
       } catch (error) {
         logFailure('audit write failed', error);
       }
     }
+    const content = outcome.content ?? buildModelContent(outcome.state);
+    if (outcome.failure) {
+      return {
+        content,
+        error: { code: outcome.failure.code, message: outcome.failure.message },
+        state: outcome.state,
+        success: false,
+      };
+    }
     return {
-      content: outcome.content ?? buildModelContent(outcome.state),
+      content,
       state: outcome.state,
       success: true,
     };
@@ -1171,11 +1617,17 @@ export const previewDingtalkPersonalWrite = async (
   apiName: DingtalkPersonalApiName,
   args: Record<string, unknown>,
 ): Promise<DingtalkPersonalPreview> => {
-  if (apiName !== 'completeTodo' && apiName !== 'submitReport' && apiName !== 'updateTodo') {
+  if (
+    apiName !== 'completeTodo' &&
+    apiName !== 'completeTodos' &&
+    apiName !== 'submitReport' &&
+    apiName !== 'updateTodo'
+  ) {
     invalidArgs('该操作不需要确认');
   }
   const service = new DingtalkPersonalService(db, userId);
   if (apiName === 'updateTodo') return previewUpdate(service, args ?? {});
   if (apiName === 'completeTodo') return previewComplete(service, args ?? {});
+  if (apiName === 'completeTodos') return previewCompleteTodos(service, userId, args ?? {});
   return previewSubmit(service, db, args ?? {});
 };

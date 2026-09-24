@@ -226,6 +226,13 @@ const viewFromStored = (record: StoredDingtalkPersonalLogin): DingtalkPersonalLo
   ...(record.mismatchUserName ? { mismatchUserName: record.mismatchUserName } : {}),
 });
 
+export interface DingtalkPersonalExecOptions {
+  /** Batch caller invalidates read caches once around the whole loop. */
+  skipCacheInvalidation?: boolean;
+  /** Batch caller already consumed the per-user rate-limit token. */
+  skipRateLimit?: boolean;
+}
+
 export class DingtalkPersonalService {
   private readonly authz: DingtalkPersonalAuthorizationModel;
 
@@ -429,16 +436,42 @@ export class DingtalkPersonalService {
     });
   };
 
-  exec = async (op: DingtalkPersonalOp, args: Record<string, unknown>): Promise<unknown> => {
+  /** One per-user rate-limit token. Batch preview and batch writes share this. */
+  reserveRateLimit = async (): Promise<void> => {
+    await assertDingtalkPersonalRateLimit(this.userId);
+  };
+
+  /**
+   * One rate-limit token and one read-cache invalidation before a batch of
+   * todo writes. Item calls then pass `skipRateLimit` and `skipCacheInvalidation`.
+   */
+  beginTodoBatch = async (): Promise<void> => {
+    await this.reserveRateLimit();
+    await invalidateDingtalkPersonalCache(this.userId).catch(() => undefined);
+  };
+
+  /** Workspace todo list and personal read cache, once, after a batch that wrote. */
+  commitTodoBatch = async (): Promise<void> => {
+    await invalidateWorkspaceTodoListCache(this.userId);
+    await invalidateDingtalkPersonalCache(this.userId).catch(() => undefined);
+  };
+
+  exec = async (
+    op: DingtalkPersonalOp,
+    args: Record<string, unknown>,
+    options?: DingtalkPersonalExecOptions,
+  ): Promise<unknown> => {
     const ready = await this.authorizeOp(op);
-    if (op === 'chat.downloadFile') {
+    if (op === 'chat.downloadFile' || op === 'drive.download') {
       throw new DingtalkPersonalError('DINGTALK_PERSONAL_INVALID_ARGS');
     }
-    await assertDingtalkPersonalRateLimit(this.userId);
+    if (!options?.skipRateLimit) await assertDingtalkPersonalRateLimit(this.userId);
     const forwarded = this.argsOf(args);
     const write = WRITE_OPS.has(op);
     if (write) {
-      await invalidateDingtalkPersonalCache(this.userId).catch(() => undefined);
+      if (!options?.skipCacheInvalidation) {
+        await invalidateDingtalkPersonalCache(this.userId).catch(() => undefined);
+      }
     } else {
       const cached = await readDingtalkPersonalCache(this.userId, op, forwarded);
       if (cached !== undefined) return cached;
@@ -456,10 +489,12 @@ export class DingtalkPersonalService {
       });
       await this.authz.touchLastUsed().catch(() => undefined);
       if (write) {
-        if (op === 'todo.update' || op === 'todo.complete') {
-          await invalidateWorkspaceTodoListCache(this.userId);
+        if (!options?.skipCacheInvalidation) {
+          if (op === 'todo.update' || op === 'todo.complete') {
+            await invalidateWorkspaceTodoListCache(this.userId);
+          }
+          await invalidateDingtalkPersonalCache(this.userId).catch(() => undefined);
         }
-        await invalidateDingtalkPersonalCache(this.userId).catch(() => undefined);
       } else if (generation !== undefined) {
         await writeDingtalkPersonalCache(this.userId, op, forwarded, data, generation).catch(
           () => undefined,
@@ -482,6 +517,27 @@ export class DingtalkPersonalService {
         actor: this.userId,
         args: forwarded,
         op: 'chat.downloadFile',
+        profile: ready.profile,
+      });
+      await this.authz.touchLastUsed().catch(() => undefined);
+      return file;
+    } catch (error) {
+      return this.expireIfUnauthorized(error);
+    }
+  };
+
+  downloadOp = async (
+    op: 'drive.download',
+    args: Record<string, unknown>,
+  ): Promise<{ buffer: Buffer; name: string; sizeBytes: number }> => {
+    const ready = await this.authorizeOp(op);
+    await assertDingtalkPersonalRateLimit(this.userId);
+    const forwarded = this.argsOf(args);
+    try {
+      const file = await downloadDingtalkPersonalFile({
+        actor: this.userId,
+        args: forwarded,
+        op,
         profile: ready.profile,
       });
       await this.authz.touchLastUsed().catch(() => undefined);

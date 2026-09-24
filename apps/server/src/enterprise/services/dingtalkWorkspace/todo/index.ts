@@ -12,7 +12,10 @@ import { DingtalkApprovalService } from '@/server/enterprise/services/dingtalkWo
 import { DEFAULT_LIST_LIMIT } from '@/server/enterprise/services/dingtalkWorkspace/approval/types';
 import { assertDingtalkFeature } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { dingtalkWorkspaceRequest } from '@/server/enterprise/services/dingtalkWorkspace/client';
-import { DingtalkWorkspaceError } from '@/server/enterprise/services/dingtalkWorkspace/errors';
+import {
+  DingtalkWorkspaceError,
+  sanitizeDingtalkApplyUrl,
+} from '@/server/enterprise/services/dingtalkWorkspace/errors';
 import { requireVerifiedDingtalkIdentity } from '@/server/enterprise/services/dingtalkWorkspace/identity';
 import { PlatformAuditService } from '@/server/enterprise/services/platformAudit';
 
@@ -102,12 +105,17 @@ type CachedMergedList = { expiresAt: number; value: DingtalkTodoListResult };
 const mergedTodoCache = new Map<string, CachedMergedList>();
 /** Bumped with every merged-list invalidation, including personal todo writes. */
 const mergedTodoGeneration = new Map<string, number>();
+let mergedInvalidationCount = 0;
 
 export const resetTodoListCacheForTest = (): void => {
   todoListCache.clear();
   mergedTodoCache.clear();
   mergedTodoGeneration.clear();
+  mergedInvalidationCount = 0;
 };
+
+/** How many times the merged list cache was dropped. Test seam for batch invalidation. */
+export const todoMergedInvalidationCountForTest = (): number => mergedInvalidationCount;
 
 /** userId + verified staff/union id, so a rebound DingTalk identity cannot reuse the old list. */
 const mergedCacheKey = (
@@ -129,6 +137,7 @@ const readMergedCache = (key: string): DingtalkTodoListResult | undefined => {
 };
 
 const invalidateMergedCache = (userId: string): void => {
+  mergedInvalidationCount += 1;
   const prefix = `${userId}:`;
   for (const key of mergedTodoCache.keys()) {
     if (key.startsWith(prefix)) mergedTodoCache.delete(key);
@@ -447,6 +456,117 @@ const parseUpdateInput = (args: Record<string, unknown>): DingtalkTodoUpdateInpu
   };
 };
 
+const TODO_BATCH_LIMIT = 20;
+
+/**
+ * Auth, rate-limit, and org-policy failures stop a batch. A per-item miss does not.
+ * `DINGTALK_FORBIDDEN` stops only when the app itself lacks permission (see
+ * {@link forbiddenStopsTodoBatch}). Two consecutive `DINGTALK_UNAVAILABLE`
+ * responses stop the rest.
+ */
+const TODO_BATCH_STOP_CODES = new Set<string>([
+  'DINGTALK_NOT_CONFIGURED',
+  'DINGTALK_FEATURE_DISABLED',
+  'DINGTALK_PREMIUM_REQUIRED',
+  'DINGTALK_RATE_LIMITED',
+  'DINGTALK_IDENTITY_UNBOUND',
+  'DINGTALK_IDENTITY_UNVERIFIED',
+  'DINGTALK_IDENTITY_INACTIVE',
+  'DINGTALK_NOT_APPROVAL_ADMIN',
+  'DINGTALK_AUTOMATION_OFF',
+]);
+
+const TODO_BATCH_UNAVAILABLE_STREAK = 2;
+
+/** App-wide 403 (missing scopes or an apply link). A "not the creator" 403 does not stop the batch. */
+const forbiddenStopsTodoBatch = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { applyUrl?: unknown; missingScopes?: unknown };
+  const scopes = record.missingScopes;
+  if (Array.isArray(scopes) && scopes.some((scope) => typeof scope === 'string' && scope.trim())) {
+    return true;
+  }
+  return Boolean(sanitizeDingtalkApplyUrl(record.applyUrl));
+};
+
+const readBatchApplyUrl = (error: unknown): string | undefined => {
+  if (!error || typeof error !== 'object' || !('applyUrl' in error)) return undefined;
+  return sanitizeDingtalkApplyUrl((error as { applyUrl?: unknown }).applyUrl);
+};
+
+export interface DingtalkTodoBatchItem {
+  /** Sanitized https://open-dev.dingtalk.com permission-apply link, when DingTalk returned one. */
+  applyUrl?: string;
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  title?: string;
+}
+
+export interface DingtalkTodoBatchResult {
+  items: DingtalkTodoBatchItem[];
+}
+
+const batchValidation = (message: string): never => {
+  const error = new Error(message);
+  Object.assign(error, { code: 'VALIDATION' });
+  throw error;
+};
+
+const readTodoBatchIds = (
+  value: unknown,
+): { ids: string[] } | { reason: 'duplicate' | 'invalid' } => {
+  if (!Array.isArray(value) || value.length < 1 || value.length > TODO_BATCH_LIMIT) {
+    return { reason: 'invalid' };
+  }
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim()) return { reason: 'invalid' };
+    if (seen.has(item)) return { reason: 'duplicate' };
+    seen.add(item);
+    ids.push(item);
+  }
+  return { ids };
+};
+
+const requireTodoBatchIds = (value: unknown): string[] => {
+  const read = readTodoBatchIds(value);
+  if ('reason' in read) {
+    return batchValidation(
+      read.reason === 'duplicate'
+        ? '待办 id 不能重复。'
+        : '待办 id 须为 1 到 20 个互不重复的非空字符串。',
+    );
+  }
+  return read.ids;
+};
+
+const errorCodeOf = (error: unknown): string => {
+  if (error instanceof DingtalkWorkspaceError) return error.code;
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
+  if (error instanceof Error) {
+    const match = /DINGTALK_[A-Z_]+/.exec(error.message);
+    if (match) return match[0];
+  }
+  return 'DINGTALK_INTERNAL';
+};
+
+/** Domain failures stay quiet. Anything else is unexpected and must show up in logs. */
+const logUnexpectedTodoBatchError = (error: unknown): void => {
+  if (error instanceof DingtalkWorkspaceError) return;
+  const code = errorCodeOf(error);
+  if (code.startsWith('DINGTALK_') && code !== 'DINGTALK_INTERNAL') return;
+  console.error('[dingtalk.todo] batch item failed', {
+    code,
+    errorClass: error instanceof Error ? error.name : 'UnknownError',
+  });
+};
+
 export class DingtalkTodoService {
   constructor(
     private readonly db: LobeChatDatabase,
@@ -524,14 +644,21 @@ export class DingtalkTodoService {
       delete: AUDIT_ACTION.DINGTALK_TODO_DELETE,
       update: AUDIT_ACTION.DINGTALK_TODO_UPDATE,
     } as const;
-    await new PlatformAuditService(this.db).append({
-      action: actions[action],
-      actorUserId: this.userId,
-      afterDiff: subject ? { subject } : null,
-      result: 'success',
-      targetId,
-      targetType: AUDIT_TARGET_TYPE.DINGTALK_TODO,
-    });
+    try {
+      await new PlatformAuditService(this.db).append({
+        action: actions[action],
+        actorUserId: this.userId,
+        afterDiff: subject ? { subject } : null,
+        result: 'success',
+        targetId,
+        targetType: AUDIT_TARGET_TYPE.DINGTALK_TODO,
+      });
+    } catch (error) {
+      console.error('[dingtalk.todo] audit append failed', {
+        action,
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
   }
 
   /** Full app-todo pages for write previews. Not used by the billed merged read. */
@@ -817,9 +944,10 @@ export class DingtalkTodoService {
     return { ok: true, subject, taskId: input.taskId };
   };
 
-  completeTodo = async (
+  /** HTTP + cache patch. The caller invalidates the merged list and writes the audit row. */
+  private completeTodoBody = async (
     input: DingtalkTodoIdInput,
-  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
+  ): Promise<{ subject?: string; taskId: string }> => {
     const identity = await this.actor();
     if (!input.taskId.trim()) return failWorkspace('DINGTALK_INVALID');
     await dingtalkWorkspaceRequest({
@@ -831,14 +959,13 @@ export class DingtalkTodoService {
     });
     const patched = this.patchCachedTodo(input.taskId, { done: true });
     const subject = patched?.subject ?? this.findCachedTodo(input.taskId)?.subject;
-    invalidateMergedCache(this.userId);
-    await this.audit('complete', input.taskId);
-    return { ok: true, subject, taskId: input.taskId };
+    return { subject, taskId: input.taskId };
   };
 
-  deleteTodo = async (
+  /** HTTP + cache patch. The caller invalidates the merged list and writes the audit row. */
+  private deleteTodoBody = async (
     input: DingtalkTodoIdInput,
-  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
+  ): Promise<{ subject?: string; taskId: string }> => {
     const identity = await this.actor();
     if (!input.taskId.trim()) return failWorkspace('DINGTALK_INVALID');
     await dingtalkWorkspaceRequest({
@@ -849,10 +976,88 @@ export class DingtalkTodoService {
     });
     const subject = this.findCachedTodo(input.taskId)?.subject;
     this.forgetTodo(input.taskId);
+    return { subject, taskId: input.taskId };
+  };
+
+  completeTodo = async (
+    input: DingtalkTodoIdInput,
+  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
+    const result = await this.completeTodoBody(input);
+    invalidateMergedCache(this.userId);
+    await this.audit('complete', input.taskId);
+    return { ok: true, subject: result.subject, taskId: result.taskId };
+  };
+
+  deleteTodo = async (
+    input: DingtalkTodoIdInput,
+  ): Promise<{ ok: boolean; subject?: string; taskId: string }> => {
+    const result = await this.deleteTodoBody(input);
     invalidateMergedCache(this.userId);
     await this.audit('delete', input.taskId);
-    return { ok: true, subject, taskId: input.taskId };
+    return { ok: true, subject: result.subject, taskId: result.taskId };
   };
+
+  private runTodoBatch = async (
+    action: 'complete' | 'delete',
+    taskIds: unknown,
+  ): Promise<DingtalkTodoBatchResult> => {
+    const ids = requireTodoBatchIds(taskIds);
+    const write = action === 'complete' ? this.completeTodoBody : this.deleteTodoBody;
+    const items: DingtalkTodoBatchItem[] = [];
+    let stop = false;
+    let wrote = false;
+    let unavailableStreak = 0;
+    for (const taskId of ids) {
+      const cachedTitle = this.findCachedTodo(taskId)?.subject?.trim() || undefined;
+      if (stop) {
+        items.push({
+          id: taskId,
+          ok: false,
+          skipped: true,
+          ...(cachedTitle ? { title: cachedTitle } : {}),
+        });
+        continue;
+      }
+      try {
+        const result = await write({ taskId });
+        wrote = true;
+        unavailableStreak = 0;
+        await this.audit(action, taskId);
+        const title = result.subject?.trim() || cachedTitle;
+        items.push({ id: taskId, ok: true, ...(title ? { title } : {}) });
+      } catch (error) {
+        const code = errorCodeOf(error);
+        const applyUrl = readBatchApplyUrl(error);
+        items.push({
+          ...(applyUrl ? { applyUrl } : {}),
+          errorCode: code,
+          id: taskId,
+          ok: false,
+          ...(cachedTitle ? { title: cachedTitle } : {}),
+        });
+        logUnexpectedTodoBatchError(error);
+        if (code === 'DINGTALK_UNAVAILABLE') {
+          unavailableStreak += 1;
+          if (unavailableStreak >= TODO_BATCH_UNAVAILABLE_STREAK) stop = true;
+        } else {
+          unavailableStreak = 0;
+          const stops =
+            code === 'DINGTALK_FORBIDDEN'
+              ? forbiddenStopsTodoBatch(error)
+              : TODO_BATCH_STOP_CODES.has(code);
+          if (stops) stop = true;
+        }
+      }
+    }
+    if (wrote) invalidateMergedCache(this.userId);
+    return { items };
+  };
+
+  completeTodos = async (input: { taskIds: string[] }): Promise<DingtalkTodoBatchResult> =>
+    this.runTodoBatch('complete', input?.taskIds);
+
+  deleteTodos = async (input: { taskIds: string[] }): Promise<DingtalkTodoBatchResult> =>
+    this.runTodoBatch('delete', input?.taskIds);
 
   preview = async (input: {
     apiName: string;
@@ -926,6 +1131,24 @@ export class DingtalkTodoService {
           : []),
       ];
       return { actingAs, danger: false, lines, title: '更新待办', warnings };
+    }
+
+    if (input.apiName === 'completeTodos' || input.apiName === 'deleteTodos') {
+      const read = readTodoBatchIds(args.taskIds);
+      if ('reason' in read) return failWorkspace('DINGTALK_INVALID');
+      const lines = [];
+      for (const [index, taskId] of read.ids.entries()) {
+        const existing = await this.requireTodo(taskId);
+        lines.push({ label: '待办', value: `${index + 1}. ${existing.subject}` });
+      }
+      const count = read.ids.length;
+      return {
+        actingAs,
+        danger: input.apiName === 'deleteTodos',
+        lines,
+        title: input.apiName === 'completeTodos' ? `完成 ${count} 项待办` : `删除 ${count} 项待办`,
+        warnings,
+      };
     }
 
     const taskId = asString(args.taskId)?.trim();

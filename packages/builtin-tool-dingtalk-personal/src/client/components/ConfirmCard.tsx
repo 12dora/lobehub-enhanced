@@ -18,6 +18,7 @@ import type { DingtalkPersonalPreview } from '../../types';
 import type { DingtalkPersonalApiNameValue } from '../apiNames';
 import { CONFIRM_VISIBLE_LINE_LIMIT } from './constants';
 import { resolveDingtalkPersonalErrorCode } from './errorCode';
+import { resolvePreviewErrorDetail } from './previewErrorDetail';
 import { cardStyles } from './styles';
 
 /** Every field optional: a partially filled preview still renders instead of crashing. */
@@ -127,17 +128,23 @@ const ConfirmCard = memo<ConfirmCardProps>((props) => {
   useEffect(() => {
     if (!registerBeforeApprove) return;
 
-    return registerBeforeApprove(CONFIRM_BEFORE_APPROVE_ID, () => {
-      if (!blockedReason) return;
+    return registerBeforeApprove(
+      CONFIRM_BEFORE_APPROVE_ID,
+      () => {
+        if (!blockedReason) return;
 
-      toast.error(
-        blockedReason === 'error'
-          ? t('builtins.lobe-dingtalk-personal.render.confirm.approveBlocked')
-          : t('builtins.lobe-dingtalk-personal.render.confirm.approvePending'),
-      );
+        toast.error(
+          blockedReason === 'error'
+            ? t('builtins.lobe-dingtalk-personal.render.confirm.approveBlocked')
+            : t('builtins.lobe-dingtalk-personal.render.confirm.approvePending'),
+        );
 
-      throw new DingtalkPersonalNotPreviewedError(blockedReason);
-    });
+        throw new DingtalkPersonalNotPreviewedError(blockedReason);
+      },
+      // Still loading is not a refusal: "approve all" waits for the preview instead
+      // of running into the toast, and this effect re-registers once it arrives.
+      { pending: blockedReason === 'loading' },
+    );
   }, [blockedReason, registerBeforeApprove, t]);
 
   const actionLabel = t(`builtins.lobe-dingtalk-personal.apiName.${apiName}` as const);
@@ -167,6 +174,9 @@ const ConfirmCard = memo<ConfirmCardProps>((props) => {
     const action = resolveDingtalkAction(code, {
       patUri: code === 'DINGTALK_PERSONAL_PAT_REQUIRED' ? extractDingtalkPatUri(error) : undefined,
     });
+    // 「参数不正确」 alone does not say what to change; the service's own reason does.
+    const detail =
+      code === 'DINGTALK_PERSONAL_INVALID_ARGS' ? resolvePreviewErrorDetail(error) : undefined;
 
     return (
       <Flexbox gap={8}>
@@ -182,6 +192,7 @@ const ConfirmCard = memo<ConfirmCardProps>((props) => {
                   ? t(`builtins.lobe-dingtalk-personal.render.error.${code}` as const)
                   : t('builtins.lobe-dingtalk-personal.render.error.unknown')}
               </div>
+              {detail && <div>{detail}</div>}
               {action && (
                 <div>
                   <DingtalkErrorAction action={action} />

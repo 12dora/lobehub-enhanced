@@ -340,4 +340,77 @@ describe('buildApprovalPreview', () => {
       }),
     ).rejects.toMatchObject({ code: 'DINGTALK_FORBIDDEN' });
   });
+
+  it('preview(approveTasks) numbers each subject and shows the shared remark', async () => {
+    mockGetDetail.mockImplementation(async (processInstanceId: string) => ({
+      ccUserIds: [],
+      formComponentValues: [],
+      operationRecords: [],
+      originatorUserId: 'me',
+      processInstanceId,
+      status: 'RUNNING',
+      tasks: [
+        {
+          status: 'RUNNING',
+          taskId: processInstanceId === 'inst-2' ? 't-2' : 't-1',
+          userId: 'me',
+        },
+      ],
+      title: processInstanceId === 'inst-2' ? '报销' : '出差申请',
+    }));
+    const preview = await buildApprovalPreview(ctx, 'approveTasks', {
+      remark: '请尽快',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-2', taskId: 't-2' },
+      ],
+    });
+    expect(preview.danger).toBe(false);
+    expect(preview.title).toBe('同意 2 项审批');
+    expect(preview.lines).toEqual([
+      { label: '审批单', value: '1. 出差申请' },
+      { label: '审批单', value: '2. 报销' },
+      { label: '意见', value: '请尽快' },
+    ]);
+    expect(preview.warnings).toEqual([]);
+    expect(JSON.stringify(preview)).not.toContain('inst-1');
+  });
+
+  it('preview(refuseTasks) is dangerous and fails like a single refuse when anything is unresolved', async () => {
+    const preview = await buildApprovalPreview(ctx, 'refuseTasks', {
+      remark: '预算不足',
+      tasks: [{ processInstanceId: 'inst-1', taskId: 't-1' }],
+    });
+    expect(preview.danger).toBe(true);
+    expect(preview.title).toBe('拒绝 1 项审批');
+    expect(preview.lines).toEqual([
+      { label: '审批单', value: '1. 出差申请' },
+      { label: '意见', value: '预算不足' },
+    ]);
+    expect(preview.warnings).toEqual(['拒绝后该审批单将结束。']);
+
+    mockGetDetail.mockClear();
+    await expect(
+      buildApprovalPreview(ctx, 'refuseTasks', {
+        tasks: [{ processInstanceId: 'inst-1', taskId: 't-1' }],
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_INVALID' });
+    expect(mockGetDetail).not.toHaveBeenCalled();
+
+    mockGetDetail.mockResolvedValueOnce({
+      ccUserIds: [],
+      formComponentValues: [],
+      operationRecords: [],
+      originatorUserId: 'me',
+      processInstanceId: 'inst-1',
+      status: 'RUNNING',
+      tasks: [{ status: 'RUNNING', taskId: 't-1', userId: 'someone-else' }],
+      title: '出差申请',
+    });
+    await expect(
+      buildApprovalPreview(ctx, 'approveTasks', {
+        tasks: [{ processInstanceId: 'inst-1', taskId: 't-1' }],
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_NOT_TASK_OWNER' });
+  });
 });

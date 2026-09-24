@@ -16,6 +16,7 @@ const ctx = { messageId: 'msg_1' } as any;
 
 const ALL_API_NAMES = [
   'completeTodo',
+  'completeTodos',
   'downloadMessageFile',
   'getReport',
   'getReportTemplate',
@@ -110,6 +111,49 @@ describe('dingtalkPersonalExecutor', () => {
       state,
       success: false,
     });
+  });
+
+  it('keeps the batch state of a partial and of a total failure', async () => {
+    const partial = {
+      action: 'completeTodos',
+      failed: 1,
+      items: [
+        { id: '1001', ok: true, title: '交库存日报' },
+        { error: '待办不存在', id: '1002', ok: false },
+      ],
+      kind: 'batchWrite',
+      succeeded: 1,
+      summary: '已完成 1 项待办，1 项失败',
+      total: 2,
+    };
+    callTool.mockResolvedValueOnce({
+      content: '已完成 1 项待办，1 项失败',
+      state: partial,
+      success: true,
+    });
+
+    const args = { taskIds: ['1001', '1002'] };
+    expect(await dingtalkPersonalExecutor.invoke('completeTodos', args, ctx)).toEqual({
+      content: '已完成 1 项待办，1 项失败',
+      state: partial,
+      success: true,
+    });
+    expect(callTool).toHaveBeenCalledWith({ apiName: 'completeTodos', args });
+
+    const failed = { ...partial, failed: 2, succeeded: 0, summary: '2 项待办均未完成' };
+    callTool.mockResolvedValueOnce({
+      content: '2 项待办均未完成',
+      error: { code: 'DINGTALK_PERSONAL_UPSTREAM', message: '待办不存在' },
+      state: failed,
+      success: false,
+    });
+
+    const result = await dingtalkPersonalExecutor.invoke('completeTodos', args, ctx);
+
+    // The render still lists every item under the mapped error.
+    expect(result.success).toBe(false);
+    expect(result.state).toEqual(failed);
+    expect(result.error?.type).toBe('PluginServerError');
   });
 
   it('turns a transport failure into a failed result', async () => {

@@ -134,7 +134,9 @@ export const TODO_WRITE_API_NAMES = [
   'createTodo',
   'updateTodo',
   'completeTodo',
+  'completeTodos',
   'deleteTodo',
+  'deleteTodos',
 ] as const;
 
 export type TodoWriteApiName = (typeof TODO_WRITE_API_NAMES)[number];

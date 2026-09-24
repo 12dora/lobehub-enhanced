@@ -8,7 +8,9 @@ const mockTodoList = vi.fn();
 const mockTodoCreate = vi.fn();
 const mockTodoUpdate = vi.fn();
 const mockTodoComplete = vi.fn();
+const mockTodoCompleteBatch = vi.fn();
 const mockTodoDelete = vi.fn();
+const mockTodoDeleteBatch = vi.fn();
 const mockCalendarListEvents = vi.fn();
 const mockCalendarGetEvent = vi.fn();
 const mockCalendarQueryFreeBusy = vi.fn();
@@ -22,8 +24,10 @@ const mockSearchDirectory = vi.fn();
 vi.mock('@/server/enterprise/services/dingtalkWorkspace/todo', () => ({
   DingtalkTodoService: vi.fn(() => ({
     completeTodo: mockTodoComplete,
+    completeTodos: mockTodoCompleteBatch,
     createTodo: mockTodoCreate,
     deleteTodo: mockTodoDelete,
+    deleteTodos: mockTodoDeleteBatch,
     listTodos: mockTodoList,
     updateTodo: mockTodoUpdate,
   })),
@@ -136,6 +140,20 @@ describe('dingtalkWorkspaceRuntime.factory', () => {
 
     await runtime.createTodo({ subject: '交周报' });
     expect(mockTodoCreate).toHaveBeenCalledWith({ subject: '交周报' });
+
+    mockTodoCompleteBatch.mockResolvedValueOnce({
+      items: [{ id: 't1', ok: true, title: '写周报' }],
+    });
+    const completed = await runtime.completeTodos({ taskIds: ['t1'] });
+    expect(mockTodoCompleteBatch).toHaveBeenCalledWith({ taskIds: ['t1'] });
+    expect(completed.success).toBe(true);
+    expect(completed.content).toContain('已完成 1 项待办');
+
+    mockTodoDeleteBatch.mockResolvedValueOnce({
+      items: [{ id: 't1', ok: true, title: '写周报' }],
+    });
+    await runtime.deleteTodos({ taskIds: ['t1'] });
+    expect(mockTodoDeleteBatch).toHaveBeenCalledWith({ taskIds: ['t1'] });
 
     mockTodoList.mockResolvedValue({ appTodos: [], notes: [] });
     await runtime.listTodos({ done: false, refresh: true });

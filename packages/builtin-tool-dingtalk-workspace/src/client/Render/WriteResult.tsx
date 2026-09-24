@@ -7,26 +7,42 @@ import { CheckCircle2 } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { DingtalkWorkspaceWriteApiName } from '../apiNames';
+import type { DingtalkWorkspaceBatchApiName, DingtalkWorkspaceWriteApiName } from '../apiNames';
+import { isDingtalkWorkspaceBatchApiName } from '../apiNames';
 import ErrorNotice from '../components/ErrorNotice';
 import { argHint } from '../Inspector/argHint';
+import { isBatchWriteState } from './batchWrite';
+import BatchWriteResult from './BatchWriteResult';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
 /**
  * Post-execution state of a todo/calendar write: one success line with the key
- * fact from the call, or the mapped short failure message.
+ * fact from the call, or the mapped short failure message. A batch write lists
+ * every item instead, under the mapped message when the batch failed as a whole.
  */
 const WriteResult = memo<BuiltinRenderProps<Record<string, unknown>>>(
   ({ apiName, args, pluginError, pluginState }) => {
     const { t } = useTranslation('plugin');
 
+    if (isBatchWriteState(pluginState)) {
+      if (!pluginError) return <BatchWriteResult state={pluginState} />;
+
+      return (
+        <Flexbox gap={8}>
+          <ErrorNotice error={pluginError} />
+          <BatchWriteResult state={pluginState} />
+        </Flexbox>
+      );
+    }
+
     const stateError = isRecord(pluginState) ? pluginState.error : undefined;
     if (pluginError || stateError) return <ErrorNotice error={pluginError ?? stateError} />;
-    if (!apiName) return null;
+    // A batch without its item list has nothing honest to claim.
+    if (!apiName || isDingtalkWorkspaceBatchApiName(apiName)) return null;
 
-    const api = apiName as DingtalkWorkspaceWriteApiName;
+    const api = apiName as Exclude<DingtalkWorkspaceWriteApiName, DingtalkWorkspaceBatchApiName>;
     // No fact at all is the right outcome for an id-only call: 「已删除待办」 already
     // says what happened, and the todo id it happened to would say nothing.
     const fact = argHint(args);

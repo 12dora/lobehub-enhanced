@@ -5,6 +5,7 @@ const mockListTemplates = vi.fn();
 const mockListPending = vi.fn();
 const mockListInitiated = vi.fn();
 const mockExecuteTask = vi.fn();
+const mockExecuteTasks = vi.fn();
 const mockRuleCreate = vi.fn();
 const mockRuleList = vi.fn();
 const mockSaveTemplate = vi.fn();
@@ -17,6 +18,7 @@ vi.mock('@/server/enterprise/services/dingtalkWorkspace/approval', () => ({
     createInstance: vi.fn(),
     deleteTemplate: vi.fn(),
     executeTask: mockExecuteTask,
+    executeTasks: mockExecuteTasks,
     getInstance: vi.fn(),
     getTemplateSchema: vi.fn(),
     listInitiated: mockListInitiated,
@@ -95,6 +97,32 @@ describe('dingtalkApprovalRuntime.factory', () => {
       processInstanceId: 'pi-1',
       result: 'agree',
       taskId: 't-1',
+    });
+
+    mockExecuteTasks.mockResolvedValueOnce({
+      items: [{ id: 't-1', ok: true, title: '出差申请' }],
+    });
+    const approved = await runtime.approveTasks({
+      tasks: [{ processInstanceId: 'pi-1', taskId: 't-1' }],
+    });
+    expect(mockExecuteTasks).toHaveBeenCalledWith({
+      remark: undefined,
+      result: 'agree',
+      tasks: [{ processInstanceId: 'pi-1', taskId: 't-1' }],
+    });
+    expect(approved.content).toContain('已同意 1 项审批');
+
+    mockExecuteTasks.mockResolvedValueOnce({
+      items: [{ id: 't-1', ok: true, title: '出差申请' }],
+    });
+    await runtime.refuseTasks({
+      remark: '不行',
+      tasks: [{ processInstanceId: 'pi-1', taskId: 't-1' }],
+    });
+    expect(mockExecuteTasks).toHaveBeenLastCalledWith({
+      remark: '不行',
+      result: 'refuse',
+      tasks: [{ processInstanceId: 'pi-1', taskId: 't-1' }],
     });
 
     await runtime.createApprovalRule({

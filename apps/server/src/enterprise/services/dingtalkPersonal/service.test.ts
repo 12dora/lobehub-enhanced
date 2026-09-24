@@ -364,7 +364,7 @@ describe('DingtalkPersonalService', () => {
     await expect(service.getStatus()).resolves.toMatchObject({
       corpName: '示例公司',
       dingtalkUserName: '甲',
-      features: { chat: true, report: true, todo: true, write: true },
+      features: { chat: true, docs: false, report: true, sheets: false, todo: true, write: true },
       state: 'authorized',
     });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -430,6 +430,57 @@ describe('DingtalkPersonalService', () => {
     });
   });
 
+  it('rejects downloads inside exec and downloads a drive file through downloadOp', async () => {
+    await expect(service.exec('chat.downloadFile', { resourceId: 'file-1' })).rejects.toMatchObject(
+      {
+        code: 'DINGTALK_PERSONAL_INVALID_ARGS',
+      },
+    );
+    expect(execBodies()).toHaveLength(0);
+
+    await expect(
+      service.downloadOp('drive.download', { nodeId: 'n1', output: './files/' }),
+    ).rejects.toMatchObject({
+      code: 'DINGTALK_PERSONAL_FEATURE_DISABLED',
+      details: { feature: 'docs' },
+    });
+    expect(execBodies()).toHaveLength(0);
+
+    harness.findByPlatform.mockResolvedValue({
+      settings: { ...allOn, personalDocsEnabled: true },
+    });
+    resetDingtalkPersonalConfigForTest();
+    await expect(service.exec('drive.download', { nodeId: 'n1' })).rejects.toMatchObject({
+      code: 'DINGTALK_PERSONAL_INVALID_ARGS',
+    });
+    expect(execBodies()).toHaveLength(0);
+
+    script.exec = {
+      file: {
+        contentBase64: Buffer.from('hello').toString('base64'),
+        name: '报价.xlsx',
+        sizeBytes: 99,
+      },
+      ok: true,
+    };
+    const file = await service.downloadOp('drive.download', { nodeId: 'n1', output: './files/' });
+    expect(file.buffer.toString()).toBe('hello');
+    expect(file.name).toBe('报价.xlsx');
+    expect(file.sizeBytes).toBe(5);
+    expect(execBodies()[0]).toEqual({
+      actor: 'user-a',
+      args: { nodeId: 'n1', output: './files/' },
+      op: 'drive.download',
+      profile: 'dingcorp:staff1',
+    });
+
+    script.exec = { error: { code: 'NOT_AUTHORIZED', message: 'gone' }, ok: false };
+    await expect(
+      service.downloadOp('drive.download', { nodeId: 'n1', output: './files/' }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_PERSONAL_EXPIRED' });
+    expect(harness.state.row).toMatchObject({ lastErrorCode: 'NOT_AUTHORIZED', status: 'expired' });
+  });
+
   it('sends only the server-derived profile and strips a caller profile', async () => {
     await service.exec('todo.list', { profile: 'evil:person', status: 'open' });
     expect(execBodies()[0]).toEqual({
@@ -474,6 +525,45 @@ describe('DingtalkPersonalService', () => {
     expect(bodies.every((body) => body.profile === 'dingcorp:staff1')).toBe(true);
     expect(harness.invalidateWorkspaceTodos).toHaveBeenCalledTimes(1);
     expect(harness.invalidateWorkspaceTodos).toHaveBeenCalledWith('user-a');
+  });
+
+  it('charges one rate-limit token for a todo batch and invalidates caches once', async () => {
+    const { readDingtalkPersonalCache, writeDingtalkPersonalCache } = await import('./cache');
+    await writeDingtalkPersonalCache('user-a', 'todo.list', { status: 'open' }, { n: 1 });
+    await service.beginTodoBatch();
+    await expect(
+      readDingtalkPersonalCache('user-a', 'todo.list', { status: 'open' }),
+    ).resolves.toBeUndefined();
+
+    await writeDingtalkPersonalCache('user-a', 'todo.list', { status: 'open' }, { n: 2 });
+    await service.exec(
+      'todo.complete',
+      { taskId: 'a' },
+      { skipCacheInvalidation: true, skipRateLimit: true },
+    );
+    await service.exec(
+      'todo.complete',
+      { taskId: 'b' },
+      { skipCacheInvalidation: true, skipRateLimit: true },
+    );
+    await expect(
+      readDingtalkPersonalCache('user-a', 'todo.list', { status: 'open' }),
+    ).resolves.toEqual({ n: 2 });
+    expect(harness.invalidateWorkspaceTodos).not.toHaveBeenCalled();
+
+    await service.commitTodoBatch();
+    await expect(
+      readDingtalkPersonalCache('user-a', 'todo.list', { status: 'open' }),
+    ).resolves.toBeUndefined();
+    expect(harness.invalidateWorkspaceTodos).toHaveBeenCalledTimes(1);
+    expect(execBodies().map((body) => body.op)).toEqual(['todo.complete', 'todo.complete']);
+
+    const redis = harness.redis.current;
+    const rateKey = [...(redis?.store.keys() ?? [])].find((key) =>
+      key.startsWith('dingtalk-personal:rl:'),
+    );
+    expect(rateKey).toBeTruthy();
+    expect(redis?.store.get(rateKey ?? '')?.value).toBe('1');
   });
 
   it('invalidates the workspace todo list only after a personal todo write', async () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { createStaticStyles } from 'antd-style';
-import { Fragment, memo, useMemo } from 'react';
+import { Fragment, memo, type ReactNode, useMemo } from 'react';
 import { Link, useInRouterContext } from 'react-router';
 
 import { splitMarkdownLinks, toInAppPath } from './linkText';
@@ -27,14 +27,45 @@ const currentOrigin = (): string | undefined => {
 };
 
 /**
+ * One link to an already vetted `href` (see `toSafeLinkHref` / `toBatchActionHref`). Links into
+ * this app navigate inside the SPA; other web links open in a new tab.
+ */
+export const TextLink = memo<{ children: ReactNode; href: string }>(({ children, href }) => {
+  const inRouter = useInRouterContext();
+  const inAppPath = toInAppPath(href, currentOrigin());
+
+  if (inAppPath && inRouter) {
+    return (
+      <Link className={styles.link} to={inAppPath}>
+        {children}
+      </Link>
+    );
+  }
+
+  if (inAppPath) {
+    return (
+      <a className={styles.link} href={inAppPath}>
+        {children}
+      </a>
+    );
+  }
+
+  return (
+    <a className={styles.link} href={href} rel={'noopener noreferrer'} target={'_blank'}>
+      {children}
+    </a>
+  );
+});
+
+TextLink.displayName = 'DingtalkTextLink';
+
+/**
  * Plain server text with its `[text](url)` links made clickable (see
  * `splitMarkdownLinks`). Links into this app navigate inside the SPA; other web
  * links open in a new tab.
  */
 export const LinkedText = memo<{ text: string }>(({ text }) => {
-  const inRouter = useInRouterContext();
   const segments = useMemo(() => splitMarkdownLinks(text), [text]);
-  const origin = currentOrigin();
 
   return (
     <>
@@ -42,34 +73,10 @@ export const LinkedText = memo<{ text: string }>(({ text }) => {
         const key = `${index}-${segment.text}`;
         if (segment.type === 'text') return <Fragment key={key}>{segment.text}</Fragment>;
 
-        const inAppPath = toInAppPath(segment.href, origin);
-
-        if (inAppPath && inRouter) {
-          return (
-            <Link className={styles.link} key={key} to={inAppPath}>
-              {segment.text}
-            </Link>
-          );
-        }
-
-        if (inAppPath) {
-          return (
-            <a className={styles.link} href={inAppPath} key={key}>
-              {segment.text}
-            </a>
-          );
-        }
-
         return (
-          <a
-            className={styles.link}
-            href={segment.href}
-            key={key}
-            rel={'noopener noreferrer'}
-            target={'_blank'}
-          >
+          <TextLink href={segment.href} key={key}>
             {segment.text}
-          </a>
+          </TextLink>
         );
       })}
     </>

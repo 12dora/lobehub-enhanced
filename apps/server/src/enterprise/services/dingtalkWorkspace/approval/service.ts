@@ -3,7 +3,7 @@ import type { LobeChatDatabase } from '@/database/type';
 import { AUDIT_ACTION, AUDIT_TARGET_TYPE } from '../../audit/auditActionCatalog';
 import { PlatformAuditService } from '../../platformAudit';
 import { assertDingtalkFeature } from '../capabilities';
-import { DingtalkWorkspaceError } from '../errors';
+import { DingtalkWorkspaceError, sanitizeDingtalkApplyUrl } from '../errors';
 import { isDingtalkApprovalAdmin, requireVerifiedDingtalkIdentity } from '../identity';
 import {
   addCommentAs,
@@ -22,6 +22,7 @@ import {
 import { encodeSaveTemplateFields } from './formComponents';
 import { encodeFormValues, formSummary, isSuiteTemplate } from './formValues';
 import {
+  invalidateApprovalInstanceCache,
   invalidateApprovalListCache,
   invalidatePendingCaches,
   listInitiatedApprovals,
@@ -109,6 +110,132 @@ const appendApprovalAudit = async (input: {
   }
 };
 
+const APPROVAL_BATCH_LIMIT = 20;
+
+/** Auth, permission, rate-limit, and org-policy failures stop a batch. A single task miss does not. */
+const APPROVAL_BATCH_STOP_CODES = new Set<string>([
+  'DINGTALK_NOT_CONFIGURED',
+  'DINGTALK_FEATURE_DISABLED',
+  'DINGTALK_FORBIDDEN',
+  'DINGTALK_PREMIUM_REQUIRED',
+  'DINGTALK_RATE_LIMITED',
+  'DINGTALK_IDENTITY_UNBOUND',
+  'DINGTALK_IDENTITY_UNVERIFIED',
+  'DINGTALK_IDENTITY_INACTIVE',
+  'DINGTALK_NOT_APPROVAL_ADMIN',
+  'DINGTALK_AUTOMATION_OFF',
+]);
+
+/** Two consecutive DINGTALK_UNAVAILABLE responses stop the rest of the batch. */
+const APPROVAL_BATCH_UNAVAILABLE_STREAK = 2;
+
+export interface ApprovalBatchItem {
+  /** Sanitized https://open-dev.dingtalk.com permission-apply link, when DingTalk returned one. */
+  applyUrl?: string;
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  title?: string;
+}
+
+export interface ApprovalBatchResult {
+  items: ApprovalBatchItem[];
+}
+
+export interface ExecuteTasksInput {
+  remark?: string;
+  result: 'agree' | 'refuse';
+  tasks: Array<{ processInstanceId: string; taskId: string }>;
+}
+
+const approvalBatchValidation = (message: string): never => {
+  const error = new Error(message);
+  Object.assign(error, { code: 'VALIDATION' });
+  throw error;
+};
+
+const asTaskRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+const readApprovalTasks = (
+  value: unknown,
+): { reason: 'duplicate' | 'invalid' } | { tasks: ExecuteTasksInput['tasks'] } => {
+  if (!Array.isArray(value) || value.length < 1 || value.length > APPROVAL_BATCH_LIMIT) {
+    return { reason: 'invalid' };
+  }
+  const seen = new Set<string>();
+  const tasks: ExecuteTasksInput['tasks'] = [];
+  for (const item of value) {
+    const record = asTaskRecord(item);
+    const processInstanceId =
+      typeof record.processInstanceId === 'string' ? record.processInstanceId : '';
+    const taskId = typeof record.taskId === 'string' ? record.taskId : '';
+    if (!processInstanceId.trim() || !taskId.trim()) return { reason: 'invalid' };
+    const key = `${processInstanceId}\0${taskId}`;
+    if (seen.has(key) || seen.has(`task:${taskId}`)) return { reason: 'duplicate' };
+    seen.add(key);
+    seen.add(`task:${taskId}`);
+    tasks.push({ processInstanceId, taskId });
+  }
+  return { tasks };
+};
+
+const requireApprovalTasks = (value: unknown): ExecuteTasksInput['tasks'] => {
+  const read = readApprovalTasks(value);
+  if ('reason' in read) {
+    return approvalBatchValidation(
+      read.reason === 'duplicate'
+        ? '审批任务不能重复。'
+        : '审批任务须为 1 到 20 个互不重复的任务，每项都要有 processInstanceId 和 taskId。',
+    );
+  }
+  return read.tasks;
+};
+
+const approvalErrorCodeOf = (error: unknown): string => {
+  if (error instanceof DingtalkWorkspaceError) return error.code;
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
+  if (error instanceof Error) {
+    const match = /DINGTALK_[A-Z_]+/.exec(error.message);
+    if (match) return match[0];
+  }
+  return 'DINGTALK_INTERNAL';
+};
+
+const readBatchApplyUrl = (error: unknown): string | undefined => {
+  if (!error || typeof error !== 'object' || !('applyUrl' in error)) return undefined;
+  return sanitizeDingtalkApplyUrl((error as { applyUrl?: unknown }).applyUrl);
+};
+
+const attachInstanceTitle = (error: unknown, title?: string): void => {
+  const trimmed = title?.trim();
+  if (!trimmed || !error || typeof error !== 'object') return;
+  Object.assign(error, { instanceTitle: trimmed });
+};
+
+const instanceTitleOf = (error: unknown): string | undefined => {
+  if (!error || typeof error !== 'object' || !('instanceTitle' in error)) return undefined;
+  const value = (error as { instanceTitle?: unknown }).instanceTitle;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+};
+
+/** Domain failures stay quiet. Anything else is unexpected and must show up in logs. */
+const logUnexpectedApprovalBatchError = (error: unknown): void => {
+  if (error instanceof DingtalkWorkspaceError) return;
+  const code = approvalErrorCodeOf(error);
+  if (code.startsWith('DINGTALK_') && code !== 'DINGTALK_INTERNAL') return;
+  console.error('[dingtalk.approval] batch item failed', {
+    code,
+    errorClass: error instanceof Error ? error.name : 'UnknownError',
+  });
+};
+
 const cachedTemplateName = async (
   userId: string,
   staffId: string,
@@ -147,9 +274,13 @@ export class DingtalkApprovalService {
     processInstanceId: string,
     taskId: string | number,
   ) => {
-    const detail = await getInstanceDetail(processInstanceId);
+    const detail = await getInstanceDetail(processInstanceId, { fresh: true });
     const task = runningTaskFor(detail, staffId, taskId);
-    if (!task) throw new DingtalkWorkspaceError('DINGTALK_NOT_TASK_OWNER');
+    if (!task) {
+      const error = new DingtalkWorkspaceError('DINGTALK_NOT_TASK_OWNER');
+      attachInstanceTitle(error, detail.title);
+      throw error;
+    }
     return { detail, task };
   };
 
@@ -287,18 +418,37 @@ export class DingtalkApprovalService {
     return created;
   };
 
-  executeTask = async (input: ExecuteTaskInput): Promise<{ result: boolean }> => {
+  /**
+   * Ownership check, pacing (via getInstanceDetail), and the execute call.
+   * The pending-list cache stays with the caller so a batch can drop it once.
+   * A failed execute drops that instance's detail cache here as well.
+   */
+  private performExecute = async (
+    input: ExecuteTaskInput,
+  ): Promise<{ result: boolean; title?: string }> => {
     const identity = await this.prepare();
     const { detail } = await this.refetchOwnedTask(
       identity.staffId,
       input.processInstanceId,
       input.taskId,
     );
+    const title = detail.title?.trim() || undefined;
     if (input.result === 'refuse' && !input.remark?.trim()) {
-      throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+      const error = new DingtalkWorkspaceError('DINGTALK_INVALID');
+      attachInstanceTitle(error, title);
+      throw error;
     }
-    const result = await executeTaskAs(identity.staffId, input);
-    invalidatePendingCaches(this.userId);
+    try {
+      const result = await executeTaskAs(identity.staffId, input);
+      return { result: result.result, title };
+    } catch (error) {
+      invalidateApprovalInstanceCache(input.processInstanceId);
+      attachInstanceTitle(error, title);
+      throw error;
+    }
+  };
+
+  private auditExecute = async (input: ExecuteTaskInput, title?: string): Promise<void> => {
     await appendApprovalAudit({
       action:
         input.result === 'agree'
@@ -306,10 +456,77 @@ export class DingtalkApprovalService {
           : AUDIT_ACTION.DINGTALK_APPROVAL_REFUSE,
       db: this.db,
       targetId: input.processInstanceId,
-      title: detail.title,
+      title,
       userId: this.userId,
     });
-    return result;
+  };
+
+  executeTask = async (input: ExecuteTaskInput): Promise<{ result: boolean }> => {
+    const performed = await this.performExecute(input);
+    // May become async when the pending cache moves to Redis.
+    await Promise.resolve(invalidatePendingCaches(this.userId));
+    await this.auditExecute(input, performed.title);
+    return { result: performed.result };
+  };
+
+  /**
+   * Sequential agree/refuse. Each item reuses performExecute, so instance-detail
+   * pacing between tasks is the same as N single calls. The pending cache is
+   * dropped once, after at least one write landed.
+   */
+  executeTasks = async (input: ExecuteTasksInput): Promise<ApprovalBatchResult> => {
+    const tasks = requireApprovalTasks(input?.tasks);
+    if (input?.result === 'refuse' && !input.remark?.trim()) {
+      approvalBatchValidation('拒绝审批必须填写意见。');
+    }
+    const items: ApprovalBatchItem[] = [];
+    let stop = false;
+    let wrote = false;
+    let unavailableStreak = 0;
+    for (const task of tasks) {
+      if (stop) {
+        items.push({ id: task.taskId, ok: false, skipped: true });
+        continue;
+      }
+      const single: ExecuteTaskInput = {
+        processInstanceId: task.processInstanceId,
+        remark: input.remark,
+        result: input.result,
+        taskId: task.taskId,
+      };
+      try {
+        const performed = await this.performExecute(single);
+        wrote = true;
+        unavailableStreak = 0;
+        await this.auditExecute(single, performed.title);
+        items.push({
+          id: task.taskId,
+          ok: true,
+          ...(performed.title ? { title: performed.title } : {}),
+        });
+      } catch (error) {
+        const code = approvalErrorCodeOf(error);
+        const applyUrl = readBatchApplyUrl(error);
+        const title = instanceTitleOf(error);
+        items.push({
+          ...(applyUrl ? { applyUrl } : {}),
+          errorCode: code,
+          id: task.taskId,
+          ok: false,
+          ...(title ? { title } : {}),
+        });
+        logUnexpectedApprovalBatchError(error);
+        if (code === 'DINGTALK_UNAVAILABLE') {
+          unavailableStreak += 1;
+          if (unavailableStreak >= APPROVAL_BATCH_UNAVAILABLE_STREAK) stop = true;
+        } else {
+          unavailableStreak = 0;
+          if (APPROVAL_BATCH_STOP_CODES.has(code)) stop = true;
+        }
+      }
+    }
+    if (wrote) await Promise.resolve(invalidatePendingCaches(this.userId));
+    return { items };
   };
 
   redirectTask = async (input: RedirectTaskInput): Promise<{ result: boolean }> => {
@@ -326,6 +543,7 @@ export class DingtalkApprovalService {
       toUserId: target.staffId,
     });
     invalidatePendingCaches(this.userId);
+    invalidateApprovalInstanceCache(input.processInstanceId);
     await appendApprovalAudit({
       action: AUDIT_ACTION.DINGTALK_APPROVAL_REDIRECT,
       db: this.db,

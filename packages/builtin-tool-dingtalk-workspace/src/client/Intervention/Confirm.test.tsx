@@ -216,3 +216,50 @@ describe('DingtalkWorkspaceConfirm card', () => {
     expect(screen.getByTestId('card').className).toContain(cardStyles.dangerCard);
   });
 });
+
+describe('DingtalkWorkspaceConfirm approve-all readiness', () => {
+  /**
+   * Renders the card and records the `pending` flag of every gate registration, in
+   * order: "approve all" waits while it is true, and the card re-registers when it flips.
+   */
+  const renderRecorded = () => {
+    const flags: (boolean | undefined)[] = [];
+    const registerBeforeApprove = (
+      _id: string,
+      _callback: () => void | Promise<void>,
+      options?: { pending?: boolean },
+    ) => {
+      flags.push(options?.pending);
+      return () => undefined;
+    };
+    // Fresh args object with the same content: the memoized card re-renders, the
+    // preview it asks for stays the same.
+    const card = () => (
+      <Confirm
+        apiName={'createEvent'}
+        args={{ ...ARGS }}
+        messageId={'msg_1'}
+        registerBeforeApprove={registerBeforeApprove}
+      />
+    );
+    const view = render(card());
+
+    return { flags, rerender: () => view.rerender(card()) };
+  };
+
+  it('reports a loading preview as pending and re-registers as ready once it arrives', () => {
+    const { flags, rerender } = renderRecorded();
+    expect(flags).toEqual([true]);
+
+    mocks.data = settled(PREVIEW);
+    rerender();
+
+    expect(flags).toEqual([true, false]);
+  });
+
+  it('does not report a failed preview as pending: that is a refusal', () => {
+    mocks.error = new Error('boom');
+
+    expect(renderRecorded().flags).toEqual([false]);
+  });
+});

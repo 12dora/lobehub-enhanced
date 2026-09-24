@@ -7,6 +7,7 @@ import {
   dingtalkPersonalWebAuthorizeUrl,
   previewDingtalkPersonalWrite,
   runDingtalkPersonalTool,
+  settleDingtalkPersonalToolError,
 } from './tool';
 
 const mocks = vi.hoisted(() => {
@@ -23,10 +24,13 @@ const mocks = vi.hoisted(() => {
   return {
     appEnv: { APP_URL: 'https://aihub.example.com/' },
     audit: vi.fn(),
+    beginTodoBatch: vi.fn(),
+    commitTodoBatch: vi.fn(),
     DingtalkPersonalError,
     downloadFile: vi.fn(),
     exec: vi.fn(),
     getStaffId: vi.fn(),
+    reserveRateLimit: vi.fn(),
     ingest: vi.fn(),
     sendCard: vi.fn(),
     startLogin: vi.fn(),
@@ -42,9 +46,12 @@ vi.mock('@/server/enterprise/services/dingtalkPersonal', () => ({
   DingtalkPersonalError: mocks.DingtalkPersonalError,
   DingtalkPersonalService: vi.fn(function Service() {
     return {
+      beginTodoBatch: mocks.beginTodoBatch,
+      commitTodoBatch: mocks.commitTodoBatch,
       downloadFile: mocks.downloadFile,
       exec: mocks.exec,
       getStaffId: mocks.getStaffId,
+      reserveRateLimit: mocks.reserveRateLimit,
       startLogin: mocks.startLogin,
     };
   }),
@@ -150,6 +157,12 @@ describe('runDingtalkPersonalTool', () => {
     vi.clearAllMocks();
     mocks.appEnv.APP_URL = 'https://aihub.example.com/';
     mocks.exec.mockReset();
+    mocks.beginTodoBatch.mockReset();
+    mocks.commitTodoBatch.mockReset();
+    mocks.reserveRateLimit.mockReset();
+    mocks.beginTodoBatch.mockResolvedValue(undefined);
+    mocks.commitTodoBatch.mockResolvedValue(undefined);
+    mocks.reserveRateLimit.mockResolvedValue(undefined);
     mocks.downloadFile.mockReset();
     mocks.getStaffId.mockReset();
     mocks.startLogin.mockReset();
@@ -262,7 +275,14 @@ describe('runDingtalkPersonalTool', () => {
       conversationId: 'cidvO0I6uONXHnc51d6c8tnNA==',
       query: '库存',
     });
-    expect(found.state).toMatchObject({ hasMore: true, kind: 'messages' });
+    expect(found.state).toMatchObject({
+      count: 0,
+      hasMore: true,
+      hint: expect.stringContaining('库存'),
+      kind: 'messages',
+    });
+    expect(found.content).toContain('searchGroups');
+    expect(found.content).toContain('listGroupMessages');
 
     mocks.exec.mockResolvedValueOnce({
       data: { complete: true, reports: [{ reportId: 'rpt-1', templateName: '月报' }] },
@@ -883,6 +903,57 @@ describe('runDingtalkPersonalTool', () => {
     expect(read.content).not.toBe(sentence);
   });
 
+  it('settles a docs write timeout as unknown and names the docs and sheets switches', async () => {
+    const sentence = '这次操作的结果未知，可能已经执行。请先到钉钉里核实，不要重复提交。';
+    const timeout = await settleDingtalkPersonalToolError(
+      new mocks.DingtalkPersonalError('DINGTALK_PERSONAL_TIMEOUT'),
+      { apiName: 'appendDoc', db: {} as never, userId: 'user-1', write: true },
+    );
+    expect(timeout.content).toBe(sentence);
+    expect(timeout.error).toEqual({ code: 'DINGTALK_PERSONAL_TIMEOUT', message: sentence });
+
+    const broker = await settleDingtalkPersonalToolError(
+      new mocks.DingtalkPersonalError('DINGTALK_PERSONAL_BROKER_UNAVAILABLE'),
+      { apiName: 'createAitableRecords', db: {} as never, userId: 'user-1', write: true },
+    );
+    expect(broker.content).toBe(sentence);
+    expect(broker.error?.code).toBe('DINGTALK_PERSONAL_BROKER_UNAVAILABLE');
+
+    const read = await settleDingtalkPersonalToolError(
+      new mocks.DingtalkPersonalError('DINGTALK_PERSONAL_TIMEOUT'),
+      { apiName: 'readDoc', db: {} as never, userId: 'user-1', write: false },
+    );
+    expect(read.content).toContain('请稍后重试');
+    expect(read.content).not.toBe(sentence);
+
+    const docs = await settleDingtalkPersonalToolError(
+      new mocks.DingtalkPersonalError('DINGTALK_PERSONAL_FEATURE_DISABLED', { feature: 'docs' }),
+      { apiName: 'searchDocs', db: {} as never, userId: 'user-1' },
+    );
+    expect(docs.content).toContain('管理员未开启「钉钉文档」');
+    const sheets = await settleDingtalkPersonalToolError(
+      new mocks.DingtalkPersonalError('DINGTALK_PERSONAL_FEATURE_DISABLED', { feature: 'sheets' }),
+      { apiName: 'listSheets', db: {} as never, userId: 'user-1' },
+    );
+    expect(sheets.content).toContain('管理员未开启「钉钉表格」');
+
+    const auth = await settleDingtalkPersonalToolError(
+      new mocks.DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'),
+      {
+        apiName: 'appendDoc',
+        db: {} as never,
+        service: {} as DingtalkPersonalService,
+        userId: 'user-1',
+        write: true,
+      },
+    );
+    expect(auth.state).toMatchObject({
+      code: 'DINGTALK_PERSONAL_UNAUTHORIZED',
+      kind: 'authorizationRequired',
+    });
+    expect(mocks.startLogin).not.toHaveBeenCalled();
+  });
+
   it('does not log report text when a tool call fails', async () => {
     const secret = '今日完成了机密项目代号星海';
     mocks.exec.mockRejectedValueOnce(new Error(`boom ${secret}`));
@@ -924,6 +995,425 @@ describe('runDingtalkPersonalTool', () => {
     expect(result.content).toContain('DINGTALK_PERSONAL_INTERNAL');
     expect(result.content).not.toContain('secret');
     expect(result.state).toBeUndefined();
+  });
+});
+
+describe('completeTodos', () => {
+  beforeEach(() => {
+    mocks.beginTodoBatch.mockReset();
+    mocks.commitTodoBatch.mockReset();
+    mocks.beginTodoBatch.mockResolvedValue(undefined);
+    mocks.commitTodoBatch.mockResolvedValue(undefined);
+    mocks.exec.mockReset();
+    mocks.audit.mockReset();
+    mocks.audit.mockResolvedValue(undefined);
+    mocks.startLogin.mockReset();
+    mocks.sendCard.mockReset();
+    mocks.getStaffId.mockReset();
+  });
+
+  it('rejects the whole array before any write', async () => {
+    const duplicate = await run('completeTodos', { taskIds: ['111', '111'] });
+    expect(duplicate.success).toBe(false);
+    expect(duplicate.content).toContain('重复');
+    const empty = await run('completeTodos', { taskIds: [] });
+    expect(empty.content).toContain('至少指定一项待办');
+    const tooMany = await run('completeTodos', {
+      taskIds: Array.from({ length: 21 }, (_, index) => `id-${index}`),
+    });
+    expect(tooMany.content).toContain('20');
+    expect(mocks.beginTodoBatch).not.toHaveBeenCalled();
+    expect(mocks.exec).not.toHaveBeenCalled();
+  });
+
+  it('completes every id in order, audits each success, and invalidates once', async () => {
+    const order: string[] = [];
+    mocks.beginTodoBatch.mockImplementation(async () => {
+      order.push('begin');
+    });
+    mocks.commitTodoBatch.mockImplementation(async () => {
+      order.push('commit');
+    });
+    mocks.exec.mockImplementation(async (_op: string, args: { taskId: string }) => {
+      order.push(args.taskId);
+      return { data: { subject: `主题${args.taskId}`, taskId: args.taskId }, ok: true };
+    });
+
+    const result = await run('completeTodos', { taskIds: ['111', '222', '333'] });
+
+    expect(result.success).toBe(true);
+    expect(order).toEqual(['begin', '111', '222', '333', 'commit']);
+    expect(mocks.exec).toHaveBeenNthCalledWith(
+      1,
+      'todo.complete',
+      { taskId: '111' },
+      { skipCacheInvalidation: true, skipRateLimit: true },
+    );
+    expect(mocks.commitTodoBatch).toHaveBeenCalledTimes(1);
+    expect(result.state).toMatchObject({
+      action: 'completeTodos',
+      failed: 0,
+      kind: 'batchWrite',
+      succeeded: 3,
+      summary: '已完成 3 项待办',
+      total: 3,
+    });
+    expect(result.content).toBe('已完成 3 项待办\n✓ 主题111\n✓ 主题222\n✓ 主题333');
+    expect(mocks.audit).toHaveBeenCalledTimes(3);
+    expect(mocks.audit).toHaveBeenNthCalledWith(
+      2,
+      db,
+      'user-1',
+      'todo.complete',
+      expect.objectContaining({ result: 'success', targetId: '222' }),
+    );
+  });
+
+  it('continues after an item failure and stops on rate limit, org policy, and auth', async () => {
+    mocks.exec
+      .mockRejectedValueOnce(
+        new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', { message: '待办不存在' }),
+      )
+      .mockResolvedValueOnce({ data: { subject: '乙', taskId: '222' } });
+    const partial = await run('completeTodos', { taskIds: ['111', '222'] });
+    expect(partial.success).toBe(true);
+    expect(partial.content).toContain('已完成 1 项待办，1 项失败');
+    expect(partial.content).toContain('✗ 111：');
+    expect(partial.content).toContain('待办不存在');
+    expect(partial.content).toContain('DINGTALK_PERSONAL_UPSTREAM');
+    expect(partial.content).toContain('✓ 乙');
+    const partialItems = (partial.state as { items: Array<Record<string, unknown>> }).items;
+    expect(partialItems[0]).toEqual({
+      error: '待办不存在',
+      errorCode: 'DINGTALK_PERSONAL_UPSTREAM',
+      id: '111',
+      ok: false,
+    });
+    expect(mocks.commitTodoBatch).toHaveBeenCalledTimes(1);
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+
+    mocks.exec.mockReset();
+    mocks.commitTodoBatch.mockClear();
+    mocks.audit.mockClear();
+    mocks.exec
+      .mockResolvedValueOnce({ data: { subject: '甲', taskId: '111' } })
+      .mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_RATE_LIMITED'));
+    const limited = await run('completeTodos', { taskIds: ['111', '222', '333'] });
+    expect(limited.success).toBe(true);
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+    expect(limited.content).toContain('已完成 1 项待办，2 项失败');
+    expect(limited.content).toContain('DINGTALK_PERSONAL_RATE_LIMITED');
+    expect(limited.content).toContain('✗ 333：未执行');
+    expect(mocks.commitTodoBatch).toHaveBeenCalledTimes(1);
+    const limitedItems = (
+      limited.state as {
+        items: Array<{ error?: string; id: string; ok: boolean; title?: string }>;
+      }
+    ).items;
+    expect(limitedItems[2]).toEqual({ error: '未执行', id: '333', ok: false });
+    expect(limitedItems[1]).toEqual({
+      error: '请求过于频繁',
+      errorCode: 'DINGTALK_PERSONAL_RATE_LIMITED',
+      id: '222',
+      ok: false,
+    });
+    expect(limitedItems[1]?.error).not.toMatch(/DINGTALK_|不要并行/);
+
+    mocks.exec.mockReset();
+    mocks.commitTodoBatch.mockClear();
+    mocks.audit.mockClear();
+    mocks.exec.mockRejectedValueOnce(
+      new DingtalkPersonalError('DINGTALK_PERSONAL_ORG_POLICY_DENIED'),
+    );
+    const denied = await run('completeTodos', { taskIds: ['111', '222'] });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.code).toBe('DINGTALK_PERSONAL_ORG_POLICY_DENIED');
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+    expect(denied.content).toContain('未执行');
+    expect(denied.content).toContain('DINGTALK_PERSONAL_ORG_POLICY_DENIED');
+    expect(denied.state).toMatchObject({ failed: 2, kind: 'batchWrite', succeeded: 0 });
+    expect((denied.state as { items: Array<Record<string, unknown>> }).items[0]).toMatchObject({
+      actionLabel: '前往设置',
+      actionUrl: 'https://open-dev.dingtalk.com/fe/old#/developerSettings',
+      error: '贵司未开放该功能',
+      errorCode: 'DINGTALK_PERSONAL_ORG_POLICY_DENIED',
+    });
+    expect(mocks.commitTodoBatch).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+
+    mocks.exec.mockReset();
+    mocks.commitTodoBatch.mockClear();
+    mocks.exec.mockRejectedValueOnce(
+      new DingtalkPersonalError('DINGTALK_PERSONAL_FEATURE_DISABLED', { feature: 'write' }),
+    );
+    const closed = await run('completeTodos', { taskIds: ['111', '222'] });
+    expect(closed.success).toBe(false);
+    expect(closed.error?.code).toBe('DINGTALK_PERSONAL_FEATURE_DISABLED');
+    expect(closed.content).toContain('未执行');
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+
+    mocks.exec.mockReset();
+    mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'));
+    const auth = await run('completeTodos', { taskIds: ['111', '222'] });
+    expect(auth.success).toBe(false);
+    expect(auth.state).toMatchObject({ kind: 'authorizationRequired' });
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+    expect(mocks.commitTodoBatch).not.toHaveBeenCalled();
+  });
+
+  it('returns the first item error when every item fails, and still runs the later ones', async () => {
+    mocks.exec.mockRejectedValue(
+      new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', { message: '待办不存在' }),
+    );
+    const failed = await run('completeTodos', { taskIds: ['111', '222'] });
+    expect(failed.success).toBe(false);
+    expect(failed.error).toMatchObject({
+      code: 'DINGTALK_PERSONAL_UPSTREAM',
+    });
+    expect(failed.error?.message).toContain('待办不存在');
+    expect(failed.content).toContain('已完成 0 项待办，2 项失败');
+    expect(failed.content).not.toBe(failed.error?.message);
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+    expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.commitTodoBatch).not.toHaveBeenCalled();
+  });
+
+  it('stops after a timeout, marks that item unknown, and leaves the rest unexecuted', async () => {
+    const unknown = '这次操作的结果未知，可能已经执行。请先到钉钉里核实，不要重复提交。';
+    mocks.exec
+      .mockResolvedValueOnce({ data: { subject: '甲', taskId: '111' } })
+      .mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_TIMEOUT'))
+      .mockResolvedValueOnce({ data: { subject: '丙', taskId: '333' } });
+    const result = await run('completeTodos', { taskIds: ['111', '222', '333'] });
+    expect(result.success).toBe(true);
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+    expect(result.content).toContain(unknown);
+    expect(result.content).toContain('✓ 甲');
+    expect(result.content).toContain('✗ 333：未执行');
+    expect(result.content).not.toContain('✓ 丙');
+    const items = (
+      result.state as {
+        items: Array<{ error?: string; id: string; ok: boolean; title?: string }>;
+      }
+    ).items;
+    expect(items[1]).toEqual({
+      error: unknown,
+      errorCode: 'DINGTALK_PERSONAL_TIMEOUT',
+      id: '222',
+      ok: false,
+    });
+    expect(items[2]).toEqual({ error: '未执行', id: '333', ok: false });
+    expect(mocks.commitTodoBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the batch when the broker is unavailable', async () => {
+    mocks.exec
+      .mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_BROKER_UNAVAILABLE'))
+      .mockResolvedValueOnce({ data: { subject: '乙', taskId: '222' } });
+    const result = await run('completeTodos', { taskIds: ['111', '222'] });
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe('DINGTALK_PERSONAL_BROKER_UNAVAILABLE');
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain('这次操作的结果未知，可能已经执行');
+    expect(result.content).toContain('✗ 222：未执行');
+    expect(result.content).not.toContain('✓ 乙');
+    expect(mocks.commitTodoBatch).not.toHaveBeenCalled();
+  });
+
+  it('leaves the title empty when there is no subject and still names the id in the model text', async () => {
+    mocks.exec.mockResolvedValueOnce({ data: { taskId: '111' }, ok: true });
+    const done = await run('completeTodos', { taskIds: ['111'] });
+    expect(done.success).toBe(true);
+    expect(done.content).toBe('已完成 1 项待办\n✓ 111');
+    expect((done.state as { items: Array<Record<string, unknown>> }).items[0]).toEqual({
+      id: '111',
+      ok: true,
+    });
+
+    mocks.exec.mockReset();
+    mocks.exec.mockRejectedValueOnce(
+      new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', { message: '待办不存在' }),
+    );
+    const failed = await run('completeTodos', { taskIds: ['222'] });
+    const failedItem = (failed.state as { items: Array<Record<string, unknown>> }).items[0];
+    expect(failedItem).toMatchObject({ id: '222', ok: false });
+    expect(failedItem).not.toHaveProperty('title');
+    expect(failed.content).toContain('✗ 222：');
+  });
+
+  it('puts auth guidance on the stopping item and prefers auth when nothing succeeded', async () => {
+    mocks.exec
+      .mockResolvedValueOnce({ data: { subject: '甲', taskId: '111' } })
+      .mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'));
+    const partial = await run('completeTodos', { taskIds: ['111', '222', '333'] });
+    expect(partial.success).toBe(true);
+    expect(partial.state).toMatchObject({ failed: 2, kind: 'batchWrite', succeeded: 1 });
+    expect(partial.content).toContain('✓ 甲');
+    expect(partial.content).toContain(WEB_AUTH_LINK);
+    expect(partial.content).toContain('✗ 333：未执行');
+    expect(partial.content).not.toContain('内部错误');
+    const partialItems = (
+      partial.state as {
+        items: Array<{ error?: string; id: string; ok: boolean; title?: string }>;
+      }
+    ).items;
+    expect(partialItems[0]).toEqual({ id: '111', ok: true, title: '甲' });
+    expect(partialItems[1]).toEqual({
+      actionLabel: '去授权',
+      actionUrl: WEB_AUTH_URL,
+      error: '需要重新授权钉钉个人数据',
+      errorCode: 'DINGTALK_PERSONAL_UNAUTHORIZED',
+      id: '222',
+      ok: false,
+    });
+    expect(partialItems[1]?.error).not.toContain(WEB_AUTH_LINK);
+    expect(partialItems[1]?.error).not.toMatch(/请点击|DINGTALK_/);
+    expect(partialItems[2]).toEqual({ error: '未执行', id: '333', ok: false });
+    expect(mocks.commitTodoBatch).toHaveBeenCalledTimes(1);
+    expect(mocks.startLogin).not.toHaveBeenCalled();
+
+    mocks.exec.mockReset();
+    mocks.commitTodoBatch.mockClear();
+    mocks.startLogin.mockReset();
+    mocks.exec
+      .mockRejectedValueOnce(
+        new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', { message: '待办不存在' }),
+      )
+      .mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_EXPIRED'));
+    const auth = await run('completeTodos', { taskIds: ['111', '222', '333'] });
+    expect(auth.success).toBe(false);
+    expect(auth).not.toHaveProperty('error');
+    expect(auth.state).toMatchObject({
+      code: 'DINGTALK_PERSONAL_EXPIRED',
+      kind: 'authorizationRequired',
+    });
+    expect(auth.content).toContain(WEB_AUTH_LINK);
+    expect(auth.content).toContain('待办不存在');
+    expect(auth.content).toContain('✗ 333：未执行');
+    expect(auth.content).not.toContain('内部错误');
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+    expect(mocks.commitTodoBatch).not.toHaveBeenCalled();
+    expect(mocks.startLogin).not.toHaveBeenCalled();
+  });
+
+  it('sends one auth card when authorization stops a partial batch on dingtalk', async () => {
+    mocks.exec
+      .mockResolvedValueOnce({ data: { taskId: '111' } })
+      .mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'));
+    mocks.startLogin.mockResolvedValueOnce(LOGIN);
+    mocks.getStaffId.mockResolvedValueOnce('staff-1');
+    mocks.sendCard.mockResolvedValueOnce({ sent: true, via: 'oto' });
+    const result = await run(
+      'completeTodos',
+      { taskIds: ['111', '222'] },
+      { botPlatform: 'dingtalk', botThreadId: 'dingtalk:cid_dm' },
+    );
+    expect(result.success).toBe(true);
+    expect(mocks.startLogin).toHaveBeenCalledTimes(1);
+    expect(mocks.sendCard).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain(DINGTALK_AUTH_LINK);
+    expect(result.content).toContain('验证码 JCHB-KBXF');
+    expect(result.content).toContain('✓ 111');
+    const items = (
+      result.state as {
+        items: Array<{ error?: string; id: string; ok: boolean; title?: string }>;
+      }
+    ).items;
+    expect(items[0]).toEqual({ id: '111', ok: true });
+    expect(items[1]).toEqual({
+      actionLabel: '去授权',
+      actionUrl: LOGIN.verificationUrl,
+      error: '需要重新授权钉钉个人数据',
+      errorCode: 'DINGTALK_PERSONAL_UNAUTHORIZED',
+      id: '222',
+      ok: false,
+    });
+    expect(items[1]?.error).not.toContain(DINGTALK_AUTH_LINK);
+    expect(items[1]?.error).not.toMatch(/请点击|DINGTALK_/);
+    expect(result.state).toMatchObject({ kind: 'batchWrite', succeeded: 1 });
+  });
+
+  it('logs non-domain batch errors without the message and keeps going', async () => {
+    const secret = 'postgres://user:secret@db/lobe';
+    mocks.exec
+      .mockRejectedValueOnce(new Error(secret))
+      .mockResolvedValueOnce({ data: { subject: '乙', taskId: '222' } });
+    const lines: string[] = [];
+    const debug = (await import('debug')).default;
+    const previousLog = debug.log;
+    const previousDebug = process.env.DEBUG;
+    debug.enable('lobe-server:dingtalk-personal');
+    debug.log = (...args: unknown[]) => {
+      lines.push(args.map((item) => String(item)).join(' '));
+    };
+    try {
+      const result = await run('completeTodos', { taskIds: ['111', '222'] });
+      expect(result.success).toBe(true);
+      expect(result.content).toContain('内部错误');
+      expect(result.content).not.toContain('secret');
+      expect(result.content).toContain('✓ 乙');
+      expect(lines.join('\n')).toContain('batch item failed');
+      expect(lines.join('\n')).not.toContain(secret);
+      expect(mocks.exec).toHaveBeenCalledTimes(2);
+
+      lines.length = 0;
+      mocks.exec.mockReset();
+      mocks.exec.mockRejectedValueOnce(
+        new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', { message: '待办不存在' }),
+      );
+      await run('completeTodos', { taskIds: ['111'] });
+      expect(lines.join('\n')).not.toContain('batch item failed');
+    } finally {
+      debug.log = previousLog;
+      debug.disable();
+      if (previousDebug !== undefined) {
+        process.env.DEBUG = previousDebug;
+        debug.enable(previousDebug);
+      }
+    }
+  });
+});
+
+describe('searchMessages empty hint', () => {
+  beforeEach(() => {
+    mocks.exec.mockReset();
+  });
+
+  it('adds the keyword hint only when the search has no messages', async () => {
+    mocks.exec.mockResolvedValueOnce({
+      complete: true,
+      count: 0,
+      hasMore: false,
+      messages: [],
+      stopReason: 'empty',
+      truncated: false,
+    });
+    const empty = await run('searchMessages', { query: '福瑞思每日库存' });
+    expect(empty.success).toBe(true);
+    expect(empty.state).toMatchObject({ count: 0, kind: 'messages' });
+    expect((empty.state as { hint?: string }).hint).toBe(
+      '近 7 天（或所给时间段）没有消息正文包含「福瑞思每日库存」。关键词只匹配消息正文，不匹配群名；总结某个群请先 searchGroups 再 listGroupMessages。',
+    );
+    expect(empty.content).toContain((empty.state as { hint: string }).hint);
+    expect(JSON.parse(empty.content)).toEqual(empty.state);
+
+    mocks.exec.mockResolvedValueOnce({
+      hasMore: false,
+      messages: [{ sender: '李四', text: '缺货' }],
+      truncated: false,
+    });
+    const hit = await run('searchMessages', { query: '缺货' });
+    expect(hit.state).toMatchObject({ count: 1, kind: 'messages' });
+    expect(hit.state).not.toHaveProperty('hint');
+
+    mocks.exec.mockResolvedValueOnce({ hasMore: false, messages: [], truncated: false });
+    const group = await run('listGroupMessages', {
+      conversationId: 'cidvO0I6uONXHnc51d6c8tnNA==',
+      endTime: isoAfter(1),
+      startTime: start,
+    });
+    expect(group.state).toMatchObject({ count: 0, kind: 'messages' });
+    expect(group.state).not.toHaveProperty('hint');
   });
 });
 
@@ -990,6 +1480,61 @@ describe('previewDingtalkPersonalWrite', () => {
     expect(preview.warnings.some((line) => line.includes('staff002'))).toBe(true);
     expect(preview.warnings.some((line) => line.includes('未完成工作'))).toBe(true);
     expect(preview.danger).toBe(false);
+  });
+
+  it('previews completeTodos as one card and fails the card if any subject cannot be resolved', async () => {
+    mocks.reserveRateLimit.mockResolvedValue(undefined);
+    mocks.exec
+      .mockResolvedValueOnce({
+        data: { ...TODO_GET.data, subject: '甲', taskId: '111' },
+      })
+      .mockResolvedValueOnce({
+        data: { ...TODO_GET.data, subject: '乙', taskId: '222' },
+      });
+    const preview = await previewDingtalkPersonalWrite(db as never, 'user-1', 'completeTodos', {
+      taskIds: ['111', '222'],
+    });
+    expect(mocks.reserveRateLimit).toHaveBeenCalledTimes(1);
+    expect(mocks.exec).toHaveBeenNthCalledWith(
+      1,
+      'todo.get',
+      { taskId: '111' },
+      { skipRateLimit: true },
+    );
+    expect(mocks.exec).toHaveBeenNthCalledWith(
+      2,
+      'todo.get',
+      { taskId: '222' },
+      { skipRateLimit: true },
+    );
+    expect(preview).toEqual({
+      danger: false,
+      lines: ['1. 甲', '2. 乙'],
+      title: '完成 2 项待办',
+      warnings: ['完成后该待办会标记为已完成。'],
+    });
+
+    mocks.exec.mockReset();
+    mocks.reserveRateLimit.mockClear();
+    mocks.exec
+      .mockResolvedValueOnce(TODO_GET)
+      .mockRejectedValueOnce(
+        new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', { message: '待办不存在' }),
+      );
+    await expect(
+      previewDingtalkPersonalWrite(db as never, 'user-1', 'completeTodos', {
+        taskIds: ['57475254077', '222'],
+      }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_PERSONAL_UPSTREAM' });
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+
+    mocks.exec.mockReset();
+    mocks.reserveRateLimit.mockClear();
+    await previewDingtalkPersonalWrite(db as never, 'user-1', 'completeTodos', {
+      taskIds: ['111', '111'],
+    }).catch(() => undefined);
+    expect(mocks.exec).not.toHaveBeenCalled();
+    expect(mocks.reserveRateLimit).not.toHaveBeenCalled();
   });
 
   it('rejects a preview of a read API before calling dws', async () => {

@@ -27,6 +27,11 @@ import { DingtalkWorkspaceApiName } from '../../types';
 
 const log = debug('lobe-dingtalk-workspace:executor');
 
+/** Batch params exactly as the runtime declares them (`{ taskIds }`). */
+type BatchParams<K extends 'completeTodos' | 'deleteTodos'> = Parameters<
+  DingtalkWorkspaceExecutionRuntime[K]
+>[0];
+
 const requireResult = <T>(value: T | undefined, message: string): T => {
   if (value === undefined) throw new Error(message);
   return value;
@@ -126,6 +131,26 @@ class DingtalkWorkspaceExecutor extends BaseExecutor<typeof DingtalkWorkspaceApi
       return this.toResult(await runtime.deleteTodo(params));
     } catch (error) {
       return this.errorResult(error, 'DeleteTodoFailed');
+    }
+  };
+
+  completeTodos = async (params: BatchParams<'completeTodos'>): Promise<BuiltinToolResult> => {
+    try {
+      log('completeTodos count=%d', params?.taskIds?.length ?? 0);
+      const runtime = await this.getRuntime();
+      return this.toResult(await runtime.completeTodos(params));
+    } catch (error) {
+      return this.errorResult(error, 'CompleteTodosFailed');
+    }
+  };
+
+  deleteTodos = async (params: BatchParams<'deleteTodos'>): Promise<BuiltinToolResult> => {
+    try {
+      log('deleteTodos count=%d', params?.taskIds?.length ?? 0);
+      const runtime = await this.getRuntime();
+      return this.toResult(await runtime.deleteTodos(params));
+    } catch (error) {
+      return this.errorResult(error, 'DeleteTodosFailed');
     }
   };
 

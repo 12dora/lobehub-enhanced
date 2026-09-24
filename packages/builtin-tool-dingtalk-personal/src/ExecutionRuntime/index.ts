@@ -3,6 +3,7 @@ import type { AppLinkResolver } from '@lobechat/utils/appLink';
 
 import type {
   CompleteTodoParams,
+  CompleteTodosParams,
   DingtalkPersonalApiName,
   DownloadMessageFileParams,
   GetReportParams,
@@ -109,6 +110,10 @@ export class DingtalkPersonalExecutionRuntime {
 
   completeTodo(args: CompleteTodoParams, ctx?: unknown) {
     return this.invoke(DingtalkPersonalApi.completeTodo, args, ctx);
+  }
+
+  completeTodos(args: CompleteTodosParams, ctx?: unknown) {
+    return this.invoke(DingtalkPersonalApi.completeTodos, args, ctx);
   }
 
   submitReport(args: SubmitReportParams, ctx?: unknown) {

@@ -22,11 +22,14 @@ describe('dingtalk personal systemRole', () => {
 
   it('splits group reads at 7 days and 500 messages, then downloads files', () => {
     expect(systemPrompt).toContain('searchGroups');
-    expect(systemPrompt).toContain('不要猜测');
+    expect(systemPrompt).toContain('先问用户');
     expect(systemPrompt).toContain('listGroupMessages');
     expect(systemPrompt).toContain('7 天');
     expect(systemPrompt).toContain('500');
     expect(systemPrompt).toContain('searchMessages');
+    expect(systemPrompt).toContain('不是群名');
+    expect(systemPrompt).toContain('也不要两个一起叫');
+    expect(systemPrompt).toContain('count 为 0');
     expect(systemPrompt).toContain('downloadMessageFile');
   });
 
@@ -42,6 +45,8 @@ describe('dingtalk personal systemRole', () => {
     expect(systemPrompt).toContain('20 天');
     expect(systemPrompt).toContain('updateTodo');
     expect(systemPrompt).toContain('completeTodo');
+    expect(systemPrompt).toContain('completeTodos');
+    expect(systemPrompt).toContain('不要并行或逐条多次调用 completeTodo');
     expect(systemPrompt).toContain('确认卡片');
     expect(systemPrompt).toContain('不要在文字里再问一次');
   });

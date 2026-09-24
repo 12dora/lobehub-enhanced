@@ -108,4 +108,14 @@ describe('dingtalkApprovalExecutor', () => {
     await dingtalkApprovalExecutor.saveTemplate(params);
     expect(saveTemplate).toHaveBeenCalledWith(params);
   });
+
+  it('implements every API of the toolset, the batch writes included', () => {
+    const apiNames = dingtalkApprovalExecutor.getApiNames();
+    const executor = dingtalkApprovalExecutor as unknown as Record<string, unknown>;
+
+    expect(apiNames).toEqual(expect.arrayContaining(['approveTasks', 'refuseTasks']));
+    for (const apiName of apiNames) {
+      expect(typeof executor[apiName], apiName).toBe('function');
+    }
+  });
 });

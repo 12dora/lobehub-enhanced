@@ -46,10 +46,12 @@ export const dingtalkWorkspaceRuntime: ServerRuntimeRegistration = {
     return createDingtalkWorkspaceRuntime(
       {
         completeTodo: (args) => todo.completeTodo(args),
+        completeTodos: (args) => todo.completeTodos(args),
         createEvent: (args) => calendar.createEvent(withReminders(args)),
         createTodo: (args) => todo.createTodo(args),
         deleteEvent: (args) => calendar.deleteEvent(args),
         deleteTodo: (args) => todo.deleteTodo(args),
+        deleteTodos: (args) => todo.deleteTodos(args),
         getEvent: (args) => calendar.getEvent(args),
         listEvents: (args) => calendar.listEvents(args),
         listMeetingRooms: () => calendar.listMeetingRooms(),

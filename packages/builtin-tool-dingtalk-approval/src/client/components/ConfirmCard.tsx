@@ -100,17 +100,23 @@ const ConfirmCard = memo<ConfirmCardProps>(({ apiName, args, registerBeforeAppro
   useEffect(() => {
     if (!registerBeforeApprove) return;
 
-    return registerBeforeApprove(CONFIRM_BEFORE_APPROVE_ID, () => {
-      if (!blockedReason) return;
+    return registerBeforeApprove(
+      CONFIRM_BEFORE_APPROVE_ID,
+      () => {
+        if (!blockedReason) return;
 
-      toast.error(
-        blockedReason === 'error'
-          ? t('builtins.lobe-dingtalk-approval.ui.confirm.approveBlocked')
-          : t('builtins.lobe-dingtalk-approval.ui.confirm.approvePending'),
-      );
+        toast.error(
+          blockedReason === 'error'
+            ? t('builtins.lobe-dingtalk-approval.ui.confirm.approveBlocked')
+            : t('builtins.lobe-dingtalk-approval.ui.confirm.approvePending'),
+        );
 
-      throw new DingtalkApprovalNotPreviewedError(blockedReason);
-    });
+        throw new DingtalkApprovalNotPreviewedError(blockedReason);
+      },
+      // Still loading is not a refusal: "approve all" waits for the preview instead
+      // of running into the toast, and this effect re-registers once it arrives.
+      { pending: blockedReason === 'loading' },
+    );
   }, [blockedReason, registerBeforeApprove, t]);
 
   const actionLabel = t(`builtins.lobe-dingtalk-approval.ui.apiLabel.${apiName}` as const);

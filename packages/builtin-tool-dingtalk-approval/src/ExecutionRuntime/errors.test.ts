@@ -124,4 +124,30 @@ describe('formatFormProblemLine', () => {
     expect(dingtalk).toContain('[用钉钉登录](https://chat.example.com/dingtalk/sso?redirect=%2F)');
     expect(dingtalk).not.toMatch(/\]\(<http/);
   });
+
+  it('adds the DingTalk permission-apply link only for an open-dev URL', () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const linked = dingtalkErrorGuidance(
+      'DINGTALK_FORBIDDEN',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      applyUrl,
+    );
+    expect(linked).toContain(`[申请权限](${applyUrl})`);
+    expect(dingtalkErrorGuidance('DINGTALK_FORBIDDEN')).toBe(
+      '当前钉钉身份没有执行该操作的权限（DINGTALK_FORBIDDEN）。',
+    );
+    expect(
+      dingtalkErrorGuidance(
+        'DINGTALK_FORBIDDEN',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'https://evil.example/phish',
+      ),
+    ).not.toContain('evil.example');
+  });
 });

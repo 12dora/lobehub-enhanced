@@ -5,6 +5,7 @@ import {
   type AppLinkResolver,
   dingtalkIdentityGuidance,
   linkedPath,
+  markdownLink,
   oaAdminMarkdownLink,
 } from '@lobechat/utils/appLink';
 
@@ -314,12 +315,27 @@ export interface DingtalkApprovalLinkContext {
   resolveLink?: AppLinkResolver;
 }
 
+/** Keep only the apply URL DingTalk itself returned, and only on open-dev. */
+export const sanitizeOpenDevApplyUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2000) return undefined;
+  if (!/^https:\/\/open-dev\.dingtalk\.com\//i.test(trimmed)) return undefined;
+  return trimmed;
+};
+
+const openDevApplyPhrase = (applyUrl?: string): string => {
+  const safe = sanitizeOpenDevApplyUrl(applyUrl);
+  return safe ? `请联系管理员申请权限：${markdownLink('申请权限', safe)}。` : '';
+};
+
 export const dingtalkErrorGuidance = (
   code: string,
   candidates?: AmbiguousCandidate[],
   hint?: string,
   problems?: SaveTemplateFieldProblem[],
   links?: DingtalkApprovalLinkContext,
+  applyUrl?: string,
 ): string => {
   const admin = adminEntrySuffix(links?.resolveLink);
   const identity = dingtalkIdentityGuidance(links?.resolveLink, links?.platform);
@@ -337,7 +353,10 @@ export const dingtalkErrorGuidance = (
       return `钉钉审批能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在连接器中启用审批${admin}。`;
     }
     case 'DINGTALK_FORBIDDEN': {
-      return '当前钉钉身份没有执行该操作的权限（DINGTALK_FORBIDDEN）。';
+      const apply = openDevApplyPhrase(applyUrl);
+      return apply
+        ? `当前钉钉身份没有执行该操作的权限（DINGTALK_FORBIDDEN）。${apply}`
+        : '当前钉钉身份没有执行该操作的权限（DINGTALK_FORBIDDEN）。';
     }
     case 'DINGTALK_PREMIUM_REQUIRED': {
       return `该操作需要 OA 审批高级版（DINGTALK_PREMIUM_REQUIRED），例如退回、加签。请向用户说明，并改用标准能力，或请钉钉组织管理员在${oaAdmin}开通高级版。`;
@@ -406,7 +425,11 @@ export const sanitizeDingtalkFailure = (
   const problems = code === 'DINGTALK_INVALID' ? extractFormProblems(error) : undefined;
 
   if (code && KNOWN_CODES.has(code)) {
-    const content = dingtalkErrorGuidance(code, candidates, hint, problems, links);
+    const applyUrl =
+      error && typeof error === 'object'
+        ? sanitizeOpenDevApplyUrl((error as { applyUrl?: unknown }).applyUrl)
+        : undefined;
+    const content = dingtalkErrorGuidance(code, candidates, hint, problems, links, applyUrl);
     return {
       content,
       error: {

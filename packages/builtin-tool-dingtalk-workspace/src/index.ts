@@ -2,8 +2,11 @@ export { DingtalkWorkspaceIdentifier, DingtalkWorkspaceManifest } from './manife
 export { systemPrompt } from './systemRole';
 export {
   type AmbiguousCandidate,
+  type BatchWriteItem,
+  type BatchWriteState,
   type CalendarEventView,
   type CompleteTodoParams,
+  type CompleteTodosParams,
   type CompleteTodoState,
   type CreateEventParams,
   type CreateEventState,
@@ -12,6 +15,7 @@ export {
   type DeleteEventParams,
   type DeleteEventState,
   type DeleteTodoParams,
+  type DeleteTodosParams,
   type DeleteTodoState,
   type DingtalkEventResponseStatus,
   DingtalkEventResponseStatuses,
@@ -19,6 +23,7 @@ export {
   DingtalkTodoPriorityValues,
   DingtalkWorkspaceApiName,
   type DingtalkWorkspaceApiNameType,
+  type DingtalkWorkspaceBatchAction,
   type DingtalkWorkspaceRecipientKind,
   type DingtalkWorkspaceWriteApiName,
   DingtalkWorkspaceWriteApiNames,

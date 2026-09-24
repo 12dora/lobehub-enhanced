@@ -125,7 +125,8 @@ export const DingtalkPersonalManifest: BuiltinToolManifest = {
       },
     },
     {
-      description: '搜索当前用户可见的群消息。若同时给出 startTime 与 endTime，窗口不得超过 7 天。',
+      description:
+        '按消息正文关键词搜索，不是按群名搜索。总结某个群请用 searchGroups 再 listGroupMessages，不要把群名当作 query。可选 conversationId 限定一个群。同时给出 startTime 与 endTime 时窗口不得超过 7 天；都不给时默认近 7 天。没有命中会返回 count 0，不是错误。',
       humanIntervention: 'never',
       name: DingtalkPersonalApiName.searchMessages,
       parameters: {
@@ -140,7 +141,7 @@ export const DingtalkPersonalManifest: BuiltinToolManifest = {
             description: '可选结束时间。与 startTime 同时给出时，窗口不得超过 7 天。',
           },
           query: {
-            description: '搜索关键词，最多 500 字。',
+            description: '消息正文关键词，不是群名。最多 500 字。',
             maxLength: 500,
             minLength: 1,
             type: 'string',
@@ -301,7 +302,7 @@ export const DingtalkPersonalManifest: BuiltinToolManifest = {
     },
     {
       description:
-        '将一条本人待办标记为完成。taskId 来自 listMyTodos。会弹出确认卡片，不要在文字里再问一次。',
+        '将一条本人待办标记为完成。taskId 来自 listMyTodos。两条及以上必须改用 completeTodos，不要并行或逐条多次调用本接口。会弹出确认卡片，不要在文字里再问一次。',
       humanIntervention: 'always',
       name: DingtalkPersonalApiName.completeTodo,
       parameters: {
@@ -313,6 +314,27 @@ export const DingtalkPersonalManifest: BuiltinToolManifest = {
           },
         },
         required: ['taskId'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        '一次完成多条本人待办（1 到 20 条）。对多条待办做完成操作时必须调用 completeTodos 一次，不要并行或逐条多次调用 completeTodo。会弹出一张确认卡片，不要在文字里再问一次。',
+      humanIntervention: 'always',
+      name: DingtalkPersonalApiName.completeTodos,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          taskIds: {
+            description: '待办 id 列表，来自 listMyTodos。1 到 20 个，不能重复。',
+            items: { minLength: 1, type: 'string' },
+            maxItems: 20,
+            minItems: 1,
+            type: 'array',
+            uniqueItems: true,
+          },
+        },
+        required: ['taskIds'],
         type: 'object',
       },
     },

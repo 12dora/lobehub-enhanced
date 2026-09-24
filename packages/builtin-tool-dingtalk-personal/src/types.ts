@@ -2,6 +2,7 @@ export const DingtalkPersonalIdentifier = 'lobe-dingtalk-personal';
 
 export const DingtalkPersonalApiName = {
   completeTodo: 'completeTodo',
+  completeTodos: 'completeTodos',
   downloadMessageFile: 'downloadMessageFile',
   getReport: 'getReport',
   getReportTemplate: 'getReportTemplate',
@@ -24,6 +25,7 @@ export type DingtalkPersonalApiName =
 export const DingtalkPersonalWriteApiNames = [
   DingtalkPersonalApiName.updateTodo,
   DingtalkPersonalApiName.completeTodo,
+  DingtalkPersonalApiName.completeTodos,
   DingtalkPersonalApiName.submitReport,
 ] as const;
 
@@ -115,6 +117,11 @@ export interface CompleteTodoParams {
   taskId: string;
 }
 
+/** 1–20 distinct todo ids. One confirmation completes every id. */
+export interface CompleteTodosParams {
+  taskIds: string[];
+}
+
 export interface SubmitReportContent {
   content: string;
   /** Must equal a template field name from getReportTemplate. */
@@ -196,6 +203,8 @@ export interface MessagesState {
   count: number;
   endTime?: string;
   hasMore: boolean;
+  /** Model-only. Set when a message search has no hits. */
+  hint?: string;
   kind: 'messages';
   messages: MessageItem[];
   startTime?: string;
@@ -285,6 +294,34 @@ export interface WriteState {
 }
 
 /**
+ * One row of a batch write.
+ * `error` is a short Chinese sentence for the user (no codes, API names, or model instructions).
+ * The full model sentence stays in the tool `content` only.
+ */
+export interface BatchWriteItem {
+  /** Chinese button label when `actionUrl` is set, e.g. 申请权限 / 去授权 / 前往设置. */
+  actionLabel?: string;
+  /** Link the user should open. https, or an app-relative path this app generated. */
+  actionUrl?: string;
+  error?: string;
+  /** Stable code, e.g. DINGTALK_PERSONAL_RATE_LIMITED. */
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  title?: string;
+}
+
+export interface BatchWriteState {
+  action: DingtalkPersonalWriteApiName;
+  failed: number;
+  items: BatchWriteItem[];
+  kind: 'batchWrite';
+  succeeded: number;
+  summary: string;
+  total: number;
+}
+
+/**
  * Login card payload. Duplicated here (plain types) so client code can import
  * it from this package without the server module.
  */
@@ -313,6 +350,7 @@ export interface AuthRequiredState {
 /** Every projected tool state. `kind` selects the render. */
 export type DingtalkPersonalToolState =
   | AuthRequiredState
+  | BatchWriteState
   | FileState
   | GroupsState
   | ListMyTodosState

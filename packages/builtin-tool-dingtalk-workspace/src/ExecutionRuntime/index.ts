@@ -1,19 +1,27 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 import {
   adminEntrySuffix,
+  APP_LINK_PATHS,
   type AppLinkResolver,
+  DINGTALK_CONSOLE_LINKS,
   dingtalkIdentityGuidance,
+  identitySignInPath,
   markdownLink,
   oaAdminMarkdownLink,
 } from '@lobechat/utils/appLink';
 
 import type {
   AmbiguousCandidate,
+  BatchWriteItem,
+  BatchWriteState,
   CompleteTodoParams,
+  CompleteTodosParams,
   CreateEventParams,
   CreateTodoParams,
   DeleteEventParams,
   DeleteTodoParams,
+  DeleteTodosParams,
+  DingtalkWorkspaceBatchAction,
   DirectoryDepartmentHit,
   DirectoryUserHit,
   GetEventParams,
@@ -30,10 +38,14 @@ import type {
 
 export interface IDingtalkWorkspaceService {
   completeTodo: (args: CompleteTodoParams) => Promise<unknown>;
+  /** Server batch. Absent on the client service, which falls back to completeTodo. */
+  completeTodos?: (args: CompleteTodosParams) => Promise<unknown>;
   createEvent: (args: CreateEventParams) => Promise<unknown>;
   createTodo: (args: CreateTodoParams) => Promise<unknown>;
   deleteEvent: (args: DeleteEventParams) => Promise<unknown>;
   deleteTodo: (args: DeleteTodoParams) => Promise<unknown>;
+  /** Server batch. Absent on the client service, which falls back to deleteTodo. */
+  deleteTodos?: (args: DeleteTodosParams) => Promise<unknown>;
   getEvent: (args: GetEventParams) => Promise<unknown>;
   listEvents: (args: ListEventsParams) => Promise<unknown>;
   listMeetingRooms: () => Promise<unknown>;
@@ -689,6 +701,207 @@ const quoteName = (name: string | undefined): string => (name ? `「${name}」` 
 const namedWriteLine = (verb: string, name: string | undefined, generic: string): string =>
   name ? `${verb}${quoteName(name)}` : generic;
 
+const TODO_BATCH_LIMIT = 20;
+
+const TODO_BATCH_COPY: Record<DingtalkWorkspaceBatchAction, { noun: string; verb: string }> = {
+  completeTodos: { noun: '待办', verb: '已完成' },
+  deleteTodos: { noun: '待办', verb: '已删除' },
+};
+
+const TODO_BATCH_STOP_CODES = new Set<string>([
+  'DINGTALK_NOT_CONFIGURED',
+  'DINGTALK_FEATURE_DISABLED',
+  'DINGTALK_PREMIUM_REQUIRED',
+  'DINGTALK_RATE_LIMITED',
+  'DINGTALK_IDENTITY_UNBOUND',
+  'DINGTALK_IDENTITY_UNVERIFIED',
+  'DINGTALK_IDENTITY_INACTIVE',
+  'DINGTALK_NOT_APPROVAL_ADMIN',
+  'DINGTALK_AUTOMATION_OFF',
+]);
+
+const TODO_BATCH_UNAVAILABLE_STREAK = 2;
+
+/** Short card copy. No codes, API names, or instructions aimed at the model. */
+const TODO_USER_ERROR: Record<string, string> = {
+  DINGTALK_AMBIGUOUS: '人员无法唯一确定',
+  DINGTALK_AUTOMATION_OFF: '自动审批已关闭',
+  DINGTALK_FEATURE_DISABLED: '该能力未开启',
+  DINGTALK_FORBIDDEN: '没有权限执行该操作',
+  DINGTALK_IDENTITY_INACTIVE: '钉钉账号已停用',
+  DINGTALK_IDENTITY_UNBOUND: '当前账号未绑定钉钉',
+  DINGTALK_IDENTITY_UNVERIFIED: '钉钉身份未经验证',
+  DINGTALK_INTERNAL: '操作失败，请稍后重试',
+  DINGTALK_INVALID: '参数无效',
+  DINGTALK_NOT_APPROVAL_ADMIN: '需要钉钉审批管理员权限',
+  DINGTALK_NOT_CONFIGURED: '钉钉服务号未配置',
+  DINGTALK_NOT_FOUND: '没有找到该待办',
+  DINGTALK_NOT_ORIGINATOR: '你不是该审批的发起人',
+  DINGTALK_NOT_TASK_OWNER: '你不是该待办的处理人',
+  DINGTALK_PREMIUM_REQUIRED: '需要开通钉钉审批高级版',
+  DINGTALK_RATE_LIMITED: '请求过于频繁',
+  DINGTALK_ROOM_UNAVAILABLE: '会议室该时段无法预订',
+  DINGTALK_RULE_LIMIT: '已达到规则数量上限',
+  DINGTALK_UNAVAILABLE: '钉钉服务暂时不可用',
+};
+
+const todoUserError = (code: string | undefined): string =>
+  (code && TODO_USER_ERROR[code]) || '操作失败，请稍后重试';
+
+interface BatchAction {
+  actionLabel: string;
+  actionUrl: string;
+}
+
+/**
+ * A link we asked the resolver to build. Absolute results must be https and
+ * still point at that path (including the DingTalk SSO `redirect`). A resolver
+ * with no origin may return the app-relative path itself.
+ */
+const safeResolvedAppLink = (resolved: string, path: string): string | undefined => {
+  const trimmed = resolved.trim();
+  if (!trimmed || trimmed.length > 2000 || /\s/.test(trimmed)) return undefined;
+  if (trimmed === path && (path === '/' || (path.startsWith('/') && !path.startsWith('//')))) {
+    return trimmed;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') return undefined;
+    if (url.searchParams.get('redirect') === path) return trimmed;
+    if (`${url.pathname}${url.search}` === path) return trimmed;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const safeDingtalkConsoleUrl = (value: string): string | undefined => {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2000) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') return undefined;
+    const host = url.hostname.replace(/\.$/, '').toLowerCase();
+    if (
+      host === 'oa.dingtalk.com' ||
+      host === 'open-dev.dingtalk.com' ||
+      host.endsWith('.dingtalk.com')
+    ) {
+      return trimmed;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const batchActionFor = (
+  code: string | undefined,
+  applyUrl: string | undefined,
+  links: ManualLinks,
+): BatchAction | undefined => {
+  const apply = applyUrl ? readOpenDevApplyUrl({ applyUrl }) : undefined;
+  if (apply) return { actionLabel: '申请权限', actionUrl: apply };
+  if (!code) return undefined;
+  const app = (label: string, path: string): BatchAction | undefined => {
+    const actionUrl = safeResolvedAppLink(links.resolveLink(path), path);
+    return actionUrl ? { actionLabel: label, actionUrl } : undefined;
+  };
+  const consoleLink = (label: string, url: string): BatchAction | undefined => {
+    const actionUrl = safeDingtalkConsoleUrl(url);
+    return actionUrl ? { actionLabel: label, actionUrl } : undefined;
+  };
+  switch (code) {
+    case 'DINGTALK_NOT_CONFIGURED':
+    case 'DINGTALK_FEATURE_DISABLED':
+    case 'DINGTALK_AUTOMATION_OFF': {
+      return app('前往设置', APP_LINK_PATHS.adminImConnectors);
+    }
+    case 'DINGTALK_IDENTITY_UNBOUND':
+    case 'DINGTALK_IDENTITY_UNVERIFIED': {
+      return app('去授权', identitySignInPath(links.platform));
+    }
+    case 'DINGTALK_IDENTITY_INACTIVE':
+    case 'DINGTALK_NOT_APPROVAL_ADMIN':
+    case 'DINGTALK_PREMIUM_REQUIRED': {
+      return consoleLink('前往设置', DINGTALK_CONSOLE_LINKS.oaAdmin);
+    }
+    case 'DINGTALK_RULE_LIMIT': {
+      return app('前往设置', APP_LINK_PATHS.approvalRules);
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+/** App-wide 403. A per-item "not the creator" 403 does not stop the batch. */
+const forbiddenStopsTodoBatch = (error: unknown): boolean => {
+  if (readOpenDevApplyUrl(error)) return true;
+  for (const record of nestedErrorRecords(error)) {
+    const scopes = record.missingScopes;
+    if (
+      Array.isArray(scopes) &&
+      scopes.some((scope) => typeof scope === 'string' && scope.trim().length > 0)
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const readTodoBatchIds = (value: unknown): { error: string } | { ids: string[] } => {
+  if (!Array.isArray(value) || value.length < 1 || value.length > TODO_BATCH_LIMIT) {
+    return { error: '待办 id 须为 1 到 20 个互不重复的非空字符串。' };
+  }
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim()) {
+      return { error: '待办 id 须为 1 到 20 个互不重复的非空字符串。' };
+    }
+    if (seen.has(item)) return { error: '待办 id 不能重复。' };
+    seen.add(item);
+    ids.push(item);
+  }
+  return { ids };
+};
+
+const validationOutput = (message: string): BuiltinServerRuntimeOutput => ({
+  content: message,
+  error: { code: 'VALIDATION', message },
+  success: false,
+});
+
+interface RawBatchItem {
+  applyUrl?: string;
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  title?: string;
+}
+
+const readRawBatchItems = (data: unknown): RawBatchItem[] => {
+  const record = asRecord(data);
+  const items = record && Array.isArray(record.items) ? record.items : [];
+  const rows: RawBatchItem[] = [];
+  for (const item of items) {
+    const row = asRecord(item);
+    if (!row || typeof row.id !== 'string') continue;
+    const title = typeof row.title === 'string' ? row.title.trim() : '';
+    rows.push({
+      applyUrl: readOpenDevApplyUrl({ applyUrl: row.applyUrl }),
+      errorCode: typeof row.errorCode === 'string' ? row.errorCode : undefined,
+      id: row.id,
+      ok: row.ok === true,
+      skipped: row.skipped === true,
+      title: title || undefined,
+    });
+  }
+  return rows;
+};
+
 const pickResultString = (data: unknown, keys: string[]): string | undefined => {
   const record = asRecord(data);
   if (!record) return undefined;
@@ -815,6 +1028,155 @@ export class DingtalkWorkspaceExecutionRuntime {
     } catch (error) {
       return this.fail(error);
     }
+  }
+
+  private validationFailure(error: unknown): BuiltinServerRuntimeOutput | undefined {
+    const record = asRecord(error);
+    if (record?.code !== 'VALIDATION') return undefined;
+    const message =
+      typeof record.message === 'string' && record.message.trim()
+        ? record.message.trim()
+        : '参数无效（VALIDATION）。';
+    return validationOutput(message);
+  }
+
+  /** Full model sentence. The card row keeps the short user error instead. */
+  private itemErrorLine(code: string | undefined, applyUrl?: string): string {
+    if (!code || !KNOWN_DINGTALK_ERROR_CODES.has(code)) {
+      return DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT;
+    }
+    const line = friendlyDingtalkErrorContent(
+      code,
+      applyUrl ? { applyUrl, code, message: code } : { code, message: code },
+      this.links,
+    );
+    return line.split('\n')[0] ?? line;
+  }
+
+  private presentTodoBatch(
+    action: DingtalkWorkspaceBatchAction,
+    rawItems: RawBatchItem[],
+  ): BuiltinServerRuntimeOutput {
+    const copy = TODO_BATCH_COPY[action];
+    const rows = rawItems.map((item) => {
+      const title = item.title ? { title: item.title } : {};
+      if (item.ok) return { item: { id: item.id, ok: true, ...title }, model: undefined };
+      if (item.skipped) {
+        return { item: { error: '未执行', id: item.id, ok: false, ...title }, model: '未执行' };
+      }
+      const actionLink = batchActionFor(item.errorCode, item.applyUrl, this.links);
+      return {
+        item: {
+          error: todoUserError(item.errorCode),
+          ...(item.errorCode ? { errorCode: item.errorCode } : {}),
+          id: item.id,
+          ok: false,
+          ...title,
+          ...actionLink,
+        },
+        model: this.itemErrorLine(item.errorCode, item.applyUrl),
+      };
+    });
+    const items: BatchWriteItem[] = rows.map((row) => row.item);
+    const succeeded = items.filter((item) => item.ok).length;
+    const failed = items.length - succeeded;
+    const summary =
+      failed === 0
+        ? `${copy.verb} ${succeeded} 项${copy.noun}`
+        : `${copy.verb} ${succeeded} 项${copy.noun}，${failed} 项失败`;
+    const lines = rows.map((row) => {
+      const label = row.item.title || row.item.id;
+      return row.item.ok ? `✓ ${label}` : `✗ ${label}：${row.model ?? '未执行'}`;
+    });
+    const state: BatchWriteState = {
+      action,
+      failed,
+      items,
+      kind: 'batchWrite',
+      succeeded,
+      summary,
+      total: items.length,
+    };
+    const content = [summary, ...lines].join('\n');
+    if (succeeded > 0) return { content, state, success: true };
+    const first = rawItems.find((item) => !item.ok && !item.skipped) ?? rawItems[0];
+    const message = rows.find((row) => !row.item.ok && row.model !== '未执行')?.model ?? '未执行';
+    return {
+      content,
+      error: { code: first?.errorCode ?? 'VALIDATION', message },
+      state,
+      success: false,
+    };
+  }
+
+  private async todoBatchBySingle(
+    action: DingtalkWorkspaceBatchAction,
+    taskIds: string[],
+  ): Promise<BuiltinServerRuntimeOutput> {
+    const call =
+      action === 'completeTodos'
+        ? (taskId: string) => this.service.completeTodo({ taskId })
+        : (taskId: string) => this.service.deleteTodo({ taskId });
+    const items: RawBatchItem[] = [];
+    let stop = false;
+    let unavailableStreak = 0;
+    for (const taskId of taskIds) {
+      if (stop) {
+        items.push({ id: taskId, ok: false, skipped: true });
+        continue;
+      }
+      try {
+        const data = await call(taskId);
+        unavailableStreak = 0;
+        items.push({ id: taskId, ok: true, title: pickResultString(data, ['subject']) });
+      } catch (error) {
+        const sanitized = sanitizeDingtalkFailure(error, this.links);
+        const applyUrl = readOpenDevApplyUrl(error);
+        items.push({
+          ...(applyUrl ? { applyUrl } : {}),
+          errorCode: sanitized.error.code,
+          id: taskId,
+          ok: false,
+        });
+        const code = sanitized.error.code;
+        if (code === 'DINGTALK_UNAVAILABLE') {
+          unavailableStreak += 1;
+          if (unavailableStreak >= TODO_BATCH_UNAVAILABLE_STREAK) stop = true;
+        } else {
+          unavailableStreak = 0;
+          const stops =
+            code === 'DINGTALK_FORBIDDEN'
+              ? forbiddenStopsTodoBatch(error)
+              : TODO_BATCH_STOP_CODES.has(code);
+          if (stops) stop = true;
+        }
+      }
+    }
+    return this.presentTodoBatch(action, items);
+  }
+
+  private async runTodoBatch(
+    action: DingtalkWorkspaceBatchAction,
+    taskIds: unknown,
+  ): Promise<BuiltinServerRuntimeOutput> {
+    const read = readTodoBatchIds(taskIds);
+    if ('error' in read) return validationOutput(read.error);
+    const batch =
+      action === 'completeTodos' ? this.service.completeTodos : this.service.deleteTodos;
+    if (!batch) return this.todoBatchBySingle(action, read.ids);
+    try {
+      return this.presentTodoBatch(action, readRawBatchItems(await batch({ taskIds: read.ids })));
+    } catch (error) {
+      return this.validationFailure(error) ?? this.fail(error);
+    }
+  }
+
+  async completeTodos(args: CompleteTodosParams): Promise<BuiltinServerRuntimeOutput> {
+    return this.runTodoBatch('completeTodos', args?.taskIds);
+  }
+
+  async deleteTodos(args: DeleteTodosParams): Promise<BuiltinServerRuntimeOutput> {
+    return this.runTodoBatch('deleteTodos', args?.taskIds);
   }
 
   async listEvents(args: ListEventsParams): Promise<BuiltinServerRuntimeOutput> {

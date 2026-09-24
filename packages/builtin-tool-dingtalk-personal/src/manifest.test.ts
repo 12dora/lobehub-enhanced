@@ -6,6 +6,7 @@ import { DingtalkPersonalApiName, DingtalkPersonalWriteApiNames } from './types'
 
 const ALL_APIS = [
   'completeTodo',
+  'completeTodos',
   'downloadMessageFile',
   'getReport',
   'getReportTemplate',
@@ -21,7 +22,7 @@ const ALL_APIS = [
   'updateTodo',
 ] as const;
 
-const WRITE_APIS = ['completeTodo', 'submitReport', 'updateTodo'] as const;
+const WRITE_APIS = ['completeTodo', 'completeTodos', 'submitReport', 'updateTodo'] as const;
 
 describe('DingtalkPersonalManifest', () => {
   it('matches the builtin tool manifest schema', () => {
@@ -30,7 +31,7 @@ describe('DingtalkPersonalManifest', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('uses the stable lobe-dingtalk-personal identifier and all 14 APIs', () => {
+  it('uses the stable lobe-dingtalk-personal identifier and all 15 APIs', () => {
     expect(DingtalkPersonalManifest.identifier).toBe('lobe-dingtalk-personal');
     expect(DingtalkPersonalManifest.type).toBe('builtin');
     expect(DingtalkPersonalManifest.meta.title).toBe('钉钉个人数据');
@@ -42,7 +43,7 @@ describe('DingtalkPersonalManifest', () => {
     );
   });
 
-  it('sets humanIntervention always on exactly the three writes and never on reads', () => {
+  it('sets humanIntervention always on exactly the four writes and never on reads', () => {
     const writes = DingtalkPersonalManifest.api
       .filter((api) => api.humanIntervention === 'always')
       .map((api) => api.name)
@@ -66,6 +67,14 @@ describe('DingtalkPersonalManifest', () => {
     expect(byName.listGroupMessages.description).toContain('500');
     expect(byName.listGroupMessages.parameters.properties.maxMessages.maximum).toBe(500);
     expect(byName.searchMessages.description).toContain('7 天');
+    expect(byName.searchMessages.description).toContain('不是按群名搜索');
+    expect(byName.searchMessages.description).toContain('listGroupMessages');
+    expect(byName.searchMessages.parameters.properties.query.description).toContain('不是群名');
+    expect(byName.completeTodos.description).toContain('completeTodos');
+    expect(byName.completeTodos.description).toContain('不要并行');
+    expect(byName.completeTodo.description).toContain('completeTodos');
+    expect(byName.completeTodos.parameters.properties.taskIds.minItems).toBe(1);
+    expect(byName.completeTodos.parameters.properties.taskIds.maxItems).toBe(20);
     expect(byName.listReports.description).toContain('180');
     expect(byName.listReports.description).toContain('20 天');
     expect(byName.listReports.parameters.properties.box.enum).toEqual(['inbox', 'outbox']);
@@ -78,6 +87,7 @@ describe('DingtalkPersonalManifest', () => {
   it('requires the write payloads and rejects extra properties', () => {
     const updateTodo = DingtalkPersonalManifest.api.find((api) => api.name === 'updateTodo');
     const completeTodo = DingtalkPersonalManifest.api.find((api) => api.name === 'completeTodo');
+    const completeTodos = DingtalkPersonalManifest.api.find((api) => api.name === 'completeTodos');
     const submitReport = DingtalkPersonalManifest.api.find((api) => api.name === 'submitReport');
 
     expect(updateTodo?.parameters.required).toEqual(['taskId']);
@@ -86,6 +96,9 @@ describe('DingtalkPersonalManifest', () => {
     expect(updateTodo?.parameters.properties.priority.enum).toEqual([10, 20, 30, 40]);
     expect(completeTodo?.parameters.required).toEqual(['taskId']);
     expect(completeTodo?.parameters.additionalProperties).toBe(false);
+    expect(completeTodos?.parameters.required).toEqual(['taskIds']);
+    expect(completeTodos?.parameters.additionalProperties).toBe(false);
+    expect(completeTodos?.humanIntervention).toBe('always');
     expect(submitReport?.parameters.required).toEqual(['templateName', 'contents', 'toUserIds']);
     expect(submitReport?.parameters.additionalProperties).toBe(false);
   });

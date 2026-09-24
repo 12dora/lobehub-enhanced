@@ -43,6 +43,10 @@ vi.mock('@/services/dingtalkApproval', () => ({
   dingtalkApprovalService: { preview: vi.fn() },
 }));
 
+// The batch card's link renderer comes from the workspace client entry; keep its
+// own service out of this test.
+vi.mock('@/services/dingtalkWorkspace', () => ({ dingtalkWorkspaceService: {} }));
+
 vi.mock('@/styles', () => ({
   inspectorTextStyles: { root: 'inspector' },
   shinyTextStyles: { shinyText: 'shiny' },
@@ -76,6 +80,8 @@ const RULE_ID = 'dar_7f3c19ab4d';
 const INSTANCE_ID = '1f6a3c2b-4d5e-6f70-8192-a3b4c5d6e7f8';
 const STAFF_TOKEN = 'staff:012345';
 const DEPT_TOKEN = 'dept:998877';
+/** A server reason may end in a markdown link to where the permission is requested. */
+const PERMISSION_LINK = '[申请权限](https://open-dev.dingtalk.com/fe/app#/permission)';
 
 /** Our own identifier formats — and only ours, so user data is never swept up. */
 const FORBIDDEN: readonly [string, RegExp][] = [
@@ -128,6 +134,33 @@ describe('Inspector shows an action, never an identifier', () => {
     // …and adds no hint at all when the arguments only carry identifiers.
     expectNoIdentifier(text);
   });
+
+  it.each([DingtalkApprovalApiName.approveTasks, DingtalkApprovalApiName.refuseTasks])(
+    'counts a %s batch without naming a single approval',
+    (apiName) => {
+      const tasks = [
+        { processInstanceId: INSTANCE_ID, taskId: '2049183091773' },
+        { processInstanceId: `${INSTANCE_ID}-2`, taskId: '2049183091774' },
+      ];
+      const { container } = render(
+        <Summary
+          apiName={apiName}
+          args={{ remark: `转 ${STAFF_TOKEN} 跟进`, tasks }}
+          identifier={'lobe-dingtalk-approval'}
+        />,
+      );
+      const text = container.textContent ?? '';
+
+      expect(text).toContain(
+        translate(`builtins.lobe-dingtalk-approval.ui.batch.action.${apiName}`, { count: 2 }),
+      );
+      // The shared remark is the user's own words and stays the hint.
+      expect(text).toContain('跟进');
+      expect(text).not.toContain(INSTANCE_ID);
+      expect(text).not.toContain('2049183091773');
+      expectNoIdentifier(text);
+    },
+  );
 
   it('adds a hint when the arguments carry a name', () => {
     const { container } = render(
@@ -249,6 +282,67 @@ const RENDER_CASES: readonly RenderCase[] = [
     render: WriteResult,
     state: { rule: { id: RULE_ID }, success: true },
   },
+  {
+    api: DingtalkApprovalApiName.approveTasks,
+    args: { tasks: [{ processInstanceId: INSTANCE_ID, taskId: '2049183091773' }] },
+    expected: '未命名条目',
+    name: 'batch result whose approvals are still named by identifiers',
+    render: WriteResult,
+    state: {
+      action: DingtalkApprovalApiName.approveTasks,
+      failed: 1,
+      items: [
+        { id: '2049183091773', ok: true, title: `${STAFF_TOKEN} 提交的请假` },
+        { error: `已转交给 ${STAFF_TOKEN}`, id: '2049183091774', ok: false, title: PROCESS_CODE },
+      ],
+      kind: 'batchWrite',
+      succeeded: 1,
+      summary: '已同意 1 项审批，1 项失败',
+      total: 2,
+    },
+  },
+  {
+    api: DingtalkApprovalApiName.approveTasks,
+    args: { tasks: [{ processInstanceId: INSTANCE_ID, taskId: '2049183091773' }] },
+    // The reason is rendered with its markdown link: the link text survives, the
+    // identifiers around it are still masked.
+    expected: '申请权限',
+    name: 'batch failure whose reason carries a permission link next to identifiers',
+    render: WriteResult,
+    state: {
+      action: DingtalkApprovalApiName.approveTasks,
+      failed: 1,
+      items: [
+        {
+          error: `${PROCESS_CODE} 已转交给 ${STAFF_TOKEN}，请 ${PERMISSION_LINK}`,
+          id: '2049183091773',
+          ok: false,
+          title: `${DEPT_TOKEN} 的请假`,
+        },
+      ],
+      kind: 'batchWrite',
+      succeeded: 0,
+      summary: '1 项审批未同意',
+      total: 1,
+    },
+  },
+  {
+    api: DingtalkApprovalApiName.refuseTasks,
+    args: { remark: '重复提交', tasks: [{ processInstanceId: INSTANCE_ID, taskId: '1' }] },
+    // An approval title is the applicant's own text: a contract number is not an id.
+    expected: USER_DATA.contractNo,
+    name: 'batch result whose approval title carries a contract number',
+    render: WriteResult,
+    state: {
+      action: DingtalkApprovalApiName.refuseTasks,
+      failed: 0,
+      items: [{ id: '1', ok: true, title: `合同 ${USER_DATA.contractNo} 付款` }],
+      kind: 'batchWrite',
+      succeeded: 1,
+      summary: '已拒绝 1 项审批',
+      total: 1,
+    },
+  },
 ];
 
 describe('Render shows names or a neutral noun, never an identifier', () => {
@@ -305,6 +399,32 @@ describe('ConfirmCard scrubs a preview that still carries identifiers', () => {
     expect(text).toContain('同事');
     expect(text).toContain('范围');
     expect(text).toContain('部门');
+    expectNoIdentifier(text);
+  });
+
+  it('names every id-only line of a batch preview and keeps the readable ones', () => {
+    const args = {
+      remark: '同意',
+      tasks: [
+        { processInstanceId: INSTANCE_ID, taskId: '2049183091773' },
+        { processInstanceId: `${INSTANCE_ID}-2`, taskId: '2049183091774' },
+      ],
+    };
+    const { container } = renderConfirm(DingtalkApprovalApiName.approveTasks, args, {
+      actingAs: { name: '张三' },
+      danger: false,
+      lines: [
+        { label: '1', value: PROCESS_CODE },
+        { label: '2', value: `合同 ${USER_DATA.contractNo} 付款` },
+        { label: '备注', value: '同意' },
+      ],
+      title: '同意 2 项审批',
+    });
+    const text = container.textContent ?? '';
+
+    expect(text).toContain('同意 2 项审批');
+    expect(text).toContain('未命名条目');
+    expect(text).toContain(USER_DATA.contractNo);
     expectNoIdentifier(text);
   });
 

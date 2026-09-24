@@ -8,7 +8,10 @@ import {
   DingtalkCalendarService,
   isCalendarWriteApiName,
 } from '@/server/enterprise/services/dingtalkWorkspace/calendar';
-import { DingtalkWorkspaceError } from '@/server/enterprise/services/dingtalkWorkspace/errors';
+import {
+  DingtalkWorkspaceError,
+  sanitizeDingtalkApplyUrl,
+} from '@/server/enterprise/services/dingtalkWorkspace/errors';
 import {
   DingtalkTodoService,
   isTodoWriteApiName,
@@ -55,6 +58,22 @@ const TRPC_BY_DINGTALK_CODE: Record<string, TRPC_ERROR_CODE_KEY> = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object';
 
+/** DingTalk scope codes only. Drop message text, URLs, and duplicates. */
+const sanitizeMissingScopes = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const scope = item.trim();
+    if (!/^[A-Z][\w.]{0,80}$/.test(scope) || seen.has(scope)) continue;
+    seen.add(scope);
+    unique.push(scope);
+    if (unique.length >= 16) break;
+  }
+  return unique.length > 0 ? unique : undefined;
+};
+
 const isDingtalkWorkspaceError = (
   error: unknown,
 ): error is DingtalkWorkspaceError & {
@@ -73,6 +92,11 @@ const mapError: (error: unknown, procedure: string) => never = (error, procedure
     if (error.candidates !== undefined) data.candidates = error.candidates;
     if (error.roomIssues !== undefined) data.roomIssues = error.roomIssues;
     if (error.timeApplied === true) data.timeApplied = true;
+    // The web batch fallback stops on an app-wide 403 only when these survive the lambda.
+    const applyUrl = sanitizeDingtalkApplyUrl(error.applyUrl);
+    if (applyUrl) data.applyUrl = applyUrl;
+    const missingScopes = sanitizeMissingScopes(error.missingScopes);
+    if (missingScopes) data.missingScopes = missingScopes;
     throw new TRPCError({
       cause: { data },
       code: TRPC_BY_DINGTALK_CODE[error.code] ?? 'BAD_REQUEST',

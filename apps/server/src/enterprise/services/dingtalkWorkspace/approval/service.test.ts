@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as ErrorsModule from '../errors';
+
 class DingtalkWorkspaceError extends Error {
   readonly code: string;
   constructor(code: string) {
@@ -28,11 +30,18 @@ const mockAppendAudit = vi.fn();
 const mockListPending = vi.fn();
 const mockLoadTemplates = vi.fn();
 const mockInvalidate = vi.fn();
+const mockInvalidateInstance = vi.fn();
 const mockRevert = vi.fn();
 const mockAppend = vi.fn();
 const mockGetUsers = vi.fn();
 
-vi.mock('../errors', () => ({ DingtalkWorkspaceError }));
+vi.mock('../errors', async () => {
+  const actual = await vi.importActual<typeof ErrorsModule>('../errors');
+  return {
+    DingtalkWorkspaceError,
+    sanitizeDingtalkApplyUrl: actual.sanitizeDingtalkApplyUrl,
+  };
+});
 vi.mock('../capabilities', () => ({
   assertDingtalkFeature: (...args: unknown[]) => mockAssertFeature(...args),
 }));
@@ -69,6 +78,7 @@ vi.mock('./api', () => ({
 }));
 vi.mock('./pending', () => ({
   invalidateApprovalListCache: (...args: unknown[]) => mockInvalidate(...args),
+  invalidateApprovalInstanceCache: (...args: unknown[]) => mockInvalidateInstance(...args),
   invalidatePendingCaches: (...args: unknown[]) => mockInvalidate(...args),
   listInitiatedApprovals: vi.fn(),
   listPendingApprovals: (...args: unknown[]) => mockListPending(...args),
@@ -155,6 +165,7 @@ describe('DingtalkApprovalService', () => {
     mockGetDetail.mockResolvedValueOnce(runningDetail);
     const service = new DingtalkApprovalService({} as never, 'user-1');
     await service.executeTask({ processInstanceId: 'inst-1', result: 'agree', taskId: 't-1' });
+    expect(mockGetDetail).toHaveBeenCalledWith('inst-1', { fresh: true });
     expect(mockExecute).toHaveBeenCalledWith('me', {
       processInstanceId: 'inst-1',
       remark: undefined,
@@ -170,6 +181,231 @@ describe('DingtalkApprovalService', () => {
         targetType: 'dingtalk_approval',
       }),
     );
+  });
+
+  it('approve batch reuses execute, shares the remark, and invalidates once', async () => {
+    mockGetDetail.mockImplementation(async (processInstanceId: string) => ({
+      ...runningDetail,
+      processInstanceId,
+      tasks: [
+        {
+          status: 'RUNNING',
+          taskId: processInstanceId === 'inst-2' ? 't-2' : 't-1',
+          userId: 'me',
+        },
+      ],
+      title: processInstanceId === 'inst-2' ? '报销' : '出差申请',
+    }));
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    const result = await service.executeTasks({
+      remark: '同意',
+      result: 'agree',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-2', taskId: 't-2' },
+      ],
+    });
+    expect(result.items).toEqual([
+      { id: 't-1', ok: true, title: '出差申请' },
+      { id: 't-2', ok: true, title: '报销' },
+    ]);
+    expect(mockExecute).toHaveBeenNthCalledWith(1, 'me', {
+      processInstanceId: 'inst-1',
+      remark: '同意',
+      result: 'agree',
+      taskId: 't-1',
+    });
+    expect(mockExecute).toHaveBeenNthCalledWith(2, 'me', {
+      processInstanceId: 'inst-2',
+      remark: '同意',
+      result: 'agree',
+      taskId: 't-2',
+    });
+    expect(mockGetDetail.mock.invocationCallOrder[0]).toBeLessThan(
+      mockExecute.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(mockExecute.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGetDetail.mock.invocationCallOrder[1] ?? 0,
+    );
+    expect(mockInvalidate).toHaveBeenCalledTimes(1);
+    expect(mockInvalidate).toHaveBeenCalledWith('user-1');
+  });
+
+  it('stops an approval batch on rate limit and marks the rest 未执行', async () => {
+    mockGetDetail.mockResolvedValue({
+      ...runningDetail,
+      tasks: [
+        { status: 'RUNNING', taskId: 't-1', userId: 'me' },
+        { status: 'RUNNING', taskId: 't-2', userId: 'me' },
+        { status: 'RUNNING', taskId: 't-3', userId: 'me' },
+      ],
+    });
+    mockExecute
+      .mockResolvedValueOnce({ result: true })
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    const result = await service.executeTasks({
+      result: 'agree',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-1', taskId: 't-2' },
+        { processInstanceId: 'inst-1', taskId: 't-3' },
+      ],
+    });
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    expect(result.items[1]?.errorCode).toBe('DINGTALK_RATE_LIMITED');
+    expect(result.items[2]?.skipped).toBe(true);
+    expect(mockInvalidate).toHaveBeenCalledTimes(1);
+    expect(mockInvalidateInstance).toHaveBeenCalledTimes(1);
+    expect(mockInvalidateInstance).toHaveBeenCalledWith('inst-1');
+  });
+
+  it('continues an approval batch when one task is not owned', async () => {
+    mockGetDetail
+      .mockResolvedValueOnce(runningDetail)
+      .mockResolvedValueOnce({
+        ...runningDetail,
+        tasks: [{ status: 'RUNNING', taskId: 't-2', userId: 'someone-else' }],
+      })
+      .mockResolvedValueOnce({
+        ...runningDetail,
+        tasks: [{ status: 'RUNNING', taskId: 't-3', userId: 'me' }],
+        title: '采购',
+      });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    const result = await service.executeTasks({
+      result: 'agree',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-1', taskId: 't-2' },
+        { processInstanceId: 'inst-1', taskId: 't-3' },
+      ],
+    });
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    expect(result.items[1]?.errorCode).toBe('DINGTALK_NOT_TASK_OWNER');
+    expect(result.items[1]?.title).toBe('出差申请');
+    expect(result.items[2]?.ok).toBe(true);
+    expect(result.items[2]?.title).toBe('采购');
+  });
+
+  it('rejects a refuse batch without a shared remark before any execute', async () => {
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    await expect(
+      service.executeTasks({
+        remark: '  ',
+        result: 'refuse',
+        tasks: [{ processInstanceId: 'inst-1', taskId: 't-1' }],
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION', message: '拒绝审批必须填写意见。' });
+    await expect(
+      service.executeTasks({
+        result: 'agree',
+        tasks: [
+          { processInstanceId: 'inst-1', taskId: 't-1' },
+          { processInstanceId: 'inst-1', taskId: 't-1' },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(mockGetDetail).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockInvalidate).not.toHaveBeenCalled();
+  });
+
+  it('stops an approval batch after two consecutive unavailable responses', async () => {
+    mockGetDetail
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE'))
+      .mockResolvedValueOnce({
+        ...runningDetail,
+        tasks: [{ status: 'RUNNING', taskId: 't-2', userId: 'me' }],
+      });
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    const once = await service.executeTasks({
+      result: 'agree',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-1', taskId: 't-2' },
+      ],
+    });
+    expect(once.items[0]?.errorCode).toBe('DINGTALK_UNAVAILABLE');
+    expect(once.items[0]?.title).toBeUndefined();
+    expect(once.items[1]?.ok).toBe(true);
+
+    mockGetDetail.mockReset();
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValue({ result: true });
+    mockGetDetail.mockRejectedValue(new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE'));
+    const stopped = await service.executeTasks({
+      result: 'agree',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-1', taskId: 't-2' },
+        { processInstanceId: 'inst-1', taskId: 't-3' },
+      ],
+    });
+    expect(mockGetDetail).toHaveBeenCalledTimes(2);
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(stopped.items[0]?.errorCode).toBe('DINGTALK_UNAVAILABLE');
+    expect(stopped.items[1]?.errorCode).toBe('DINGTALK_UNAVAILABLE');
+    expect(stopped.items[2]?.skipped).toBe(true);
+  });
+
+  it('keeps the loaded instance title and a sanitized apply link on a failed approval item', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const forbidden = new DingtalkWorkspaceError('DINGTALK_FORBIDDEN');
+    Object.assign(forbidden, { applyUrl });
+    mockGetDetail.mockResolvedValue(runningDetail);
+    mockExecute.mockRejectedValueOnce(forbidden);
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    const result = await service.executeTasks({
+      result: 'agree',
+      tasks: [
+        { processInstanceId: 'inst-1', taskId: 't-1' },
+        { processInstanceId: 'inst-1', taskId: 't-2' },
+      ],
+    });
+    expect(result.items[0]).toMatchObject({
+      applyUrl,
+      errorCode: 'DINGTALK_FORBIDDEN',
+      id: 't-1',
+      ok: false,
+      title: '出差申请',
+    });
+    expect(result.items[1]?.skipped).toBe(true);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a non-open-dev apply link and logs only unexpected approval batch errors', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetDetail.mockResolvedValue({
+      ...runningDetail,
+      tasks: [
+        { status: 'RUNNING', taskId: 't-1', userId: 'me' },
+        { status: 'RUNNING', taskId: 't-2', userId: 'me' },
+      ],
+    });
+    const phish = new DingtalkWorkspaceError('DINGTALK_NOT_FOUND');
+    Object.assign(phish, { applyUrl: 'https://evil.example/phish' });
+    mockExecute.mockRejectedValueOnce(phish).mockRejectedValueOnce(new Error('socket hang up'));
+    const service = new DingtalkApprovalService({} as never, 'user-1');
+    try {
+      const result = await service.executeTasks({
+        result: 'agree',
+        tasks: [
+          { processInstanceId: 'inst-1', taskId: 't-1' },
+          { processInstanceId: 'inst-1', taskId: 't-2' },
+        ],
+      });
+      expect(result.items[0]?.applyUrl).toBeUndefined();
+      expect(result.items[0]?.title).toBe('出差申请');
+      expect(result.items[1]?.errorCode).toBe('DINGTALK_INTERNAL');
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith('[dingtalk.approval] batch item failed', {
+        code: 'DINGTALK_INTERNAL',
+        errorClass: 'Error',
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('attaches directory display names on getInstance', async () => {

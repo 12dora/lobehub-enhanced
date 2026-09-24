@@ -12,6 +12,7 @@ export {
 export type { DingtalkPersonalErrorCode } from './errorCode';
 export { DINGTALK_PERSONAL_ERROR_CODES, resolveDingtalkPersonalErrorCode } from './errorCode';
 export { default as ErrorNotice } from './ErrorNotice';
+export { PREVIEW_ERROR_DETAIL_LIMIT, resolvePreviewErrorDetail } from './previewErrorDetail';
 export {
   ExpandableList,
   ExternalAction,

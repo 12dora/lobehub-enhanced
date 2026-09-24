@@ -10,6 +10,7 @@ import { inspectorTextStyles, shinyTextStyles } from '@/styles';
 import type { DingtalkApprovalApiNameType } from '../apiNames';
 import { DingtalkApprovalApiName } from '../apiNames';
 import { argHint } from './argHint';
+import { resolveBatchCall } from './batchCount';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   hint: css`
@@ -40,14 +41,21 @@ const isKnownApiName = (apiName: string): apiName is DingtalkApprovalApiNameType
 /**
  * One-line inspector for every lobe-dingtalk-approval API, e.g.
  * 「钉钉审批 · 同意」 plus a short hint pulled from the arguments.
+ * A batch call names its size instead: 「钉钉审批 · 同意 2 项审批」.
  */
 const Summary = memo<BuiltinInspectorProps<Record<string, unknown>>>(
   ({ apiName, args, partialArgs, isArgumentsStreaming, isLoading }) => {
     const { t } = useTranslation('plugin');
 
-    const label = isKnownApiName(apiName)
-      ? t(`builtins.lobe-dingtalk-approval.ui.apiLabel.${apiName}` as const)
-      : apiName;
+    const known = isKnownApiName(apiName);
+    const batch = known ? resolveBatchCall(apiName, args, partialArgs) : undefined;
+    const label = batch
+      ? t(`builtins.lobe-dingtalk-approval.ui.batch.action.${batch.apiName}` as const, {
+          count: batch.count,
+        })
+      : known
+        ? t(`builtins.lobe-dingtalk-approval.ui.apiLabel.${apiName}` as const)
+        : apiName;
     const title = `${t('builtins.lobe-dingtalk-approval.title')} · ${label}`;
     const hint = argHint(args ?? partialArgs);
 

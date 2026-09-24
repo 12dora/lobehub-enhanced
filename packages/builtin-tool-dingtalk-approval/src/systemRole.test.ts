@@ -23,13 +23,17 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('never call listTemplates, getTemplateSchema');
   });
 
-  it('forbids parallel batch approvals', () => {
-    expect(systemPrompt).toContain('one call per task');
-    expect(systemPrompt).toContain('never in parallel');
+  it('sends same-action approvals through the batch APIs', () => {
+    expect(systemPrompt).toContain('approveTasks');
+    expect(systemPrompt).toContain('refuseTasks');
+    expect(systemPrompt).toContain('不要并行或逐条多次调用');
+    expect(systemPrompt).not.toContain('one call per task');
+    expect(systemPrompt).not.toContain('never in parallel');
   });
 
   it('requires a reason for refuse and return', () => {
-    expect(systemPrompt).toContain('refuseTask and returnTask need a reason');
+    expect(systemPrompt).toContain('refuseTask, refuseTasks, and returnTask need a reason');
+    expect(systemPrompt).toContain('one shared remark');
   });
 
   it('describes compiling rule conditions from the schema', () => {

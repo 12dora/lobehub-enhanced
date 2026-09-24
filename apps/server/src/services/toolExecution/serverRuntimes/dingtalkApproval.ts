@@ -33,6 +33,8 @@ export const dingtalkApprovalRuntime: ServerRuntimeRegistration = {
       {
         addApprover: (params) => approval.appendTask(params),
         approveTask: (params) => approval.executeTask({ ...params, result: 'agree' }),
+        approveTasks: (params) =>
+          approval.executeTasks({ remark: params.remark, result: 'agree', tasks: params.tasks }),
         commentApproval: (params) => approval.addComment(params),
         createApprovalRule: (params) => {
           const { processName: _processName, topicId: ruleTopicId, ...rest } = params;
@@ -51,6 +53,8 @@ export const dingtalkApprovalRuntime: ServerRuntimeRegistration = {
         listPendingApprovals: (params) => approval.listPending(params),
         listTemplates: (params) => approval.listTemplates(params),
         refuseTask: (params) => approval.executeTask({ ...params, result: 'refuse' }),
+        refuseTasks: (params) =>
+          approval.executeTasks({ remark: params.remark, result: 'refuse', tasks: params.tasks }),
         returnTask: (params) => approval.revertTask(params),
         saveTemplate: (params) => {
           const mapLeaf = (field: (typeof params.fields)[number]) => ({

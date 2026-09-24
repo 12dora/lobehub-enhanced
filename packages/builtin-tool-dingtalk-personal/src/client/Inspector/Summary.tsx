@@ -9,6 +9,7 @@ import { inspectorTextStyles, shinyTextStyles } from '@/styles';
 
 import { DINGTALK_PERSONAL_DOMAINS, isDingtalkPersonalApiName } from '../apiNames';
 import { argHint } from './argHint';
+import { resolveBatchCall } from './batchCount';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   hint: css`
@@ -36,6 +37,7 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 /**
  * One-line inspector for every lobe-dingtalk-personal API, e.g.
  * 「我的钉钉待办 · 查看我的待办」, plus a short hint pulled from the arguments.
+ * A batch call names its size instead: 「我的钉钉待办 · 完成 3 项待办」.
  */
 const Summary = memo<BuiltinInspectorProps<Record<string, unknown>>>(
   ({ apiName, args, partialArgs, isArgumentsStreaming, isLoading }) => {
@@ -44,9 +46,14 @@ const Summary = memo<BuiltinInspectorProps<Record<string, unknown>>>(
     let title: string = apiName;
     if (isDingtalkPersonalApiName(apiName)) {
       const domain = DINGTALK_PERSONAL_DOMAINS[apiName];
+      const batch = resolveBatchCall(apiName, args, partialArgs);
       title = [
         t(`builtins.lobe-dingtalk-personal.render.domain.${domain}` as const),
-        t(`builtins.lobe-dingtalk-personal.apiName.${apiName}` as const),
+        batch
+          ? t(`builtins.lobe-dingtalk-personal.render.batch.action.${batch.apiName}` as const, {
+              count: batch.count,
+            })
+          : t(`builtins.lobe-dingtalk-personal.apiName.${apiName}` as const),
       ].join(' · ');
     }
     const hint = argHint(args ?? partialArgs);

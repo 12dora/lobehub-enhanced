@@ -621,4 +621,230 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
       '[钉钉管理后台](https://oa.dingtalk.com/)',
     );
   });
+
+  it('formats a completeTodos result and does not call the single API when the batch exists', async () => {
+    const completeTodo = vi.fn();
+    const completeTodos = vi.fn().mockResolvedValue({
+      items: [
+        { id: 't1', ok: true, title: '写周报' },
+        { errorCode: 'DINGTALK_NOT_FOUND', id: 't2', ok: false },
+        { id: 't3', ok: false, skipped: true },
+      ],
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodo, completeTodos }));
+    const result = await runtime.completeTodos({ taskIds: ['t1', 't2', 't3'] });
+
+    expect(completeTodo).not.toHaveBeenCalled();
+    expect(completeTodos).toHaveBeenCalledWith({ taskIds: ['t1', 't2', 't3'] });
+    expect(result.success).toBe(true);
+    expect(result.content).toBe(
+      [
+        '已完成 1 项待办，2 项失败',
+        '✓ 写周报',
+        '✗ t2：未找到该待办或日程（DINGTALK_NOT_FOUND）。请先 listTodos / listEvents 确认 id，且只能操作通过本工具创建的待办。',
+        '✗ t3：未执行',
+      ].join('\n'),
+    );
+    expect(result.state).toMatchObject({
+      action: 'completeTodos',
+      failed: 2,
+      kind: 'batchWrite',
+      succeeded: 1,
+      summary: '已完成 1 项待办，2 项失败',
+      total: 3,
+    });
+    const items = (result.state as { items: Array<Record<string, unknown>> }).items;
+    expect(items[1]).toEqual({
+      error: '没有找到该待办',
+      errorCode: 'DINGTALK_NOT_FOUND',
+      id: 't2',
+      ok: false,
+    });
+    expect(items[2]).toEqual({ error: '未执行', id: 't3', ok: false });
+    expect(String(items[1]?.error)).not.toMatch(/DINGTALK_|listTodos|不要向用户/);
+  });
+
+  it('returns VALIDATION before any todo write when ids are duplicated', async () => {
+    const completeTodos = vi.fn();
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodos }));
+    const result = await runtime.completeTodos({ taskIds: ['t1', 't1'] });
+    expect(completeTodos).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toMatchObject({ code: 'VALIDATION', message: '待办 id 不能重复。' });
+  });
+
+  it('marks an all-failed deleteTodos batch unsuccessful with the first error', async () => {
+    const deleteTodos = vi.fn().mockResolvedValue({
+      items: [{ errorCode: 'DINGTALK_FORBIDDEN', id: 't1', ok: false }],
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ deleteTodos }));
+    const result = await runtime.deleteTodos({ taskIds: ['t1'] });
+    expect(result.success).toBe(false);
+    expect(result.content.split('\n')[0]).toBe('已删除 0 项待办，1 项失败');
+    expect(result.error).toMatchObject({ code: 'DINGTALK_FORBIDDEN' });
+    expect(String(result.error?.message)).toContain('没有权限执行该操作');
+  });
+
+  it('falls back to sequential completeTodo and stops on rate limit', async () => {
+    const completeTodo = vi
+      .fn()
+      .mockResolvedValueOnce({ subject: '写周报' })
+      .mockRejectedValueOnce(coded('DINGTALK_RATE_LIMITED'));
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodo }));
+    const result = await runtime.completeTodos({ taskIds: ['t1', 't2', 't3'] });
+    expect(completeTodo).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('✓ 写周报');
+    expect(result.content).toContain('✗ t2：钉钉接口限流');
+    expect(result.content).toContain('DINGTALK_RATE_LIMITED');
+    expect(result.content).toContain('✗ t3：未执行');
+    const items = (result.state as { items: Array<Record<string, unknown>> }).items;
+    expect(items[1]).toEqual({
+      error: '请求过于频繁',
+      errorCode: 'DINGTALK_RATE_LIMITED',
+      id: 't2',
+      ok: false,
+    });
+    expect(String(items[1]?.error)).not.toMatch(/DINGTALK_|不要并行/);
+  });
+
+  it('puts a sanitized apply link on a forbidden batch item', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const deleteTodos = vi.fn().mockResolvedValue({
+      items: [
+        { applyUrl, errorCode: 'DINGTALK_FORBIDDEN', id: 't1', ok: false, title: '写周报' },
+        {
+          applyUrl: 'https://evil.example/phish',
+          errorCode: 'DINGTALK_NOT_FOUND',
+          id: 't2',
+          ok: false,
+        },
+      ],
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ deleteTodos }));
+    const result = await runtime.deleteTodos({ taskIds: ['t1', 't2'] });
+    expect(result.content).toContain('✗ 写周报：');
+    expect(result.content).toContain(`[申请权限](${applyUrl})`);
+    expect(result.content).not.toContain('evil.example');
+    const items = (result.state as { items: Array<Record<string, unknown>> }).items;
+    expect(items[0]).toMatchObject({
+      actionLabel: '申请权限',
+      actionUrl: applyUrl,
+      error: '没有权限执行该操作',
+      errorCode: 'DINGTALK_FORBIDDEN',
+      id: 't1',
+      ok: false,
+      title: '写周报',
+    });
+    expect(items[1]).toEqual({
+      error: '没有找到该待办',
+      errorCode: 'DINGTALK_NOT_FOUND',
+      id: 't2',
+      ok: false,
+    });
+    expect(String(items[0]?.error)).not.toContain(applyUrl);
+    expect(JSON.stringify(items)).not.toContain('evil.example');
+  });
+
+  it('continues a fallback batch after a creator 403 and stops on an app-permission 403', async () => {
+    const continued = vi
+      .fn()
+      .mockRejectedValueOnce(coded('DINGTALK_FORBIDDEN', 'not creator'))
+      .mockResolvedValueOnce({ subject: '对账' });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodo: continued }));
+    const kept = await runtime.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(continued).toHaveBeenCalledTimes(2);
+    expect(kept.content).toContain('✓ 对账');
+    expect(kept.content).not.toContain('未执行');
+
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const stopped = vi.fn().mockRejectedValueOnce(
+      coded('DINGTALK_FORBIDDEN', 'DINGTALK_FORBIDDEN', {
+        applyUrl,
+        missingScopes: ['Todo.Todo.Write'],
+      }),
+    );
+    const stopping = createDingtalkWorkspaceRuntime(makeService({ deleteTodo: stopped }));
+    const result = await stopping.deleteTodos({ taskIds: ['t1', 't2'] });
+    expect(stopped).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain(`[申请权限](${applyUrl})`);
+    expect(result.content).toContain('✗ t2：未执行');
+  });
+
+  it('stops a fallback todo batch after two consecutive unavailable responses', async () => {
+    const completeTodo = vi
+      .fn()
+      .mockRejectedValueOnce(coded('DINGTALK_UNAVAILABLE'))
+      .mockResolvedValueOnce({ subject: '对账' })
+      .mockRejectedValueOnce(coded('DINGTALK_UNAVAILABLE'))
+      .mockRejectedValueOnce(coded('DINGTALK_UNAVAILABLE'));
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodo }));
+    const result = await runtime.completeTodos({ taskIds: ['a', 'b', 'c', 'd', 'e'] });
+    expect(completeTodo).toHaveBeenCalledTimes(4);
+    expect(result.content).toContain('✓ 对账');
+    expect(result.content).toContain('✗ e：未执行');
+    expect(result.content).not.toContain('✗ d：未执行');
+  });
+
+  it('stops a fallback batch when a lambda 403 carries applyUrl in errorData', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const completeTodo = vi.fn().mockRejectedValue({
+      data: {
+        code: 'FORBIDDEN',
+        errorData: {
+          applyUrl,
+          code: 'DINGTALK_FORBIDDEN',
+          missingScopes: ['Todo.Todo.Write'],
+        },
+      },
+      message: 'DINGTALK_FORBIDDEN',
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodo }));
+    const result = await runtime.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(completeTodo).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain(`[申请权限](${applyUrl})`);
+    expect(result.content).toContain('✗ t2：未执行');
+    const items = (result.state as { items: Array<Record<string, unknown>> }).items;
+    expect(items[0]).toMatchObject({
+      actionLabel: '申请权限',
+      actionUrl: applyUrl,
+      error: '没有权限执行该操作',
+      errorCode: 'DINGTALK_FORBIDDEN',
+    });
+    expect(String(items[0]?.error)).not.toMatch(/DINGTALK_|listTodos/);
+  });
+
+  it('puts a settings link on a disabled batch item', async () => {
+    const settings = 'https://aihub.example.com/admin/system/general?tab=im-connectors';
+    const completeTodos = vi.fn().mockResolvedValue({
+      items: [{ errorCode: 'DINGTALK_FEATURE_DISABLED', id: 't1', ok: false }],
+    });
+    const runtime = createDingtalkWorkspaceRuntime(makeService({ completeTodos }), {
+      resolveLink: (path) => (path === '/admin/system/general?tab=im-connectors' ? settings : path),
+    });
+    const result = await runtime.completeTodos({ taskIds: ['t1'] });
+    const item = (result.state as { items: Array<Record<string, unknown>> }).items[0];
+    expect(item).toMatchObject({
+      actionLabel: '前往设置',
+      actionUrl: settings,
+      error: '该能力未开启',
+      errorCode: 'DINGTALK_FEATURE_DISABLED',
+    });
+    expect(String(item?.error)).not.toMatch(/DINGTALK_|不要向用户/);
+    expect(result.content).toContain(settings);
+
+    const relative = createDingtalkWorkspaceRuntime(
+      makeService({
+        completeTodos: vi.fn().mockResolvedValue({
+          items: [{ errorCode: 'DINGTALK_FEATURE_DISABLED', id: 't1', ok: false }],
+        }),
+      }),
+    );
+    const web = await relative.completeTodos({ taskIds: ['t1'] });
+    expect((web.state as { items: Array<Record<string, unknown>> }).items[0]).toMatchObject({
+      actionLabel: '前往设置',
+      actionUrl: '/admin/system/general?tab=im-connectors',
+      error: '该能力未开启',
+    });
+  });
 });

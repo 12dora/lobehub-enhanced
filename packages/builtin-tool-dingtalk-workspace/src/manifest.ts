@@ -49,7 +49,7 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
     },
     {
       description:
-        '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
+        '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo，多条用 lobe-dingtalk-personal 的 completeTodos，一次调用）；notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
       humanIntervention: 'never',
       name: DingtalkWorkspaceApiName.listTodos,
       parameters: {
@@ -135,7 +135,7 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
     },
     {
       description:
-        'Mark a todo created through this tool as done. taskId from listTodos/createTodo.',
+        'Mark one todo created through this tool as done. taskId from listTodos/createTodo. 多项同一操作请一次调用 completeTodos，不要并行或逐条多次调用本接口。',
       humanIntervention: 'always',
       name: DingtalkWorkspaceApiName.completeTodo,
       parameters: {
@@ -151,7 +151,28 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
       },
     },
     {
-      description: 'Delete a todo created through this tool. taskId from listTodos/createTodo.',
+      description:
+        '一次完成多条本助手创建的待办。taskIds 为 1 到 20 个互不重复的待办 id。对多条待办做同一操作时，必须一次调用本接口，不要并行或逐条多次调用 completeTodo。',
+      humanIntervention: 'always',
+      name: DingtalkWorkspaceApiName.completeTodos,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          taskIds: {
+            description: '1–20 distinct todo ids from listTodos or createTodo.',
+            items: { minLength: 1, type: 'string' },
+            maxItems: 20,
+            minItems: 1,
+            type: 'array',
+          },
+        },
+        required: ['taskIds'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        'Delete one todo created through this tool. taskId from listTodos/createTodo. 多项同一操作请一次调用 deleteTodos，不要并行或逐条多次调用本接口。',
       humanIntervention: 'always',
       name: DingtalkWorkspaceApiName.deleteTodo,
       parameters: {
@@ -163,6 +184,26 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
           },
         },
         required: ['taskId'],
+        type: 'object',
+      },
+    },
+    {
+      description:
+        '一次删除多条本助手创建的待办。taskIds 为 1 到 20 个互不重复的待办 id。对多条待办做同一操作时，必须一次调用本接口，不要并行或逐条多次调用 deleteTodo。',
+      humanIntervention: 'always',
+      name: DingtalkWorkspaceApiName.deleteTodos,
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          taskIds: {
+            description: '1–20 distinct todo ids from listTodos or createTodo.',
+            items: { minLength: 1, type: 'string' },
+            maxItems: 20,
+            minItems: 1,
+            type: 'array',
+          },
+        },
+        required: ['taskIds'],
         type: 'object',
       },
     },

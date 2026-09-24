@@ -6,6 +6,7 @@
     ".": "./src/index.ts",
     "./client": "./src/client/index.ts",
     "./client/executor": "./src/client/executor/index.ts",
+    "./client/reasonText": "./src/client/components/reasonText.ts",
     "./executor": "./src/client/executor/index.ts",
     "./executionRuntime": "./src/ExecutionRuntime/index.ts",
     "./manifest": "./src/manifest.ts"

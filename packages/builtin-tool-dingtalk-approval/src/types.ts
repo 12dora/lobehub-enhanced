@@ -17,11 +17,13 @@ export const DingtalkApprovalReadApiName = {
 export const DingtalkApprovalWriteApiName = {
   addApprover: 'addApprover',
   approveTask: 'approveTask',
+  approveTasks: 'approveTasks',
   commentApproval: 'commentApproval',
   createApprovalRule: 'createApprovalRule',
   deleteApprovalRule: 'deleteApprovalRule',
   deleteTemplate: 'deleteTemplate',
   refuseTask: 'refuseTask',
+  refuseTasks: 'refuseTasks',
   returnTask: 'returnTask',
   saveTemplate: 'saveTemplate',
   submitApproval: 'submitApproval',
@@ -332,6 +334,51 @@ export interface RefuseTaskParams {
 export interface RefuseTaskState {
   success: boolean;
   taskId?: string;
+}
+
+export interface ApprovalTaskRef {
+  processInstanceId: string;
+  taskId: string;
+}
+
+export interface ApproveTasksParams {
+  remark?: string;
+  tasks: ApprovalTaskRef[];
+}
+
+export interface RefuseTasksParams {
+  remark: string;
+  tasks: ApprovalTaskRef[];
+}
+
+/**
+ * One row of a batch write.
+ * `error` is a short Chinese sentence for the user (no codes, API names, or model instructions).
+ * The full model sentence stays in the tool `content` only.
+ */
+export interface BatchWriteItem {
+  /** Chinese button label when `actionUrl` is set, e.g. 申请权限 / 去授权 / 前往设置. */
+  actionLabel?: string;
+  /** Link the user should open. https, or an app-relative path this app generated. */
+  actionUrl?: string;
+  error?: string;
+  /** Stable code, e.g. DINGTALK_NOT_TASK_OWNER. */
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  title?: string;
+}
+
+export type DingtalkApprovalBatchAction = 'approveTasks' | 'refuseTasks';
+
+export interface BatchWriteState {
+  action: DingtalkApprovalBatchAction;
+  failed: number;
+  items: BatchWriteItem[];
+  kind: 'batchWrite';
+  succeeded: number;
+  summary: string;
+  total: number;
 }
 
 export interface TransferTaskParams {

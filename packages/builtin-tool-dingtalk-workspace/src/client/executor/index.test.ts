@@ -101,4 +101,14 @@ describe('dingtalkWorkspaceExecutor', () => {
     await dingtalkWorkspaceExecutor.updateTodo({ dueTime: null, taskId: 'todo-1' });
     expect(updateTodo).toHaveBeenCalledWith({ dueTime: null, taskId: 'todo-1' });
   });
+
+  it('implements every API of the toolset, the batch writes included', () => {
+    const apiNames = dingtalkWorkspaceExecutor.getApiNames();
+    const executor = dingtalkWorkspaceExecutor as unknown as Record<string, unknown>;
+
+    expect(apiNames).toEqual(expect.arrayContaining(['completeTodos', 'deleteTodos']));
+    for (const apiName of apiNames) {
+      expect(typeof executor[apiName], apiName).toBe('function');
+    }
+  });
 });

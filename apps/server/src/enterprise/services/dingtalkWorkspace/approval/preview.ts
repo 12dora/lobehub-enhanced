@@ -223,6 +223,57 @@ const loadOwnedTask = async (
   return { detail, task };
 };
 
+const APPROVAL_PREVIEW_BATCH_LIMIT = 20;
+
+const readPreviewTasks = (value: unknown): Array<{ processInstanceId: string; taskId: string }> => {
+  if (!Array.isArray(value) || value.length < 1 || value.length > APPROVAL_PREVIEW_BATCH_LIMIT) {
+    throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  }
+  const seen = new Set<string>();
+  const tasks: Array<{ processInstanceId: string; taskId: string }> = [];
+  for (const item of value) {
+    const record = asRecord(item);
+    const processInstanceId = asString(record.processInstanceId);
+    const taskId = asString(record.taskId);
+    if (!processInstanceId || !taskId) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+    const key = `${processInstanceId}\0${taskId}`;
+    if (seen.has(key) || seen.has(`task:${taskId}`)) {
+      throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+    }
+    seen.add(key);
+    seen.add(`task:${taskId}`);
+    tasks.push({ processInstanceId, taskId });
+  }
+  return tasks;
+};
+
+const previewExecuteBatch = async (
+  ctx: ApprovalServiceContext,
+  args: Record<string, unknown>,
+  result: 'agree' | 'refuse',
+): Promise<PreviewBody> => {
+  const tasks = readPreviewTasks(args.tasks);
+  const remark = asString(args.remark);
+  if (result === 'refuse' && !remark) throw new DingtalkWorkspaceError('DINGTALK_INVALID');
+  const lines: ApprovalPreview['lines'] = [];
+  for (const [index, task] of tasks.entries()) {
+    const { detail } = await loadOwnedTask(
+      ctx.identity.staffId,
+      task.processInstanceId,
+      task.taskId,
+    );
+    lines.push({ label: '审批单', value: `${index + 1}. ${instanceHeadline(detail)}` });
+  }
+  if (remark) lines.push({ label: '意见', value: remark });
+  const count = tasks.length;
+  return {
+    danger: result === 'refuse',
+    lines,
+    title: result === 'agree' ? `同意 ${count} 项审批` : `拒绝 ${count} 项审批`,
+    warnings: result === 'refuse' ? ['拒绝后该审批单将结束。'] : [],
+  };
+};
+
 const previewExecute = async (
   ctx: ApprovalServiceContext,
   args: Record<string, unknown>,
@@ -624,11 +675,13 @@ const previewRule = async (
 const WRITE_ALIASES: Record<string, string> = {
   addApprover: 'appendTask',
   approveTask: 'executeTaskAgree',
+  approveTasks: 'executeTasksAgree',
   commentApproval: 'addComment',
   createApprovalRule: 'createApprovalRule',
   deleteApprovalRule: 'deleteApprovalRule',
   deleteTemplate: 'deleteTemplate',
   refuseTask: 'executeTaskRefuse',
+  refuseTasks: 'executeTasksRefuse',
   returnTask: 'revertTask',
   saveTemplate: 'saveTemplate',
   submitApproval: 'createInstance',
@@ -664,6 +717,14 @@ export const buildApprovalPreview = async (
     }
     case 'executeTaskRefuse': {
       preview = await previewExecute(ctx, args, 'refuse');
+      break;
+    }
+    case 'executeTasksAgree': {
+      preview = await previewExecuteBatch(ctx, args, 'agree');
+      break;
+    }
+    case 'executeTasksRefuse': {
+      preview = await previewExecuteBatch(ctx, args, 'refuse');
       break;
     }
     case 'redirectTask': {

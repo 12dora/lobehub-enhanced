@@ -9,6 +9,7 @@ import zhPlugin from '../../../../../locales/zh-CN/plugin.json';
 import { previewRequestKey } from '../components/ConfirmCard';
 import { cardStyles } from '../components/styles';
 import Confirm from './Confirm';
+import { DingtalkPersonalInterventions } from './index';
 
 const dict = zhPlugin as Record<string, string>;
 
@@ -229,6 +230,60 @@ describe('DingtalkPersonalConfirm gate', () => {
     ).toBe('/settings/connector?dingtalkPersonal=authorize');
   });
 
+  it('says why the arguments were refused, under the generic title, and still blocks', async () => {
+    // What the lambda error formatter hands the client: `cause.data` lands in `data.errorData`.
+    mocks.error = Object.assign(new Error('DINGTALK_PERSONAL_INVALID_ARGS'), {
+      data: {
+        errorData: {
+          code: 'DINGTALK_PERSONAL_INVALID_ARGS',
+          details: { message: '参数无效（DINGTALK_PERSONAL_INVALID_ARGS）：收件人「张三」重复' },
+        },
+      },
+    });
+
+    const beforeApprove = renderConfirm('updateTodo', { taskId: '1', title: '新标题' });
+
+    await expect(beforeApprove()).rejects.toThrow('DINGTALK_PERSONAL_PREVIEW_ERROR');
+    const invalidKey =
+      'builtins.lobe-dingtalk-personal.render.error.DINGTALK_PERSONAL_INVALID_ARGS';
+    expect(screen.getByText(dict[invalidKey])).toBeTruthy();
+    expect(screen.getByText('收件人「张三」重复')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).not.toContain('DINGTALK_');
+  });
+
+  it('shows the generic title alone when the refusal carries no reason', () => {
+    mocks.error = new Error('DINGTALK_PERSONAL_INVALID_ARGS');
+
+    renderConfirm('updateTodo', { taskId: '1', title: '新标题' });
+
+    const invalidKey =
+      'builtins.lobe-dingtalk-personal.render.error.DINGTALK_PERSONAL_INVALID_ARGS';
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toBe(
+      [
+        dict['builtins.lobe-dingtalk-personal.render.confirm.blocked'],
+        dict[invalidKey],
+        dict['builtins.lobe-dingtalk-personal.render.confirm.blockedHint'],
+      ].join(''),
+    );
+  });
+
+  it('shows no service text for any other failure', () => {
+    mocks.error = {
+      data: {
+        errorData: {
+          code: 'DINGTALK_PERSONAL_UPSTREAM',
+          details: { message: '上游说明：token expired at node-7' },
+        },
+      },
+      message: 'DINGTALK_PERSONAL_UPSTREAM',
+    };
+
+    renderConfirm('updateTodo', { taskId: '1', title: '新标题' });
+
+    expect(screen.getByRole('alert').textContent).not.toContain('上游说明');
+  });
+
   it('rejects approval when the cached preview belongs to other arguments', async () => {
     mocks.data = answerTo(PREVIEW, [
       'dingtalk-personal-preview',
@@ -362,5 +417,98 @@ describe('DingtalkPersonalConfirm card', () => {
     );
 
     expect(container.innerHTML).toBe('');
+  });
+});
+
+describe('DingtalkPersonalConfirm batch', () => {
+  const BATCH_ARGS = { taskIds: ['1001', '1002', '1003'] };
+  const BATCH_PREVIEW = {
+    danger: false,
+    lines: ['1. 交库存日报', '2. 测试待办 123', '3. 写周报'],
+    title: '完成 3 项待办',
+    warnings: ['完成后这些待办会标记为已完成。'],
+  };
+
+  it('confirms completeTodos through the same card', () => {
+    expect(DingtalkPersonalInterventions.completeTodos).toBe(Confirm);
+  });
+
+  it('asks the preview for the whole batch and shows one line per todo', async () => {
+    mocks.data = settled(BATCH_PREVIEW);
+
+    const beforeApprove = renderConfirm('completeTodos', BATCH_ARGS);
+
+    expect(mocks.preview).toHaveBeenCalledWith({ apiName: 'completeTodos', args: BATCH_ARGS });
+    await expect(beforeApprove()).resolves.toBeUndefined();
+    expect(screen.getByText('完成 3 项待办')).toBeTruthy();
+    expect(
+      screen.getByText(dict['builtins.lobe-dingtalk-personal.apiName.completeTodos']),
+    ).toBeTruthy();
+    for (const line of BATCH_PREVIEW.lines) expect(screen.getByText(line)).toBeTruthy();
+  });
+
+  it('blocks the whole batch when one todo could not be resolved', async () => {
+    mocks.error = new Error('DINGTALK_PERSONAL_UPSTREAM');
+
+    const beforeApprove = renderConfirm('completeTodos', BATCH_ARGS);
+
+    await expect(beforeApprove()).rejects.toThrow('DINGTALK_PERSONAL_PREVIEW_ERROR');
+    expect(
+      screen.getByText(dict['builtins.lobe-dingtalk-personal.render.confirm.blocked']),
+    ).toBeTruthy();
+  });
+});
+
+describe('DingtalkPersonalConfirm approve-all readiness', () => {
+  /**
+   * Renders the card and records the `pending` flag of every gate registration, in
+   * order: "approve all" waits while it is true, and the card re-registers when it flips.
+   */
+  const renderRecorded = () => {
+    const flags: (boolean | undefined)[] = [];
+    const registerBeforeApprove = (
+      _id: string,
+      _callback: () => void | Promise<void>,
+      options?: { pending?: boolean },
+    ) => {
+      flags.push(options?.pending);
+      return () => undefined;
+    };
+    // Fresh args object with the same content: the memoized card re-renders, the
+    // preview it asks for stays the same.
+    const card = () => (
+      <Confirm
+        apiName={'completeTodo'}
+        args={{ ...ARGS }}
+        messageId={'msg_1'}
+        registerBeforeApprove={registerBeforeApprove}
+      />
+    );
+    const view = render(card());
+
+    return { flags, rerender: () => view.rerender(card()) };
+  };
+
+  it('reports a loading preview as pending and re-registers as ready once it arrives', () => {
+    const { flags, rerender } = renderRecorded();
+    expect(flags).toEqual([true]);
+
+    mocks.data = settled(PREVIEW);
+    rerender();
+
+    expect(flags).toEqual([true, false]);
+  });
+
+  it('does not report a failed preview as pending: that is a refusal', () => {
+    mocks.error = new Error('boom');
+
+    expect(renderRecorded().flags).toEqual([false]);
+  });
+
+  it('stays pending while the preview is being re-fetched', () => {
+    mocks.data = settled(PREVIEW);
+    mocks.isValidating = true;
+
+    expect(renderRecorded().flags).toEqual([true]);
   });
 });

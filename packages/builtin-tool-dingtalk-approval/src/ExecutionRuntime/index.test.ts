@@ -763,4 +763,160 @@ describe('DingtalkApprovalExecutionRuntime', () => {
     expect(created.content.split('\n')[0]).not.toContain('rule-1');
     expect(created.content).toContain('"ruleId":"rule-1"');
   });
+
+  it('formats approveTasks from the batch service and keeps a shared remark', async () => {
+    const approveTask = vi.fn();
+    const approveTasks = vi.fn().mockResolvedValue({
+      items: [
+        { id: 't-1', ok: true, title: '出差申请' },
+        { id: 't-2', ok: true, title: '报销' },
+      ],
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ approveTask, approveTasks }));
+    const result = await runtime.approveTasks({
+      remark: '同意',
+      tasks: [
+        { processInstanceId: 'pi-1', taskId: 't-1' },
+        { processInstanceId: 'pi-2', taskId: 't-2' },
+      ],
+    });
+    expect(approveTask).not.toHaveBeenCalled();
+    expect(approveTasks).toHaveBeenCalledWith({
+      remark: '同意',
+      tasks: [
+        { processInstanceId: 'pi-1', taskId: 't-1' },
+        { processInstanceId: 'pi-2', taskId: 't-2' },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.content).toBe(['已同意 2 项审批', '✓ 出差申请', '✓ 报销'].join('\n'));
+    expect(result.state).toMatchObject({
+      action: 'approveTasks',
+      failed: 0,
+      kind: 'batchWrite',
+      succeeded: 2,
+      total: 2,
+    });
+  });
+
+  it('rejects refuseTasks without a remark and duplicate tasks before any call', async () => {
+    const refuseTasks = vi.fn();
+    const runtime = createDingtalkApprovalRuntime(makeService({ refuseTasks }));
+    const missing = await runtime.refuseTasks({
+      remark: '  ',
+      tasks: [{ processInstanceId: 'pi-1', taskId: 't-1' }],
+    });
+    expect(missing.error).toMatchObject({ code: 'VALIDATION', message: '拒绝审批必须填写意见。' });
+    const duplicate = await runtime.approveTasks({
+      tasks: [
+        { processInstanceId: 'pi-1', taskId: 't-1' },
+        { processInstanceId: 'pi-2', taskId: 't-1' },
+      ],
+    });
+    expect(duplicate.error).toMatchObject({ code: 'VALIDATION', message: '审批任务不能重复。' });
+    expect(refuseTasks).not.toHaveBeenCalled();
+  });
+
+  it('reports an all-failed refuse batch with the first item error', async () => {
+    const refuseTasks = vi.fn().mockResolvedValue({
+      items: [
+        { errorCode: 'DINGTALK_NOT_TASK_OWNER', id: 't-1', ok: false, title: '出差申请' },
+        { id: 't-2', ok: false, skipped: true },
+      ],
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ refuseTasks }));
+    const result = await runtime.refuseTasks({
+      remark: '不行',
+      tasks: [
+        { processInstanceId: 'pi-1', taskId: 't-1' },
+        { processInstanceId: 'pi-2', taskId: 't-2' },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(result.content.split('\n')[0]).toBe('已拒绝 0 项审批，2 项失败');
+    expect(result.content).toContain('✗ 出差申请：');
+    expect(result.content).toContain('DINGTALK_NOT_TASK_OWNER');
+    expect(result.content).toContain('✗ t-2：未执行');
+    expect(result.error).toMatchObject({ code: 'DINGTALK_NOT_TASK_OWNER' });
+    const items = (result.state as { items: Array<Record<string, unknown>> }).items;
+    expect(items[0]).toEqual({
+      error: '你不是该审批的处理人',
+      errorCode: 'DINGTALK_NOT_TASK_OWNER',
+      id: 't-1',
+      ok: false,
+      title: '出差申请',
+    });
+    expect(String(items[0]?.error)).not.toMatch(/DINGTALK_|listPending|不要向用户/);
+    expect(items[1]).toEqual({ error: '未执行', id: 't-2', ok: false });
+  });
+
+  it('puts a sanitized apply link on a forbidden approval batch item', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const approveTasks = vi.fn().mockResolvedValue({
+      items: [
+        {
+          applyUrl,
+          errorCode: 'DINGTALK_FORBIDDEN',
+          id: 't-1',
+          ok: false,
+          title: '出差申请',
+        },
+        {
+          applyUrl: 'https://evil.example/phish',
+          errorCode: 'DINGTALK_NOT_FOUND',
+          id: 't-2',
+          ok: false,
+        },
+      ],
+    });
+    const runtime = createDingtalkApprovalRuntime(makeService({ approveTasks }));
+    const result = await runtime.approveTasks({
+      tasks: [
+        { processInstanceId: 'pi-1', taskId: 't-1' },
+        { processInstanceId: 'pi-2', taskId: 't-2' },
+      ],
+    });
+    expect(result.content).toContain(`[申请权限](${applyUrl})`);
+    expect(result.content).toContain('✗ 出差申请：');
+    expect(result.content).not.toContain('evil.example');
+    const items = (result.state as { items: Array<Record<string, unknown>> }).items;
+    expect(items[0]).toMatchObject({
+      actionLabel: '申请权限',
+      actionUrl: applyUrl,
+      error: '没有权限执行该操作',
+      errorCode: 'DINGTALK_FORBIDDEN',
+    });
+    expect(items[1]).toEqual({
+      error: '没有找到该审批',
+      errorCode: 'DINGTALK_NOT_FOUND',
+      id: 't-2',
+      ok: false,
+    });
+    expect(String(items[0]?.error)).not.toContain(applyUrl);
+    expect(JSON.stringify(items)).not.toContain('evil.example');
+  });
+
+  it('stops a fallback approval batch after two consecutive unavailable responses', async () => {
+    const unavailable = () =>
+      Object.assign(new Error('DINGTALK_UNAVAILABLE'), { code: 'DINGTALK_UNAVAILABLE' });
+    const approveTask = vi
+      .fn()
+      .mockRejectedValueOnce(unavailable())
+      .mockResolvedValueOnce({ title: '报销' })
+      .mockRejectedValueOnce(unavailable())
+      .mockRejectedValueOnce(unavailable());
+    const runtime = createDingtalkApprovalRuntime(makeService({ approveTask }));
+    const result = await runtime.approveTasks({
+      tasks: [
+        { processInstanceId: 'pi-1', taskId: 'a' },
+        { processInstanceId: 'pi-2', taskId: 'b' },
+        { processInstanceId: 'pi-3', taskId: 'c' },
+        { processInstanceId: 'pi-4', taskId: 'd' },
+        { processInstanceId: 'pi-5', taskId: 'e' },
+      ],
+    });
+    expect(approveTask).toHaveBeenCalledTimes(4);
+    expect(result.content).toContain('✓ 报销');
+    expect(result.content).toContain('✗ e：未执行');
+  });
 });

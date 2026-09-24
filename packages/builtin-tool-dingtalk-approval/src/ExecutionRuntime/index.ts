@@ -1,5 +1,10 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
-import { DINGTALK_CONSOLE_LINKS, markdownLink } from '@lobechat/utils/appLink';
+import {
+  APP_LINK_PATHS,
+  DINGTALK_CONSOLE_LINKS,
+  identitySignInPath,
+  markdownLink,
+} from '@lobechat/utils/appLink';
 
 import type {
   AddApproverParams,
@@ -10,7 +15,10 @@ import type {
   ApprovalScanIncomplete,
   ApprovalScanIncompleteReason,
   ApproveTaskParams,
+  ApproveTasksParams,
   ApproveTaskState,
+  BatchWriteItem,
+  BatchWriteState,
   CommentApprovalParams,
   CommentApprovalState,
   CreateApprovalRuleParams,
@@ -19,6 +27,7 @@ import type {
   DeleteApprovalRuleState,
   DeleteTemplateParams,
   DeleteTemplateState,
+  DingtalkApprovalBatchAction,
   DirectoryDepartmentHit,
   DirectoryUserHit,
   GetApprovalDetailParams,
@@ -34,6 +43,7 @@ import type {
   ListTemplatesParams,
   ListTemplatesState,
   RefuseTaskParams,
+  RefuseTasksParams,
   RefuseTaskState,
   ReturnTaskParams,
   ReturnTaskState,
@@ -53,9 +63,14 @@ import type {
   WithdrawApplicationState,
 } from '../types';
 import {
+  DINGTALK_ERROR_CODES,
+  DINGTALK_INTERNAL_TOOL_CONTENT,
   type DingtalkApprovalLinkContext,
+  dingtalkErrorGuidance,
   dingtalkFailureResult,
   formatCandidateLabel,
+  sanitizeDingtalkFailure,
+  sanitizeOpenDevApplyUrl,
 } from './errors';
 
 export {
@@ -71,6 +86,8 @@ export interface CreateApprovalRuleRuntimeInput extends CreateApprovalRuleParams
 export interface IDingtalkApprovalService {
   addApprover: (params: AddApproverParams) => Promise<unknown>;
   approveTask: (params: ApproveTaskParams) => Promise<unknown>;
+  /** Server batch. Absent on the client service, which falls back to approveTask. */
+  approveTasks?: (params: ApproveTasksParams) => Promise<unknown>;
   commentApproval: (params: CommentApprovalParams) => Promise<unknown>;
   createApprovalRule: (params: CreateApprovalRuleRuntimeInput) => Promise<unknown>;
   deleteApprovalRule: (params: DeleteApprovalRuleParams) => Promise<unknown>;
@@ -82,6 +99,8 @@ export interface IDingtalkApprovalService {
   listPendingApprovals: (params?: ListPendingApprovalsParams) => Promise<unknown>;
   listTemplates: (params?: ListTemplatesParams) => Promise<unknown>;
   refuseTask: (params: RefuseTaskParams) => Promise<unknown>;
+  /** Server batch. Absent on the client service, which falls back to refuseTask. */
+  refuseTasks?: (params: RefuseTasksParams) => Promise<unknown>;
   returnTask: (params: ReturnTaskParams) => Promise<unknown>;
   saveTemplate: (params: SaveTemplateParams) => Promise<unknown>;
   searchDirectory: (params: SearchDirectoryParams) => Promise<{
@@ -699,6 +718,209 @@ const writeOk = (
   state: unknown,
 ): BuiltinServerRuntimeOutput => ok(`${line}\n${compactJson(payload)}`, state);
 
+const APPROVAL_BATCH_LIMIT = 20;
+
+const APPROVAL_BATCH_COPY: Record<DingtalkApprovalBatchAction, { noun: string; verb: string }> = {
+  approveTasks: { noun: '审批', verb: '已同意' },
+  refuseTasks: { noun: '审批', verb: '已拒绝' },
+};
+
+const APPROVAL_BATCH_STOP_CODES = new Set<string>([
+  'DINGTALK_NOT_CONFIGURED',
+  'DINGTALK_FEATURE_DISABLED',
+  'DINGTALK_FORBIDDEN',
+  'DINGTALK_PREMIUM_REQUIRED',
+  'DINGTALK_RATE_LIMITED',
+  'DINGTALK_IDENTITY_UNBOUND',
+  'DINGTALK_IDENTITY_UNVERIFIED',
+  'DINGTALK_IDENTITY_INACTIVE',
+  'DINGTALK_NOT_APPROVAL_ADMIN',
+  'DINGTALK_AUTOMATION_OFF',
+]);
+
+const APPROVAL_BATCH_UNAVAILABLE_STREAK = 2;
+
+/** Short card copy. No codes, API names, or instructions aimed at the model. */
+const APPROVAL_USER_ERROR: Record<string, string> = {
+  DINGTALK_AMBIGUOUS: '人员无法唯一确定',
+  DINGTALK_AUTOMATION_OFF: '自动审批已关闭',
+  DINGTALK_FEATURE_DISABLED: '审批能力未开启',
+  DINGTALK_FORBIDDEN: '没有权限执行该操作',
+  DINGTALK_IDENTITY_INACTIVE: '钉钉账号已停用',
+  DINGTALK_IDENTITY_UNBOUND: '当前账号未绑定钉钉',
+  DINGTALK_IDENTITY_UNVERIFIED: '钉钉身份未经验证',
+  DINGTALK_INTERNAL: '操作失败，请稍后重试',
+  DINGTALK_INVALID: '参数无效',
+  DINGTALK_NOT_APPROVAL_ADMIN: '需要钉钉审批管理员权限',
+  DINGTALK_NOT_CONFIGURED: '钉钉服务号未配置',
+  DINGTALK_NOT_FOUND: '没有找到该审批',
+  DINGTALK_NOT_ORIGINATOR: '你不是该审批的发起人',
+  DINGTALK_NOT_TASK_OWNER: '你不是该审批的处理人',
+  DINGTALK_PREMIUM_REQUIRED: '需要开通钉钉审批高级版',
+  DINGTALK_RATE_LIMITED: '请求过于频繁',
+  DINGTALK_RULE_LIMIT: '已达到规则数量上限',
+  DINGTALK_UNAVAILABLE: '钉钉服务暂时不可用',
+};
+
+const approvalUserError = (code: string | undefined): string =>
+  (code && APPROVAL_USER_ERROR[code]) || '操作失败，请稍后重试';
+
+interface BatchAction {
+  actionLabel: string;
+  actionUrl: string;
+}
+
+const safeResolvedAppLink = (resolved: string, path: string): string | undefined => {
+  const trimmed = resolved.trim();
+  if (!trimmed || trimmed.length > 2000 || /\s/.test(trimmed)) return undefined;
+  if (trimmed === path && (path === '/' || (path.startsWith('/') && !path.startsWith('//')))) {
+    return trimmed;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') return undefined;
+    if (url.searchParams.get('redirect') === path) return trimmed;
+    if (`${url.pathname}${url.search}` === path) return trimmed;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const safeDingtalkConsoleUrl = (value: string): string | undefined => {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2000) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') return undefined;
+    const host = url.hostname.replace(/\.$/, '').toLowerCase();
+    if (
+      host === 'oa.dingtalk.com' ||
+      host === 'open-dev.dingtalk.com' ||
+      host.endsWith('.dingtalk.com')
+    ) {
+      return trimmed;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const approvalBatchAction = (
+  code: string | undefined,
+  applyUrl: string | undefined,
+  links: DingtalkApprovalLinkContext,
+): BatchAction | undefined => {
+  const apply = sanitizeOpenDevApplyUrl(applyUrl);
+  if (apply) return { actionLabel: '申请权限', actionUrl: apply };
+  if (!code) return undefined;
+  const resolve = links.resolveLink ?? ((path: string) => path);
+  const app = (label: string, path: string): BatchAction | undefined => {
+    const actionUrl = safeResolvedAppLink(resolve(path), path);
+    return actionUrl ? { actionLabel: label, actionUrl } : undefined;
+  };
+  const consoleLink = (label: string, url: string): BatchAction | undefined => {
+    const actionUrl = safeDingtalkConsoleUrl(url);
+    return actionUrl ? { actionLabel: label, actionUrl } : undefined;
+  };
+  switch (code) {
+    case 'DINGTALK_NOT_CONFIGURED':
+    case 'DINGTALK_FEATURE_DISABLED':
+    case 'DINGTALK_AUTOMATION_OFF': {
+      return app('前往设置', APP_LINK_PATHS.adminImConnectors);
+    }
+    case 'DINGTALK_IDENTITY_UNBOUND':
+    case 'DINGTALK_IDENTITY_UNVERIFIED': {
+      return app('去授权', identitySignInPath(links.platform));
+    }
+    case 'DINGTALK_IDENTITY_INACTIVE':
+    case 'DINGTALK_NOT_APPROVAL_ADMIN':
+    case 'DINGTALK_PREMIUM_REQUIRED': {
+      return consoleLink('前往设置', DINGTALK_CONSOLE_LINKS.oaAdmin);
+    }
+    case 'DINGTALK_RULE_LIMIT': {
+      return app('前往设置', APP_LINK_PATHS.approvalRules);
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const readErrorApplyUrl = (error: unknown): string | undefined => {
+  if (!error || typeof error !== 'object') return undefined;
+  return sanitizeOpenDevApplyUrl((error as { applyUrl?: unknown }).applyUrl);
+};
+
+const KNOWN_APPROVAL_CODES = new Set<string>(DINGTALK_ERROR_CODES);
+
+interface ApprovalTaskInput {
+  processInstanceId: string;
+  taskId: string;
+}
+
+const readApprovalTasks = (value: unknown): { error: string } | { tasks: ApprovalTaskInput[] } => {
+  if (!Array.isArray(value) || value.length < 1 || value.length > APPROVAL_BATCH_LIMIT) {
+    return {
+      error: '审批任务须为 1 到 20 个互不重复的任务，每项都要有 processInstanceId 和 taskId。',
+    };
+  }
+  const seen = new Set<string>();
+  const tasks: ApprovalTaskInput[] = [];
+  for (const item of value) {
+    const record = isRecord(item) ? item : {};
+    const processInstanceId =
+      typeof record.processInstanceId === 'string' ? record.processInstanceId : '';
+    const taskId = typeof record.taskId === 'string' ? record.taskId : '';
+    if (!processInstanceId.trim() || !taskId.trim()) {
+      return {
+        error: '审批任务须为 1 到 20 个互不重复的任务，每项都要有 processInstanceId 和 taskId。',
+      };
+    }
+    const key = `${processInstanceId}\0${taskId}`;
+    if (seen.has(key) || seen.has(`task:${taskId}`)) return { error: '审批任务不能重复。' };
+    seen.add(key);
+    seen.add(`task:${taskId}`);
+    tasks.push({ processInstanceId, taskId });
+  }
+  return { tasks };
+};
+
+const approvalValidationOutput = (message: string): BuiltinServerRuntimeOutput => ({
+  content: message,
+  error: { code: 'VALIDATION', message },
+  success: false,
+});
+
+interface RawApprovalBatchItem {
+  applyUrl?: string;
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  title?: string;
+}
+
+const readRawApprovalItems = (data: unknown): RawApprovalBatchItem[] => {
+  const record = isRecord(data) ? data : undefined;
+  const items = record && Array.isArray(record.items) ? record.items : [];
+  const rows: RawApprovalBatchItem[] = [];
+  for (const item of items) {
+    if (!isRecord(item) || typeof item.id !== 'string') continue;
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    rows.push({
+      applyUrl: sanitizeOpenDevApplyUrl(item.applyUrl),
+      errorCode: typeof item.errorCode === 'string' ? item.errorCode : undefined,
+      id: item.id,
+      ok: item.ok === true,
+      skipped: item.skipped === true,
+      title: title || undefined,
+    });
+  }
+  return rows;
+};
+
 const RAW_USER_KEYS = new Set(['ccUserIds', 'ccUsers', 'originatorUserId', 'userId']);
 
 const stripRawUserIds = (value: unknown): unknown => {
@@ -968,6 +1190,154 @@ export class DingtalkApprovalExecutionRuntime {
     } catch (error) {
       return this.fail(error);
     }
+  }
+
+  private approvalValidationFailure(error: unknown): BuiltinServerRuntimeOutput | undefined {
+    if (!isRecord(error) || error.code !== 'VALIDATION') return undefined;
+    const message =
+      typeof error.message === 'string' && error.message.trim()
+        ? error.message.trim()
+        : '参数无效（VALIDATION）。';
+    return approvalValidationOutput(message);
+  }
+
+  /** Full model sentence. The card row keeps the short user error instead. */
+  private approvalItemErrorLine(code: string | undefined, applyUrl?: string): string {
+    if (!code || !KNOWN_APPROVAL_CODES.has(code)) return DINGTALK_INTERNAL_TOOL_CONTENT;
+    const line = dingtalkErrorGuidance(code, undefined, undefined, undefined, this.links, applyUrl);
+    return line.split('\n')[0] ?? line;
+  }
+
+  private presentApprovalBatch(
+    action: DingtalkApprovalBatchAction,
+    rawItems: RawApprovalBatchItem[],
+  ): BuiltinServerRuntimeOutput {
+    const copy = APPROVAL_BATCH_COPY[action];
+    const rows = rawItems.map((item) => {
+      const title = item.title ? { title: item.title } : {};
+      if (item.ok) return { item: { id: item.id, ok: true, ...title }, model: undefined };
+      if (item.skipped) {
+        return { item: { error: '未执行', id: item.id, ok: false, ...title }, model: '未执行' };
+      }
+      const actionLink = approvalBatchAction(item.errorCode, item.applyUrl, this.links);
+      return {
+        item: {
+          error: approvalUserError(item.errorCode),
+          ...(item.errorCode ? { errorCode: item.errorCode } : {}),
+          id: item.id,
+          ok: false,
+          ...title,
+          ...actionLink,
+        },
+        model: this.approvalItemErrorLine(item.errorCode, item.applyUrl),
+      };
+    });
+    const items: BatchWriteItem[] = rows.map((row) => row.item);
+    const succeeded = items.filter((item) => item.ok).length;
+    const failed = items.length - succeeded;
+    const summary =
+      failed === 0
+        ? `${copy.verb} ${succeeded} 项${copy.noun}`
+        : `${copy.verb} ${succeeded} 项${copy.noun}，${failed} 项失败`;
+    const lines = rows.map((row) => {
+      const label = row.item.title || row.item.id;
+      return row.item.ok ? `✓ ${label}` : `✗ ${label}：${row.model ?? '未执行'}`;
+    });
+    const state: BatchWriteState = {
+      action,
+      failed,
+      items,
+      kind: 'batchWrite',
+      succeeded,
+      summary,
+      total: items.length,
+    };
+    const content = [summary, ...lines].join('\n');
+    if (succeeded > 0) return { content, state, success: true };
+    const first = rawItems.find((item) => !item.ok && !item.skipped) ?? rawItems[0];
+    const message = rows.find((row) => !row.item.ok && row.model !== '未执行')?.model ?? '未执行';
+    return {
+      content,
+      error: { code: first?.errorCode ?? 'VALIDATION', message },
+      state,
+      success: false,
+    };
+  }
+
+  private async approvalBatchBySingle(
+    action: DingtalkApprovalBatchAction,
+    tasks: ApprovalTaskInput[],
+    remark: string | undefined,
+  ): Promise<BuiltinServerRuntimeOutput> {
+    const items: RawApprovalBatchItem[] = [];
+    let stop = false;
+    let unavailableStreak = 0;
+    for (const task of tasks) {
+      if (stop) {
+        items.push({ id: task.taskId, ok: false, skipped: true });
+        continue;
+      }
+      try {
+        const data =
+          action === 'approveTasks'
+            ? await this.service.approveTask({ ...task, remark })
+            : await this.service.refuseTask({ ...task, remark: remark ?? '' });
+        unavailableStreak = 0;
+        items.push({
+          id: task.taskId,
+          ok: true,
+          title: pickWriteName(data, ['title', 'name', 'processName']),
+        });
+      } catch (error) {
+        const sanitized = sanitizeDingtalkFailure(error, this.links);
+        const applyUrl = readErrorApplyUrl(error);
+        items.push({
+          ...(applyUrl ? { applyUrl } : {}),
+          errorCode: sanitized.error.code,
+          id: task.taskId,
+          ok: false,
+        });
+        const code = sanitized.error.code;
+        if (code === 'DINGTALK_UNAVAILABLE') {
+          unavailableStreak += 1;
+          if (unavailableStreak >= APPROVAL_BATCH_UNAVAILABLE_STREAK) stop = true;
+        } else {
+          unavailableStreak = 0;
+          if (APPROVAL_BATCH_STOP_CODES.has(code)) stop = true;
+        }
+      }
+    }
+    return this.presentApprovalBatch(action, items);
+  }
+
+  private async runApprovalBatch(
+    action: DingtalkApprovalBatchAction,
+    args: { remark?: string; tasks: unknown },
+  ): Promise<BuiltinServerRuntimeOutput> {
+    if (action === 'refuseTasks' && !args.remark?.trim()) {
+      return approvalValidationOutput('拒绝审批必须填写意见。');
+    }
+    const read = readApprovalTasks(args.tasks);
+    if ('error' in read) return approvalValidationOutput(read.error);
+    const batch = action === 'approveTasks' ? this.service.approveTasks : this.service.refuseTasks;
+    if (!batch) return this.approvalBatchBySingle(action, read.tasks, args.remark);
+    try {
+      const data =
+        action === 'approveTasks'
+          ? await this.service.approveTasks?.({ remark: args.remark, tasks: read.tasks })
+          : await this.service.refuseTasks?.({ remark: args.remark ?? '', tasks: read.tasks });
+      return this.presentApprovalBatch(action, readRawApprovalItems(data));
+    } catch (error) {
+      return this.approvalValidationFailure(error) ?? this.fail(error);
+    }
+  }
+
+  async approveTasks(args: ApproveTasksParams): Promise<BuiltinServerRuntimeOutput> {
+    return this.runApprovalBatch('approveTasks', { remark: args?.remark, tasks: args?.tasks });
+  }
+
+  async refuseTasks(args: RefuseTasksParams): Promise<BuiltinServerRuntimeOutput> {
+    return this.runApprovalBatch('refuseTasks', { remark: args?.remark, tasks: args?.tasks });
   }
 
   async transferTask(args: TransferTaskParams): Promise<BuiltinServerRuntimeOutput> {

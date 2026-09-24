@@ -1,11 +1,13 @@
 'use client';
 
 import type { BuiltinRenderProps } from '@lobechat/types';
+import { Flexbox } from '@lobehub/ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type {
   AuthRequiredState,
+  BatchWriteState,
   FileState,
   GroupsState,
   ListMyTodosState,
@@ -20,6 +22,7 @@ import type {
 import { isDingtalkPersonalApiName } from '../apiNames';
 import ErrorNotice from '../components/ErrorNotice';
 import AuthorizationRequired from './AuthorizationRequired';
+import BatchWriteResult from './BatchWriteResult';
 import FileResult from './FileResult';
 import GroupList from './GroupList';
 import MessageList from './MessageList';
@@ -34,6 +37,7 @@ import WriteResult from './WriteResult';
 /** Every projected state of contract §4; `kind` decides the view. */
 export type DingtalkPersonalRenderState =
   | AuthRequiredState
+  | BatchWriteState
   | FileState
   | GroupsState
   | ListMyTodosState
@@ -59,6 +63,18 @@ const ResultRender = memo<BuiltinRenderProps<Record<string, unknown>, DingtalkPe
     // Checked before the error: an unauthorized call fails, and its state carries
     // the way out.
     if (state?.kind === 'authorizationRequired') return <AuthorizationRequired />;
+    // A batch that failed as a whole still lists what happened to each item, under
+    // the mapped message that says how to fix it.
+    if (state?.kind === 'batchWrite') {
+      if (!pluginError) return <BatchWriteResult state={state} />;
+
+      return (
+        <Flexbox gap={8}>
+          <ErrorNotice error={pluginError} state={state} />
+          <BatchWriteResult state={state} />
+        </Flexbox>
+      );
+    }
     if (pluginError) return <ErrorNotice error={pluginError} state={state} />;
     if (!state) return null;
 

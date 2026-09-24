@@ -11,7 +11,8 @@ import WriteResult from './WriteResult';
 
 /**
  * Render registry: each read API gets its own compact result view, every write
- * API a one-line success state (or the mapped error).
+ * API a one-line success state (or the mapped error); a batch write's state
+ * switches the same render to its per-item list.
  */
 export const DingtalkWorkspaceRenders: Record<string, BuiltinRender> = {
   [DingtalkWorkspaceApiName.getEvent]: EventDetail as BuiltinRender,
@@ -25,6 +26,7 @@ export const DingtalkWorkspaceRenders: Record<string, BuiltinRender> = {
   ),
 };
 
+export { default as DingtalkWorkspaceBatchWriteRender } from './BatchWriteResult';
 export { default as DingtalkWorkspaceDirectoryRender } from './DirectoryList';
 export { default as DingtalkWorkspaceEventDetailRender } from './EventDetail';
 export { default as DingtalkWorkspaceEventListRender } from './EventList';

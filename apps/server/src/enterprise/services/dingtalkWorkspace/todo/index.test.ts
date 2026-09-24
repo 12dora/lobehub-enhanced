@@ -90,6 +90,7 @@ const {
   personalTodoAuthNote,
   resetOrgTodoReadGateForTest,
   resetTodoListCacheForTest,
+  todoMergedInvalidationCountForTest,
 } = await import('./index');
 const {
   ORG_TODO_READ_DISCOVER_CLAIM_KEY,
@@ -134,7 +135,14 @@ describe('DingtalkTodoService', () => {
     mockGetPersonalConfig.mockResolvedValue({
       brokerConfigured: false,
       enabled: false,
-      features: { chat: false, report: false, todo: false, write: false },
+      features: {
+        chat: false,
+        docs: false,
+        report: false,
+        sheets: false,
+        todo: false,
+        write: false,
+      },
     });
     mockPersonalGetStatus.mockReset();
     mockPersonalExec.mockReset();
@@ -666,6 +674,256 @@ describe('DingtalkTodoService', () => {
     expect(mockRequest).not.toHaveBeenCalled();
   });
 
+  it('completeTodos writes each id in order, then drops the merged cache once', async () => {
+    mockRequest.mockResolvedValue({});
+    const before = todoMergedInvalidationCountForTest();
+    const result = await service.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(result.items).toEqual([
+      { id: 't1', ok: true },
+      { id: 't2', ok: true },
+    ]);
+    expect(mockRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        body: { done: true },
+        method: 'PUT',
+        path: '/v1.0/todo/users/union-me/tasks/t1',
+      }),
+    );
+    expect(mockRequest).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: 'PUT',
+        path: '/v1.0/todo/users/union-me/tasks/t2',
+      }),
+    );
+    expect(todoMergedInvalidationCountForTest()).toBe(before + 1);
+    expect(mockAppend).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops a todo batch on rate limit and leaves the rest unexecuted', async () => {
+    mockRequest
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    const result = await service.completeTodos({ taskIds: ['t1', 't2', 't3'] });
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(result.items.map((item) => item.ok)).toEqual([true, false, false]);
+    expect(result.items[1]?.errorCode).toBe('DINGTALK_RATE_LIMITED');
+    expect(result.items[2]?.skipped).toBe(true);
+    expect(todoMergedInvalidationCountForTest()).toBe(1);
+  });
+
+  it('continues a todo batch after a per-item miss', async () => {
+    mockRequest
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_NOT_FOUND'))
+      .mockResolvedValueOnce({});
+    const result = await service.deleteTodos({ taskIds: ['t1', 'missing', 't3'] });
+    expect(mockRequest).toHaveBeenCalledTimes(3);
+    expect(result.items[1]?.errorCode).toBe('DINGTALK_NOT_FOUND');
+    expect(result.items[2]?.ok).toBe(true);
+    expect(result.items[2]?.skipped).toBeUndefined();
+  });
+
+  it('rejects a duplicate or empty todo batch before any write', async () => {
+    await expect(service.completeTodos({ taskIds: ['t1', 't1'] })).rejects.toMatchObject({
+      code: 'VALIDATION',
+    });
+    await expect(service.completeTodos({ taskIds: [] })).rejects.toMatchObject({
+      code: 'VALIDATION',
+    });
+    await expect(service.deleteTodos({ taskIds: ['  '] })).rejects.toMatchObject({
+      code: 'VALIDATION',
+    });
+    await expect(
+      service.completeTodos({ taskIds: Array.from({ length: 21 }, (_, index) => `t${index}`) }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it('stops the whole todo batch when the feature switch is off', async () => {
+    mockAssertFeature.mockRejectedValueOnce(
+      new DingtalkWorkspaceError('DINGTALK_FEATURE_DISABLED'),
+    );
+    const result = await service.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(mockRequest).not.toHaveBeenCalled();
+    expect(result.items[0]?.errorCode).toBe('DINGTALK_FEATURE_DISABLED');
+    expect(result.items[1]?.skipped).toBe(true);
+    expect(todoMergedInvalidationCountForTest()).toBe(0);
+  });
+
+  it('continues after a per-item forbidden and stops when the app lacks permission', async () => {
+    mockRequest
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_FORBIDDEN'))
+      .mockResolvedValueOnce({});
+    const continued = await service.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(continued.items[0]?.errorCode).toBe('DINGTALK_FORBIDDEN');
+    expect(continued.items[0]?.applyUrl).toBeUndefined();
+    expect(continued.items[1]?.ok).toBe(true);
+
+    mockRequest.mockReset();
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    mockRequest.mockRejectedValueOnce(
+      new DingtalkWorkspaceError('DINGTALK_FORBIDDEN', 'Forbidden', ['Todo.Todo.Write'], applyUrl),
+    );
+    const stopped = await service.deleteTodos({ taskIds: ['t1', 't2'] });
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(stopped.items[0]).toMatchObject({
+      applyUrl,
+      errorCode: 'DINGTALK_FORBIDDEN',
+      id: 't1',
+      ok: false,
+    });
+    expect(stopped.items[1]?.skipped).toBe(true);
+
+    mockRequest.mockReset();
+    mockRequest
+      .mockRejectedValueOnce(
+        new DingtalkWorkspaceError(
+          'DINGTALK_FORBIDDEN',
+          'Forbidden',
+          undefined,
+          'https://evil.example/phish',
+        ),
+      )
+      .mockResolvedValueOnce({});
+    const phishing = await service.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(phishing.items[0]?.applyUrl).toBeUndefined();
+    expect(phishing.items[1]?.ok).toBe(true);
+  });
+
+  it('stops a todo batch after two consecutive unavailable responses', async () => {
+    mockRequest
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE'))
+      .mockResolvedValueOnce({});
+    const once = await service.completeTodos({ taskIds: ['t1', 't2'] });
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(once.items[0]?.errorCode).toBe('DINGTALK_UNAVAILABLE');
+    expect(once.items[1]?.ok).toBe(true);
+
+    mockRequest.mockReset();
+    mockRequest
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE'))
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE'))
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_UNAVAILABLE'));
+    const reset = await service.deleteTodos({ taskIds: ['a', 'b', 'c', 'd', 'e'] });
+    expect(mockRequest).toHaveBeenCalledTimes(4);
+    expect(reset.items.map((item) => item.ok)).toEqual([false, true, false, false, false]);
+    expect(reset.items[3]?.errorCode).toBe('DINGTALK_UNAVAILABLE');
+    expect(reset.items[4]?.skipped).toBe(true);
+    expect(reset.items[4]?.errorCode).toBeUndefined();
+  });
+
+  it('fills batch titles from the cached subject, including failed and skipped rows', async () => {
+    mockRequest
+      .mockResolvedValueOnce({
+        todoCards: [
+          { isDone: false, subject: '写周报', taskId: 't1' },
+          { isDone: false, subject: '对账', taskId: 't2' },
+        ],
+      })
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_RATE_LIMITED'));
+    await service.preview({ apiName: 'completeTodo', args: { taskId: 't1' } });
+    const result = await service.completeTodos({ taskIds: ['t1', 't2', 't3'] });
+    expect(result.items[0]).toEqual({ id: 't1', ok: true, title: '写周报' });
+    expect(result.items[1]).toMatchObject({
+      errorCode: 'DINGTALK_RATE_LIMITED',
+      id: 't2',
+      ok: false,
+      title: '对账',
+    });
+    expect(result.items[2]).toEqual({ id: 't3', ok: false, skipped: true });
+  });
+
+  it('logs an unexpected batch error and still records the item', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockRequest.mockRejectedValueOnce(new Error('socket hang up')).mockResolvedValueOnce({});
+    try {
+      const result = await service.completeTodos({ taskIds: ['t1', 't2'] });
+      expect(result.items[0]?.errorCode).toBe('DINGTALK_INTERNAL');
+      expect(result.items[1]?.ok).toBe(true);
+      expect(spy).toHaveBeenCalledWith('[dingtalk.todo] batch item failed', {
+        code: 'DINGTALK_INTERNAL',
+        errorClass: 'Error',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not log a domain batch failure', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockRequest.mockRejectedValueOnce(new DingtalkWorkspaceError('DINGTALK_NOT_FOUND'));
+    try {
+      await service.completeTodos({ taskIds: ['t1'] });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps a successful batch item when the audit write throws', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockRequest.mockResolvedValueOnce({});
+    mockAppend.mockRejectedValueOnce(new Error('audit down'));
+    try {
+      const result = await service.completeTodos({ taskIds: ['t1'] });
+      expect(result.items).toEqual([{ id: 't1', ok: true }]);
+      expect(spy).toHaveBeenCalledWith('[dingtalk.todo] audit append failed', {
+        action: 'complete',
+        errorClass: 'Error',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('preview(completeTodos) titles the batch and fails if any todo cannot be resolved', async () => {
+    mockRequest.mockResolvedValueOnce({
+      todoCards: [
+        { subject: '写周报', taskId: 't1' },
+        { subject: '对账', taskId: 't2' },
+      ],
+    });
+    const preview = await service.preview({
+      apiName: 'completeTodos',
+      args: { taskIds: ['t1', 't2'] },
+    });
+    expect(preview.danger).toBe(false);
+    expect(preview.title).toBe('完成 2 项待办');
+    expect(preview.lines).toEqual([
+      { label: '待办', value: '1. 写周报' },
+      { label: '待办', value: '2. 对账' },
+    ]);
+    expect(preview.warnings).toEqual(['仅能查看和编辑通过本应用创建的待办']);
+    expect(JSON.stringify(preview.lines)).not.toContain('t1');
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+
+    mockRequest.mockResolvedValueOnce({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    await expect(
+      service.preview({ apiName: 'deleteTodos', args: { taskIds: ['t1', 'missing'] } }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_NOT_FOUND' });
+  });
+
+  it('preview(deleteTodos) is dangerous and rejects duplicates before lookup', async () => {
+    mockRequest.mockResolvedValueOnce({ todoCards: [{ subject: '写周报', taskId: 't1' }] });
+    const preview = await service.preview({
+      apiName: 'deleteTodos',
+      args: { taskIds: ['t1'] },
+    });
+    expect(preview.danger).toBe(true);
+    expect(preview.title).toBe('删除 1 项待办');
+    expect(preview.lines).toEqual([{ label: '待办', value: '1. 写周报' }]);
+    mockRequest.mockClear();
+    await expect(
+      service.preview({ apiName: 'completeTodos', args: { taskIds: ['t1', 't1'] } }),
+    ).rejects.toMatchObject({ code: 'DINGTALK_INVALID' });
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown preview api names', async () => {
     await expect(service.preview({ apiName: 'listTodos', args: {} })).rejects.toBeInstanceOf(
       DingtalkWorkspaceError,
@@ -676,7 +934,14 @@ describe('DingtalkTodoService', () => {
     mockGetPersonalConfig.mockResolvedValue({
       brokerConfigured: true,
       enabled: true,
-      features: { chat: false, report: false, todo: true, write: false },
+      features: {
+        chat: false,
+        docs: false,
+        report: false,
+        sheets: false,
+        todo: true,
+        write: false,
+      },
     });
   };
 

@@ -178,4 +178,51 @@ describe('dingtalkWorkspaceRouter', () => {
       message: 'DINGTALK_ROOM_UNAVAILABLE',
     });
   });
+
+  it('forwards a sanitized apply URL and scope codes for an app-wide 403', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    mockTodo.completeTodo.mockRejectedValueOnce(
+      new DingtalkWorkspaceError(
+        'DINGTALK_FORBIDDEN',
+        'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+        ['Todo.Todo.Write', 'Todo.Todo.Write'],
+        applyUrl,
+      ),
+    );
+    await expect(createCaller().todo.completeTodo({ taskId: 't1' })).rejects.toMatchObject({
+      cause: {
+        data: {
+          applyUrl,
+          code: 'DINGTALK_FORBIDDEN',
+          missingScopes: ['Todo.Todo.Write'],
+        },
+      },
+      code: 'FORBIDDEN',
+      message: 'DINGTALK_FORBIDDEN',
+    });
+  });
+
+  it('drops a non-open-dev apply URL and non-scope strings from error data', async () => {
+    const error = Object.assign(new Error('DINGTALK_FORBIDDEN'), {
+      applyUrl: 'https://evil.example/phish',
+      code: 'DINGTALK_FORBIDDEN',
+      missingScopes: ['Todo.Todo.Write', 'https://evil.example/scope', '权限说明'],
+    });
+    mockTodo.deleteTodo.mockRejectedValueOnce(error);
+    const caught = await createCaller()
+      .todo.deleteTodo({ taskId: 't1' })
+      .then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+    const data = (caught as { cause?: { data?: Record<string, unknown> } } | undefined)?.cause
+      ?.data;
+    expect(data).toMatchObject({
+      code: 'DINGTALK_FORBIDDEN',
+      missingScopes: ['Todo.Todo.Write'],
+    });
+    expect(data?.applyUrl).toBeUndefined();
+    expect(JSON.stringify(data)).not.toContain('evil.example');
+    expect(JSON.stringify(data)).not.toContain('权限');
+  });
 });

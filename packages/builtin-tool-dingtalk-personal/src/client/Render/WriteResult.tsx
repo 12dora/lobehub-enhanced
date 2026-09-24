@@ -10,13 +10,19 @@ import { useTranslation } from 'react-i18next';
 import type { WriteState } from '../../types';
 import { asText } from './format';
 
-const WRITE_ACTIONS = new Set(['completeTodo', 'submitReport', 'updateTodo']);
+/** Single-item writes only: a batch write has its own `batchWrite` state and card. */
+const WRITE_ACTIONS = ['completeTodo', 'submitReport', 'updateTodo'] as const;
+
+type SingleWriteAction = (typeof WRITE_ACTIONS)[number];
+
+const isSingleWriteAction = (value: unknown): value is SingleWriteAction =>
+  (WRITE_ACTIONS as readonly unknown[]).includes(value);
 
 /** Post-execution state of a confirmed write: one success line plus the server summary. */
 const WriteResult = memo<{ state: WriteState }>(({ state }) => {
   const { t } = useTranslation('plugin');
 
-  const action = WRITE_ACTIONS.has(state.action) ? state.action : undefined;
+  const action = isSingleWriteAction(state.action) ? state.action : undefined;
   const summary = asText(state.summary);
   if (!action && !summary) return null;
 

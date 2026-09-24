@@ -3,6 +3,41 @@ import { createHash } from 'node:crypto';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
 export const DINGTALK_PERSONAL_CACHE_TTL_SEC = 60;
+/** Group search and my-groups lists. */
+export const DINGTALK_PERSONAL_GROUP_CACHE_TTL_SEC = 10 * 60;
+/** Report template list and one template's fields. */
+export const DINGTALK_PERSONAL_TEMPLATE_CACHE_TTL_SEC = 60 * 60;
+
+/**
+ * One op → TTL table. Group search and report templates keep their longer
+ * windows; docs/sheets reads join the same map. Unlisted reads stay at 60s.
+ */
+const OP_TTL_SEC: Record<string, number> = {
+  'aitable.bases': DINGTALK_PERSONAL_CACHE_TTL_SEC,
+  'aitable.schema': 10 * 60,
+  'chat.myGroups': DINGTALK_PERSONAL_GROUP_CACHE_TTL_SEC,
+  'chat.searchGroups': DINGTALK_PERSONAL_GROUP_CACHE_TTL_SEC,
+  'doc.info': 10 * 60,
+  'doc.read': 5 * 60,
+  'doc.search': DINGTALK_PERSONAL_CACHE_TTL_SEC,
+  'drive.search': DINGTALK_PERSONAL_CACHE_TTL_SEC,
+  'report.template': DINGTALK_PERSONAL_TEMPLATE_CACHE_TTL_SEC,
+  'report.templates': DINGTALK_PERSONAL_TEMPLATE_CACHE_TTL_SEC,
+  'sheet.info': 10 * 60,
+  'sheet.list': 10 * 60,
+  'wiki.spaces': 10 * 60,
+};
+
+/** Read-cache TTL for a broker op. Writes are not cached. */
+export const dingtalkPersonalReadCacheTtlSec = (op: string): number =>
+  OP_TTL_SEC[op] ?? DINGTALK_PERSONAL_CACHE_TTL_SEC;
+
+/**
+ * Redis generation key. It must outlive every entry: if it expires first, the
+ * next read falls back to generation 0 and can serve a stale row.
+ */
+export const DINGTALK_PERSONAL_CACHE_GEN_TTL_SEC =
+  Math.max(DINGTALK_PERSONAL_CACHE_TTL_SEC, ...Object.values(OP_TTL_SEC)) * 2;
 
 export interface DingtalkPersonalRedisLike {
   del: (...keys: string[]) => Promise<number>;
@@ -161,7 +196,7 @@ const writeMemory = (
   const key = memoryKey(userId, current, op, hash);
   memory.delete(key);
   memory.set(key, {
-    expiresAt: Date.now() + DINGTALK_PERSONAL_CACHE_TTL_SEC * 1000,
+    expiresAt: Date.now() + dingtalkPersonalReadCacheTtlSec(op) * 1000,
     value: payload,
   });
   trimMemoryCache();
@@ -224,7 +259,7 @@ export const writeDingtalkPersonalCache = async (
       entryKey(userId, generation ?? current, op, hash),
       payload,
       'EX',
-      DINGTALK_PERSONAL_CACHE_TTL_SEC,
+      dingtalkPersonalReadCacheTtlSec(op),
     );
   } catch {
     // A cache write must not fail the read that just succeeded.
@@ -238,7 +273,7 @@ export const invalidateDingtalkPersonalCache = async (userId: string): Promise<v
   try {
     const key = genKey(userId);
     await redis.incr(key);
-    await redis.expire(key, 60 * 60);
+    await redis.expire(key, DINGTALK_PERSONAL_CACHE_GEN_TTL_SEC);
   } catch {
     // Memory generation already moved, so a later fallback cannot serve stale rows.
   }

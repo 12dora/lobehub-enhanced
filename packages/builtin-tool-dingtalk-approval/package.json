@@ -12,6 +12,7 @@
   },
   "main": "./src/index.ts",
   "dependencies": {
+    "@lobechat/builtin-tool-dingtalk-workspace": "workspace:*",
     "@lobechat/utils": "workspace:*"
   },
   "devDependencies": {

@@ -89,6 +89,8 @@ class DingtalkPersonalExecutor extends BaseExecutor<typeof DingtalkPersonalApiNa
 
   completeTodo = (params: ToolArgs) => this.forward(DingtalkPersonalApiName.completeTodo, params);
 
+  completeTodos = (params: ToolArgs) => this.forward(DingtalkPersonalApiName.completeTodos, params);
+
   submitReport = (params: ToolArgs) => this.forward(DingtalkPersonalApiName.submitReport, params);
 
   private async forward(

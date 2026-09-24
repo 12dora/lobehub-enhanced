@@ -17,6 +17,7 @@ const output: BuiltinServerRuntimeOutput = {
 
 const samples: Record<keyof typeof DingtalkPersonalApiName, object> = {
   completeTodo: { taskId: 'task-1' },
+  completeTodos: { taskIds: ['task-1', 'task-2'] },
   downloadMessageFile: { resourceId: 'file-1', resourceType: 'fileId' },
   getReport: { reportId: 'report-1' },
   getReportTemplate: { name: '日报' },

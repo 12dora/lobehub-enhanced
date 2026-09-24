@@ -2,7 +2,10 @@ export { DingtalkPersonalIdentifier, DingtalkPersonalManifest } from './manifest
 export { systemPrompt } from './systemRole';
 export {
   type AuthRequiredState,
+  type BatchWriteItem,
+  type BatchWriteState,
   type CompleteTodoParams,
+  type CompleteTodosParams,
   DingtalkPersonalApiName,
   type DingtalkPersonalLoginView,
   type DingtalkPersonalPreview,

@@ -2,10 +2,12 @@ export const DingtalkWorkspaceIdentifier = 'lobe-dingtalk-workspace';
 
 export const DingtalkWorkspaceApiName = {
   completeTodo: 'completeTodo',
+  completeTodos: 'completeTodos',
   createEvent: 'createEvent',
   createTodo: 'createTodo',
   deleteEvent: 'deleteEvent',
   deleteTodo: 'deleteTodo',
+  deleteTodos: 'deleteTodos',
   getEvent: 'getEvent',
   listEvents: 'listEvents',
   listMeetingRooms: 'listMeetingRooms',
@@ -25,7 +27,9 @@ export const DingtalkWorkspaceWriteApiNames = [
   DingtalkWorkspaceApiName.createTodo,
   DingtalkWorkspaceApiName.updateTodo,
   DingtalkWorkspaceApiName.completeTodo,
+  DingtalkWorkspaceApiName.completeTodos,
   DingtalkWorkspaceApiName.deleteTodo,
+  DingtalkWorkspaceApiName.deleteTodos,
   DingtalkWorkspaceApiName.createEvent,
   DingtalkWorkspaceApiName.updateEvent,
   DingtalkWorkspaceApiName.deleteEvent,
@@ -152,6 +156,44 @@ export interface DeleteTodoState {
   serverNow?: string;
   success: boolean;
   taskId: string;
+}
+
+export interface CompleteTodosParams {
+  taskIds: string[];
+}
+
+export interface DeleteTodosParams {
+  taskIds: string[];
+}
+
+/**
+ * One row of a batch write.
+ * `error` is a short Chinese sentence for the user (no codes, API names, or model instructions).
+ * The full model sentence stays in the tool `content` only.
+ */
+export interface BatchWriteItem {
+  /** Chinese button label when `actionUrl` is set, e.g. 申请权限 / 去授权 / 前往设置. */
+  actionLabel?: string;
+  /** Link the user should open. https, or an app-relative path this app generated. */
+  actionUrl?: string;
+  error?: string;
+  /** Stable code, e.g. DINGTALK_NOT_FOUND. */
+  errorCode?: string;
+  id: string;
+  ok: boolean;
+  title?: string;
+}
+
+export type DingtalkWorkspaceBatchAction = 'completeTodos' | 'deleteTodos';
+
+export interface BatchWriteState {
+  action: DingtalkWorkspaceBatchAction;
+  failed: number;
+  items: BatchWriteItem[];
+  kind: 'batchWrite';
+  succeeded: number;
+  summary: string;
+  total: number;
 }
 
 export interface ListEventsParams {

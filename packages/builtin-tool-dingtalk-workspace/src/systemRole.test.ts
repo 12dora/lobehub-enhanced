@@ -34,14 +34,18 @@ describe('dingtalk workspace systemRole', () => {
     expect(systemPrompt).toContain('refresh=true');
     const listTodos = DingtalkWorkspaceManifest.api.find((api) => api.name === 'listTodos');
     expect(listTodos?.description).toBe(
-      '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
+      '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo，多条用 lobe-dingtalk-personal 的 completeTodos，一次调用）；notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
     );
     expect(systemPrompt).toContain('personalTodos');
     expect(systemPrompt).toContain('lobe-dingtalk-personal updateTodo/completeTodo');
+    expect(systemPrompt).toContain('多条用 lobe-dingtalk-personal 的 completeTodos，一次调用');
     expect(systemPrompt).toContain('If notes say to authorize, relay that note');
     expect(listTodos?.parameters.properties).toHaveProperty('refresh');
     expect(systemPrompt).toContain('confirm card');
-    expect(systemPrompt).toContain('never parallelize');
+    expect(systemPrompt).toContain('completeTodos');
+    expect(systemPrompt).toContain('deleteTodos');
+    expect(systemPrompt).toContain('不要并行或逐条多次调用');
+    expect(systemPrompt).not.toContain('never parallelize');
     expect(systemPrompt).toContain('successful write result is authoritative');
   });
 

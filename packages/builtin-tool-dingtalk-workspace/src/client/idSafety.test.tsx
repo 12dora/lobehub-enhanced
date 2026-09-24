@@ -136,6 +136,26 @@ describe('Inspector shows an action, never an identifier', () => {
     expectNoIdentifier(text);
   });
 
+  it.each([DingtalkWorkspaceApiName.completeTodos, DingtalkWorkspaceApiName.deleteTodos])(
+    'counts a %s batch without naming a single todo',
+    (apiName) => {
+      const { container } = render(
+        <Summary
+          apiName={apiName}
+          args={{ taskIds: [TODO_ID, TASK_ID] }}
+          identifier={'lobe-dingtalk-workspace'}
+        />,
+      );
+      const text = container.textContent ?? '';
+
+      expect(text).toContain(
+        translate(`builtins.lobe-dingtalk-workspace.ui.batch.action.${apiName}`, { count: 2 }),
+      );
+      expect(text).not.toContain(TASK_ID);
+      expectNoIdentifier(text);
+    },
+  );
+
   it('adds a hint when the arguments carry a subject', () => {
     const { container } = render(
       <Summary
@@ -292,6 +312,42 @@ const RENDER_CASES: readonly RenderCase[] = [
     render: WriteResult,
     state: { success: true },
   },
+  {
+    api: DingtalkWorkspaceApiName.completeTodos,
+    args: { taskIds: [TODO_ID, TASK_ID] },
+    expected: '未命名待办',
+    name: 'batch result whose items are still named by their ids',
+    render: WriteResult,
+    state: {
+      action: DingtalkWorkspaceApiName.completeTodos,
+      failed: 1,
+      items: [
+        { id: TODO_ID, ok: true, title: TODO_ID },
+        { error: `执行人 ${STAFF_TOKEN} 已停用`, id: TASK_ID, ok: false },
+      ],
+      kind: 'batchWrite',
+      succeeded: 1,
+      summary: '已完成 1 项待办，1 项失败',
+      total: 2,
+    },
+  },
+  {
+    api: DingtalkWorkspaceApiName.deleteTodos,
+    args: { taskIds: [TODO_ID] },
+    // The subject is the user's own text: a long account number is not an id.
+    expected: USER_DATA.bankAccount,
+    name: 'batch result whose todo subject contains an account number',
+    render: WriteResult,
+    state: {
+      action: DingtalkWorkspaceApiName.deleteTodos,
+      failed: 0,
+      items: [{ id: TODO_ID, ok: true, title: `核对收款账号 ${USER_DATA.bankAccount}` }],
+      kind: 'batchWrite',
+      succeeded: 1,
+      summary: '已删除 1 项待办',
+      total: 1,
+    },
+  },
 ];
 
 describe('Render shows names or a neutral noun, never an identifier', () => {
@@ -346,6 +402,25 @@ describe('ConfirmCard scrubs a preview that still carries identifiers', () => {
     expect(text).toContain('同事');
     expect(text).toContain('范围');
     expect(text).toContain('部门');
+    expectNoIdentifier(text);
+  });
+
+  it('names every id-only line of a batch preview and keeps the readable ones', () => {
+    const args = { taskIds: [TODO_ID, TASK_ID] };
+    const { container } = renderConfirm(DingtalkWorkspaceApiName.deleteTodos, args, {
+      actingAs: { name: '张三' },
+      danger: true,
+      lines: [
+        { label: '1', value: TODO_ID },
+        { label: '2', value: `核对收款账号 ${USER_DATA.bankAccount}` },
+      ],
+      title: '删除 2 项待办',
+    });
+    const text = container.textContent ?? '';
+
+    expect(text).toContain('删除 2 项待办');
+    expect(text).toContain('未命名条目');
+    expect(text).toContain(USER_DATA.bankAccount);
     expectNoIdentifier(text);
   });
 
