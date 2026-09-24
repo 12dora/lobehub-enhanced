@@ -221,6 +221,12 @@ describe('DingtalkPersonalConfirm gate', () => {
     ).toBeTruthy();
     const expiredKey = 'builtins.lobe-dingtalk-personal.render.error.DINGTALK_PERSONAL_EXPIRED';
     expect(screen.getByText(dict[expiredKey])).toBeTruthy();
+    // The way out is one click away: the authorize deep link that starts the login by itself.
+    expect(
+      screen
+        .getByRole('link', { name: dict['builtins.dingtalk.action.personalAuthorize'] })
+        .getAttribute('href'),
+    ).toBe('/settings/connector?dingtalkPersonal=authorize');
   });
 
   it('rejects approval when the cached preview belongs to other arguments', async () => {

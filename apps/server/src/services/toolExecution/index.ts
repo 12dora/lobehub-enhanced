@@ -5,15 +5,13 @@ import debug from 'debug';
 
 import { ConnectorToolPermission } from '@/database/schemas';
 import { type CloudMCPParams, type StdioMCPParams, type ToolCallContent } from '@/libs/mcp';
-import {
-  buildBlockedToolResponse,
-  getConnectorToolPermission,
-} from '@/libs/mcp/connectorPermissionCheck';
+import { getConnectorToolPermission } from '@/libs/mcp/connectorPermissionCheck';
 import { platformSafeMcpService } from '@/server/enterprise/services/connectorCatalog/legacyMcpTransport';
 import { executeManagedConnectorTool } from '@/server/enterprise/services/connectorCatalog/runtimeIntegration';
 import { resolveConnectorGovernance } from '@/server/enterprise/services/connectorGovernance/resolve';
 import { deviceGateway } from '@/server/services/deviceGateway';
 import { contentBlocksToString } from '@/server/services/mcp/contentProcessor';
+import { blockedConnectorToolMessage, desktopDeviceRequiredMessage } from '@/server/utils/appLinks';
 import {
   DEFAULT_TOOL_RESULT_MAX_LENGTH,
   truncateToolResult,
@@ -152,8 +150,16 @@ export class ToolExecutionService {
           apiName,
           governedBuiltin ? 'org governance' : 'by user',
         );
-        const blocked = buildBlockedToolResponse(apiName);
-        return { ...blocked, executionTime: 0 };
+        const message = blockedConnectorToolMessage(apiName, {
+          governed: governedBuiltin,
+          platform: context.botPlatform,
+        });
+        return {
+          content: message,
+          executionTime: 0,
+          state: { content: [{ text: message, type: 'text' }], isError: false },
+          success: true,
+        };
       }
     }
     // ── End permission gate ───────────────────────────────────────────────
@@ -289,8 +295,7 @@ export class ToolExecutionService {
       }
 
       if (mcpParams.type === 'stdio') {
-        const message =
-          'This integration must run on a connected desktop device. Connect a device and try again.';
+        const message = desktopDeviceRequiredMessage(context.botPlatform);
         return {
           content: message,
           error: {

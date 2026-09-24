@@ -39,12 +39,19 @@ const readOnlineDeviceCount = (metadata: { onlineDeviceCount?: unknown } | undef
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 };
 
-/** `state.metadata.botContext` is untyped. Only a string `platform` is forwarded. */
+/** `state.metadata.botContext` is untyped. Only string platform / thread id are forwarded. */
 const readBotPlatform = (botContext: unknown): string | undefined => {
   if (typeof botContext !== 'object' || botContext === null) return undefined;
   if (!('platform' in botContext)) return undefined;
   const platform = (botContext as { platform?: unknown }).platform;
   return typeof platform === 'string' ? platform : undefined;
+};
+
+/** Thread id is forwarded only when `platform` itself is a string. */
+const readBotThreadId = (botContext: unknown): string | undefined => {
+  if (readBotPlatform(botContext) === undefined) return undefined;
+  const threadId = (botContext as { platformThreadId?: unknown }).platformThreadId;
+  return typeof threadId === 'string' ? threadId : undefined;
 };
 
 export class ServerToolTransport implements ToolTransport {
@@ -219,6 +226,7 @@ export class ServerToolTransport implements ToolTransport {
               toolManifestMap: context.effectiveManifestMap,
               toolResultMaxLength: context.toolResultMaxLength,
               botPlatform: readBotPlatform(context.state.metadata?.botContext),
+              botThreadId: readBotThreadId(context.state.metadata?.botContext),
               topicId: this.ctx.topicId,
               userId,
               workingDirectory: context.state.metadata?.deviceSystemInfo?.workingDirectory,

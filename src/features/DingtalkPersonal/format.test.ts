@@ -1,6 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatAuthorizationTime, formatCountdown, listEnabledFeatures } from './format';
+import {
+  formatAuthorizationTime,
+  formatCountdown,
+  listEnabledFeatures,
+  resolveVerificationUrl,
+} from './format';
+
+describe('resolveVerificationUrl', () => {
+  it('keeps DingTalk’s own https device-login page', () => {
+    const url = 'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=ABCD-EFGH';
+    expect(resolveVerificationUrl(url)).toBe(url);
+    expect(resolveVerificationUrl('https://dingtalk.com/verify')).toBe(
+      'https://dingtalk.com/verify',
+    );
+  });
+
+  it('refuses another host, http, look-alike hosts and control characters', () => {
+    for (const value of [
+      undefined,
+      '',
+      'http://login.dingtalk.com/oauth2/device/verify.htm',
+      'https://evil.example.com/verify',
+      'https://dingtalk.com.evil.example/verify',
+      'https://evildingtalk.com/verify',
+      'https://login.dingtalk.com@evil.example/verify',
+      'https://login.dingtalk.com/\n',
+      'https://login.dingtalk.com/\nverify',
+      '/settings/connector',
+      'javascript:alert(1)',
+    ])
+      expect(resolveVerificationUrl(value)).toBeUndefined();
+  });
+});
 
 describe('formatCountdown', () => {
   it('prints minutes and seconds, rounding a partial second up', () => {

@@ -39,6 +39,43 @@ describe('formatBotPlatformContext', () => {
     );
   });
 
+  it('tells a markdown platform to link AIHub pages with the absolute origin', () => {
+    const text = formatBotPlatformContext({
+      appUrl: 'https://chat.example.com/',
+      platformName: 'Slack',
+      supportsMarkdown: true,
+    });
+
+    expect(text).toContain('The AIHub web app is at https://chat.example.com.');
+    expect(text).toContain(
+      'full clickable markdown link that starts with https://chat.example.com',
+    );
+    expect(text).toContain('Do not write only a menu path.');
+    expect(text).not.toContain('/dingtalk/sso');
+  });
+
+  it('tells DingTalk to wrap settings links through the sign-in bridge', () => {
+    const text = formatBotPlatformContext({
+      appUrl: 'https://chat.example.com',
+      platformName: 'DingTalk',
+      supportsMarkdown: true,
+    });
+
+    expect(text).toContain('https://chat.example.com/dingtalk/sso?redirect=<urlencoded app path>');
+    expect(text).not.toContain('readMessages');
+  });
+
+  it('does not ask a plain-text platform to emit markdown links', () => {
+    const text = formatBotPlatformContext({
+      appUrl: 'https://chat.example.com',
+      platformName: 'QQ',
+      supportsMarkdown: false,
+    });
+
+    expect(text).not.toContain('<app_links>');
+    expect(text).toContain('This platform does NOT support Markdown rendering.');
+  });
+
   it('still tells a plain-text DingTalk caller not to use Markdown', () => {
     const text = formatBotPlatformContext({
       platformName: 'DingTalk',

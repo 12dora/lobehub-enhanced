@@ -30,6 +30,7 @@ const COPY: Record<string, string> = {
   'messenger.dingtalk.agent.hint':
     '来自钉钉的消息将由该助手回复，也可在对话中发送 /助手 随时切换。',
   'messenger.dingtalk.agent.label': '默认助手',
+  'messenger.dingtalk.capabilities.adminLink': '管理员入口：IM 连接器设置',
   'messenger.dingtalk.capabilities.chatDisabled': '管理员已关闭对话能力',
   'messenger.dingtalk.capabilities.pushDisabled': '管理员已关闭提醒推送',
   'messenger.dingtalk.commands.agents': '列出并切换助手',
@@ -260,6 +261,18 @@ describe('Messenger DingTalkDetail', () => {
 
     expect(screen.getByText('管理员已关闭对话能力')).toBeInTheDocument();
     expect(screen.getByText('管理员已关闭提醒推送')).toBeInTheDocument();
+    // One link to the admin switches, not one per notice.
+    const links = screen.getAllByRole('link', { name: '管理员入口：IM 连接器设置' });
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute('href')).toBe('/admin/system/general?tab=im-connectors');
+  });
+
+  it('links the admin switches when only chat is off and the account is not linked yet', () => {
+    renderDetail({ capabilities: { chat: false, push: true } });
+
+    expect(
+      screen.getByRole('link', { name: '管理员入口：IM 连接器设置' }).getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
   });
 
   it('hides the capability notices when both halves are enabled', () => {
@@ -268,5 +281,6 @@ describe('Messenger DingTalkDetail', () => {
 
     expect(screen.queryByText('管理员已关闭对话能力')).not.toBeInTheDocument();
     expect(screen.queryByText('管理员已关闭提醒推送')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '管理员入口：IM 连接器设置' })).toBeNull();
   });
 });

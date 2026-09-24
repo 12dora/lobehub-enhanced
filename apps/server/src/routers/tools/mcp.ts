@@ -17,6 +17,7 @@ import { assertLegacyConnectorTransportAllowed } from '@/server/enterprise/guard
 import { platformSafeMcpService } from '@/server/enterprise/services/connectorCatalog/legacyMcpTransport';
 import { FileService } from '@/server/services/file';
 import { processContentBlocks } from '@/server/services/mcp/contentProcessor';
+import { blockedConnectorToolMessage } from '@/server/utils/appLinks';
 
 import { scheduleToolCallReport } from './_helpers';
 
@@ -159,21 +160,11 @@ export const mcpRouter = router({
           const tools = await connectorToolModel.queryByConnector(connector.id);
           const tool = tools.find((t) => t.toolName === input.toolName);
           if (tool?.permission === ConnectorToolPermission.disabled) {
+            const message = blockedConnectorToolMessage(input.toolName, { governed: false });
             return {
-              content:
-                `The tool "${input.toolName}" has been disabled by the user and cannot be executed. ` +
-                `Please inform the user that this tool is currently disabled. ` +
-                `They can re-enable it in Settings > Connectors.`,
+              content: message,
               state: {
-                content: [
-                  {
-                    text:
-                      `The tool "${input.toolName}" has been disabled by the user and cannot be executed. ` +
-                      `Please inform the user that this tool is currently disabled. ` +
-                      `They can re-enable it in Settings > Connectors.`,
-                    type: 'text',
-                  },
-                ],
+                content: [{ text: message, type: 'text' }],
                 isError: false,
               },
               success: true,

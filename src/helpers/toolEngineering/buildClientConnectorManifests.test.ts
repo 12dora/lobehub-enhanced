@@ -64,6 +64,8 @@ describe('buildClientConnectorManifests', () => {
     // still present so the AI knows it exists, but told not to call it
     expect(m.api).toHaveLength(1);
     expect(m.api[0].description).toContain('[TOOL DISABLED]');
+    // One click back to the switch: a plain markdown link the chat routes inside the app.
+    expect(m.api[0].description).toContain('[设置 → 连接器](/settings/connector)');
     expect(m.api[0].humanIntervention).toBe('required');
   });
 });

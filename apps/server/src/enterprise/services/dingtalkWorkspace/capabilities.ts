@@ -33,6 +33,8 @@ export interface DingtalkWorkspaceCapabilities {
 export type DingtalkPermissionProbeReason = 'forbidden' | 'not_configured' | 'unreachable';
 
 export interface DingtalkPermissionProbe {
+  /** https://open-dev.dingtalk.com apply link, when DingTalk returned one. */
+  applyUrl?: string;
   missingScopes?: string[];
   ok: boolean;
   reason?: DingtalkPermissionProbeReason;
@@ -182,7 +184,7 @@ const notConfigured = (): DingtalkPermissionProbe => ({ ok: false, reason: 'not_
 
 type SubProbeOutcome =
   | { kind: 'ignore' }
-  | { kind: 'missing'; scopes: string[] }
+  | { applyUrl?: string; kind: 'missing'; scopes: string[] }
   | { kind: 'not_configured' }
   | { kind: 'ok' }
   | { kind: 'unreachable' };
@@ -201,7 +203,11 @@ const outcomeFromWriteOrWarning = (
   if (error instanceof DingtalkWorkspaceError) {
     if (error.code === 'DINGTALK_NOT_CONFIGURED') return { kind: 'not_configured' };
     if (error.code === 'DINGTALK_FORBIDDEN') {
-      return { kind: 'missing', scopes: scopesFromError(error, fallback) };
+      return {
+        applyUrl: error.applyUrl,
+        kind: 'missing',
+        scopes: scopesFromError(error, fallback),
+      };
     }
     // Scope is checked before the body: 400/404 means the scope is present.
     if (error.code === 'DINGTALK_INVALID' || error.code === 'DINGTALK_NOT_FOUND') {
@@ -217,7 +223,11 @@ const outcomeFromRead = (error: unknown, fallback: readonly string[]): SubProbeO
   if (error instanceof DingtalkWorkspaceError) {
     if (error.code === 'DINGTALK_NOT_CONFIGURED') return { kind: 'not_configured' };
     if (error.code === 'DINGTALK_FORBIDDEN') {
-      return { kind: 'missing', scopes: scopesFromError(error, fallback) };
+      return {
+        applyUrl: error.applyUrl,
+        kind: 'missing',
+        scopes: scopesFromError(error, fallback),
+      };
     }
     return { kind: 'unreachable' };
   }
@@ -243,6 +253,7 @@ const mergeProbeOutcomes = (
 ): DingtalkPermissionProbe => {
   const missing: string[] = [];
   const seen = new Set<string>();
+  let applyUrl: string | undefined;
   let requiredMissing = false;
   let sawNotConfigured = false;
   let requiredUnreachable = false;
@@ -259,6 +270,7 @@ const mergeProbeOutcomes = (
     switch (outcome.kind) {
       case 'missing': {
         addScopes(outcome.scopes);
+        if (!applyUrl && outcome.applyUrl) applyUrl = outcome.applyUrl;
         if (required) requiredMissing = true;
         break;
       }
@@ -276,12 +288,15 @@ const mergeProbeOutcomes = (
     }
   }
 
+  const withApply = <T extends DingtalkPermissionProbe>(probe: T): T =>
+    applyUrl ? { ...probe, applyUrl } : probe;
+
   if (requiredMissing) {
-    return { missingScopes: missing, ok: false, reason: 'forbidden' };
+    return withApply({ missingScopes: missing, ok: false, reason: 'forbidden' });
   }
   if (sawNotConfigured) return notConfigured();
   if (requiredUnreachable) return { ok: false, reason: 'unreachable' };
-  if (missing.length > 0) return { missingScopes: missing, ok: true };
+  if (missing.length > 0) return withApply({ missingScopes: missing, ok: true });
   return { ok: true };
 };
 

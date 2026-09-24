@@ -26,12 +26,28 @@ const CODE_SET = new Set<string>(DINGTALK_WORKSPACE_ERROR_CODES);
 export const isDingtalkWorkspaceErrorCode = (value: unknown): value is DingtalkWorkspaceErrorCode =>
   typeof value === 'string' && CODE_SET.has(value);
 
+/** Keep only an https URL on open-dev.dingtalk.com. Anything else is dropped. */
+export const sanitizeDingtalkApplyUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2000) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:' || url.hostname !== 'open-dev.dingtalk.com') return undefined;
+  } catch {
+    return undefined;
+  }
+  return trimmed;
+};
+
 /**
  * Stable DingTalk workspace failure. `upstreamCode` is for logs only — never
  * put it in model-facing or client-facing copy. `missingScopes` are DingTalk
  * scope codes parsed from a 403 body (never the message text or apply URL).
+ * `applyUrl` is the https://open-dev.dingtalk.com link DingTalk returned, if any.
  */
 export class DingtalkWorkspaceError extends Error {
+  readonly applyUrl?: string;
   readonly code: DingtalkWorkspaceErrorCode;
   readonly missingScopes?: string[];
   readonly upstreamCode?: string;
@@ -42,11 +58,14 @@ export class DingtalkWorkspaceError extends Error {
     code: DingtalkWorkspaceErrorCode,
     upstreamCode?: string,
     missingScopes?: readonly string[],
+    applyUrl?: string,
   ) {
     super(code);
     this.name = 'DingtalkWorkspaceError';
     this.code = code;
     if (upstreamCode) this.upstreamCode = upstreamCode;
+    const safeApplyUrl = sanitizeDingtalkApplyUrl(applyUrl);
+    if (safeApplyUrl) this.applyUrl = safeApplyUrl;
     if (missingScopes && missingScopes.length > 0) {
       const unique: string[] = [];
       const seen = new Set<string>();

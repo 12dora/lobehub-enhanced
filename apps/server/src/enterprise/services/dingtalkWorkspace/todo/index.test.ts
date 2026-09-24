@@ -112,6 +112,9 @@ describe('personalTodoAuthNote', () => {
     expect(personalTodoAuthNote(null)).toContain(
       '[点此前往授权](/settings/connector?dingtalkPersonal=authorize)',
     );
+    expect(personalTodoAuthNote('https://aihub.example.com', 'dingtalk')).toBe(
+      '授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：[点此前往授权](https://aihub.example.com/dingtalk/sso?redirect=%2Fsettings%2Fconnector%3FdingtalkPersonal%3Dauthorize)',
+    );
   });
 });
 

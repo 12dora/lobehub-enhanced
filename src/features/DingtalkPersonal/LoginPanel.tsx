@@ -7,10 +7,11 @@ import { Copy, ExternalLink, LoaderCircle } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import DingtalkSettingLink from '@/features/DingtalkActionLink/DingtalkSettingLink';
 import type { DingtalkPersonalLoginView } from '@/services/dingtalkPersonal';
 
 import { type LoginFailureMessage, resolveLoginFailure } from './errors';
-import { formatCountdown } from './format';
+import { formatCountdown, resolveVerificationUrl } from './format';
 import { styles } from './styles';
 
 const CODE_ELAPSED: LoginFailureMessage = { key: 'dingtalkPersonal.login.error.expired' };
@@ -45,6 +46,7 @@ export const LoginPanel = memo<LoginPanelProps>(
       return (
         <Flexbox gap={8}>
           <Text type={'danger'}>{t(failure.key as never, failure.values)}</Text>
+          {failure.link ? <DingtalkSettingLink kind={failure.link} /> : null}
           <Flexbox horizontal gap={8}>
             <Button loading={starting} size={'small'} type={'primary'} onClick={onRetry}>
               {t('dingtalkPersonal.actions.reauthorize')}
@@ -56,9 +58,49 @@ export const LoginPanel = memo<LoginPanelProps>(
     if (login.status === 'succeeded')
       return <Text type={'success'}>{t('dingtalkPersonal.login.succeeded')}</Text>;
 
+    const codeRow = (
+      <Flexbox horizontal align={'baseline'} gap={8} wrap={'wrap'}>
+        <Text type={'secondary'}>{t('dingtalkPersonal.login.codeLabel')}</Text>
+        <span className={styles.code}>{login.userCode}</span>
+      </Flexbox>
+    );
+    const countdown =
+      remainingMs === undefined ? null : (
+        <Text className={styles.countdown} type={'secondary'}>
+          {t('dingtalkPersonal.login.countdown', { time: formatCountdown(remainingMs) })}
+        </Text>
+      );
+    const cancelButton = (
+      <Button loading={cancelling} size={'small'} type={'text'} onClick={onCancel}>
+        {t('dingtalkPersonal.actions.cancel')}
+      </Button>
+    );
+    const cancelFailedNote = cancelFailed ? (
+      <Text fontSize={13} type={'danger'}>
+        {t('dingtalkPersonal.login.cancelFailed')}
+      </Text>
+    ) : null;
+
+    // Only DingTalk's own https page becomes a QR code, a copy action or a link.
+    const verificationUrl = resolveVerificationUrl(login.verificationUrl);
+    if (!verificationUrl)
+      return (
+        <div className={styles.details}>
+          {codeRow}
+          {countdown}
+          <Text fontSize={13} type={'danger'}>
+            {t('dingtalkPersonal.login.invalidLink')}
+          </Text>
+          <Flexbox horizontal gap={8} wrap={'wrap'}>
+            {cancelButton}
+          </Flexbox>
+          {cancelFailedNote}
+        </div>
+      );
+
     const copyLink = async () => {
       try {
-        await copyToClipboard(login.verificationUrl);
+        await copyToClipboard(verificationUrl);
         toast.success(t('dingtalkPersonal.login.linkCopied'));
       } catch {
         toast.error(t('dingtalkPersonal.login.copyFailed'));
@@ -73,26 +115,19 @@ export const LoginPanel = memo<LoginPanelProps>(
             bordered={false}
             color={'#000'}
             size={compact ? 128 : 160}
-            value={login.verificationUrl}
+            value={verificationUrl}
           />
         </div>
         <div className={styles.details}>
-          <Flexbox horizontal align={'baseline'} gap={8} wrap={'wrap'}>
-            <Text type={'secondary'}>{t('dingtalkPersonal.login.codeLabel')}</Text>
-            <span className={styles.code}>{login.userCode}</span>
-          </Flexbox>
-          {remainingMs === undefined ? null : (
-            <Text className={styles.countdown} type={'secondary'}>
-              {t('dingtalkPersonal.login.countdown', { time: formatCountdown(remainingMs) })}
-            </Text>
-          )}
+          {codeRow}
+          {countdown}
           <Text fontSize={13}>{t('dingtalkPersonal.login.scanHint')}</Text>
           <Flexbox horizontal gap={8} wrap={'wrap'}>
             <Button icon={Copy} size={'small'} onClick={() => void copyLink()}>
               {t('dingtalkPersonal.actions.copyLink')}
             </Button>
             <Button
-              href={login.verificationUrl}
+              href={verificationUrl}
               icon={ExternalLink}
               rel={'noopener noreferrer'}
               size={'small'}
@@ -100,15 +135,9 @@ export const LoginPanel = memo<LoginPanelProps>(
             >
               {t('dingtalkPersonal.actions.openLink')}
             </Button>
-            <Button loading={cancelling} size={'small'} type={'text'} onClick={onCancel}>
-              {t('dingtalkPersonal.actions.cancel')}
-            </Button>
+            {cancelButton}
           </Flexbox>
-          {cancelFailed ? (
-            <Text fontSize={13} type={'danger'}>
-              {t('dingtalkPersonal.login.cancelFailed')}
-            </Text>
-          ) : null}
+          {cancelFailedNote}
           <span className={styles.waiting}>
             <Icon spin icon={LoaderCircle} size={12} />
             {t('dingtalkPersonal.login.waiting')}

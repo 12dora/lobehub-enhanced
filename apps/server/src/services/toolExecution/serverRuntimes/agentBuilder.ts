@@ -12,6 +12,7 @@ import { builtinTools } from '@lobechat/builtin-tools';
 import { BRANDING_PROVIDER } from '@lobechat/business-const';
 import { modelsResultsPrompt } from '@lobechat/prompts';
 import { getPluginMode, upsertPluginMode } from '@lobechat/types';
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
 import { isAiModelVisible } from 'model-bank';
 
 import { AgentModel } from '@/database/models/agent';
@@ -24,6 +25,7 @@ import {
   resolvePlatformAiRuntimeState,
 } from '@/server/modules/ModelRuntime/platformAiRuntimeBridge';
 import { DiscoverService } from '@/server/services/discover';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import { type ToolExecutionContext, type ToolExecutionResult } from '../types';
 import { type ServerRuntimeRegistration } from './types';
@@ -372,9 +374,15 @@ export const agentBuilderRuntime: ServerRuntimeRegistration = {
             }
           }
 
-          // OAuth-based tools (Composio, LobehubSkill) cannot be installed in background context
+          // OAuth-based tools (Composio, LobehubSkill) cannot be installed in background context.
+          // The skills page is where those OAuth cards live; there is no route that opens the builder dialog.
+          const skills = linkedPath(
+            serverAppLinkResolver(ctx.botPlatform),
+            '技能页',
+            APP_LINK_PATHS.skills,
+          );
           return {
-            content: `Installing official integrations that require OAuth (Composio, LobehubSkill) is not supported in background execution. Please install "${identifier}" from the Agent Builder UI instead.`,
+            content: `后台无法安装需要授权的「${identifier}」。请到${skills}完成授权。`,
             error: { message: 'OAuth not available in background context', type: 'NotSupported' },
             success: false,
           };

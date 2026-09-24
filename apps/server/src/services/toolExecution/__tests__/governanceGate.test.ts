@@ -17,14 +17,9 @@ vi.mock('@/server/enterprise/services/connectorCatalog/legacyMcpTransport', () =
 vi.mock('@/server/services/deviceGateway', () => ({
   deviceGateway: { executeMcpCall: mocks.executeMcpCall, isConfigured: false },
 }));
-// The gate imports both the blocked-response builder and the per-user lookup
-// from this module; mock the lookup, keep the builder shape stable.
+// The gate imports the per-user lookup from this module. The blocked copy is
+// built in the service so org policy and user switches can carry different links.
 vi.mock('@/libs/mcp/connectorPermissionCheck', () => ({
-  buildBlockedToolResponse: (toolName: string) => ({
-    content: `blocked:${toolName}`,
-    state: { content: [{ text: `blocked:${toolName}`, type: 'text' }], isError: false },
-    success: true,
-  }),
   getConnectorToolPermission: mocks.getConnectorToolPermission,
 }));
 // The governance resolver is stubbed until storage lands — tests always mock it.
@@ -82,7 +77,9 @@ describe('ToolExecutionService connector governance gate', () => {
 
     const result = await service.executeTool(builtinPayload, context);
 
-    expect(result.content).toBe('blocked:search');
+    expect(result.content).toContain('连接器设置');
+    expect(result.content).toContain('/settings/connector');
+    expect(result.content).not.toContain('/admin/ai/connectors');
     expect(mocks.getConnectorToolPermission).toHaveBeenCalledWith(
       context.serverDB,
       'user-1',
@@ -105,7 +102,9 @@ describe('ToolExecutionService connector governance gate', () => {
 
     const result = await service.executeTool(builtinPayload, context);
 
-    expect(result.content).toBe('blocked:search');
+    expect(result.content).toContain('请联系管理员');
+    expect(result.content).toContain('/admin/ai/connectors');
+    expect(result.content).not.toContain('/settings/connector');
     expect(mocks.getConnectorToolPermission).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
   });
@@ -154,9 +153,23 @@ describe('ToolExecutionService connector governance gate', () => {
 
     const result = await service.executeTool(nonBuiltinPayload, context);
 
-    expect(result.content).toBe('blocked:send');
+    expect(result.content).toContain('连接器设置');
+    expect(result.content).toContain('/settings/connector');
     expect(mocks.getConnectorToolPermission).toHaveBeenCalledTimes(1);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('wraps a DingTalk blocked-tool link through the sign-in bridge', async () => {
+    mocks.getConnectorToolPermission.mockResolvedValue('disabled');
+    const { service } = createService();
+
+    const result = await service.executeTool(builtinPayload, {
+      ...context,
+      botPlatform: 'dingtalk',
+    });
+
+    expect(result.content).toContain('/dingtalk/sso?redirect=');
+    expect(result.content).toContain(encodeURIComponent('/settings/connector'));
   });
 
   it('lets non-builtin identifiers through when user rows allow them', async () => {

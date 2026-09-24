@@ -13,7 +13,11 @@ import {
 } from '@/server/services/messenger/platforms/dingtalk/notifyApp';
 
 import { recordDingtalkHttpCall } from './apiCallStats';
-import { DingtalkWorkspaceError, type DingtalkWorkspaceErrorCode } from './errors';
+import {
+  DingtalkWorkspaceError,
+  type DingtalkWorkspaceErrorCode,
+  sanitizeDingtalkApplyUrl,
+} from './errors';
 
 /** Same scope as `CUSTOM_TODO_READ_SCOPE` in `todo/orgReadGate.ts`. */
 const SILENT_TODO_READ_SCOPE = 'Custom.Todo.Read';
@@ -271,6 +275,7 @@ const isOapiFailure = (record: Record<string, unknown> | null, responseOk: boole
  * DingTalk 403 bodies name the missing scope after 权限, e.g.
  * `应用尚未开通所需的权限：[Calendar.Event.Write]，点击链接申请…`.
  * Captures scope codes only — never the surrounding text or apply URL.
+ * The apply link is {@link parseDingtalkApplyUrl}.
  * Built per call so a leftover lastIndex cannot skip matches.
  */
 export const parseDingtalkMissingScopes = (message: string | null): string[] | undefined => {
@@ -292,6 +297,14 @@ export const parseDingtalkMissingScopes = (message: string | null): string[] | u
     }
   }
   return scopes.length > 0 ? scopes : undefined;
+};
+
+/** https apply link DingTalk printed in a 403 body. open-dev.dingtalk.com only. */
+export const parseDingtalkApplyUrl = (message: string | null): string | undefined => {
+  if (!message) return undefined;
+  const match = message.match(/https:\/\/open-dev\.dingtalk\.com\/[^\s<>"'，。；、)）\]]+/i);
+  if (!match) return undefined;
+  return sanitizeDingtalkApplyUrl(match[0]);
 };
 
 const mapUpstreamToCode = (
@@ -368,8 +381,14 @@ const throwMapped = (
   const code = mapUpstreamToCode(status, upstreamCode, message);
   const missingScopes =
     code === 'DINGTALK_FORBIDDEN' ? parseDingtalkMissingScopes(message) : undefined;
+  const applyUrl = code === 'DINGTALK_FORBIDDEN' ? parseDingtalkApplyUrl(message) : undefined;
   log('dingtalk request failed code=%s upstream=%s status=%s', code, upstreamCode, status);
-  const mapped = new DingtalkWorkspaceError(code, upstreamCode ?? undefined, missingScopes);
+  const mapped = new DingtalkWorkspaceError(
+    code,
+    upstreamCode ?? undefined,
+    missingScopes,
+    applyUrl,
+  );
   if (message) mapped.upstreamMessage = message;
   noteDingtalkApiFailure(mapped, {
     missingScopes,

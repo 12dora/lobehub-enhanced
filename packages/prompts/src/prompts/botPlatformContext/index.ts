@@ -1,4 +1,6 @@
 export interface BotPlatformInfo {
+  /** Absolute AIHub origin (`APP_URL`). Markdown platforms are told to link pages with it. */
+  appUrl?: string;
   platformName: string;
   supportsMarkdown: boolean;
   /** Non-fatal warnings from message processing (e.g. file too large, parse failure) */
@@ -19,6 +21,7 @@ const sanitizePromptText = (text: string) =>
  * When the platform does not support Markdown, instructs the AI to use plain text only.
  */
 export const formatBotPlatformContext = ({
+  appUrl,
   platformName,
   supportsMarkdown,
   warnings,
@@ -55,6 +58,23 @@ export const formatBotPlatformContext = ({
     '`sendMessage` / `sendDirectMessage` should ONLY be used when the user explicitly asks you to send a message to a DIFFERENT channel or user.',
     '</message_delivery>',
   ];
+
+  const safeAppUrl = sanitizePromptText((appUrl ?? '').trim().replace(/\/+$/, ''));
+  if (supportsMarkdown && safeAppUrl) {
+    const isDingTalk = platformName.trim().toLowerCase() === 'dingtalk';
+    lines.push(
+      '',
+      '<app_links>',
+      `The AIHub web app is at ${safeAppUrl}.`,
+      `When you mention a page the user must open in AIHub, give a full clickable markdown link that starts with ${safeAppUrl}. Do not write only a menu path.`,
+      ...(isDingTalk
+        ? [
+            `Inside DingTalk, wrap that link as ${safeAppUrl}/dingtalk/sso?redirect=<urlencoded app path> so the in-app browser signs the user in.`,
+          ]
+        : []),
+      '</app_links>',
+    );
+  }
 
   if (!supportsMarkdown) {
     lines.push(

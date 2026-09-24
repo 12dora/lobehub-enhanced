@@ -8,6 +8,7 @@ import { AgentBotProviderModel } from '@/database/models/agentBotProvider';
 import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
 import type { LobeChatDatabase } from '@/database/type';
+import { appEnv } from '@/envs/app';
 import { createAbortError, isAbortError } from '@/server/services/agentRuntime/abort';
 import { AiAgentService } from '@/server/services/aiAgent';
 import { GatewayService } from '@/server/services/gateway';
@@ -933,13 +934,19 @@ export class AgentBridgeService {
       ? platformRegistry.getPlatform(opts.botContext.platform)
       : undefined;
     const botPlatformContext:
-      { platformName: string; supportsMarkdown: boolean; warnings?: string[] } | undefined =
-      platformDef
-        ? {
-            platformName: platformDef.name,
-            supportsMarkdown: platformDef.supportsMarkdown !== false,
-          }
-        : undefined;
+      | {
+          appUrl?: string;
+          platformName: string;
+          supportsMarkdown: boolean;
+          warnings?: string[];
+        }
+      | undefined = platformDef
+      ? {
+          appUrl: appEnv.APP_URL,
+          platformName: platformDef.name,
+          supportsMarkdown: platformDef.supportsMarkdown !== false,
+        }
+      : undefined;
     // Whether we can edit a previously-posted message in place. When false
     // (QQ/WeChat today), the chat-adapter falls editMessage back to postMessage,
     // so each step/completion edit surfaces as a NEW message — leaving the
@@ -1084,6 +1091,7 @@ export class AgentBridgeService {
     // Build webhook config for production mode
     const callbackUrl = '/api/agent/webhooks/bot-callback';
     const webhookBody = {
+      agentId,
       applicationId: botContext?.applicationId,
       // Forward the messenger discriminator (set by MessengerRouter for runs
       // originated by the shared Messenger bot). The callback uses this — not
@@ -1588,6 +1596,7 @@ export class AgentBridgeService {
                       event.operationId,
                       replyLocale,
                       event.errorAttribution,
+                      { agentId, platform: botContext?.platform },
                     );
                     // Wrap in `{ markdown }` so the Chat SDK adapter sets the
                     // platform's markdown parse_mode (e.g. Telegram `Markdown`,

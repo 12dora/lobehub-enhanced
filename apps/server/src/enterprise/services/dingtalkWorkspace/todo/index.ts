@@ -115,9 +115,11 @@ const mergedCacheKey = (
   identity: { staffId: string; unionId: string },
   done: boolean | undefined,
   personal: PersonalTodoCacheFlag,
+  platform?: string | null,
 ): string => {
   const doneFlag = done === true ? '1' : done === false ? '0' : '*';
-  return `${userId}:${identity.staffId}:${identity.unionId}:${doneFlag}:${personal}`;
+  const surface = platform === 'dingtalk' ? 'dt' : 'web';
+  return `${userId}:${identity.staffId}:${identity.unionId}:${doneFlag}:${personal}:${surface}`;
 };
 
 const readMergedCache = (key: string): DingtalkTodoListResult | undefined => {
@@ -347,10 +349,14 @@ const applyPersonalTodos = async (
   input: DingtalkTodoListInput,
   result: DingtalkTodoListResult,
   flag: PersonalTodoCacheFlag,
+  platform?: string | null,
 ): Promise<void> => {
   if (flag === 'off') return;
   if (flag === 'auth') {
-    result.notes = replaceOrgUnavailableNote(result.notes, personalTodoAuthNote(appEnv.APP_URL));
+    result.notes = replaceOrgUnavailableNote(
+      result.notes,
+      personalTodoAuthNote(appEnv.APP_URL, platform),
+    );
     return;
   }
   if (flag === 'error') {
@@ -389,7 +395,10 @@ const applyPersonalTodos = async (
   } catch (error) {
     log('personal todo.list failed user=%s code=%s: %O', userId, personalErrorCode(error), error);
     if (isPersonalAuthError(error)) {
-      result.notes = replaceOrgUnavailableNote(result.notes, personalTodoAuthNote(appEnv.APP_URL));
+      result.notes = replaceOrgUnavailableNote(
+        result.notes,
+        personalTodoAuthNote(appEnv.APP_URL, platform),
+      );
       return;
     }
     result.notes = pushNote(result.notes, PERSONAL_TODO_ERROR_NOTE);
@@ -442,6 +451,8 @@ export class DingtalkTodoService {
   constructor(
     private readonly db: LobeChatDatabase,
     private readonly userId: string,
+    /** DingTalk chat uses SSO links in the personal-authorize note. */
+    private readonly linkPlatform?: string | null,
   ) {}
 
   private cachedTodos(): DingtalkTodoCard[] | undefined {
@@ -694,7 +705,7 @@ export class DingtalkTodoService {
     // the verified staff/union id so a changed binding is a miss.
     const identity = await this.actor();
     const personal = await resolvePersonalTodoFlag(this.db, this.userId);
-    const cacheKey = mergedCacheKey(this.userId, identity, input.done, personal);
+    const cacheKey = mergedCacheKey(this.userId, identity, input.done, personal, this.linkPlatform);
     if (!input.refresh) {
       const cached = readMergedCache(cacheKey);
       if (cached) return cached;
@@ -726,7 +737,7 @@ export class DingtalkTodoService {
       truncated: Boolean(appPage.nextToken) || orgTruncated,
     };
     if (orgTodos) result.orgTodos = orgTodos;
-    await applyPersonalTodos(this.db, this.userId, input, result, personal);
+    await applyPersonalTodos(this.db, this.userId, input, result, personal, this.linkPlatform);
     if ((mergedTodoGeneration.get(this.userId) ?? 0) !== mergedGeneration) return result;
     mergedTodoCache.set(cacheKey, { expiresAt: Date.now() + MERGED_TODO_CACHE_MS, value: result });
     return result;

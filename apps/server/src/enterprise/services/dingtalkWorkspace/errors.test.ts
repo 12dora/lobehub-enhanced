@@ -28,6 +28,25 @@ describe('DingtalkWorkspaceError', () => {
     expect(error.missingScopes?.join(',')).not.toContain('权限');
   });
 
+  it('stores an open-dev apply URL separately from the scope codes', () => {
+    const url = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const error = new DingtalkWorkspaceError(
+      'DINGTALK_FORBIDDEN',
+      '60011',
+      ['Calendar.Event.Write'],
+      url,
+    );
+    expect(error.applyUrl).toBe(url);
+    expect(error.missingScopes).toEqual(['Calendar.Event.Write']);
+    const blocked = new DingtalkWorkspaceError(
+      'DINGTALK_FORBIDDEN',
+      '60011',
+      ['Calendar.Event.Write'],
+      'https://evil.example/apply',
+    );
+    expect(blocked.applyUrl).toBeUndefined();
+  });
+
   it('omits empty missingScopes', () => {
     const error = new DingtalkWorkspaceError('DINGTALK_FORBIDDEN', '60011', []);
     expect(error.missingScopes).toBeUndefined();

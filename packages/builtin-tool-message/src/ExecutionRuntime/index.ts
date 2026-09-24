@@ -1,4 +1,5 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import { APP_LINK_PATHS, type AppLinkResolver, linkedPath } from '@lobechat/utils/appLink';
 
 import type {
   ConfiguredBotInfo,
@@ -245,18 +246,25 @@ export interface MessageExecutionRuntimeOptions {
    * connector is enabled. Empty discovery must not point at Settings → Messenger.
    */
   dingtalkChannel?: boolean;
+  resolveLink?: AppLinkResolver;
   service: MessageRuntimeService;
 }
 
 export class MessageExecutionRuntime {
   private botProvider?: BotProviderQuery;
   private dingtalkChannel: boolean;
+  private resolveLink?: AppLinkResolver;
   private service: MessageRuntimeService;
 
   constructor(options: MessageExecutionRuntimeOptions) {
     this.service = options.service;
     this.botProvider = options.botProvider;
     this.dingtalkChannel = options.dingtalkChannel === true;
+    this.resolveLink = options.resolveLink;
+  }
+
+  private messengerSettingsLink(): string {
+    return linkedPath(this.resolveLink, 'Messenger 设置', APP_LINK_PATHS.messenger);
   }
 
   // ==================== Core Message Operations ====================
@@ -785,7 +793,7 @@ export class MessageExecutionRuntime {
         return {
           content: this.dingtalkChannel
             ? DINGTALK_CHANNEL_EMPTY_MESSAGE
-            : 'No System Bot installations connected. Tell the user to install via Settings → Messenger; `listMessengerPlatforms` shows what platforms are available.',
+            : `No System Bot installations connected. Tell the user to install via Settings → Messenger ${this.messengerSettingsLink()}; \`listMessengerPlatforms\` shows what platforms are available.`,
           state: { installations } satisfies ListMessengersState,
           success: true,
         };
@@ -888,7 +896,7 @@ export class MessageExecutionRuntime {
         return `- ${parts.join(' ')}`;
       });
       return {
-        content: `${platforms.length} platform(s) available for System Bot install:\n${lines.join('\n')}\n\nInstalls are initiated via Settings → Messenger (OAuth requires a browser).`,
+        content: `${platforms.length} platform(s) available for System Bot install:\n${lines.join('\n')}\n\nInstalls are initiated via Settings → Messenger (OAuth requires a browser): ${this.messengerSettingsLink()}.`,
         state: { platforms } satisfies ListMessengerPlatformsState,
         success: true,
       };

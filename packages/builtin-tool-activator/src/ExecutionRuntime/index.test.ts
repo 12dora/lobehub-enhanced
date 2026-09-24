@@ -18,7 +18,12 @@ const localSystemManifest = (): ToolManifestInfo => ({
 
 const service = (overrides: Partial<ActivatorRuntimeService> = {}): ActivatorRuntimeService => ({
   getActivatedToolIds: () => [],
-  getToolManifests: vi.fn(async () => [localSystemManifest()]),
+  // Only manifests the runtime actually requested. A blocked lobe-local-system
+  // is refused by not asking for it; always returning the fixture would put
+  // the unreplaced device placeholders back into the reply.
+  getToolManifests: vi.fn(async (identifiers: string[]) =>
+    identifiers.includes(LOCAL_SYSTEM_IDENTIFIER) ? [localSystemManifest()] : [],
+  ),
   markActivated: vi.fn(),
   ...overrides,
 });
@@ -35,6 +40,8 @@ describe('ActivatorExecutionRuntime.activateTools', () => {
 
     expect(result.success).toBe(true);
     expect(result.content).toContain(LOCAL_SYSTEM_NO_DEVICE_MESSAGE);
+    expect(result.content).toContain('[设备页](/settings/devices)');
+    expect(result.content).toContain('[下载桌面端](/downloads)');
     expect(result.content).not.toContain('{{hostname}}');
     expect(result.content).not.toContain('{{workingDirectory}}');
     expect(result.state).toMatchObject({

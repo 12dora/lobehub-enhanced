@@ -1,8 +1,11 @@
 'use client';
 
+import { DINGTALK_CONSOLE_LINKS } from '@lobechat/utils/appLink';
 import { Text } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
+
+import ActionLink from '@/components/ActionLink';
 
 import { InfraSwitchRow } from '../infra/InfraField';
 import { infraFormStyles as formStyles } from '../infra/styles';
@@ -37,7 +40,12 @@ export const PersonalDataSection = memo<PersonalDataSectionProps>(
           {t('systemGeneral.imConnectors.personal.title')}
         </span>
         <span className={formStyles.hint}>
-          {t('systemGeneral.imConnectors.personal.description')}
+          {/* The CLI switch lives in the DingTalk console, not here: one click to the exact page. */}
+          <Trans
+            components={{ cli: <ActionLink href={DINGTALK_CONSOLE_LINKS.cliSettings} /> }}
+            i18nKey={'systemGeneral.imConnectors.personal.description'}
+            ns={'admin'}
+          />
         </span>
 
         {/* Said whatever the switch says: saving it on without the sidecar would look like it

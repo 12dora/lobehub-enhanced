@@ -22,18 +22,20 @@ import {
   normalizeSandboxCommandResult,
 } from '@/server/services/sandbox';
 import { preprocessLhCommand } from '@/server/services/toolExecution/preprocessLhCommand';
+import {
+  managedSkillRunFailedMessage,
+  managedSkillUnavailableMessage,
+} from '@/server/utils/appLinks';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const log = debug('lobe-server:managed-skill-runtime');
-const MANAGED_SKILL_RUN_FAILED =
-  'This Skill couldn’t run. Start a new run and try again. If the problem continues, contact your administrator.';
-const MANAGED_SKILL_UNAVAILABLE =
-  'This Skill is no longer available. Start a new run or ask your administrator to republish it.';
 
 export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
   private readonly catalog: SkillCatalogReadService;
   private readonly resolver: PlatformSkillOperationResolver;
   private readonly refsByKey: Map<string, { checksum: string; skillKey: string; version: string }>;
+  private readonly runFailedMessage: string;
+  private readonly unavailableMessage: string;
 
   constructor(
     private readonly options: {
@@ -45,9 +47,12 @@ export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
       snapshot: PlatformSkillOperationSnapshot;
       topicId?: string;
       userId: string;
+      botPlatform?: string | null;
       workspaceId?: string;
     },
   ) {
+    this.runFailedMessage = managedSkillRunFailedMessage(options.botPlatform);
+    this.unavailableMessage = managedSkillUnavailableMessage(options.botPlatform);
     if (
       !options.agentId ||
       options.snapshot.agentId !== options.agentId ||
@@ -55,7 +60,7 @@ export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
       options.snapshot.operationId !== options.operationId
     ) {
       log('operation context rejected reason=snapshot_mismatch');
-      throw new Error(MANAGED_SKILL_RUN_FAILED);
+      throw new Error(this.runFailedMessage);
     }
     this.catalog = new SkillCatalogReadService(options.serverDB, {
       builtinSkills: getBuiltinSkillDefinitions(),
@@ -72,7 +77,7 @@ export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
   private resolveActivated = async (activatedSkills?: ExecScriptActivatedSkill[]) => {
     if (!activatedSkills?.length) {
       log('activated Skill resolution rejected reason=missing_activation');
-      throw new Error(MANAGED_SKILL_RUN_FAILED);
+      throw new Error(this.runFailedMessage);
     }
     const resolved = [];
     for (const activated of activatedSkills) {
@@ -82,12 +87,12 @@ export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
           'activated Skill resolution rejected reason=reference_missing skill=%s',
           activated.name,
         );
-        throw new Error(MANAGED_SKILL_UNAVAILABLE);
+        throw new Error(this.unavailableMessage);
       }
       const skill = await this.catalog.resolvePinnedForExecution(ref);
       if (!skill) {
         log('activated Skill resolution rejected reason=revision_missing skill=%s', ref.skillKey);
-        throw new Error(MANAGED_SKILL_UNAVAILABLE);
+        throw new Error(this.unavailableMessage);
       }
       resolved.push({ ref, skill });
     }
@@ -153,7 +158,7 @@ export class ManagedSkillServerRuntimeService implements SkillRuntimeService {
   ): Promise<CommandResult> => {
     if (!this.options.operationId) {
       log('execScript rejected reason=operation_missing');
-      return { exitCode: 1, output: '', stderr: MANAGED_SKILL_RUN_FAILED, success: false };
+      return { exitCode: 1, output: '', stderr: this.runFailedMessage, success: false };
     }
     const skills = await this.resolveActivated(options.activatedSkills);
     return this.options.activeDeviceId

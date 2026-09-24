@@ -60,6 +60,8 @@ const log = debug('lobe-server:bot:callback');
 // --------------- Callback body types ---------------
 
 export interface BotCallbackBody {
+  /** Agent that owns this bot run, so error replies can link its settings. */
+  agentId?: string;
   applicationId: string;
   /**
    * Outbound attachments (images/files) extracted from the agent's final
@@ -486,6 +488,7 @@ export class BotCallbackService {
           operationId,
           replyLocale,
           errorAttribution,
+          { agentId: body.agentId, platform: 'dingtalk' },
         );
         await dingtalkSink.onError?.(errorBody);
         return;
@@ -545,6 +548,7 @@ export class BotCallbackService {
         operationId,
         replyLocale,
         errorAttribution,
+        { agentId: body.agentId, platform: platformThreadId.split(':')[0] },
       );
       const errorText = client.formatMarkdown?.(errorBody) ?? errorBody;
       await this.deliverFirstChunk(messenger, progressMessageId, errorText, canEdit);

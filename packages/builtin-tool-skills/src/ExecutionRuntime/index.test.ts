@@ -326,6 +326,8 @@ describe('SkillsExecutionRuntime', () => {
 
       expect(result.success).toBe(false);
       expect(result.content).toContain('no device file access');
+      expect(result.content).toContain('[设备页](/settings/devices)');
+      expect(result.content).toContain('[下载桌面端](/downloads)');
     });
 
     it('readReference resolves a project file relative to the SKILL.md directory', async () => {

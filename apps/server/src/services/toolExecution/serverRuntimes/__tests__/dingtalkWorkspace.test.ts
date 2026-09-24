@@ -86,6 +86,23 @@ describe('createDingtalkWorkspaceRuntime', () => {
   });
 });
 
+describe('dingtalkWorkspaceRuntime link resolver', () => {
+  it('uses a DingTalk SSO link when the chat is DingTalk', async () => {
+    mockTodoCreate.mockRejectedValueOnce(
+      Object.assign(new Error('DINGTALK_IDENTITY_UNBOUND'), { code: 'DINGTALK_IDENTITY_UNBOUND' }),
+    );
+    const runtime = await dingtalkWorkspaceRuntime.factory({
+      botPlatform: 'dingtalk',
+      serverDB: {},
+      userId: 'user-1',
+    } as never);
+    const result = await runtime.createTodo({ subject: 'x' });
+    expect(result.content).toContain('[用钉钉登录](');
+    expect(result.content).toContain('/dingtalk/sso?redirect=%2F');
+    expect(result.content).not.toMatch(/\]\(<http/);
+  });
+});
+
 describe('dingtalkWorkspaceRuntime.factory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -112,7 +129,8 @@ describe('dingtalkWorkspaceRuntime.factory', () => {
       userId: 'user-1',
     } as never);
 
-    expect(DingtalkTodoService).toHaveBeenCalledWith(serverDB, 'user-1');
+    // Third arg is the bot platform (undefined for web runs) so authorize links fit the surface.
+    expect(DingtalkTodoService).toHaveBeenCalledWith(serverDB, 'user-1', undefined);
     expect(DingtalkCalendarService).toHaveBeenCalledWith(serverDB, 'user-1');
     expect(ReminderService).toHaveBeenCalledWith(serverDB, 'user-1');
 

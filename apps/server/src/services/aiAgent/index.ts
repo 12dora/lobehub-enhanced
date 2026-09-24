@@ -136,6 +136,7 @@ import { getLatestPersonaDocumentMemo } from '@/server/enterprise/services/memor
 import type { UserSettingsReadMemo } from '@/server/enterprise/services/settings/runtimeSettingsAdapter';
 import {
   getEffectiveMemorySettings,
+  getEffectiveToolSettings,
   getRawUserSettings,
   resolveEffectiveUserInterventionConfig,
   resolvePersonalTopicApprovalSnapshot,
@@ -190,6 +191,7 @@ import type { ConversationHistoryEntry } from '@/server/services/heterogeneousAg
 import { MarketService } from '@/server/services/market';
 import { getMemoryEmbeddingAvailability } from '@/server/services/memory/userMemory/embeddingAvailability';
 import { createSandboxService } from '@/server/services/sandbox';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 import { markdownToTxt } from '@/utils/markdownToTxt';
 
 import { resolveDeviceAccessPolicy } from './deviceAccessPolicy';
@@ -2579,8 +2581,14 @@ export class AiAgentService {
       });
       const generalSettings = settings?.general as { timezone?: string } | undefined;
       userTimezone = generalSettings?.timezone;
-      userToolConfig = settings?.tool as UserToolConfig | undefined;
+      // Read before the tool-policy lookup so a failure there cannot drop market search.
       marketAccessToken = (settings?.market as { accessToken?: string } | undefined)?.accessToken;
+      userToolConfig = (await getEffectiveToolSettings({
+        db: this.db,
+        memo: settingsMemo,
+        scope: this.workspaceId ? 'workspace' : 'personal',
+        userId: this.userId,
+      })) as UserToolConfig | undefined;
     } catch (error) {
       log('execAgent: failed to fetch user settings: %O', error);
     }
@@ -2799,12 +2807,15 @@ export class AiAgentService {
       //    identity in BuiltinToolsExecutor).
       // Inactive governance keeps today's per-user behavior byte-identical.
       // User rows are never written by any of this.
+      // Disabled-tool descriptions link the settings page; absolute (SSO-wrapped) in DingTalk runs.
+      const manualActionLink = serverAppLinkResolver(botContext?.platform);
       const connectorGovernance = await resolveConnectorGovernance(this.db);
       const applyBuiltinGovernance = (manifest: LobeToolManifest): LobeToolManifest =>
         connectorGovernance.active
           ? (patchBuiltinManifestWithGovernance(
               manifest as any,
               connectorGovernance.builtinToolPolicies,
+              manualActionLink,
             ) as LobeToolManifest)
           : manifest;
       const sharedAuthOwnerUserId = connectorGovernance.active
@@ -2877,7 +2888,11 @@ export class AiAgentService {
                   connectorsMcp.map(({ id }) => id),
                 )
               : [];
-          connectorManifests = buildConnectorManifests(connectorsMcp, connectorTools);
+          connectorManifests = buildConnectorManifests(
+            connectorsMcp,
+            connectorTools,
+            manualActionLink,
+          );
         }
       }
 
@@ -2959,14 +2974,14 @@ export class AiAgentService {
             lobehubSkillManifests = lobehubSkillManifests.map((m) => {
               const perms = connectorToolsMap.get(m.identifier);
               return perms && perms.size > 0
-                ? (patchManifestWithPermissions(m as any, perms as any) as any)
+                ? (patchManifestWithPermissions(m as any, perms as any, manualActionLink) as any)
                 : m;
             });
 
             composioManifests = composioManifests.map((m) => {
               const perms = connectorToolsMap.get(m.identifier);
               return perms && perms.size > 0
-                ? (patchManifestWithPermissions(m as any, perms as any) as any)
+                ? (patchManifestWithPermissions(m as any, perms as any, manualActionLink) as any)
                 : m;
             });
 
@@ -2977,7 +2992,11 @@ export class AiAgentService {
               if (perms && perms.size > 0 && (p as any).manifest?.api) {
                 return {
                   ...p,
-                  manifest: patchManifestWithPermissions((p as any).manifest, perms as any) as any,
+                  manifest: patchManifestWithPermissions(
+                    (p as any).manifest,
+                    perms as any,
+                    manualActionLink,
+                  ) as any,
                 };
               }
               return p;

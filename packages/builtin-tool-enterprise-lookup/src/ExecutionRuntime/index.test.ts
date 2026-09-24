@@ -144,6 +144,11 @@ describe('EnterpriseLookupExecutionRuntime', () => {
     expect(result.content).toContain(snippet);
     expect(result.content).toContain(code);
     expect(result.content).not.toContain('token=abc');
+    if (code === 'ENTERPRISE_LOOKUP_NOT_CONFIGURED' || code === 'ENTERPRISE_LOOKUP_DAILY_LIMIT') {
+      expect(result.content).toContain('[系统设置](/admin/system/general)');
+      expect(result.content).toContain('请联系管理员');
+      expect(result.content).not.toContain('不要向用户展示技术细节');
+    }
     expect(result.error).toMatchObject({ code });
   });
 

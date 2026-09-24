@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./markdownTables": "./src/markdownTables.ts"
+    "./markdownTables": "./src/markdownTables.ts",
+    "./threadId": "./src/threadId.ts"
   },
   "files": [
     "dist"

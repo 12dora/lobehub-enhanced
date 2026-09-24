@@ -406,6 +406,8 @@ export const dingtalkPermissionProbeReasonSchema = z.enum([
 
 export const dingtalkPermissionProbeSchema = z
   .object({
+    /** https://open-dev.dingtalk.com apply link DingTalk returned next to the missing scopes. */
+    applyUrl: z.string().min(1).max(2000).optional(),
     missingScopes: z.array(z.string().min(1).max(100)).max(16).optional(),
     ok: z.boolean(),
     reason: dingtalkPermissionProbeReasonSchema.optional(),

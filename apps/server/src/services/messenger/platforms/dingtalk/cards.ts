@@ -183,6 +183,52 @@ export const sendDingTalkMarkdown = async (
   return processQueryKey;
 };
 
+const isHttpsUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Single-button actionCard on this thread's live session webhook.
+ * Does not fall back to a billed robot API. `singleURL` must be https.
+ */
+export const sendDingTalkActionCardToThread = async (
+  threadId: string,
+  card: { singleTitle: string; singleURL: string; text: string; title: string },
+): Promise<{ sent: true; via: 'session' } | { sent: false }> => {
+  try {
+    const singleURL = card.singleURL.trim();
+    if (!isHttpsUrl(singleURL)) return { sent: false };
+    const trimmedThread = threadId.trim();
+    if (!trimmedThread) return { sent: false };
+
+    const { session } = resolveSendTarget(trimmedThread);
+    if (!isSessionWebhookLive(session) || !session?.sessionWebhook) return { sent: false };
+
+    const config = await getMessengerDingTalkConfig();
+    if (!config) return { sent: false };
+
+    const api = new DingTalkApiClient(config.clientId, config.clientSecret);
+    await api.sendBySessionWebhook(session.sessionWebhook, {
+      msgtype: 'actionCard',
+      actionCard: {
+        title: card.title,
+        text: card.text,
+        singleTitle: card.singleTitle,
+        singleURL,
+      },
+    });
+    return { sent: true, via: 'session' };
+  } catch (error) {
+    log('sendDingTalkActionCardToThread failed: %O', error);
+    return { sent: false };
+  }
+};
+
 const lastListKindFromPagePrefix = (
   pageCommandPrefix: string | undefined,
 ): DingTalkLastListKind | null => {

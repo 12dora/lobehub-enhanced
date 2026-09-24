@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveDingtalkPersonalErrorCode,
+  resolveDingtalkPersonalLinkKind,
   resolveIdentityRequiredKey,
+  resolveIdentityRequiredLink,
   resolveLoginFailure,
   resolveRevokeErrorKey,
   resolveStartErrorKey,
@@ -47,6 +49,37 @@ describe('resolveIdentityRequiredKey', () => {
     expect(resolveIdentityRequiredKey(undefined)).toBe(
       'dingtalkPersonal.identity.DINGTALK_IDENTITY_UNBOUND',
     );
+  });
+});
+
+describe('resolveIdentityRequiredLink', () => {
+  it('sends a missing binding to the binding page and a missing CorpId to the admin', () => {
+    expect(resolveIdentityRequiredLink('DINGTALK_IDENTITY_UNBOUND')).toBe('binding');
+    expect(resolveIdentityRequiredLink('DINGTALK_IDENTITY_UNVERIFIED')).toBe('binding');
+    expect(resolveIdentityRequiredLink('SOMETHING_NEW')).toBe('binding');
+    expect(resolveIdentityRequiredLink(undefined)).toBe('binding');
+    expect(resolveIdentityRequiredLink('DINGTALK_PERSONAL_CORP_ID_MISSING')).toBe(
+      'adminImConnectors',
+    );
+  });
+
+  it('offers nothing for a deactivated identity', () => {
+    expect(resolveIdentityRequiredLink('DINGTALK_IDENTITY_INACTIVE')).toBeUndefined();
+  });
+});
+
+describe('resolveDingtalkPersonalLinkKind', () => {
+  it.each([
+    ['DINGTALK_PERSONAL_DISABLED', 'adminImConnectors'],
+    ['DINGTALK_PERSONAL_FEATURE_DISABLED', 'adminImConnectors'],
+    ['DINGTALK_IDENTITY_UNBOUND', 'binding'],
+    ['DINGTALK_PERSONAL_ORG_POLICY_DENIED', 'cliSettings'],
+    // Authorizing again is the card's own button, never a link on the card.
+    ['DINGTALK_PERSONAL_EXPIRED', undefined],
+    ['DINGTALK_PERSONAL_RATE_LIMITED', undefined],
+    [undefined, undefined],
+  ])('maps %s to %s', (code, kind) => {
+    expect(resolveDingtalkPersonalLinkKind(code)).toBe(kind);
   });
 });
 
@@ -95,9 +128,10 @@ describe('resolveLoginFailure', () => {
     });
   });
 
-  it('tells the member the organization has not enabled CLI access', () => {
+  it('tells the member the organization has not enabled CLI access, and where that is', () => {
     expect(resolveLoginFailure({ errorCode: 'ORG_CLI_DISABLED', status: 'failed' })).toEqual({
       key: 'dingtalkPersonal.login.error.orgCliDisabled',
+      link: 'cliSettings',
     });
   });
 

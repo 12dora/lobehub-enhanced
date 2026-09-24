@@ -1,3 +1,4 @@
+import { APP_LINK_PATHS } from '@lobechat/utils/appLink';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DINGTALK_ERROR_CODES, DINGTALK_INTERNAL_TOOL_CONTENT } from './errors';
@@ -146,9 +147,9 @@ describe('DingtalkApprovalExecutionRuntime', () => {
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('DINGTALK_IDENTITY_UNVERIFIED');
-    expect(result.content).toContain('使用钉钉登录');
-    expect(result.content).toContain('钉钉机器人');
-    expect(result.content).toContain('管理员不能代为绑定');
+    expect(result.content).toContain('请先用钉钉登录 AIHub');
+    expect(result.content).toContain(`[用钉钉登录](${APP_LINK_PATHS.dingtalkBinding})`);
+    expect(result.content).toContain('给机器人发一条消息完成绑定');
     expect(result.content).not.toContain('upstream boom');
   });
 

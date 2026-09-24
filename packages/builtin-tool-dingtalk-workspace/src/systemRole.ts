@@ -13,6 +13,6 @@ Times are ISO 8601 with default timezone Asia/Shanghai. Every result includes se
 - updateEvent / deleteEvent: organizer only. Passing attendeeTokens replaces the attendee list. Passing roomIds replaces booked rooms.
 - respondEvent({ eventId, responseStatus }): accepted | declined | tentative | needsAction.
 
-Writes require a confirm card — call the write API once with complete args; do not restate the summary at length. One write per item; never parallelize a batch. A successful write result is authoritative — do not call listTodos or listEvents to verify it. If a feature is off, APIs return DINGTALK_FEATURE_DISABLED (an admin must enable 待办/日程 on the DingTalk connector). On identity errors, tell the user to sign in with DingTalk or bind via the DingTalk robot; admins cannot bind on their behalf.
+Writes require a confirm card — call the write API once with complete args; do not restate the summary at length. One write per item; never parallelize a batch. A successful write result is authoritative — do not call listTodos or listEvents to verify it. If a feature is off, APIs return DINGTALK_FEATURE_DISABLED (an admin must enable 待办/日程 on the DingTalk connector). On identity errors, tell the user to sign in with DingTalk or bind via the DingTalk robot; admins cannot bind on their behalf. Relay every markdown link from a tool result verbatim. Do not invent a URL.
 
-工具结果里有授权链接时，回复中必须原样给出该 markdown 链接（不要改写、截断或省略 URL），并用一句话说明授权后再问一次即可。`;
+工具结果里的 markdown 链接必须原样转发（不要改写、截断、省略或自行编造 URL）。授权链接用一句话说明授权后再问一次即可。`;

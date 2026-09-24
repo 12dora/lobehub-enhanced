@@ -57,6 +57,7 @@ const {
   createDingTalkReplySink,
   paginateEntries,
   parseDingTalkAskerCommand,
+  sendDingTalkActionCardToThread,
   sendDingTalkChoiceList,
   sendDingTalkHelpReply,
   sendDingTalkMarkdown,
@@ -520,5 +521,89 @@ describe('sendDingTalkMarkdown staffId override', () => {
 
     expect(beforeChunk).toHaveBeenCalled();
     expect(sendOtoMessage.mock.calls.length).toBe(1);
+  });
+});
+
+describe('sendDingTalkActionCardToThread', () => {
+  const webhook = 'https://oapi.dingtalk.com/robot/sendBySession?session=abc';
+  const card = {
+    singleTitle: '去授权',
+    singleURL: 'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF',
+    text: '授权后可以读取你的待办',
+    title: '授权 AI 助手读取钉钉个人数据',
+  };
+
+  const liveSession = () => {
+    vi.mocked(isSessionWebhookLive).mockReturnValue(true);
+    vi.mocked(getDingTalkSession).mockReturnValue({ sessionWebhook: webhook } as never);
+  };
+
+  beforeEach(() => {
+    sendBySessionWebhook.mockReset();
+    sendBySessionWebhook.mockResolvedValue(undefined);
+  });
+
+  it('posts an actionCard on a live session webhook and does not use the robot API', async () => {
+    liveSession();
+    const result = await sendDingTalkActionCardToThread('dingtalk:cid_dm', card);
+
+    expect(result).toEqual({ sent: true, via: 'session' });
+    expect(sendBySessionWebhook).toHaveBeenCalledTimes(1);
+    expect(sendBySessionWebhook).toHaveBeenCalledWith(webhook, {
+      msgtype: 'actionCard',
+      actionCard: {
+        title: card.title,
+        text: card.text,
+        singleTitle: card.singleTitle,
+        singleURL: card.singleURL,
+      },
+    });
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(sendGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns sent:false when the session webhook is missing or expired', async () => {
+    const missing = await sendDingTalkActionCardToThread('dingtalk:cid_dm', card);
+    expect(missing).toEqual({ sent: false });
+
+    vi.mocked(isSessionWebhookLive).mockReturnValue(false);
+    vi.mocked(getDingTalkSession).mockReturnValue({
+      sessionWebhook: webhook,
+      sessionWebhookExpiredTime: 1,
+    } as never);
+    const expired = await sendDingTalkActionCardToThread('dingtalk:cid_group:staff_9', card);
+    expect(expired).toEqual({ sent: false });
+    expect(sendBySessionWebhook).not.toHaveBeenCalled();
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(sendGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-https singleURL without posting', async () => {
+    liveSession();
+    const http = await sendDingTalkActionCardToThread('dingtalk:cid_dm', {
+      ...card,
+      singleURL: 'http://login.dingtalk.com/oauth2/device/verify.htm',
+    });
+    const junk = await sendDingTalkActionCardToThread('dingtalk:cid_dm', {
+      ...card,
+      singleURL: 'javascript:alert(1)',
+    });
+    expect(http).toEqual({ sent: false });
+    expect(junk).toEqual({ sent: false });
+    expect(sendBySessionWebhook).not.toHaveBeenCalled();
+  });
+
+  it('returns sent:false when the connector is missing or the webhook post throws', async () => {
+    liveSession();
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValueOnce(null);
+    const noConfig = await sendDingTalkActionCardToThread('dingtalk:cid_dm', card);
+    expect(noConfig).toEqual({ sent: false });
+    expect(sendBySessionWebhook).not.toHaveBeenCalled();
+
+    liveSession();
+    sendBySessionWebhook.mockRejectedValueOnce(new Error('webhook 500'));
+    const thrown = await sendDingTalkActionCardToThread('dingtalk:cid_dm', card);
+    expect(thrown).toEqual({ sent: false });
+    expect(sendOtoMessage).not.toHaveBeenCalled();
   });
 });

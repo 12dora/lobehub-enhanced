@@ -152,6 +152,10 @@ describe('DingtalkWorkspaceConfirm gate', () => {
     expect(
       screen.getByText('预览失败，请勿批准。如需取消，请填写拒绝原因并点「提交」。'),
     ).toBeTruthy();
+    // A switched-off capability names the admin page that switches it on.
+    expect(
+      screen.getByRole('link', { name: '管理员入口：IM 连接器设置' }).getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
   });
 
   it('rejects approval when the cached preview belongs to other arguments', async () => {

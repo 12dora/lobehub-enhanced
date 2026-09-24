@@ -44,11 +44,16 @@ vi.mock('@/database/models/messengerAccountLink', () => ({
   })),
 }));
 
-// Stub the agents schema as an opaque token — the runtime only uses it for
-// `select.from(agents)` reference equality, so any object works.
-vi.mock('@/database/schemas', () => ({
-  agents: { id: 'agents.id', userId: 'agents.userId' },
-}));
+// Stub `agents` as an opaque token — the runtime only uses it for
+// `select.from(agents)` reference equality. Spread the real module so
+// platform models loaded transitively (audit retention SQL) still see `topics`.
+vi.mock('@/database/schemas', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    agents: { id: 'agents.id', userId: 'agents.userId' },
+  };
+});
 
 // DingTalk connector lookup + DingTalk client/service are only reached for
 // DingTalk turns; keep them out of the module graph for these tests.

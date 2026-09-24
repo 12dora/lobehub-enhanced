@@ -30,6 +30,7 @@ export {
   getEffectiveDefaultAgentConfig,
   getEffectiveMemorySettings,
   getEffectiveSystemAgentConfig,
+  getEffectiveToolSettings,
   getRawUserSettings,
   getSystemAgentSlice,
   getToolSlice,

@@ -408,6 +408,51 @@ describe('MarketService', () => {
       ).rejects.toBe(converted);
     });
 
+    it('includes a minted authorize link when the skill is not connected', async () => {
+      const service = new MarketService();
+      (service as any).market.skills.callTool = vi.fn().mockResolvedValue({
+        data: null,
+        error: { code: 'NOT_CONNECTED', message: 'NOT_CONNECTED' },
+        success: false,
+      });
+      (service as any).market.connect = {
+        authorize: vi.fn().mockResolvedValue({ authorize_url: 'https://auth.example/start' }),
+      };
+
+      const result = await service.executeLobehubSkill({
+        args: {},
+        provider: 'linear',
+        toolName: 'list',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe('NOT_CONNECTED');
+      expect(result.content).toContain('NOT_CONNECTED');
+      expect(result.content).toContain('[点此授权](https://auth.example/start)');
+    });
+
+    it('falls back to the skills page when the authorize url cannot be minted', async () => {
+      const service = new MarketService();
+      (service as any).market.skills.callTool = vi
+        .fn()
+        .mockRejectedValue(new Error('TOKEN_EXPIRED'));
+      (service as any).market.connect = {
+        authorize: vi.fn().mockRejectedValue(new Error('down')),
+      };
+
+      const result = await service.executeLobehubSkill({
+        args: {},
+        platform: 'dingtalk',
+        provider: 'linear',
+        toolName: 'list',
+      });
+
+      expect(result.content).toContain('TOKEN_EXPIRED');
+      expect(result.content).toContain('[技能页](');
+      expect(result.content).toContain('/dingtalk/sso?redirect=');
+      expect(result.content).toContain(encodeURIComponent('/settings/skill'));
+    });
+
     it('should use a generic failure message when an unsuccessful response has no detail', async () => {
       const service = new MarketService();
       const mockCallTool = vi.fn().mockResolvedValue({

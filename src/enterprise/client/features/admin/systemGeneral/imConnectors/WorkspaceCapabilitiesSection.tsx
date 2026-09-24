@@ -1,10 +1,12 @@
 'use client';
 
 import type { ApprovalAutomationTier } from '@lobechat/types';
+import { DINGTALK_CONSOLE_LINKS } from '@lobechat/utils/appLink';
 import { Button, Select, Text } from '@lobehub/ui/base-ui';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import ActionLink, { resolveActionHref } from '@/components/ActionLink';
 import type {
   AdminImConnectorProbeWorkspacePermissionsOutput,
   DingtalkPermissionProbe,
@@ -37,6 +39,46 @@ const defaultWorkspaceService: ImConnectorWorkspaceService = adminImConnectorsSe
 
 /** The capabilities in the order they are switched on, which is also the order they are probed. */
 const CAPABILITIES = ['approval', 'todo', 'calendar'] as const;
+
+/**
+ * DingTalk's own "apply for these scopes" page, when the probe kept it. Read defensively: the field
+ * is optional on the contract and only an https URL is ever linked.
+ */
+export const readProbeApplyUrl = (result: DingtalkPermissionProbe): string | undefined => {
+  const target = resolveActionHref(
+    (result as DingtalkPermissionProbe & { applyUrl?: unknown }).applyUrl,
+  );
+  return target?.external ? target.href : undefined;
+};
+
+export interface ProbeApplyLink {
+  href: string;
+  labelKey:
+    | 'systemGeneral.imConnectors.workspace.probe.applyLink'
+    | 'systemGeneral.imConnectors.workspace.probe.consoleLink';
+}
+
+/**
+ * Where an admin grants what a probe found missing: DingTalk's own apply page when the probe kept
+ * one, otherwise the developer console home for a forbidden reading with named scopes (labelled as
+ * the console, since it is not the application page itself).
+ */
+export const resolveProbeApplyLink = (
+  result: DingtalkPermissionProbe,
+): ProbeApplyLink | undefined => {
+  const applyUrl = readProbeApplyUrl(result);
+  if (applyUrl)
+    return { href: applyUrl, labelKey: 'systemGeneral.imConnectors.workspace.probe.applyLink' };
+
+  const missingScopes = (result.missingScopes ?? []).filter((scope) => scope.length > 0);
+  if (!result.ok && result.reason === 'forbidden' && missingScopes.length > 0)
+    return {
+      href: DINGTALK_CONSOLE_LINKS.developerConsole,
+      labelKey: 'systemGeneral.imConnectors.workspace.probe.consoleLink',
+    };
+
+  return undefined;
+};
 
 const toTier = (value: unknown): ApprovalAutomationTier | null =>
   typeof value === 'string' &&
@@ -203,13 +245,19 @@ export const WorkspaceCapabilitiesSection = memo<WorkspaceCapabilitiesSectionPro
               <div className={styles.probeList}>
                 {capabilityLabels.map((row) => {
                   const result = probe[row.capability];
+                  const applyLink = resolveProbeApplyLink(result);
                   return (
-                    <Text key={row.capability} type={result.ok ? 'success' : 'danger'}>
-                      {t('systemGeneral.imConnectors.workspace.probe.row', {
-                        capability: row.label,
-                        status: resolveProbeText(result),
-                      })}
-                    </Text>
+                    <div className={styles.probeRow} key={row.capability}>
+                      <Text type={result.ok ? 'success' : 'danger'}>
+                        {t('systemGeneral.imConnectors.workspace.probe.row', {
+                          capability: row.label,
+                          status: resolveProbeText(result),
+                        })}
+                      </Text>
+                      {applyLink ? (
+                        <ActionLink href={applyLink.href}>{t(applyLink.labelKey)}</ActionLink>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>

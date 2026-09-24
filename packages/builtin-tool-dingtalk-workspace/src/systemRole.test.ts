@@ -34,7 +34,7 @@ describe('dingtalk workspace systemRole', () => {
     expect(systemPrompt).toContain('refresh=true');
     const listTodos = DingtalkWorkspaceManifest.api.find((api) => api.name === 'listTodos');
     expect(listTodos?.description).toBe(
-      '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 若提示授权，请原样转告',
+      '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
     );
     expect(systemPrompt).toContain('personalTodos');
     expect(systemPrompt).toContain('lobe-dingtalk-personal updateTodo/completeTodo');
@@ -53,8 +53,9 @@ describe('dingtalk workspace systemRole', () => {
 
   it('requires the model to repeat an authorization markdown link verbatim', () => {
     expect(systemPrompt).toContain(
-      '工具结果里有授权链接时，回复中必须原样给出该 markdown 链接（不要改写、截断或省略 URL），并用一句话说明授权后再问一次即可。',
+      '工具结果里的 markdown 链接必须原样转发（不要改写、截断、省略或自行编造 URL）。授权链接用一句话说明授权后再问一次即可。',
     );
+    expect(systemPrompt).toContain('Do not invent a URL');
   });
 
   it('keeps free/busy titles stripped and organizer-only updates', () => {

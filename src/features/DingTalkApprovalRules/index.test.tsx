@@ -265,6 +265,9 @@ describe('DingTalkApprovalRules capability gate', () => {
     render(<DingTalkApprovalRules />);
 
     expect(screen.getByText('管理员尚未启用钉钉审批，自动审批规则暂不可用。')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: '管理员入口：IM 连接器设置' }).getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
     expect(mocks.list).not.toHaveBeenCalled();
   });
 });
@@ -369,6 +372,9 @@ describe('DingTalkApprovalRules table', () => {
     render(<DingTalkApprovalRules />);
 
     expect(screen.getByText('需使用钉钉登录后才能使用自动审批规则。')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '去绑定钉钉' }).getAttribute('href')).toBe(
+      '/settings/messenger/dingtalk',
+    );
     expect(screen.queryByText('error.retry')).toBeNull();
     expect(screen.queryByText('暂无规则')).toBeNull();
   });

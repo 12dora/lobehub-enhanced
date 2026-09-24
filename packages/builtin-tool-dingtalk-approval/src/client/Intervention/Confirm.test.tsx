@@ -151,6 +151,19 @@ describe('DingtalkApprovalConfirm gate', () => {
     expect(
       screen.getByText('预览失败，请勿批准。如需取消，请填写拒绝原因并点「提交」。'),
     ).toBeTruthy();
+    // No page can make someone else's task yours: no link is offered.
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('links an unverified DingTalk identity to the binding page', () => {
+    mocks.error = new Error('DINGTALK_IDENTITY_UNVERIFIED');
+
+    renderConfirm('refuseTask');
+
+    expect(screen.getByText('需使用钉钉登录后才能执行此操作')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '去绑定钉钉' }).getAttribute('href')).toBe(
+      '/settings/messenger/dingtalk',
+    );
   });
 
   it('rejects approval when the cached preview belongs to other arguments', async () => {

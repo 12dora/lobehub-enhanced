@@ -64,7 +64,7 @@ const { DingtalkPersonalError } = mocks;
 const run = (
   apiName: DingtalkPersonalApiName,
   args: Record<string, unknown>,
-  ctx: { botPlatform?: string; workspaceId?: string } = {},
+  ctx: { botPlatform?: string; botThreadId?: string; workspaceId?: string } = {},
 ) => runDingtalkPersonalTool(db as never, 'user-1', apiName, args, ctx);
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -126,6 +126,8 @@ const LOGIN = {
 const WEB_AUTH_URL = 'https://aihub.example.com/settings/connector?dingtalkPersonal=authorize';
 const WEB_AUTH_LINK = `[点此前往授权](${WEB_AUTH_URL})`;
 const DINGTALK_AUTH_LINK = `[点此授权钉钉个人数据](${LOGIN.verificationUrl})`;
+const DINGTALK_APP_AUTH_URL = `https://aihub.example.com/dingtalk/sso?redirect=${encodeURIComponent('/settings/connector?dingtalkPersonal=authorize')}`;
+const DINGTALK_APP_AUTH_LINK = `[点此授权钉钉个人数据](${DINGTALK_APP_AUTH_URL})`;
 
 describe('dingtalkPersonalWebAuthorizeUrl', () => {
   it('joins APP_URL without a trailing slash and falls back to a relative path', () => {
@@ -658,8 +660,12 @@ describe('runDingtalkPersonalTool', () => {
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'));
     mocks.startLogin.mockResolvedValueOnce(LOGIN);
     mocks.getStaffId.mockResolvedValueOnce('staff-1');
-    mocks.sendCard.mockResolvedValueOnce(undefined);
-    const result = await run('getTodo', { taskId: '57475254077' }, { botPlatform: 'dingtalk' });
+    mocks.sendCard.mockResolvedValueOnce({ sent: true, via: 'oto' });
+    const result = await run(
+      'getTodo',
+      { taskId: '57475254077' },
+      { botPlatform: 'dingtalk', botThreadId: 'dingtalk:cid_dm' },
+    );
     expect(mocks.startLogin).toHaveBeenCalledTimes(1);
     expect(mocks.startLogin).toHaveBeenCalledWith({ origin: 'dingtalk' });
     expect(mocks.getStaffId).toHaveBeenCalledTimes(1);
@@ -668,6 +674,7 @@ describe('runDingtalkPersonalTool', () => {
       db,
       login: LOGIN,
       staffId: 'staff-1',
+      threadId: 'dingtalk:cid_dm',
       userId: 'user-1',
     });
     expect(result.success).toBe(false);
@@ -676,6 +683,9 @@ describe('runDingtalkPersonalTool', () => {
     expect(result.content).toContain('验证码 JCHB-KBXF');
     expect(result.content).toContain('有效期');
     expect(result.content).toContain(LOGIN.expiresAt);
+    expect(result.content).toContain('同时在机器人单聊里发了一张授权卡片');
+    expect(result.content).not.toContain('同时在当前会话发了一张授权卡片');
+    expect(result.content).not.toContain('若钉钉单聊');
     expect(result.content).toContain('授权后再问我一次即可');
     expect(result.state).toMatchObject({
       authUrl: LOGIN.verificationUrl,
@@ -696,16 +706,51 @@ describe('runDingtalkPersonalTool', () => {
     expect(thrown.content).toContain(DINGTALK_AUTH_LINK);
     expect(thrown.content).toContain('验证码 JCHB-KBXF');
     expect(thrown.content).toContain('有效期');
+    expect(thrown.content).not.toContain('授权卡片');
     expect((thrown.state as { authUrl?: string; login?: { userCode?: string } }).authUrl).toBe(
       LOGIN.verificationUrl,
     );
     expect((thrown.state as { login?: { userCode?: string } }).login?.userCode).toBe('JCHB-KBXF');
 
-    mocks.sendCard.mockResolvedValueOnce(false);
+    mocks.sendCard.mockResolvedValueOnce({ sent: false });
     const declined = await run('listMyTodos', {}, { botPlatform: 'dingtalk' });
     expect(declined.content).toBe(thrown.content);
+    expect(declined.content).not.toContain('授权卡片');
     expect(declined).not.toHaveProperty('error');
     expect(mocks.startLogin).toHaveBeenCalledTimes(2);
+  });
+
+  it('names the channel that actually delivered the auth card', async () => {
+    mocks.exec.mockRejectedValue(new DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'));
+    mocks.startLogin.mockResolvedValue(LOGIN);
+    mocks.getStaffId.mockResolvedValue('staff-1');
+
+    mocks.sendCard.mockResolvedValueOnce({ sent: true, via: 'session' });
+    const session = await run(
+      'listMyTodos',
+      {},
+      { botPlatform: 'dingtalk', botThreadId: 'dingtalk:cid_group:staff-1' },
+    );
+    expect(mocks.sendCard).toHaveBeenCalledWith({
+      db,
+      login: LOGIN,
+      staffId: 'staff-1',
+      threadId: 'dingtalk:cid_group:staff-1',
+      userId: 'user-1',
+    });
+    expect(session).not.toHaveProperty('error');
+    expect(session.content).toContain(DINGTALK_AUTH_LINK);
+    expect(session.content).toContain('同时在当前会话发了一张授权卡片');
+    expect(session.content).not.toContain('同时在机器人单聊里发了一张授权卡片');
+
+    mocks.sendCard.mockResolvedValueOnce({ sent: true });
+    const claimed = await run(
+      'listMyTodos',
+      {},
+      { botPlatform: 'dingtalk', botThreadId: 'dingtalk:cid_dm' },
+    );
+    expect(claimed.content).toContain(DINGTALK_AUTH_LINK);
+    expect(claimed.content).not.toContain('授权卡片');
   });
 
   it('puts the DingTalk permission page URL in PAT_REQUIRED content', async () => {
@@ -714,7 +759,7 @@ describe('runDingtalkPersonalTool', () => {
       new DingtalkPersonalError('DINGTALK_PERSONAL_PAT_REQUIRED', { uri }),
     );
     const result = await run('getReport', { reportId: 'rpt-1' });
-    expect(result.content).toContain(uri);
+    expect(result.content).toContain(`[打开权限页面](${uri})`);
     expect(result.content).toContain('钉钉自己的权限页面');
     expect(result.error?.code).toBe('DINGTALK_PERSONAL_PAT_REQUIRED');
 
@@ -724,6 +769,44 @@ describe('runDingtalkPersonalTool', () => {
     const blocked = await run('getReport', { reportId: 'rpt-1' });
     expect(blocked.content).not.toContain('javascript:');
     expect(blocked.content).toContain('DINGTALK_PERSONAL_PAT_REQUIRED');
+
+    mocks.exec.mockRejectedValueOnce(
+      new DingtalkPersonalError('DINGTALK_PERSONAL_PAT_REQUIRED', {
+        uri: 'http://open.dingtalk.com/permission/cli',
+      }),
+    );
+    const httpOnly = await run('getReport', { reportId: 'rpt-1' });
+    expect(httpOnly.content).not.toContain('http://');
+    expect(httpOnly.content).not.toContain('打开权限页面');
+    expect(httpOnly.content).toContain('DINGTALK_PERSONAL_PAT_REQUIRED');
+  });
+
+  it('replaces an unsafe verification URL with the app authorize link', async () => {
+    const unsafe = [
+      'javascript:alert(1)',
+      'http://login.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF',
+      'https://evil.example/verify',
+    ];
+    for (const verificationUrl of unsafe) {
+      mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_UNAUTHORIZED'));
+      mocks.startLogin.mockResolvedValueOnce({ ...LOGIN, verificationUrl });
+      mocks.getStaffId.mockResolvedValueOnce('staff-1');
+      mocks.sendCard.mockResolvedValueOnce({ sent: true, via: 'oto' });
+      const result = await run(
+        'listMyTodos',
+        {},
+        { botPlatform: 'dingtalk', botThreadId: 'dingtalk:cid_dm' },
+      );
+      expect(result.content).toContain(DINGTALK_APP_AUTH_LINK);
+      expect(result.content).not.toContain(verificationUrl);
+      expect(result.content).toContain('验证码 JCHB-KBXF');
+      expect((result.state as { authUrl?: string }).authUrl).toBe(DINGTALK_APP_AUTH_URL);
+      expect(mocks.sendCard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          login: expect.objectContaining({ verificationUrl: DINGTALK_APP_AUTH_URL }),
+        }),
+      );
+    }
   });
 
   it('uses the org-policy sentence and the workspace identity copy', async () => {
@@ -732,13 +815,13 @@ describe('runDingtalkPersonalTool', () => {
     );
     const denied = await run('listMyTodos', {});
     expect(denied.content).toContain(
-      '贵司钉钉管理员未开放该功能给 CLI（开发者后台 → CLI 设置），请联系管理员',
+      '贵司钉钉管理员未开放该功能给 CLI（开发者后台 → [CLI 设置](https://open-dev.dingtalk.com/fe/old#/developerSettings)），请联系管理员',
     );
     expect(denied.content).toContain('DINGTALK_PERSONAL_ORG_POLICY_DENIED');
 
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_IDENTITY_UNBOUND'));
     expect((await run('listMyTodos', {})).content).toBe(
-      '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。请使用钉钉登录或通过钉钉机器人完成绑定；管理员不能代为绑定。',
+      '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。请先用钉钉登录 AIHub（[用钉钉登录](https://aihub.example.com/settings/messenger/dingtalk)），或在钉钉里给机器人发一条消息完成绑定',
     );
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_IDENTITY_UNVERIFIED'));
     expect((await run('listMyTodos', {})).content).toContain('DINGTALK_IDENTITY_UNVERIFIED');
@@ -751,7 +834,18 @@ describe('runDingtalkPersonalTool', () => {
     expect((await run('listMyTodos', {})).content).toContain('管理员未开启「待办」');
 
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_DISABLED'));
-    expect((await run('listMyTodos', {})).content).toContain('管理员未开启钉钉个人数据');
+    const disabled = await run('listMyTodos', {});
+    expect(disabled.content).toContain('管理员未开启钉钉个人数据');
+    expect(disabled.content).toContain(
+      '[IM 连接器设置](https://aihub.example.com/admin/system/general?tab=im-connectors)',
+    );
+
+    mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_IDENTITY_UNBOUND'));
+    const inDingTalk = await run('listMyTodos', {}, { botPlatform: 'dingtalk' });
+    expect(inDingTalk.content).toContain(
+      '[用钉钉登录](https://aihub.example.com/dingtalk/sso?redirect=%2F)',
+    );
+    expect(inDingTalk.content).not.toMatch(/\]\(<http/);
   });
 
   it('says a timed-out write may already have happened', async () => {

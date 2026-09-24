@@ -55,6 +55,21 @@ describe('dingtalkApprovalRuntime.factory', () => {
     mockSearchDirectory.mockResolvedValue({ ambiguous: false, departments: [], users: [] });
   });
 
+  it('uses a DingTalk SSO link when the chat is DingTalk', async () => {
+    mockListTemplates.mockRejectedValueOnce(
+      Object.assign(new Error('DINGTALK_IDENTITY_UNBOUND'), { code: 'DINGTALK_IDENTITY_UNBOUND' }),
+    );
+    const runtime = await dingtalkApprovalRuntime.factory({
+      botPlatform: 'dingtalk',
+      serverDB: {},
+      userId: 'user-1',
+    } as any);
+    const result = await runtime.listTemplates();
+    expect(result.content).toContain('[用钉钉登录](');
+    expect(result.content).toContain('/dingtalk/sso?redirect=%2F');
+    expect(result.content).not.toMatch(/\]\(<http/);
+  });
+
   it('requires userId and serverDB', async () => {
     await expect(dingtalkApprovalRuntime.factory({} as any)).rejects.toThrow(
       'userId and serverDB are required',

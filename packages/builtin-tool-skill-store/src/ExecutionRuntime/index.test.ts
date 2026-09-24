@@ -18,7 +18,8 @@ describe('SkillStoreExecutionRuntime.searchSkill', () => {
     const result = await runtime.searchSkill({ q: '钉钉' });
 
     expect(result).toEqual({
-      content: 'Market skill search is not available in this environment.',
+      content:
+        'Market skill search is not available in this environment. 请打开[技能页](/settings/skill)登录市场后再试。',
       success: false,
     });
   });
@@ -35,7 +36,9 @@ describe('SkillStoreExecutionRuntime.searchSkill', () => {
     const result = await runtime.searchSkill({ q: '库存' });
 
     expect(result.success).toBe(false);
-    expect(result.content).toBe('Market skill search is not available in this environment.');
+    expect(result.content).toBe(
+      'Market skill search is not available in this environment. 请打开[技能页](/settings/skill)登录市场后再试。',
+    );
     expect(result.content).not.toContain('Failed to search skills');
   });
 

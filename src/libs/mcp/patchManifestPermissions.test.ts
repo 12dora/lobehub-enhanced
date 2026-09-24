@@ -23,6 +23,19 @@ describe('patchManifestWithPermissions', () => {
     );
     expect(out.api[0].humanIntervention).toBe('required');
     expect(out.api[0].description).toContain('[TOOL DISABLED]');
+    expect(out.api[0].description).toContain('[设置 → 连接器](/settings/connector)');
+    expect(out.api[0].description).not.toContain('](<');
+  });
+
+  it('makes the settings link absolute when given a resolver (IM turns)', () => {
+    const out = patchManifestWithPermissions(
+      manifest([{ description: 'x', name: 'a' }]),
+      new Map([['a', ConnectorToolPermission.disabled]]),
+      (path) => `https://aihub.example.com${path}`,
+    );
+    expect(out.api[0].description).toContain(
+      '[设置 → 连接器](https://aihub.example.com/settings/connector)',
+    );
   });
 
   it('leaves auto tools unchanged', () => {

@@ -20,6 +20,7 @@ import {
   type StdioMCPParams,
 } from '@/libs/mcp';
 import { MCPClient } from '@/libs/mcp';
+import { desktopDeviceRequiredMessage } from '@/server/utils/appLinks';
 import { rethrowIfNetworkProxyUnavailable } from '@/server/utils/networkProxyUnavailable';
 
 import { type ProcessContentBlocksFn } from './contentProcessor';
@@ -293,8 +294,7 @@ export class MCPService {
     if (params.type === 'stdio' && this.options.allowStdio !== true) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
-        message:
-          'This integration must run on a connected desktop device. Connect a device and try again.',
+        message: desktopDeviceRequiredMessage(),
       });
     }
     const key = this.serializeParams(params); // Use custom serialization

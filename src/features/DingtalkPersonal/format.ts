@@ -1,6 +1,24 @@
 import dayjs from 'dayjs';
 
+import { resolveActionHref } from '@/components/ActionLink/href';
 import type { DingtalkPersonalFeature } from '@/services/dingtalkPersonal';
+
+/**
+ * The device-login link, only when it is DingTalk's own https page (`dingtalk.com` or a subdomain).
+ * It becomes a QR code, a copy action and an 「打开授权页」 button, so anything else — another host,
+ * `http:`, control characters — is refused rather than shown.
+ */
+export const resolveVerificationUrl = (value: unknown): string | undefined => {
+  const target = resolveActionHref(value);
+  if (!target?.external) return undefined;
+
+  try {
+    const host = new URL(target.href).hostname.toLowerCase();
+    return host === 'dingtalk.com' || host.endsWith('.dingtalk.com') ? target.href : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /** `mm:ss` for the code's remaining lifetime; never negative. */
 export const formatCountdown = (remainingMs: number): string => {

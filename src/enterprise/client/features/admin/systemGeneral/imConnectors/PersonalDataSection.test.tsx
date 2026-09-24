@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdminImConnectorView } from '@/enterprise/client/services/adminImConnectors';
@@ -8,12 +8,31 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 import { type DingTalkPersonalSummary, toDingTalkDraft } from './draft';
 import { PersonalDataSection } from './PersonalDataSection';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) =>
-      options ? `${key}:${Object.values(options).join(',')}` : key,
-  }),
-}));
+vi.mock('react-i18next', async () => {
+  const { cloneElement } = await import('react');
+
+  return {
+    // The key stands in for the copy; each named component renders once, labelled by its name.
+    Trans: ({
+      components,
+      i18nKey,
+    }: {
+      components?: Record<string, ReactElement>;
+      i18nKey: string;
+    }) => (
+      <span>
+        {i18nKey}
+        {Object.entries(components ?? {}).map(([name, element]) =>
+          cloneElement(element, { key: name }, name),
+        )}
+      </span>
+    ),
+    useTranslation: () => ({
+      t: (key: string, options?: Record<string, unknown>) =>
+        options ? `${key}:${Object.values(options).join(',')}` : key,
+    }),
+  };
+});
 
 vi.mock('antd-style', () => ({
   createStaticStyles: () => new Proxy({}, { get: () => '' }),
@@ -125,6 +144,17 @@ describe('PersonalDataSection', () => {
     expect(screen.getByText('systemGeneral.imConnectors.personal.title')).toBeTruthy();
     expect(screen.getByText('systemGeneral.imConnectors.personal.description')).toBeTruthy();
     expect(screen.getByText('systemGeneral.imConnectors.personal.hints.write')).toBeTruthy();
+  });
+
+  it('links the DingTalk CLI setting it names straight to the developer console', () => {
+    renderSection();
+
+    const link = screen.getByRole('link', { name: 'cli' });
+    expect(link.getAttribute('href')).toBe(
+      'https://open-dev.dingtalk.com/fe/old#/developerSettings',
+    );
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   it('holds the four scopes back while the master switch is off', () => {

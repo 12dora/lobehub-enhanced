@@ -73,3 +73,28 @@ describe('buildConnectorManifests mcpParams headers', () => {
     expect(params.headers).toBeUndefined();
   });
 });
+
+describe('buildConnectorManifests disabled tools', () => {
+  const disabledTool = (): UserConnectorToolItem => ({ ...tool(), permission: 'disabled' }) as any;
+
+  it('tells the model where the user switches the tool back on, as a markdown link', () => {
+    const [manifest] = buildConnectorManifests([httpConnector(null)], [disabledTool()]);
+
+    expect(manifest.api[0].description).toContain('[TOOL DISABLED]');
+    expect(manifest.api[0].description).toContain('"doThing"');
+    expect(manifest.api[0].description).toContain('[设置 → 连接器](/settings/connector)');
+    expect(manifest.api[0].humanIntervention).toBe('required');
+  });
+
+  it('uses the resolver for an absolute link on IM turns', () => {
+    const [manifest] = buildConnectorManifests(
+      [httpConnector(null)],
+      [disabledTool()],
+      (path) => `https://aihub.example.com/dingtalk/sso?redirect=${encodeURIComponent(path)}`,
+    );
+
+    expect(manifest.api[0].description).toContain(
+      '[设置 → 连接器](https://aihub.example.com/dingtalk/sso?redirect=%2Fsettings%2Fconnector)',
+    );
+  });
+});

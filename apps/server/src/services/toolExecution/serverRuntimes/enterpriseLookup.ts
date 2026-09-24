@@ -5,6 +5,8 @@ import {
 } from '@lobechat/builtin-tool-enterprise-lookup/executionRuntime';
 import { EnterpriseLookupIdentifier } from '@lobechat/builtin-tool-enterprise-lookup/manifest';
 
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
+
 import type { ServerRuntimeRegistration } from './types';
 
 export { createEnterpriseLookupRuntime, EnterpriseLookupExecutionRuntime };
@@ -23,11 +25,14 @@ export const enterpriseLookupRuntime: ServerRuntimeRegistration = {
       await import('@/server/enterprise/services/enterpriseLookup');
     const lookup = new EnterpriseLookupService(serverDB, userId);
 
-    return createEnterpriseLookupRuntime({
-      companyProfile: (params) => lookup.companyProfile(params),
-      listCapabilities: (params) => lookup.listCapabilities(params),
-      query: (params) => lookup.query(params),
-    });
+    return createEnterpriseLookupRuntime(
+      {
+        companyProfile: (params) => lookup.companyProfile(params),
+        listCapabilities: (params) => lookup.listCapabilities(params),
+        query: (params) => lookup.query(params),
+      },
+      { resolveLink: serverAppLinkResolver(context.botPlatform) },
+    );
   },
   identifier: EnterpriseLookupIdentifier,
 };

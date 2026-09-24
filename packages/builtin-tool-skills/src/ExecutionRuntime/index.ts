@@ -7,6 +7,7 @@ import type {
   SkillListItem,
   SkillResourceContent,
 } from '@lobechat/types';
+import { APP_LINK_PATHS, type AppLinkResolver, linkedPath } from '@lobechat/utils/appLink';
 
 import type {
   ActivateSkillParams,
@@ -100,6 +101,8 @@ export interface SkillsExecutionRuntimeOptions {
   deviceFileAccess?: DeviceFileAccess;
   /** Filesystem skills discovered on the execution device. */
   projectSkills?: ProjectSkillRuntimeItem[];
+  /** Turns app paths into links for the surface showing the tool result. */
+  resolveLink?: AppLinkResolver;
   service: SkillRuntimeService;
 }
 
@@ -162,6 +165,7 @@ export class SkillsExecutionRuntime {
   private builtinSkills: BuiltinSkill[];
   private projectSkills: ProjectSkillRuntimeItem[];
   private deviceFileAccess?: DeviceFileAccess;
+  private resolveLink?: AppLinkResolver;
   private service: SkillRuntimeService;
 
   constructor(options: SkillsExecutionRuntimeOptions) {
@@ -170,6 +174,14 @@ export class SkillsExecutionRuntime {
     this.builtinSkills = options.builtinSkills || [];
     this.projectSkills = options.projectSkills || [];
     this.deviceFileAccess = options.deviceFileAccess;
+    this.resolveLink = options.resolveLink;
+  }
+
+  private deviceFileAccessMessage(skillName: string, verb: 'read' | 'loaded'): string {
+    const devices = linkedPath(this.resolveLink, '设备页', APP_LINK_PATHS.devices);
+    const downloads = linkedPath(this.resolveLink, '下载桌面端', APP_LINK_PATHS.downloads);
+    const action = verb === 'read' ? 'cannot be read' : 'cannot be loaded';
+    return `Filesystem skill "${skillName}" ${action}: no device file access available. 请在${devices}连接桌面端，或先${downloads}。`;
   }
 
   async execScript(args: ExecScriptParams): Promise<BuiltinServerRuntimeOutput> {
@@ -288,7 +300,7 @@ export class SkillsExecutionRuntime {
       if (projectSkill) {
         if (!this.deviceFileAccess) {
           return {
-            content: `Filesystem skill "${id}" cannot be read: no device file access available.`,
+            content: this.deviceFileAccessMessage(id, 'read'),
             success: false,
           };
         }
@@ -403,7 +415,7 @@ export class SkillsExecutionRuntime {
     if (projectSkill) {
       if (!this.deviceFileAccess) {
         return {
-          content: `Filesystem skill "${name}" cannot be loaded: no device file access available.`,
+          content: this.deviceFileAccessMessage(name, 'loaded'),
           success: false,
         };
       }

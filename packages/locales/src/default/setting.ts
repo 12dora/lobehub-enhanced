@@ -536,6 +536,9 @@ export default {
   'defaultAgent.model.desc': 'Model used when creating new agents',
   'defaultAgent.model.title': 'Model',
   'defaultAgent.title': 'New Agent',
+  'dingtalkLink.adminImConnectors': 'Admin: IM connector settings',
+  'dingtalkLink.binding': 'Link DingTalk',
+  'dingtalkLink.cliSettings': 'DingTalk developer console → CLI settings',
   'dingtalkPersonal.actions.authorize': 'Authorize',
   'dingtalkPersonal.actions.cancel': 'Cancel',
   'dingtalkPersonal.actions.check': 'Check status',
@@ -583,6 +586,8 @@ export default {
     'The DingTalk account you authorized is not yours. Please authorize again with your own account.',
   'dingtalkPersonal.login.error.orgCliDisabled':
     'Your organization has not enabled "Allow members to access personal data via CLI" in DingTalk. Contact your administrator.',
+  'dingtalkPersonal.login.invalidLink':
+    'The authorization link does not point to DingTalk, so no QR code or link is shown. Cancel and authorize again, or contact your administrator.',
   'dingtalkPersonal.login.linkCopied':
     'Link copied. Send it to yourself in DingTalk and open it there.',
   'dingtalkPersonal.login.scanHint':

@@ -258,6 +258,43 @@ describe('AuthorizeCard', () => {
     expect(screen.queryByText('授权')).toBeNull();
   });
 
+  it('links a missing binding to the DingTalk binding page', async () => {
+    mocks.getStatus.mockResolvedValue({
+      code: 'DINGTALK_IDENTITY_UNVERIFIED',
+      state: 'identity_required',
+    });
+    await renderCard();
+
+    expect(screen.getByRole('link', { name: '去绑定钉钉' }).getAttribute('href')).toBe(
+      '/settings/messenger/dingtalk',
+    );
+  });
+
+  it('links a missing CorpId to the admin tab, a deactivated identity nowhere', async () => {
+    mocks.getStatus.mockResolvedValue({
+      code: 'DINGTALK_PERSONAL_CORP_ID_MISSING',
+      state: 'identity_required',
+    });
+    const view = await renderCard();
+
+    expect(
+      screen.getByRole('link', { name: '管理员入口：IM 连接器设置' }).getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
+    view.unmount();
+
+    swr.cache.clear();
+    mocks.getStatus.mockResolvedValue({
+      code: 'DINGTALK_IDENTITY_INACTIVE',
+      state: 'identity_required',
+    });
+    await renderCard();
+
+    expect(
+      screen.getByText(dict['dingtalkPersonal.identity.DINGTALK_IDENTITY_INACTIVE']!),
+    ).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
   it('shows the QR, the code, its countdown and the hint, and copies the link', async () => {
     mocks.getStatus.mockResolvedValue({ state: 'unauthorized' });
     mocks.startLogin.mockResolvedValue(job());
@@ -281,6 +318,40 @@ describe('AuthorizeCard', () => {
 
     await advance(60_000);
     expect(screen.getByText('14:00 后过期')).toBeTruthy();
+  });
+
+  it('shows only the code when the verification link is not DingTalk’s own https page', async () => {
+    const bad = job({ verificationUrl: 'https://evil.example.com/verify?user_code=ABCD-EFGH' });
+    mocks.getStatus.mockResolvedValue({ state: 'unauthorized' });
+    mocks.startLogin.mockResolvedValue(bad);
+    mocks.getLoginJob.mockResolvedValue(bad);
+    await renderCard();
+
+    fireEvent.click(screen.getByText('授权'));
+    await flush();
+
+    expect(screen.getByText('ABCD-EFGH')).toBeTruthy();
+    expect(screen.getByText(dict['dingtalkPersonal.login.invalidLink']!)).toBeTruthy();
+    expect(screen.queryByTestId('qr')).toBeNull();
+    expect(screen.queryByText('复制链接')).toBeNull();
+    expect(screen.queryByText('打开授权页')).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+    // Still cancellable, which brings the 授权 button back.
+    expect(screen.getByText('取消')).toBeTruthy();
+  });
+
+  it('refuses a plain-http DingTalk link the same way', async () => {
+    const bad = job({ verificationUrl: 'http://login.dingtalk.com/oauth2/device/verify.htm' });
+    mocks.getStatus.mockResolvedValue({ state: 'unauthorized' });
+    mocks.startLogin.mockResolvedValue(bad);
+    mocks.getLoginJob.mockResolvedValue(bad);
+    await renderCard();
+
+    fireEvent.click(screen.getByText('授权'));
+    await flush();
+
+    expect(screen.queryByTestId('qr')).toBeNull();
+    expect(screen.getByText(dict['dingtalkPersonal.login.invalidLink']!)).toBeTruthy();
   });
 
   it('flips to the authorized view once the poll reports success', async () => {
@@ -335,6 +406,11 @@ describe('AuthorizeCard', () => {
     expect(
       screen.getByText('贵司钉钉未开启「允许成员通过 CLI 访问个人数据」，请联系管理员'),
     ).toBeTruthy();
+    const link = screen.getByRole('link', { name: '钉钉开发者后台 → CLI 设置' });
+    expect(link.getAttribute('href')).toBe(
+      'https://open-dev.dingtalk.com/fe/old#/developerSettings',
+    );
+    expect(link.getAttribute('target')).toBe('_blank');
   });
 
   it('says the code expired once its clock runs out', async () => {
@@ -435,6 +511,20 @@ describe('AuthorizeCard', () => {
     expect(screen.getByText('授权服务暂时不可用，请稍后再试')).toBeTruthy();
   });
 
+  it('links a start the admin switch refused to the IM connector tab', async () => {
+    mocks.getStatus.mockResolvedValue({ state: 'unauthorized' });
+    mocks.startLogin.mockRejectedValue(new Error('DINGTALK_PERSONAL_DISABLED'));
+    await renderCard();
+
+    fireEvent.click(screen.getByText('授权'));
+    await flush();
+
+    expect(screen.getByText('管理员暂未开启钉钉个人数据')).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: '管理员入口：IM 连接器设置' }).getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
+  });
+
   it('shows who is authorized, since when, and what is enabled', async () => {
     mocks.getStatus.mockResolvedValue(authorized);
     await renderCard();
@@ -446,6 +536,19 @@ describe('AuthorizeCard', () => {
     expect(screen.queryByText('工作日志')).toBeNull();
     expect(screen.getByText('检查状态')).toBeTruthy();
     expect(screen.getByText('撤销授权')).toBeTruthy();
+  });
+
+  it('links the admin IM connector tab when the admin has enabled nothing yet', async () => {
+    mocks.getStatus.mockResolvedValue({
+      ...authorized,
+      features: { chat: false, report: false, todo: false, write: false },
+    });
+    await renderCard();
+
+    expect(screen.getByText('管理员暂未开放任何内容')).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: '管理员入口：IM 连接器设置' }).getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
   });
 
   it('re-checks the authorization with the sidecar', async () => {

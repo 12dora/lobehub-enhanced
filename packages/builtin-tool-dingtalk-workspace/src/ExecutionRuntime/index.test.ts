@@ -566,4 +566,59 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
       ?.event;
     expect(event?.attendees?.length ?? 0).toBeLessThan(400);
   });
+
+  it('adds a one-click link for identity, admin, and apply-url errors', async () => {
+    const unbound = createDingtalkWorkspaceRuntime(
+      makeService({
+        createTodo: vi.fn().mockRejectedValue(coded('DINGTALK_IDENTITY_UNBOUND')),
+      }),
+    );
+    const web = await unbound.createTodo({ subject: 'x' });
+    expect(web.content).toContain(`[用钉钉登录](/settings/messenger/dingtalk)`);
+    expect(web.content).toContain('请先用钉钉登录 AIHub');
+
+    const dingtalkRuntime = createDingtalkWorkspaceRuntime(
+      makeService({
+        createTodo: vi.fn().mockRejectedValue(coded('DINGTALK_IDENTITY_UNBOUND')),
+      }),
+      {
+        platform: 'dingtalk',
+        resolveLink: (path) =>
+          `https://chat.example.com/dingtalk/sso?redirect=${encodeURIComponent(path)}`,
+      },
+    );
+    const ding = await dingtalkRuntime.createTodo({ subject: 'x' });
+    expect(ding.content).toContain(
+      '[用钉钉登录](https://chat.example.com/dingtalk/sso?redirect=%2F)',
+    );
+    expect(ding.content).not.toMatch(/\]\(<http/);
+
+    const adminRuntime = createDingtalkWorkspaceRuntime(
+      makeService({
+        createTodo: vi.fn().mockRejectedValue(coded('DINGTALK_FEATURE_DISABLED')),
+      }),
+    );
+    const disabled = await adminRuntime.createTodo({ subject: 'x' });
+    expect(disabled.content).toContain('[IM 连接器设置](/admin/system/general?tab=im-connectors)');
+
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    const forbiddenRuntime = createDingtalkWorkspaceRuntime(
+      makeService({
+        createTodo: vi
+          .fn()
+          .mockRejectedValue(coded('DINGTALK_FORBIDDEN', 'DINGTALK_FORBIDDEN', { applyUrl })),
+      }),
+    );
+    const forbidden = await forbiddenRuntime.createTodo({ subject: 'x' });
+    expect(forbidden.content).toContain(`[申请权限](${applyUrl})`);
+
+    const inactive = createDingtalkWorkspaceRuntime(
+      makeService({
+        createTodo: vi.fn().mockRejectedValue(coded('DINGTALK_IDENTITY_INACTIVE')),
+      }),
+    );
+    expect((await inactive.createTodo({ subject: 'x' })).content).toContain(
+      '[钉钉管理后台](https://oa.dingtalk.com/)',
+    );
+  });
 });

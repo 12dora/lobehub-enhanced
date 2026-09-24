@@ -1,4 +1,5 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import type { AppLinkResolver } from '@lobechat/utils/appLink';
 
 import type {
   CompleteTodoParams,
@@ -31,6 +32,11 @@ export interface DingtalkPersonalRuntimeCaller {
   ) => Promise<BuiltinServerRuntimeOutput>;
 }
 
+export interface DingtalkPersonalRuntimeOptions {
+  /** Resolves manual-action links for the surface (`serverAppLinkResolver(botPlatform)`). */
+  resolveLink?: AppLinkResolver;
+}
+
 const asArgs = (args: object): Record<string, unknown> => ({
   ...(args as Record<string, unknown>),
 });
@@ -40,7 +46,14 @@ const asArgs = (args: object): Record<string, unknown> => ({
  * (runDingtalkPersonalTool on the server). No DingTalk or database access here.
  */
 export class DingtalkPersonalExecutionRuntime {
-  constructor(private readonly caller: DingtalkPersonalRuntimeCaller) {}
+  readonly resolveLink: AppLinkResolver;
+
+  constructor(
+    private readonly caller: DingtalkPersonalRuntimeCaller,
+    options?: DingtalkPersonalRuntimeOptions,
+  ) {
+    this.resolveLink = options?.resolveLink ?? ((path) => path);
+  }
 
   private invoke(apiName: DingtalkPersonalApiName, args: object = {}, ctx?: unknown) {
     return this.caller.call(apiName, asArgs(args), ctx);
@@ -103,5 +116,7 @@ export class DingtalkPersonalExecutionRuntime {
   }
 }
 
-export const createDingtalkPersonalRuntime = (caller: DingtalkPersonalRuntimeCaller) =>
-  new DingtalkPersonalExecutionRuntime(caller);
+export const createDingtalkPersonalRuntime = (
+  caller: DingtalkPersonalRuntimeCaller,
+  options?: DingtalkPersonalRuntimeOptions,
+) => new DingtalkPersonalExecutionRuntime(caller, options);

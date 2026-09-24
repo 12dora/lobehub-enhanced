@@ -18,6 +18,7 @@ const {
   execDingtalkPersonal,
   getDingtalkPersonalLoginJob,
   getDingtalkPersonalProfileStatus,
+  isDingtalkVerificationUrl,
   startDingtalkPersonalLogin,
 } = await import('./brokerClient');
 
@@ -163,6 +164,53 @@ describe('dingtalk personal broker client', () => {
 
     const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
     expect(logged).not.toContain(TOKEN);
+  });
+
+  it('rejects a verificationUrl that is not https on a DingTalk host', async () => {
+    const pending = (verificationUrl: string) =>
+      json(
+        {
+          expiresAt: '2026-09-24T00:15:00.000Z',
+          jobId: 'job-1',
+          status: 'pending',
+          userCode: 'JCHB-KBXF',
+          verificationUrl,
+        },
+        201,
+      );
+
+    for (const verificationUrl of [
+      'javascript:alert(1)',
+      'http://login.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF',
+      'https://evil.example/verify',
+      'https://login.dingtalk.com.evil.com/verify',
+      'https://dingtalk.com/verify',
+    ]) {
+      fetchMock.mockResolvedValueOnce(pending(verificationUrl));
+      await expect(
+        startDingtalkPersonalLogin({ expectedProfile: 'dingcorp:staff1' }),
+      ).rejects.toMatchObject({
+        code: 'DINGTALK_PERSONAL_UPSTREAM',
+        details: { message: '授权链接无效' },
+      });
+    }
+
+    const accepted = 'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF';
+    fetchMock.mockResolvedValueOnce(pending(accepted));
+    await expect(
+      startDingtalkPersonalLogin({ expectedProfile: 'dingcorp:staff1' }),
+    ).resolves.toMatchObject({ verificationUrl: accepted });
+
+    const subdomain = 'https://accounts.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF';
+    fetchMock.mockResolvedValueOnce(pending(subdomain));
+    await expect(getDingtalkPersonalLoginJob('job-1')).resolves.toMatchObject({
+      verificationUrl: subdomain,
+    });
+
+    expect(isDingtalkVerificationUrl(accepted)).toBe(true);
+    expect(isDingtalkVerificationUrl('https://foo.bar.dingtalk.com/a')).toBe(true);
+    expect(isDingtalkVerificationUrl('http://login.dingtalk.com/a')).toBe(false);
+    expect(isDingtalkVerificationUrl('https://notdingtalk.com/a')).toBe(false);
   });
 
   it('aborts login start at 30s and a job read at 10s', async () => {

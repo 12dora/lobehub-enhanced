@@ -23,6 +23,7 @@ import type {
   UserToolConfig,
 } from '@lobechat/types';
 import { resolveDisabledSkillIds } from '@lobechat/types';
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
 import debug from 'debug';
 
 import { AgentModel } from '@/database/models/agent';
@@ -43,6 +44,7 @@ import {
 } from '@/server/services/sandbox';
 import { SkillResourceService } from '@/server/services/skill/resource';
 import { preprocessLhCommand } from '@/server/services/toolExecution/preprocessLhCommand';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import { ManagedSkillServerRuntimeService } from './platformSkillWorkspace';
 import { resolveRunWorkspaceId } from './resolveWorkspaceScope';
@@ -69,8 +71,14 @@ const LEGACY_DEVICE_CLIENT = Symbol('legacy-device-client');
  * discloses the degradation — the manifest already told it the command would
  * run on the user's device.
  */
-const LEGACY_FALLBACK_NOTE =
-  "Note: the user's device client is outdated and does not support on-device skill execution, so this command ran in the cloud sandbox instead. Tell the user to update their LobeHub app to run skills on their device.";
+const legacyFallbackNote = (platform?: string | null): string => {
+  const download = linkedPath(
+    serverAppLinkResolver(platform),
+    '下载桌面端',
+    APP_LINK_PATHS.downloads,
+  );
+  return `Note: the user's device client is outdated and does not support on-device skill execution, so this command ran in the cloud sandbox instead. Tell the user to update their LobeHub app to run skills on their device. ${download}`;
+};
 
 const LH_COMMAND_PATTERN = /(?:^|&&|\|\||;)\s*lh(?:\s|$)/;
 
@@ -98,9 +106,11 @@ class SkillServerRuntimeService implements SkillRuntimeService {
   private workspaceId?: string;
   private device?: SkillDeviceExecution;
   private disabledSkillIds: Set<string>;
+  private botPlatform?: string | null;
 
   constructor(options: {
     agentId?: string;
+    botPlatform?: string | null;
     device?: SkillDeviceExecution;
     /**
      * Identifiers the user or agent has disabled (user-scope uninstall /
@@ -132,6 +142,7 @@ class SkillServerRuntimeService implements SkillRuntimeService {
     this.workspaceId = options.workspaceId;
     this.device = options.device;
     this.disabledSkillIds = options.disabledSkillIds ?? new Set();
+    this.botPlatform = options.botPlatform;
   }
 
   findAll = async (): Promise<{ data: SkillListItem[]; total: number }> => {
@@ -475,7 +486,9 @@ class SkillServerRuntimeService implements SkillRuntimeService {
       const sandboxResult = await this.execScriptInSandbox(command, options);
       return {
         ...sandboxResult,
-        stderr: [sandboxResult.stderr, LEGACY_FALLBACK_NOTE].filter(Boolean).join('\n'),
+        stderr: [sandboxResult.stderr, legacyFallbackNote(this.botPlatform)]
+          .filter(Boolean)
+          .join('\n'),
       };
     }
 
@@ -613,9 +626,11 @@ export const skillsRuntime: ServerRuntimeRegistration = {
         activatedSkills: context.activatedSkills,
         builtinSkills: [],
         projectSkills: [],
+        resolveLink: serverAppLinkResolver(context.botPlatform),
         service: new ManagedSkillServerRuntimeService({
           activeDeviceId: context.activeDeviceId,
           agentId: context.agentId,
+          botPlatform: context.botPlatform,
           executionTimeoutMs: context.executionTimeoutMs,
           operationId: context.operationId,
           serverDB: context.serverDB,
@@ -701,6 +716,7 @@ export const skillsRuntime: ServerRuntimeRegistration = {
 
     const service = new SkillServerRuntimeService({
       agentId: context.agentId,
+      botPlatform: context.botPlatform,
       device,
       disabledSkillIds,
       fileModel,
@@ -823,6 +839,7 @@ export const skillsRuntime: ServerRuntimeRegistration = {
       ],
       deviceFileAccess,
       projectSkills,
+      resolveLink: serverAppLinkResolver(context.botPlatform),
       service,
     });
   },

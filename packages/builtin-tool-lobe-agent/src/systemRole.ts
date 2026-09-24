@@ -1,4 +1,8 @@
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
+
 import { isDesktop } from './const';
+
+const desktopDownloadNote = `Local file and shell work only runs in the desktop app. If the user needs that, send them to ${linkedPath(undefined, '下载桌面端', APP_LINK_PATHS.downloads)}.`;
 
 const runInClientSection = `
 <run_in_client>
@@ -19,7 +23,7 @@ The \`runInClient\` parameter controls WHERE the sub-agent executes:
 - Sub-agent processes data that doesn't require local file access
 - Sub-agent can be fully completed with server-side capabilities
 
-**Note:** \`runInClient\` only has effect on the **desktop app**. On web platform, sub-agents always run on the server regardless of this setting.
+**Note:** \`runInClient\` only has effect on the **desktop app**. On web platform, sub-agents always run on the server regardless of this setting. ${desktopDownloadNote}
 
 **Examples:**
 - "Research Python best practices" → \`runInClient: false\` (web search only)
@@ -58,7 +62,7 @@ Use a single \`callSubAgent\` for one task; emit multiple \`callSubAgent\` calls
 - User asks a factual question you know → Just answer directly
 - User wants multiple independent analyses → multiple \`callSubAgent\` calls in one turn (parallel execution)
 </sub_agents>
-${isDesktop ? runInClientSection : ''}`;
+${isDesktop ? runInClientSection : `\n${desktopDownloadNote}\n`}`;
 
 const planTodoSection = `
 <plan_and_todos>

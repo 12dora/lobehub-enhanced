@@ -1,4 +1,5 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import { APP_LINK_PATHS, type AppLinkResolver, linkedPath } from '@lobechat/utils/appLink';
 
 import type {
   ImportFromMarketParams,
@@ -24,8 +25,14 @@ export interface SkillStoreRuntimeService {
 }
 
 export interface SkillStoreExecutionRuntimeOptions {
+  resolveLink?: AppLinkResolver;
   service: SkillStoreRuntimeService;
 }
+
+const marketSearchUnavailable = (resolveLink?: AppLinkResolver): string => {
+  const skills = linkedPath(resolveLink, '技能页', APP_LINK_PATHS.skills);
+  return `Market skill search is not available in this environment. 请打开${skills}登录市场后再试。`;
+};
 
 const isMarketSearchUnauthorized = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
@@ -47,10 +54,12 @@ const isMarketSearchUnauthorized = (error: unknown): boolean => {
 };
 
 export class SkillStoreExecutionRuntime {
+  private resolveLink?: AppLinkResolver;
   private service: SkillStoreRuntimeService;
 
   constructor(options: SkillStoreExecutionRuntimeOptions) {
     this.service = options.service;
+    this.resolveLink = options.resolveLink;
   }
 
   /**
@@ -114,7 +123,7 @@ export class SkillStoreExecutionRuntime {
   async searchSkill(args: SearchSkillParams): Promise<BuiltinServerRuntimeOutput> {
     if (!this.service.searchSkill) {
       return {
-        content: 'Market skill search is not available in this environment.',
+        content: marketSearchUnavailable(this.resolveLink),
         success: false,
       };
     }
@@ -150,7 +159,7 @@ export class SkillStoreExecutionRuntime {
       // "search is not offered here", same as a runtime with no searchSkill.
       if (isMarketSearchUnauthorized(e)) {
         return {
-          content: 'Market skill search is not available in this environment.',
+          content: marketSearchUnavailable(this.resolveLink),
           success: false,
         };
       }

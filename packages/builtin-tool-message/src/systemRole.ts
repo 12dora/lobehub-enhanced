@@ -1,4 +1,12 @@
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
+
+const messengerSettingsLink = linkedPath(undefined, 'Messenger 设置', APP_LINK_PATHS.messenger);
+const messengerPlatformLink = (platform: string) =>
+  linkedPath(undefined, `安装 ${platform}`, `${APP_LINK_PATHS.messenger}/${platform}`);
+
 export const systemPrompt = `You have access to a Message tool that provides unified messaging and bot management capabilities across multiple platforms.
+
+When replying in IM, use the absolute AIHub address from the platform context (bot_platform_context carries APP_URL) instead of the app-relative example links.
 
 <supported_platforms>
 - **discord** — Discord servers (guilds), channels, threads, reactions, polls
@@ -26,13 +34,13 @@ export const systemPrompt = `You have access to a Message tool that provides uni
 The send APIs (\`sendMessage\`, \`sendDirectMessage\`, \`replyToThread\`) can deliver through **two sources** — both use the same underlying platform clients (so attachments / formatting / rate behavior are identical), but they come from different lists:
 
 - **Per-agent bot** (pass \`botId\`) — the agent's own credentials, configured via \`createBot\`. Listed by \`listBots\`. Messages appear with the per-agent bot's identity.
-- **System Bot installation** (pass \`messengerInstallationId\`) — the LobeHub shared bot, installed by the user once into a workspace via Settings → Messenger OAuth. Listed by \`listMessengers\`. Messages appear with the LobeHub System Bot identity.
+- **System Bot installation** (pass \`messengerInstallationId\`) — the LobeHub shared bot, installed by the user once into a workspace via ${messengerSettingsLink} (OAuth). Listed by \`listMessengers\`. Messages appear with the LobeHub System Bot identity.
 
 **Two-step routing rule — apply in order:**
 
 1. **Call \`listBots\`.** If any entry has \`platform: "<target>"\` → use its \`botId\` on the send API. Done.
 2. **Otherwise call \`listMessengers\`.** If any entry has \`platform: "<target>"\` → use its \`id\` as \`messengerInstallationId\` on the send API. Done.
-3. **Neither has the platform → do NOT pick a different platform.** Tell the user: "I can't reach <platform> for you yet. You can either provision a dedicated bot for this agent with \`createBot\`, or install the LobeHub System Bot via Settings → Messenger." Stop. **Exception — 钉钉:** do not say that, and do not send the user to Settings → Messenger. This chat is already the enterprise connector. Group history still cannot be read. Notify colleagues with \`lobe-reminder\`.
+3. **Neither has the platform → do NOT pick a different platform.** Tell the user: "I can't reach <platform> for you yet. You can either provision a dedicated bot for this agent with \`createBot\`, or install the LobeHub System Bot: ${messengerSettingsLink}." For Slack / Telegram / Discord, also give the platform page (${messengerPlatformLink('slack')}, ${messengerPlatformLink('telegram')}, ${messengerPlatformLink('discord')}). Stop. **Exception — 钉钉:** do not say that, and do not send the user to Settings → Messenger. This chat is already the enterprise connector. Group history still cannot be read. Notify colleagues with \`lobe-reminder\`.
 
 Per-agent bots always win because they're purpose-built for the current agent and use identity the user explicitly configured. Only fall back to System Bot when the agent has nothing for the platform. If the user **explicitly** asks to route through their System Bot install even when a per-agent bot exists, honor that and call \`listMessengers\` directly.
 
@@ -40,7 +48,7 @@ The send APIs accept **exactly one** of \`botId\` / \`messengerInstallationId\` 
 </outbound_routing>
 
 <system_bot_management>
-The **System Bot** is the LobeHub-owned shared bot the user installs via \`Settings → Messenger\` OAuth. It's separate from per-agent bots (\`createBot\` / \`listBots\`). This API surface mirrors the per-agent CRUD but operates on \`messenger_installations\` (workspace-scoped installs) and \`messenger_account_links\` (per-user routing decisions).
+The **System Bot** is the LobeHub-owned shared bot the user installs via ${messengerSettingsLink} (OAuth). It's separate from per-agent bots (\`createBot\` / \`listBots\`). This API surface mirrors the per-agent CRUD but operates on \`messenger_installations\` (workspace-scoped installs) and \`messenger_account_links\` (per-user routing decisions).
 
 **Platform coverage** — System Bot only supports **Slack, Discord, and Telegram** (the three platforms with OAuth install flows). For Feishu / Lark / QQ / WeChat the user must use a per-agent bot via \`createBot\` — there is no System Bot route. \`listMessengerPlatforms\` returns the currently-enabled subset on this deployment.
 
@@ -61,7 +69,7 @@ The **System Bot** is the LobeHub-owned shared bot the user installs via \`Setti
 
 When in doubt, ask. Defaulting to the destructive option (\`uninstallMessenger\`) when the user only wanted \`unlinkMessenger\` will affect colleagues.
 
-**Why there's no \`createMessenger\`**: OAuth install requires browser redirect — the tool cannot start the flow. When \`listMessengers\` returns nothing for a platform the user wants, tell them: "Open \`Settings → Messenger\` and install for <platform>". You can list the available platforms via \`listMessengerPlatforms\` and surface the \`appId\` so the user knows what they're installing.
+**Why there's no \`createMessenger\`**: OAuth install requires browser redirect — the tool cannot start the flow. When \`listMessengers\` returns nothing for a platform the user wants, tell them to open ${messengerSettingsLink} and install for <platform> (Slack ${messengerPlatformLink('slack')}, Telegram ${messengerPlatformLink('telegram')}, Discord ${messengerPlatformLink('discord')}). You can list the available platforms via \`listMessengerPlatforms\` and surface the \`appId\` so the user knows what they're installing. **Exception — 钉钉:** do not send the user to Messenger.
 </system_bot_management>
 
 <access_policies>

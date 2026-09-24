@@ -3,7 +3,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdminImConnectorView } from '@/enterprise/client/services/adminImConnectors';
+import type {
+  AdminImConnectorView,
+  DingtalkPermissionProbe,
+} from '@/enterprise/client/services/adminImConnectors';
 
 import { toDingTalkDraft } from './draft';
 import type {
@@ -320,6 +323,77 @@ describe('WorkspaceCapabilitiesSection', () => {
         'systemGeneral.imConnectors.workspace.probe.row:systemGeneral.imConnectors.workspace.fields.calendar,systemGeneral.imConnectors.workspace.probe.reason.unreachable',
       ),
     ).toBeTruthy();
+  });
+
+  it('links DingTalk’s apply-for-permission page beside a missing scope, https only', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=Workflow.Instance.Write';
+    const service = workspaceService({
+      probeWorkspacePermissions: vi.fn().mockResolvedValue(
+        probeResult({
+          approval: {
+            applyUrl,
+            missingScopes: ['Workflow.Instance.Write'],
+            ok: false,
+            reason: 'forbidden',
+          } as DingtalkPermissionProbe,
+          calendar: {
+            applyUrl: 'http://open-dev.dingtalk.com/appscope/apply',
+            missingScopes: ['Calendar.Event.Write'],
+            ok: false,
+            reason: 'forbidden',
+          } as DingtalkPermissionProbe,
+        }),
+      ),
+    });
+    renderSection({ service });
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.workspace.probe.run'));
+
+    const link = await screen.findByRole('link', {
+      name: 'systemGeneral.imConnectors.workspace.probe.applyLink',
+    });
+    expect(link.getAttribute('href')).toBe(applyUrl);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    // The plain-http one is never linked: that row falls back to the developer console instead.
+    expect(
+      screen
+        .getAllByRole('link')
+        .map((anchor) => anchor.getAttribute('href'))
+        .sort(),
+    ).toEqual([applyUrl, 'https://open-dev.dingtalk.com/'].sort());
+    expect(
+      screen.getByText(
+        'systemGeneral.imConnectors.workspace.probe.row:systemGeneral.imConnectors.workspace.fields.calendar,systemGeneral.imConnectors.workspace.probe.missingScopes:Calendar.Event.Write',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('falls back to the developer console for missing scopes the probe kept no apply page for', async () => {
+    const service = workspaceService({
+      probeWorkspacePermissions: vi.fn().mockResolvedValue(
+        probeResult({
+          approval: { missingScopes: ['qyapi_get_process'], ok: false, reason: 'forbidden' },
+          calendar: { ok: false, reason: 'unreachable' },
+          todo: { ok: false, reason: 'forbidden' },
+        }),
+      ),
+    });
+    renderSection({ service });
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.workspace.probe.run'));
+
+    const link = await screen.findByRole('link', {
+      name: 'systemGeneral.imConnectors.workspace.probe.consoleLink',
+    });
+    expect(link.getAttribute('href')).toBe('https://open-dev.dingtalk.com/');
+    expect(link.getAttribute('target')).toBe('_blank');
+    // Only the row with named scopes gets it: an unreachable app or an unnamed refusal has no
+    // permission to go and apply for.
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(
+      screen.queryByRole('link', { name: 'systemGeneral.imConnectors.workspace.probe.applyLink' }),
+    ).toBeNull();
   });
 
   it('falls back to the reason alone when no scope is named', async () => {

@@ -3,7 +3,8 @@ import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import {
   ActivatorExecutionRuntime,
   type ActivatorRuntimeService,
-  LOCAL_SYSTEM_NO_DEVICE_MESSAGE,
+  localSystemAwaitingDeviceMessage,
+  localSystemNoDeviceMessage,
   type ToolManifestInfo,
 } from '@lobechat/builtin-tool-activator/executionRuntime';
 import { SkillsExecutionRuntime } from '@lobechat/builtin-tool-skills/executionRuntime';
@@ -20,13 +21,14 @@ import {
   resolveToolOutcomeScope,
 } from '@/server/services/agentSignal/procedure';
 import { redisPolicyStateStore } from '@/server/services/agentSignal/store/adapters/redis/policyStateStore';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import { resolveRunWorkspaceId } from './resolveWorkspaceScope';
 import { type ServerRuntimeRegistration } from './types';
 
 /** Online desktops exist, but this run has not selected one yet. */
 export const LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE =
-  '有在线设备但尚未选择，请先用远程设备工具选择一台设备';
+  localSystemAwaitingDeviceMessage(serverAppLinkResolver());
 
 /**
  * `metadata.onlineDeviceCount` snapshotted beside the execution plan.
@@ -92,6 +94,7 @@ export const activatorRuntime: ServerRuntimeRegistration = {
       if (platformCatalog) {
         skillsRuntime = new SkillsExecutionRuntime({
           builtinSkills: [],
+          resolveLink: serverAppLinkResolver(context.botPlatform),
           service: createPlatformSkillOperationResolver(context.serverDB, platformCatalog),
         });
       } else {
@@ -140,6 +143,7 @@ export const activatorRuntime: ServerRuntimeRegistration = {
           );
 
         skillsRuntime = new SkillsExecutionRuntime({
+          resolveLink: serverAppLinkResolver(context.botPlatform),
           // Same device-only gate as the skills runtime: lobe-agent-browser
           // follows `deviceOnlySkillsAvailable` (not the broader
           // `deviceCapable`). `activeDeviceId` is the fallback for callers
@@ -235,7 +239,8 @@ export const activatorRuntime: ServerRuntimeRegistration = {
       },
     };
 
-    const runtime = new ActivatorExecutionRuntime({ service });
+    const resolveLink = serverAppLinkResolver(context.botPlatform);
+    const runtime = new ActivatorExecutionRuntime({ resolveLink, service });
     const onlineDeviceCount = readOnlineDeviceCount(
       context as typeof context & { onlineDeviceCount?: unknown },
     );
@@ -246,19 +251,18 @@ export const activatorRuntime: ServerRuntimeRegistration = {
       !context.activeDeviceId && onlineDeviceCount !== undefined && onlineDeviceCount > 0;
     if (!devicesAwaitingSelection) return runtime;
 
+    const noDeviceMessage = localSystemNoDeviceMessage(resolveLink);
+    const awaitingMessage = localSystemAwaitingDeviceMessage(resolveLink);
     return {
       activateSkill: (args: Parameters<typeof runtime.activateSkill>[0]) =>
         runtime.activateSkill(args),
       activateTools: async (args: Parameters<typeof runtime.activateTools>[0]) => {
         const result = await runtime.activateTools(args);
-        if (!result.content?.includes(LOCAL_SYSTEM_NO_DEVICE_MESSAGE)) return result;
+        if (!result.content?.includes(noDeviceMessage)) return result;
 
         return {
           ...result,
-          content: result.content.replaceAll(
-            LOCAL_SYSTEM_NO_DEVICE_MESSAGE,
-            LOCAL_SYSTEM_AWAITING_DEVICE_MESSAGE,
-          ),
+          content: result.content.replaceAll(noDeviceMessage, awaitingMessage),
         };
       },
     };

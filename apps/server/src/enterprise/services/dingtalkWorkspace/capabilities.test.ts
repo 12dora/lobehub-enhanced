@@ -214,6 +214,28 @@ describe('dingtalk workspace capabilities', () => {
     });
   });
 
+  it('keeps the DingTalk apply URL next to the missing scopes', async () => {
+    const applyUrl = 'https://open-dev.dingtalk.com/appscope/apply?content=abc';
+    mockRequest.mockImplementation(async (req: { method?: string; path: string }) => {
+      if (String(req.path).includes('/calendars/primary/events') && req.method === 'POST') {
+        throw new DingtalkWorkspaceError(
+          'DINGTALK_FORBIDDEN',
+          'Forbidden.AccessDenied.AccessTokenPermissionDenied',
+          ['Calendar.Event.Write'],
+          applyUrl,
+        );
+      }
+      return {};
+    });
+    const result = await probeWorkspacePermissions();
+    expect(result.calendar).toEqual({
+      applyUrl,
+      missingScopes: ['Calendar.Event.Write'],
+      ok: false,
+      reason: 'forbidden',
+    });
+  });
+
   it('does not probe when no active directory user exists', async () => {
     mockGetServerDB.mockResolvedValueOnce({
       select: () => ({

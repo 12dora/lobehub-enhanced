@@ -589,6 +589,34 @@ describe('replyTemplate', () => {
       );
     });
 
+    it('adds a provider settings link, and wraps it for DingTalk', () => {
+      const en = renderAgentError('InvalidProviderAPIKey', undefined, 'op-1');
+      expect(en).toContain('[Provider settings](');
+      expect(en).toContain('/settings/provider/all');
+
+      const zh = renderAgentError('InvalidProviderAPIKey', undefined, 'op-1', 'zh-CN', undefined, {
+        platform: 'dingtalk',
+      });
+      expect(zh).toContain('[Provider 设置](');
+      expect(zh).toContain('/dingtalk/sso?redirect=');
+      expect(zh).toContain(encodeURIComponent('/settings/provider/all'));
+    });
+
+    it('links credits and plans, and the agent profile when the agent is known', () => {
+      const credits = renderAgentError('InsufficientBudgetForModel', undefined, 'op-1', 'zh-CN');
+      expect(credits).toContain('[充值积分](');
+      expect(credits).toContain('/settings/credits');
+      expect(credits).toContain('/settings/plans');
+
+      const agent = renderAgentError('NoAvailableProvider', undefined, 'op-1', 'zh-CN', undefined, {
+        agentId: 'agt_1',
+        platform: 'slack',
+      });
+      expect(agent).toContain('[Agent 设置](');
+      expect(agent).toContain('/agent/agt_1/profile');
+      expect(agent).not.toContain('/dingtalk/sso');
+    });
+
     it('prefers the precise code copy over the attribution fallback', () => {
       // ProviderNetworkError has precise copy even though attribution=system
       // would also resolve; the precise tier must win.

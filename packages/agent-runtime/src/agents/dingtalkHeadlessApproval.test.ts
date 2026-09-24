@@ -29,7 +29,12 @@ describe('dingtalkHeadlessApproval', () => {
         topicId: 'topic_1',
       });
       expect(text).toContain('该操作需要本人确认');
-      expect(text).toContain('https://chat.example.com/agent/agt_1/topic_1');
+      expect(text).toContain(
+        '[在网页端确认](https://chat.example.com/dingtalk/sso?redirect=' +
+          encodeURIComponent('/agent/agt_1/topic_1') +
+          ')',
+      );
+      expect(text).not.toContain('https://chat.example.com/agent/agt_1/topic_1');
       expect(text).not.toContain('Blocked by security/privacy');
     } finally {
       process.env.APP_URL = previous;

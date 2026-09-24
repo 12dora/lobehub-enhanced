@@ -2508,7 +2508,7 @@ export default {
   // 钉钉个人数据 — employee-authorized reads of their own to-dos, group chats and reports.
   'systemGeneral.imConnectors.personal.title': 'DingTalk personal data (employee authorization)',
   'systemGeneral.imConnectors.personal.description':
-    'After an employee authorizes it, the AI assistant can read that employee\'s own DingTalk to-dos, group messages, and work reports. Deploy the aihub-dws service first, and in the DingTalk developer console → Basic information → CLI settings turn on "Allow members to access personal data through the CLI".',
+    'After an employee authorizes it, the AI assistant can read that employee\'s own DingTalk to-dos, group messages, and work reports. Deploy the aihub-dws service first, and in <cli>DingTalk developer console → Basic information → CLI settings</cli> turn on "Allow members to access personal data through the CLI".',
   'systemGeneral.imConnectors.personal.fields.enabled': 'Enable DingTalk personal data',
   'systemGeneral.imConnectors.personal.fields.todo': 'To-dos',
   'systemGeneral.imConnectors.personal.fields.chat': 'Group messages',
@@ -2553,6 +2553,9 @@ export default {
   'systemGeneral.imConnectors.workspace.probe.row': '{{capability}}: {{status}}',
   'systemGeneral.imConnectors.workspace.probe.ok': 'Granted',
   'systemGeneral.imConnectors.workspace.probe.missingScopes': 'Missing permission: {{scopes}}',
+  'systemGeneral.imConnectors.workspace.probe.applyLink': 'Request the permission in DingTalk',
+  'systemGeneral.imConnectors.workspace.probe.consoleLink':
+    'Request it in the DingTalk developer console',
   'systemGeneral.imConnectors.workspace.probe.reason.forbidden': 'Missing permission',
   'systemGeneral.imConnectors.workspace.probe.reason.not_configured':
     'Notification app not configured',

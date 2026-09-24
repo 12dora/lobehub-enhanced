@@ -1,4 +1,12 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import {
+  adminEntrySuffix,
+  APP_LINK_PATHS,
+  type AppLinkResolver,
+  dingtalkIdentityGuidance,
+  linkedPath,
+  oaAdminMarkdownLink,
+} from '@lobechat/utils/appLink';
 
 import type { AmbiguousCandidate, SaveTemplateFieldProblem } from '../types';
 
@@ -161,13 +169,13 @@ const suggestionZh = (problem: SaveTemplateFieldProblem): string => {
     problem.componentType === 'CalculateField' ||
     problem.suggestion.startsWith('formulas are not available')
   ) {
-    return '公式无法通过接口设置，请改用 MoneyField 或 NumberField，并在钉钉设计器中设置公式';
+    return `公式无法通过接口设置，请改用 MoneyField 或 NumberField，并在${oaAdminMarkdownLink()}的审批设计器中设置公式`;
   }
   if (
     problem.componentType === 'RelateField' ||
     problem.suggestion.startsWith('not available via API')
   ) {
-    return '关联审批单无法通过接口创建，请改用 TextField「关联立项单号」，并告诉用户在钉钉设计器中切换为关联审批单';
+    return `关联审批单无法通过接口创建，请改用 TextField「关联立项单号」，并告诉用户在${oaAdminMarkdownLink()}的审批设计器中切换为关联审批单`;
   }
   return problem.suggestion;
 };
@@ -300,26 +308,39 @@ export const formatCandidateLabel = (candidate: AmbiguousCandidate): string => {
   return dept ? `${candidate.name} · ${dept}（${token}）` : `${candidate.name}（${token}）`;
 };
 
-const identityGuidance = '请让用户使用钉钉登录，或通过钉钉机器人完成绑定。管理员不能代为绑定。';
+export interface DingtalkApprovalLinkContext {
+  /** `'dingtalk'` selects the SSO sign-in target for identity errors. */
+  platform?: string | null;
+  resolveLink?: AppLinkResolver;
+}
 
 export const dingtalkErrorGuidance = (
   code: string,
   candidates?: AmbiguousCandidate[],
   hint?: string,
   problems?: SaveTemplateFieldProblem[],
+  links?: DingtalkApprovalLinkContext,
 ): string => {
+  const admin = adminEntrySuffix(links?.resolveLink);
+  const identity = dingtalkIdentityGuidance(links?.resolveLink, links?.platform);
+  const oaAdmin = oaAdminMarkdownLink();
+  const rulesLink = linkedPath(
+    links?.resolveLink,
+    '停用或删除现有规则',
+    APP_LINK_PATHS.approvalRules,
+  );
   switch (code) {
     case 'DINGTALK_NOT_CONFIGURED': {
-      return '钉钉服务号未配置，无法使用审批（DINGTALK_NOT_CONFIGURED）。请联系管理员完成钉钉连接配置。';
+      return `钉钉服务号未配置，无法使用审批（DINGTALK_NOT_CONFIGURED）。请联系管理员完成钉钉连接配置${admin}。`;
     }
     case 'DINGTALK_FEATURE_DISABLED': {
-      return '钉钉审批能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在连接器中启用审批。';
+      return `钉钉审批能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在连接器中启用审批${admin}。`;
     }
     case 'DINGTALK_FORBIDDEN': {
       return '当前钉钉身份没有执行该操作的权限（DINGTALK_FORBIDDEN）。';
     }
     case 'DINGTALK_PREMIUM_REQUIRED': {
-      return '该操作需要 OA 审批高级版（DINGTALK_PREMIUM_REQUIRED），例如退回、加签。请向用户说明，并改用标准能力或请管理员开通高级版。';
+      return `该操作需要 OA 审批高级版（DINGTALK_PREMIUM_REQUIRED），例如退回、加签。请向用户说明，并改用标准能力，或请钉钉组织管理员在${oaAdmin}开通高级版。`;
     }
     case 'DINGTALK_NOT_FOUND': {
       return '未找到对应的审批单、任务或模板（DINGTALK_NOT_FOUND）。请先调用 listPendingApprovals / listMyApplications / listTemplates 确认标识后再试。';
@@ -341,13 +362,13 @@ export const dingtalkErrorGuidance = (
       return '钉钉服务暂时不可用（DINGTALK_UNAVAILABLE）。请稍后重试。不要向用户展示技术细节。';
     }
     case 'DINGTALK_IDENTITY_UNBOUND': {
-      return `当前账号尚未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。${identityGuidance}`;
+      return `当前账号尚未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。${identity}`;
     }
     case 'DINGTALK_IDENTITY_UNVERIFIED': {
-      return `当前钉钉身份未经验证（DINGTALK_IDENTITY_UNVERIFIED）。${identityGuidance}`;
+      return `当前钉钉身份未经验证（DINGTALK_IDENTITY_UNVERIFIED）。${identity}`;
     }
     case 'DINGTALK_IDENTITY_INACTIVE': {
-      return '钉钉通讯录中该成员已停用（DINGTALK_IDENTITY_INACTIVE），无法代其操作审批。';
+      return `钉钉通讯录中该成员已停用（DINGTALK_IDENTITY_INACTIVE），无法代其操作审批。请联系钉钉组织管理员在${oaAdmin}处理。`;
     }
     case 'DINGTALK_NOT_TASK_OWNER': {
       return '当前用户不是该待办任务的处理人（DINGTALK_NOT_TASK_OWNER），不能同意、拒绝或转交。';
@@ -356,13 +377,13 @@ export const dingtalkErrorGuidance = (
       return '当前用户不是该审批单的发起人（DINGTALK_NOT_ORIGINATOR），不能撤销。';
     }
     case 'DINGTALK_NOT_APPROVAL_ADMIN': {
-      return '当前用户不是钉钉审批管理员（DINGTALK_NOT_APPROVAL_ADMIN），不能创建或删除模板。';
+      return `当前用户不是钉钉审批管理员（DINGTALK_NOT_APPROVAL_ADMIN），不能创建或删除模板。请联系钉钉组织管理员在${oaAdmin}授予审批管理员。`;
     }
     case 'DINGTALK_AUTOMATION_OFF': {
-      return '自动审批已关闭（DINGTALK_AUTOMATION_OFF），无法创建或执行规则。请联系管理员调整档位。';
+      return `自动审批已关闭（DINGTALK_AUTOMATION_OFF），无法创建或执行规则。请联系管理员调整档位${admin}。`;
     }
     case 'DINGTALK_RULE_LIMIT': {
-      return '已达到自动审批规则数量上限（DINGTALK_RULE_LIMIT）。请先停用或删除现有规则后再创建。';
+      return `已达到自动审批规则数量上限（DINGTALK_RULE_LIMIT）。请先${rulesLink}后再创建。`;
     }
     case 'DINGTALK_AMBIGUOUS': {
       const listed = (candidates ?? []).map(formatCandidateLabel);
@@ -377,6 +398,7 @@ export const dingtalkErrorGuidance = (
 
 export const sanitizeDingtalkFailure = (
   error: unknown,
+  links?: DingtalkApprovalLinkContext,
 ): { content: string; error: DingtalkToolFailure } => {
   const code = extractDingtalkErrorCode(error);
   const candidates = extractAmbiguousCandidates(error);
@@ -384,7 +406,7 @@ export const sanitizeDingtalkFailure = (
   const problems = code === 'DINGTALK_INVALID' ? extractFormProblems(error) : undefined;
 
   if (code && KNOWN_CODES.has(code)) {
-    const content = dingtalkErrorGuidance(code, candidates, hint, problems);
+    const content = dingtalkErrorGuidance(code, candidates, hint, problems, links);
     return {
       content,
       error: {
@@ -404,8 +426,11 @@ export const sanitizeDingtalkFailure = (
   };
 };
 
-export const dingtalkFailureResult = (error: unknown): BuiltinServerRuntimeOutput => {
-  const sanitized = sanitizeDingtalkFailure(error);
+export const dingtalkFailureResult = (
+  error: unknown,
+  links?: DingtalkApprovalLinkContext,
+): BuiltinServerRuntimeOutput => {
+  const sanitized = sanitizeDingtalkFailure(error, links);
   const payload = {
     code: sanitized.error.code,
     ...(sanitized.error.candidates ? { candidates: sanitized.error.candidates } : {}),

@@ -1,9 +1,12 @@
 'use client';
 
+import { APP_LINK_PATHS } from '@lobechat/utils/appLink';
 import { Flexbox } from '@lobehub/ui';
-import { Text } from '@lobehub/ui/base-ui';
+import { Text, useModalContext } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import ActionLink from '@/components/ActionLink';
 
 import { PlatformAvatar } from '../constants';
 
@@ -22,6 +25,7 @@ interface DingTalkLinkBodyProps {
  */
 const DingTalkLinkBody = memo<DingTalkLinkBodyProps>(({ botUsername, chatDisabled, name }) => {
   const { t } = useTranslation('messenger');
+  const { close } = useModalContext();
   const robotName = botUsername?.trim() || 'AI 助手';
 
   return (
@@ -38,6 +42,13 @@ const DingTalkLinkBody = memo<DingTalkLinkBodyProps>(({ botUsername, chatDisable
             ? t('messenger.dingtalk.capabilities.chatDisabled')
             : t('messenger.dingtalk.status.instructions', { botName: robotName })}
         </Text>
+        {chatDisabled && (
+          <Text fontSize={13}>
+            <ActionLink href={APP_LINK_PATHS.adminImConnectors} onClick={() => close()}>
+              {t('messenger.dingtalk.capabilities.adminLink')}
+            </ActionLink>
+          </Text>
+        )}
       </Flexbox>
     </>
   );

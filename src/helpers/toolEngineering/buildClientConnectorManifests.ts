@@ -1,6 +1,7 @@
 import { type ToolManifest } from '@lobechat/types';
 
 import { ConnectorToolPermission } from '@/database/schemas';
+import { userDisabledToolDescription } from '@/libs/mcp/disabledToolText';
 import type { ConnectorWithTools } from '@/store/tool/slices/connector/types';
 
 /**
@@ -30,10 +31,7 @@ export const buildClientConnectorManifests = (connectors: ConnectorWithTools[]):
       >;
       if (t.permission === ConnectorToolPermission.disabled) {
         return {
-          description:
-            `[TOOL DISABLED] The user has disabled this tool and it cannot be executed. ` +
-            `Do NOT call this tool. If the user asks to perform this action, inform them ` +
-            `that they have manually disabled "${t.toolName}" and can re-enable it in Settings > Connectors.`,
+          description: userDisabledToolDescription(t.toolName),
           humanIntervention: 'required' as const,
           name: t.toolName,
           parameters,

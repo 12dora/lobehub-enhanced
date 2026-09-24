@@ -50,7 +50,8 @@ describe('dingtalk personal systemRole', () => {
     expect(systemPrompt).toContain('一句话');
     expect(systemPrompt).toContain('原样转达');
     expect(systemPrompt).toContain(
-      '工具结果里有授权链接时，回复中必须原样给出该 markdown 链接（不要改写、截断或省略 URL），并用一句话说明授权后再问一次即可。',
+      '工具结果里的 markdown 链接必须原样转发（不要改写、截断、省略或自行编造 URL）。授权链接用一句话说明授权后再问一次即可。',
     );
+    expect(systemPrompt).toContain('自行编造 URL');
   });
 });

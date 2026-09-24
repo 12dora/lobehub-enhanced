@@ -10,6 +10,9 @@
     "./manifest": "./src/manifest.ts"
   },
   "main": "./src/index.ts",
+  "dependencies": {
+    "@lobechat/utils": "workspace:*"
+  },
   "devDependencies": {
     "@lobechat/types": "workspace:*"
   },

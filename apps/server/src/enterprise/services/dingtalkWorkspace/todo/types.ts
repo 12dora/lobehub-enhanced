@@ -1,3 +1,10 @@
+import {
+  APP_LINK_PATHS,
+  buildAppUrl,
+  buildDingTalkAppUrl,
+  markdownLink,
+} from '@lobechat/utils/appLink';
+
 export interface DingtalkWorkspacePreviewLine {
   label: string;
   value: string;
@@ -93,20 +100,18 @@ export const ORG_TODO_UNAVAILABLE_NOTE =
 /** Personal todo.list was merged. Replaces {@link ORG_TODO_UNAVAILABLE_NOTE}. */
 export const PERSONAL_TODO_MERGED_NOTE = '已包含你在钉钉里的全部待办（经你授权读取）';
 
-/** Settings deep link. Joined with APP_URL at runtime; a blank base stays relative. */
-export const DINGTALK_PERSONAL_AUTHORIZE_PATH = '/settings/connector?dingtalkPersonal=authorize';
-
-export const dingtalkPersonalAuthorizeUrl = (appUrl?: string | null): string => {
-  const base = typeof appUrl === 'string' ? appUrl.trim().replace(/\/+$/, '') : '';
-  return base ? `${base}${DINGTALK_PERSONAL_AUTHORIZE_PATH}` : DINGTALK_PERSONAL_AUTHORIZE_PATH;
-};
-
 /**
  * Shown instead of {@link ORG_TODO_UNAVAILABLE_NOTE} when personal todos are
  * enabled but the caller has not authorized (or the authorization expired).
+ * `platform === 'dingtalk'` wraps the link in the SSO bridge.
  */
-export const personalTodoAuthNote = (appUrl?: string | null): string =>
-  `授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：[点此前往授权](${dingtalkPersonalAuthorizeUrl(appUrl)})`;
+export const personalTodoAuthNote = (appUrl?: string | null, platform?: string | null): string => {
+  const url =
+    platform === 'dingtalk'
+      ? buildDingTalkAppUrl(appUrl, APP_LINK_PATHS.dingtalkPersonalAuthorize)
+      : buildAppUrl(appUrl, APP_LINK_PATHS.dingtalkPersonalAuthorize);
+  return `授权「钉钉个人数据」后可查看你在钉钉客户端里的全部待办：${markdownLink('点此前往授权', url)}`;
+};
 
 /** Personal read failed. The rest of listTodos is still returned. */
 export const PERSONAL_TODO_ERROR_NOTE = '暂时无法读取你在钉钉客户端里的待办，本次结果不含这部分。';

@@ -1,4 +1,5 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import { APP_LINK_PATHS, type AppLinkResolver, linkedPath } from '@lobechat/utils/appLink';
 
 import type { ActivatedToolInfo, ActivateSkillParams, ActivateToolsParams } from '../types';
 
@@ -13,8 +14,24 @@ export interface ToolManifestInfo {
 /** Device-gated builtin. Activation requires a routed desktop. */
 export const LOCAL_SYSTEM_IDENTIFIER = 'lobe-local-system';
 
+const deviceLinks = (resolveLink?: AppLinkResolver) => ({
+  devices: linkedPath(resolveLink, '设备页', APP_LINK_PATHS.devices),
+  downloads: linkedPath(resolveLink, '下载桌面端', APP_LINK_PATHS.downloads),
+});
+
 /** Shown when `lobe-local-system` is requested and this run has no active device. */
-export const LOCAL_SYSTEM_NO_DEVICE_MESSAGE = '当前没有在线的桌面设备，本地系统工具不可用';
+export const localSystemNoDeviceMessage = (resolveLink?: AppLinkResolver): string => {
+  const { devices, downloads } = deviceLinks(resolveLink);
+  return `当前没有在线的桌面设备，本地系统工具不可用。请${downloads}并在${devices}连接。`;
+};
+
+/** Online desktops exist, but this run has not selected one yet. */
+export const localSystemAwaitingDeviceMessage = (resolveLink?: AppLinkResolver): string => {
+  const { devices } = deviceLinks(resolveLink);
+  return `有在线设备但尚未选择，请先用远程设备工具选择一台设备，或打开${devices}查看。`;
+};
+
+export const LOCAL_SYSTEM_NO_DEVICE_MESSAGE = localSystemNoDeviceMessage();
 
 export interface ActivatorRuntimeService {
   activateSkill?: (args: ActivateSkillParams) => Promise<BuiltinServerRuntimeOutput>;
@@ -32,14 +49,17 @@ export interface ActivatorRuntimeService {
 }
 
 export interface ActivatorExecutionRuntimeOptions {
+  resolveLink?: AppLinkResolver;
   service: ActivatorRuntimeService;
 }
 
 export class ActivatorExecutionRuntime {
+  private noDeviceMessage: string;
   private service: ActivatorRuntimeService;
 
   constructor(options: ActivatorExecutionRuntimeOptions) {
     this.service = options.service;
+    this.noDeviceMessage = localSystemNoDeviceMessage(options.resolveLink);
   }
 
   async activateSkill(args: ActivateSkillParams): Promise<BuiltinServerRuntimeOutput> {
@@ -155,7 +175,7 @@ export class ActivatorExecutionRuntime {
 
       if (deviceUnavailable.length > 0) {
         notFound.push(...deviceUnavailable);
-        parts.push(`\n${LOCAL_SYSTEM_NO_DEVICE_MESSAGE}`);
+        parts.push(`\n${this.noDeviceMessage}`);
       }
 
       if (notFound.length > 0) {

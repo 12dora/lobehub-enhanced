@@ -5,6 +5,7 @@ import { Button, confirmModal, Tag, Text, toast } from '@lobehub/ui/base-ui';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import DingtalkSettingLink from '@/features/DingtalkActionLink/DingtalkSettingLink';
 import { dingtalkPersonalService, type DingtalkPersonalStatus } from '@/services/dingtalkPersonal';
 
 import { resolveDingtalkPersonalErrorCode, resolveRevokeErrorKey } from './errors';
@@ -116,9 +117,12 @@ export const AuthorizedPanel = memo<AuthorizedPanelProps>(
             {t('dingtalkPersonal.authorized.features')}
           </Text>
           {features.length === 0 ? (
-            <Text fontSize={13} type={'secondary'}>
-              {t('dingtalkPersonal.authorized.featuresNone')}
-            </Text>
+            <>
+              <Text fontSize={13} type={'secondary'}>
+                {t('dingtalkPersonal.authorized.featuresNone')}
+              </Text>
+              <DingtalkSettingLink kind={'adminImConnectors'} />
+            </>
           ) : (
             features.map((feature) => (
               <Tag key={feature} size={'small'}>

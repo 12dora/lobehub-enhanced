@@ -1,8 +1,11 @@
 import type { ToolManifest } from '@lobechat/types';
+import type { AppLinkResolver } from '@lobechat/utils/appLink';
 
 import type { DecryptedConnector } from '@/database/models/connector';
 import type { UserConnectorToolItem } from '@/database/schemas';
 import { ConnectorToolPermission } from '@/database/schemas';
+
+import { userDisabledToolDescription } from './disabledToolText';
 
 /**
  * Convert connector DB rows into ToolManifest entries suitable for
@@ -12,10 +15,13 @@ import { ConnectorToolPermission } from '@/database/schemas';
  * - 'auto'           → humanIntervention: undefined (AI calls freely)
  * - 'needs_approval' → humanIntervention: 'required' (human must confirm)
  * - 'disabled'       → tool included with blocking description; AI knows it exists but is told it cannot be called
+ *
+ * `resolveLink` turns the settings path in that description into an absolute link for IM turns.
  */
 export function buildConnectorManifests(
   connectors: DecryptedConnector[],
   tools: UserConnectorToolItem[],
+  resolveLink?: AppLinkResolver,
 ): ToolManifest[] {
   const toolsByConnector = new Map<string, UserConnectorToolItem[]>();
   for (const tool of tools) {
@@ -39,10 +45,7 @@ export function buildConnectorManifests(
     const api = connectorTools.map((t) => {
       if (t.permission === ConnectorToolPermission.disabled) {
         return {
-          description:
-            `[TOOL DISABLED] The user has disabled this tool and it cannot be executed. ` +
-            `Do NOT call this tool. If the user asks to perform this action, inform them ` +
-            `that they have manually disabled "${t.toolName}" and can re-enable it in Settings > Connectors.`,
+          description: userDisabledToolDescription(t.toolName, resolveLink),
           humanIntervention: 'required' as const,
           name: t.toolName,
           parameters: (t.inputSchema ?? { properties: {}, type: 'object' }) as Record<
@@ -101,8 +104,7 @@ function buildMcpParams(connector: DecryptedConnector) {
   // Merge them on top of any header-type credential headers (legacy rows), to
   // mirror the sync/callTool path in services/connector/sync.ts.
   const customHeaders = connector.metadata?.customHeaders as Record<string, string> | undefined;
-  const mergedHeaders =
-    headers || customHeaders ? { ...headers, ...customHeaders } : undefined;
+  const mergedHeaders = headers || customHeaders ? { ...headers, ...customHeaders } : undefined;
 
   return {
     auth,

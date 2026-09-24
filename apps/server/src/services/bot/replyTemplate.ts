@@ -1,3 +1,7 @@
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
+
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
+
 import type { StepPresentationData } from '../agentRuntime/types';
 import { getExtremeAck } from './ackPhrases';
 import { type BotReplyLocale, formatDuration } from './platforms';
@@ -546,12 +550,64 @@ const isCommandConnectionClosedError = (
  * message) so it stays traceable in logs without being the only thing the
  * user sees.
  */
+export interface AgentErrorLinkContext {
+  /** Agent whose settings page should be linked when the failure is fixed there. */
+  agentId?: string;
+  /** IM platform. `'dingtalk'` wraps the link through the in-app sign-in bridge. */
+  platform?: string | null;
+}
+
+const AGENT_SETTINGS_ERROR_KEYS = new Set<keyof SystemStrings>([
+  'errorEmptyCompletion',
+  'errorExceededContextWindow',
+  'errorLocationNotSupported',
+  'errorModelNotFound',
+  'errorModelRefusal',
+  'errorNoAvailableProvider',
+  'errorPermissionDenied',
+  'errorProviderUnavailable',
+  'errorQuotaLimitReached',
+  'errorRateLimited',
+  'errorTransientNetwork',
+  'errorUserGeneric',
+]);
+
+const appendManualActionLink = (
+  key: keyof SystemStrings,
+  body: string,
+  lng: BotReplyLocale | undefined,
+  linkContext?: AgentErrorLinkContext,
+): string => {
+  const zh = lng === 'zh-CN';
+  const resolve = serverAppLinkResolver(linkContext?.platform);
+  if (key === 'errorInvalidProviderAPIKey') {
+    return `${body}\n${linkedPath(resolve, zh ? 'Provider 设置' : 'Provider settings', APP_LINK_PATHS.providers)}`;
+  }
+  if (key === 'errorInsufficientCredits') {
+    const credits = linkedPath(resolve, zh ? '充值积分' : 'Top up credits', APP_LINK_PATHS.credits);
+    const plans = linkedPath(resolve, zh ? '升级方案' : 'Upgrade plan', APP_LINK_PATHS.plans);
+    return `${body}\n${credits} · ${plans}`;
+  }
+  if (!AGENT_SETTINGS_ERROR_KEYS.has(key)) return body;
+  const agentId = linkContext?.agentId;
+  const path = agentId ? `/agent/${agentId}/profile` : APP_LINK_PATHS.providers;
+  const label = agentId
+    ? zh
+      ? 'Agent 设置'
+      : 'Agent settings'
+    : zh
+      ? 'Provider 设置'
+      : 'Provider settings';
+  return `${body}\n${linkedPath(resolve, label, path)}`;
+};
+
 export function renderAgentError(
   errorType: string | undefined,
   errorMessage: string | undefined,
   operationId: string | undefined,
   lng?: BotReplyLocale,
   attribution?: string,
+  linkContext?: AgentErrorLinkContext,
 ): string {
   const strings = getSystemStrings(lng);
 
@@ -565,7 +621,10 @@ export function renderAgentError(
   if (stringKey) {
     const value = strings[stringKey];
     if (typeof value === 'string') {
-      return appendOperationId(value, operationId);
+      return appendOperationId(
+        appendManualActionLink(stringKey, value, lng, linkContext),
+        operationId,
+      );
     }
   }
 

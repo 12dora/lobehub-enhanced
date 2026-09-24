@@ -69,6 +69,23 @@ const LOGIN_ERRORS = new Set<DingtalkPersonalLoginErrorCode>([
   'ORG_CLI_DISABLED',
 ]);
 
+/**
+ * Device-login links must be https on login.dingtalk.com or another
+ * `*.dingtalk.com` host. Anything else is treated as a failed login start.
+ */
+export const isDingtalkVerificationUrl = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:') return false;
+    const host = url.hostname.replace(/\.$/, '').toLowerCase();
+    return host === 'login.dingtalk.com' || host.endsWith('.dingtalk.com');
+  } catch {
+    return false;
+  }
+};
+
 const requireBroker = (): { token: string; url: string } => {
   const url = dingtalkPersonalEnv.DINGTALK_PERSONAL_BROKER_URL;
   const token = dingtalkPersonalEnv.DINGTALK_PERSONAL_BROKER_TOKEN;
@@ -244,6 +261,12 @@ const asLoginJob = (value: unknown): BrokerLoginJob => {
   ) {
     throw new DingtalkPersonalError('DINGTALK_PERSONAL_BROKER_UNAVAILABLE');
   }
+  const safeVerificationUrl = verificationUrl.trim();
+  if (!isDingtalkVerificationUrl(safeVerificationUrl)) {
+    throw new DingtalkPersonalError('DINGTALK_PERSONAL_UPSTREAM', {
+      message: '授权链接无效',
+    });
+  }
   const parsedError =
     typeof errorCode === 'string' && LOGIN_ERRORS.has(errorCode as DingtalkPersonalLoginErrorCode)
       ? (errorCode as DingtalkPersonalLoginErrorCode)
@@ -254,7 +277,7 @@ const asLoginJob = (value: unknown): BrokerLoginJob => {
     jobId,
     status: status as DingtalkPersonalLoginStatus,
     userCode,
-    verificationUrl,
+    verificationUrl: safeVerificationUrl,
     ...(parsedError ? { errorCode: parsedError } : {}),
     ...(identity ? { identity } : {}),
   };

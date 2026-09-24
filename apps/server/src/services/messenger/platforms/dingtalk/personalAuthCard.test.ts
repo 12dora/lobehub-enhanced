@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendOtoMessage = vi.fn();
 
+const cardDeps = vi.hoisted(() => ({
+  requireVerifiedDingtalkIdentity: vi.fn(),
+  sendDingTalkActionCardToThread: vi.fn(),
+}));
+
 const redisState = vi.hoisted(() => {
   const store = new Map<string, string>();
   const state = {
@@ -33,8 +38,24 @@ const redisState = vi.hoisted(() => {
   return state;
 });
 
+vi.mock('@/envs/app', () => ({
+  appEnv: { APP_URL: 'https://chat.example.com' },
+}));
+
+vi.mock('@/envs/dingtalkPersonal', () => ({
+  dingtalkPersonalEnv: {},
+}));
+
 vi.mock('@/config/messenger', () => ({
   getMessengerDingTalkConfig: vi.fn(),
+}));
+
+vi.mock('./cards', () => ({
+  sendDingTalkActionCardToThread: cardDeps.sendDingTalkActionCardToThread,
+}));
+
+vi.mock('@/server/enterprise/services/dingtalkWorkspace/identity', () => ({
+  requireVerifiedDingtalkIdentity: cardDeps.requireVerifiedDingtalkIdentity,
 }));
 
 vi.mock('@lobechat/chat-adapter-dingtalk', async (importOriginal) => {
@@ -71,6 +92,10 @@ const login = {
 
 const db = {} as never;
 
+const appAuthorizeUrl = `https://chat.example.com/dingtalk/sso?redirect=${encodeURIComponent('/settings/connector?dingtalkPersonal=authorize')}`;
+
+const reauthorizeLink = (): string => `[重新授权](${appAuthorizeUrl})`;
+
 const cardParam = () =>
   JSON.parse(sendOtoMessage.mock.calls[0][0].msgParam) as Record<string, string>;
 
@@ -80,6 +105,9 @@ beforeEach(() => {
   redisState.useClient = true;
   redisState.store.clear();
   sendOtoMessage.mockResolvedValue({ processQueryKey: 'pqk-1' });
+  cardDeps.sendDingTalkActionCardToThread.mockReset();
+  cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: false });
+  cardDeps.requireVerifiedDingtalkIdentity.mockReset();
   vi.mocked(getMessengerDingTalkConfig).mockResolvedValue(CONFIG as never);
 });
 
@@ -92,7 +120,9 @@ describe('sendDingtalkPersonalAuthCard', () => {
       userId: 'user_1',
     });
 
-    expect(result).toEqual({ sent: true });
+    expect(result).toEqual({ sent: true, via: 'oto' });
+    expect(cardDeps.sendDingTalkActionCardToThread).not.toHaveBeenCalled();
+    expect(cardDeps.requireVerifiedDingtalkIdentity).not.toHaveBeenCalled();
     expect(DingTalkApiClient).toHaveBeenCalledWith('app_key', 'app_secret');
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
     expect(sendOtoMessage).toHaveBeenCalledWith({
@@ -113,7 +143,7 @@ describe('sendDingtalkPersonalAuthCard', () => {
     expect(param.text).toContain('点下方「去授权」→ 选择公司 → 同意');
     expect(param.text).toContain('确认卡片');
     expect(redisState.client?.set).toHaveBeenCalledWith(
-      'dingtalk-personal:authcard:job-auth-1',
+      'dingtalk-personal:authcard:job-auth-1:oto',
       '1',
       'EX',
       20 * 60,
@@ -136,7 +166,7 @@ describe('sendDingtalkPersonalAuthCard', () => {
       userId: 'user_1',
     });
 
-    expect(first).toEqual({ sent: true });
+    expect(first).toEqual({ sent: true, via: 'oto' });
     expect(second).toEqual({ sent: true });
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
     expect(redisState.client?.incr).toHaveBeenCalledTimes(1);
@@ -150,7 +180,7 @@ describe('sendDingtalkPersonalAuthCard', () => {
       staffId: 'staff_9',
       userId: 'user_1',
     });
-    expect(failed).toEqual({ sent: true });
+    expect(failed).toEqual({ sent: true, via: 'oto' });
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
 
     sendOtoMessage.mockClear();
@@ -161,7 +191,7 @@ describe('sendDingtalkPersonalAuthCard', () => {
       staffId: 'staff_9',
       userId: 'user_1',
     });
-    expect(missing).toEqual({ sent: true });
+    expect(missing).toEqual({ sent: true, via: 'oto' });
     expect(sendOtoMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -175,8 +205,10 @@ describe('sendDingtalkPersonalAuthCard', () => {
     });
 
     expect(result).toEqual({ sent: false });
-    expect(redisState.client?.del).toHaveBeenCalledWith('dingtalk-personal:authcard:job-auth-1');
-    expect(redisState.store.has('dingtalk-personal:authcard:job-auth-1')).toBe(false);
+    expect(redisState.client?.del).toHaveBeenCalledWith(
+      'dingtalk-personal:authcard:job-auth-1:oto',
+    );
+    expect(redisState.store.has('dingtalk-personal:authcard:job-auth-1:oto')).toBe(false);
     expect(redisState.client?.incr).not.toHaveBeenCalled();
 
     sendOtoMessage.mockResolvedValueOnce({});
@@ -186,7 +218,7 @@ describe('sendDingtalkPersonalAuthCard', () => {
       staffId: 'staff_9',
       userId: 'user_1',
     });
-    expect(retry).toEqual({ sent: true });
+    expect(retry).toEqual({ sent: true, via: 'oto' });
     expect(sendOtoMessage).toHaveBeenCalledTimes(2);
   });
 
@@ -208,17 +240,320 @@ describe('sendDingtalkPersonalAuthCard', () => {
       sendDingtalkPersonalAuthCard({ db, login, staffId: '  ', userId: 'user_1' }),
     ).resolves.toEqual({ sent: false });
 
-    await expect(
-      sendDingtalkPersonalAuthCard({
-        db,
-        login: { ...login, verificationUrl: 'not a url' },
-        staffId: 'staff_9',
-        userId: 'user_1',
-      }),
-    ).resolves.toEqual({ sent: false });
-
     expect(sendOtoMessage).not.toHaveBeenCalled();
     expect(redisState.client?.set).not.toHaveBeenCalled();
+  });
+
+  const sessionCard = () =>
+    cardDeps.sendDingTalkActionCardToThread.mock.calls[0]?.[1] as {
+      singleTitle: string;
+      singleURL: string;
+      text: string;
+      title: string;
+    };
+
+  it('posts the card on a live DM session webhook and does not bill a 1:1 send', async () => {
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const result = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ sent: true, via: 'session' });
+    expect(cardDeps.requireVerifiedDingtalkIdentity).not.toHaveBeenCalled();
+    expect(cardDeps.sendDingTalkActionCardToThread).toHaveBeenCalledTimes(1);
+    expect(cardDeps.sendDingTalkActionCardToThread).toHaveBeenCalledWith(
+      'dingtalk:cid_dm',
+      expect.objectContaining({
+        singleTitle: '去授权',
+        singleURL: login.verificationUrl,
+        title: '授权 AI 助手读取钉钉个人数据',
+      }),
+    );
+    const text = sessionCard().text;
+    expect(text).toContain('你的待办');
+    expect(text).toContain('你所在群的聊天记录');
+    expect(text).toContain('工作日志');
+    expect(text).toContain('验证码：JCHB-KBXF');
+    expect(text).not.toContain('本人点击');
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(redisState.client?.incr).not.toHaveBeenCalled();
+    expect(redisState.client?.set).toHaveBeenCalledWith(
+      'dingtalk-personal:authcard:job-auth-1:dingtalk:cid_dm',
+      '1',
+      'EX',
+      20 * 60,
+      'NX',
+    );
+  });
+
+  it('prefixes a live group card with the verified name', async () => {
+    cardDeps.requireVerifiedDingtalkIdentity.mockResolvedValue({
+      name: '张三',
+      staffId: 'staff_9',
+      unionId: 'union_1',
+    });
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const result = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_group:staff_9',
+      userId: 'user_1',
+    });
+
+    expect(result).toEqual({ sent: true, via: 'session' });
+    expect(cardDeps.requireVerifiedDingtalkIdentity).toHaveBeenCalledWith(db, 'user_1');
+    const text = sessionCard().text;
+    expect(text.startsWith('仅 张三 本人点击（别人点击不会生效）\n\n')).toBe(true);
+    expect(text).toContain('你的待办');
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(redisState.client?.incr).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the 1:1 card when the session webhook is not live', async () => {
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: false });
+    const dm = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+
+    expect(dm).toEqual({ sent: true, via: 'oto' });
+    expect(cardDeps.sendDingTalkActionCardToThread).toHaveBeenCalledWith(
+      'dingtalk:cid_dm',
+      expect.any(Object),
+    );
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    expect(cardParam().text).not.toContain('本人点击');
+    expect(cardParam().title).toBe('授权 AI 助手读取钉钉个人数据');
+    expect(cardParam().singleURL).toBe(login.verificationUrl);
+    expect(redisState.client?.incr).toHaveBeenCalledTimes(1);
+
+    sendOtoMessage.mockClear();
+    redisState.client?.incr.mockClear();
+    cardDeps.sendDingTalkActionCardToThread.mockClear();
+    cardDeps.requireVerifiedDingtalkIdentity.mockResolvedValue({
+      name: '李四',
+      staffId: 'staff_9',
+      unionId: 'union_1',
+    });
+    const group = await sendDingtalkPersonalAuthCard({
+      db,
+      login: { ...login, jobId: 'job-auth-group' },
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_group:staff_9',
+      userId: 'user_1',
+    });
+    expect(group).toEqual({ sent: true, via: 'oto' });
+    expect(cardParam().text.startsWith('仅 李四 本人点击（别人点击不会生效）\n\n')).toBe(true);
+    expect(redisState.client?.incr).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to 1:1 when the session send throws', async () => {
+    cardDeps.sendDingTalkActionCardToThread.mockRejectedValueOnce(new Error('webhook down'));
+    const result = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+    expect(result).toEqual({ sent: true, via: 'oto' });
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send a second session card for the same job', async () => {
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const first = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+    const second = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+
+    expect(first).toEqual({ sent: true, via: 'session' });
+    expect(second).toEqual({ sent: true });
+    expect(cardDeps.sendDingTalkActionCardToThread).toHaveBeenCalledTimes(1);
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('sends the group card without a name when the lookup fails', async () => {
+    cardDeps.requireVerifiedDingtalkIdentity.mockRejectedValueOnce(
+      new Error('DINGTALK_IDENTITY_UNBOUND'),
+    );
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const failed = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_group:staff_9',
+      userId: 'user_1',
+    });
+    expect(failed).toEqual({ sent: true, via: 'session' });
+    const failedText = sessionCard().text;
+    expect(failedText.startsWith('仅本人点击（别人点击不会生效）\n\n')).toBe(true);
+    expect(failedText).not.toContain('undefined');
+    expect(failedText).not.toContain('DINGTALK_IDENTITY');
+    expect(failedText).toContain('你的待办');
+
+    cardDeps.sendDingTalkActionCardToThread.mockClear();
+    cardDeps.requireVerifiedDingtalkIdentity.mockResolvedValueOnce({
+      name: '   ',
+      staffId: 'staff_9',
+      unionId: 'union_1',
+    });
+    const blank = await sendDingtalkPersonalAuthCard({
+      db,
+      login: { ...login, jobId: 'job-auth-blank-name' },
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_group:staff_9',
+      userId: 'user_1',
+    });
+    expect(blank).toEqual({ sent: true, via: 'session' });
+    expect(sessionCard().text.startsWith('仅本人点击（别人点击不会生效）\n\n')).toBe(true);
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+  });
+
+  it('prefixes a group thread whose conversation id contains a colon', async () => {
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid:extra:staff_9',
+      userId: 'user_1',
+    });
+    expect(cardDeps.requireVerifiedDingtalkIdentity).toHaveBeenCalledWith(db, 'user_1');
+    expect(sessionCard().text.startsWith('仅本人点击（别人点击不会生效）\n\n')).toBe(true);
+  });
+
+  it('delivers the same job again in another conversation', async () => {
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const dm = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+    const group = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_group:staff_9',
+      userId: 'user_1',
+    });
+
+    expect(dm).toEqual({ sent: true, via: 'session' });
+    expect(group).toEqual({ sent: true, via: 'session' });
+    expect(cardDeps.sendDingTalkActionCardToThread).toHaveBeenCalledTimes(2);
+    expect(redisState.store.has('dingtalk-personal:authcard:job-auth-1:dingtalk:cid_dm')).toBe(
+      true,
+    );
+    expect(
+      redisState.store.has('dingtalk-personal:authcard:job-auth-1:dingtalk:cid_group:staff_9'),
+    ).toBe(true);
+  });
+
+  it('still delivers a group card after the same job was sent in the 1:1 fallback', async () => {
+    const oto = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      userId: 'user_1',
+    });
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const group = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_group:staff_9',
+      userId: 'user_1',
+    });
+
+    expect(oto).toEqual({ sent: true, via: 'oto' });
+    expect(group).toEqual({ sent: true, via: 'session' });
+    expect(sendOtoMessage).toHaveBeenCalledTimes(1);
+    expect(cardDeps.sendDingTalkActionCardToThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the app authorize link when the verification URL is not https on a DingTalk host', async () => {
+    for (const [index, verificationUrl] of [
+      'not a url',
+      'javascript:alert(1)',
+      'http://login.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF',
+      'https://evil.example/verify',
+    ].entries()) {
+      sendOtoMessage.mockClear();
+      const result = await sendDingtalkPersonalAuthCard({
+        db,
+        login: { ...login, jobId: `job-unsafe-${index}`, verificationUrl },
+        staffId: 'staff_9',
+        userId: 'user_1',
+      });
+      expect(result).toEqual({ sent: true, via: 'oto' });
+      expect(cardParam().singleURL).toBe(appAuthorizeUrl);
+      expect(cardParam().singleURL.startsWith('https://')).toBe(true);
+      expect(cardParam().text).not.toContain(verificationUrl);
+    }
+
+    sendOtoMessage.mockClear();
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const subdomain = 'https://accounts.dingtalk.com/oauth2/device/verify.htm?user_code=JCHB-KBXF';
+    const kept = await sendDingtalkPersonalAuthCard({
+      db,
+      login: { ...login, jobId: 'job-subdomain', verificationUrl: subdomain },
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+    expect(kept).toEqual({ sent: true, via: 'session' });
+    expect(sessionCard().singleURL).toBe(subdomain);
+  });
+
+  it('still uses the session webhook when the robot code is missing', async () => {
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...CONFIG,
+      robotCode: '',
+    } as never);
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValue({ sent: true, via: 'session' });
+    const sent = await sendDingtalkPersonalAuthCard({
+      db,
+      login,
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+    expect(sent).toEqual({ sent: true, via: 'session' });
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+
+    cardDeps.sendDingTalkActionCardToThread.mockResolvedValueOnce({ sent: false });
+    const missed = await sendDingtalkPersonalAuthCard({
+      db,
+      login: { ...login, jobId: 'job-auth-no-robot' },
+      staffId: 'staff_9',
+      threadId: 'dingtalk:cid_dm',
+      userId: 'user_1',
+    });
+    expect(missed).toEqual({ sent: false });
+    expect(sendOtoMessage).not.toHaveBeenCalled();
+    expect(
+      redisState.store.has('dingtalk-personal:authcard:job-auth-no-robot:dingtalk:cid_dm'),
+    ).toBe(false);
   });
 });
 
@@ -258,7 +593,9 @@ describe('notifyDingtalkPersonalLoginResult', () => {
       userName: '李四',
     });
     expect(named).toEqual({ sent: true });
-    expect(textOf()).toBe('你授权的是 李四 的账号，请用本人钉钉账号授权');
+    expect(textOf()).toBe(
+      `你授权的是 李四 的账号，请用本人钉钉账号重新授权（${reauthorizeLink()}）`,
+    );
 
     sendOtoMessage.mockClear();
     await notifyDingtalkPersonalLoginResult({
@@ -268,12 +605,17 @@ describe('notifyDingtalkPersonalLoginResult', () => {
       staffId: 'staff_9',
       userId: 'user_1',
     });
-    expect(textOf()).toBe('你授权的不是本人钉钉账号，请用本人钉钉账号授权');
+    expect(textOf()).toBe(
+      `你授权的不是本人钉钉账号，请用本人钉钉账号重新授权（${reauthorizeLink()}）`,
+    );
   });
 
   it.each([
-    ['ORG_CLI_DISABLED', '贵司钉钉管理员未开放该功能给 CLI（开发者后台 → CLI 设置），请联系管理员'],
-    ['LOGIN_TIMEOUT', '授权超时了，请重新发起授权'],
+    [
+      'ORG_CLI_DISABLED',
+      '贵司钉钉管理员未开放该功能给 CLI（开发者后台 → [CLI 设置](https://open-dev.dingtalk.com/fe/old#/developerSettings)），请联系管理员',
+    ],
+    ['LOGIN_TIMEOUT', `授权超时了，请${reauthorizeLink()}`],
     ['LOGIN_FAILED', '钉钉个人数据授权失败，请稍后重试'],
     ['LOGIN_NOT_FOUND', '钉钉个人数据授权未完成，请稍后重试'],
   ] as const)('explains %s', async (errorCode, text) => {

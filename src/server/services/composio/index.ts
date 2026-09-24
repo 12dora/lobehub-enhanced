@@ -1,6 +1,7 @@
 import { COMPOSIO_APP_TYPES } from '@lobechat/const';
 import type { LobeToolManifest } from '@lobechat/context-engine';
 import type { LobeChatDatabase } from '@lobechat/database';
+import { APP_LINK_PATHS, markdownLink } from '@lobechat/utils/appLink';
 import debug from 'debug';
 
 import { ConnectorModel } from '@/database/models/connector';
@@ -9,6 +10,7 @@ import { PluginModel } from '@/database/models/plugin';
 import type { UserConnectorToolItem } from '@/database/schemas';
 import { getComposioClient, isComposioClientAvailable } from '@/libs/composio';
 import { type ToolExecutionResult } from '@/server/services/toolExecution/types';
+import { serverAppLink } from '@/server/utils/appLinks';
 
 const log = debug('lobe-server:composio-service');
 
@@ -17,8 +19,25 @@ const VALID_COMPOSIO_IDENTIFIERS = new Set(COMPOSIO_APP_TYPES.map((type) => type
 export interface ComposioToolExecuteParams {
   args: Record<string, any>;
   identifier: string;
+  /** Messenger platform of the turn (`dingtalk` wraps links in the in-app sign-in). */
+  platform?: string;
   toolSlug: string;
 }
+
+/**
+ * The account behind a Composio tool is not connected: the user connects it on the skills page.
+ * The link is absolute so it also works from an IM chat.
+ */
+export const composioNotConnectedContent = (identifier: string, platform?: string): string => {
+  const label = COMPOSIO_APP_TYPES.find((type) => type.identifier === identifier)?.label;
+  const name = label || identifier;
+  const link = markdownLink('设置 → 技能', serverAppLink(APP_LINK_PATHS.skills, platform));
+
+  return (
+    `The ${name} account is not connected, so "${identifier}" cannot run. ` +
+    `Ask the user to connect ${name} in ${link} (include this link), then try again.`
+  );
+};
 
 export interface ComposioServiceOptions {
   db?: LobeChatDatabase;
@@ -60,7 +79,7 @@ export class ComposioService {
   }
 
   async executeComposioTool(params: ComposioToolExecuteParams): Promise<ToolExecutionResult> {
-    const { identifier, toolSlug, args } = params;
+    const { identifier, platform, toolSlug, args } = params;
 
     log('executeComposioTool: %s/%s with args: %O', identifier, toolSlug, args);
 
@@ -87,7 +106,7 @@ export class ComposioService {
       const connectedAccountId = await this.resolveConnectedAccountId(identifier);
       if (!connectedAccountId) {
         return {
-          content: `Composio configuration not found for server "${identifier}"`,
+          content: composioNotConnectedContent(identifier, platform),
           error: {
             code: 'COMPOSIO_CONFIG_NOT_FOUND',
             message: `Composio configuration missing for ${identifier}`,

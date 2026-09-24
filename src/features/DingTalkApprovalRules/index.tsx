@@ -5,6 +5,8 @@ import { Text } from '@lobehub/ui/base-ui';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import DingtalkSettingLink from '@/features/DingtalkActionLink/DingtalkSettingLink';
+
 import RuleTable from './RuleTable';
 import { useDingTalkApprovalEnabled } from './useDingTalkApprovalEnabled';
 
@@ -20,9 +22,12 @@ const DingTalkApprovalRules = memo(() => {
 
   if (!approvalEnabled)
     return (
-      <Text fontSize={13} type={'secondary'}>
-        {t('approvalRule.unavailable')}
-      </Text>
+      <Flexbox gap={6}>
+        <Text fontSize={13} type={'secondary'}>
+          {t('approvalRule.unavailable')}
+        </Text>
+        <DingtalkSettingLink kind={'adminImConnectors'} />
+      </Flexbox>
     );
 
   return (

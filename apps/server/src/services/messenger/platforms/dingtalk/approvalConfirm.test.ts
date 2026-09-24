@@ -293,7 +293,7 @@ describe('applyDingTalkConfirmClick', () => {
     expect(claimNotice).toHaveBeenCalledWith('web-only', 'confirm-1', 'staff_1');
     expect(sendMarkdown).toHaveBeenCalledWith(
       'dingtalk:cid:staff_1',
-      expect.stringContaining('内容较长，完整内容请在网页端确认：'),
+      '内容较长，完整内容请在网页端确认：[网页端](https://chat.example.com/topic)',
       { staffId: 'staff_1' },
     );
   });

@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from '@lobechat/config';
 import type { NotificationSettings } from '@lobechat/types';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ReminderSettingsContent from './ReminderSettingsContent';
@@ -196,6 +197,50 @@ describe('ReminderSettingsContent', () => {
     expect(screen.queryByText('task.reminder.channel.dingtalkUnavailable')).toBeNull();
     // An unlinked channel is not "enabled": it contributes no column to the matrix.
     expect(screen.getAllByRole('switch')).toHaveLength(6);
+  });
+
+  it('links the admin IM connector tab when push is off', () => {
+    mocks.dingtalkStatus = 'unavailable';
+
+    render(<ReminderSettingsContent />);
+
+    expect(
+      screen
+        .getByRole('link', { name: 'task.reminder.channel.dingtalkLink.adminImConnectors' })
+        .getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
+    expect(
+      screen.queryByRole('link', { name: 'task.reminder.channel.dingtalkLink.binding' }),
+    ).toBeNull();
+  });
+
+  it('offers an unlinked account the binding page and closes the modal on the way', () => {
+    mocks.dingtalkStatus = 'unlinked';
+    const onClose = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <ReminderSettingsContent onClose={onClose} />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen
+        .getByRole('link', { name: 'task.reminder.channel.dingtalkLink.adminImConnectors' })
+        .getAttribute('href'),
+    ).toBe('/admin/system/general?tab=im-connectors');
+    const binding = screen.getByRole('link', {
+      name: 'task.reminder.channel.dingtalkLink.binding',
+    });
+    expect(binding.getAttribute('href')).toBe('/settings/messenger/dingtalk');
+
+    fireEvent.click(binding);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no link while DingTalk push works', () => {
+    render(<ReminderSettingsContent />);
+    expect(screen.queryByRole('link')).toBeNull();
   });
 
   it('names the DingTalk account that will receive the pushes', () => {

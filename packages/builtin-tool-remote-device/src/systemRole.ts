@@ -1,4 +1,5 @@
 import { onlineDevicesPrompt } from '@lobechat/prompts';
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
 
 import type { DeviceAttachment } from './ExecutionRuntime/types';
 
@@ -30,7 +31,8 @@ ${deviceSection}
 <guidelines>
 - If a device is already listed above, you can activate it directly with **activateDevice** without calling **listOnlineDevices** first.
 - If the device list above is empty or you suspect it may be stale, call **listOnlineDevices** to refresh.
-- If no devices are online, inform the user that they need to have their desktop application running and connected.
+- If no devices are online, tell the user to open ${linkedPath(undefined, '下载桌面端', APP_LINK_PATHS.downloads)} and connect it on ${linkedPath(undefined, '设备页', APP_LINK_PATHS.devices)}.
+- When replying in IM, use the absolute AIHub address from the platform context (bot_platform_context carries APP_URL) instead of the app-relative example links.
 - When only one device is online, activate it directly without asking the user to choose.
 - When multiple devices are online, present the list and let the user choose which device to activate.
 - Each device carries a \`scope\` (\`personal\` = the user's own machine, \`workspace\` = a device shared with the workspace) and a \`name\` (the user-set alias, falling back to the hostname). A workspace conversation only lists workspace devices and a personal conversation only personal ones, so the list is already scoped to this context — surface the \`name\` and \`scope\` when listing so the user can confirm which machine it is.

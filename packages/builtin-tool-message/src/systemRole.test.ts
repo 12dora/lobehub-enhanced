@@ -9,4 +9,11 @@ describe('message tool history budget', () => {
     expect(systemPrompt).toContain('Do **not** keep paging');
     expect(systemPrompt).not.toContain('paginate with `readMessages`. Do **not** run');
   });
+
+  it('keeps example links and tells the model to use the platform APP_URL in IM', () => {
+    expect(systemPrompt).toContain('[Messenger 设置](/settings/messenger)');
+    expect(systemPrompt).toContain(
+      'When replying in IM, use the absolute AIHub address from the platform context (bot_platform_context carries APP_URL) instead of the app-relative example links.',
+    );
+  });
 });

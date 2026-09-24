@@ -1,3 +1,4 @@
+import { APP_LINK_PATHS } from '@lobechat/utils/appLink';
 import { describe, expect, it } from 'vitest';
 
 import { dingtalkErrorGuidance, formatFormProblemLine } from './errors';
@@ -47,7 +48,7 @@ describe('formatFormProblemLine', () => {
     });
     expect(calculate).toContain('不支持该控件');
     expect(calculate).toContain(
-      '公式无法通过接口设置，请改用 MoneyField 或 NumberField，并在钉钉设计器中设置公式',
+      '公式无法通过接口设置，请改用 MoneyField 或 NumberField，并在[钉钉管理后台](https://oa.dingtalk.com/)的审批设计器中设置公式',
     );
     expect(calculate).not.toContain('formulas are not available');
 
@@ -60,7 +61,7 @@ describe('formatFormProblemLine', () => {
         'not available via API; use a TextField "关联立项单号" and tell the user to switch it to 关联审批单 in the DingTalk designer',
     });
     expect(relate).toContain(
-      '关联审批单无法通过接口创建，请改用 TextField「关联立项单号」，并告诉用户在钉钉设计器中切换为关联审批单',
+      '关联审批单无法通过接口创建，请改用 TextField「关联立项单号」，并告诉用户在[钉钉管理后台](https://oa.dingtalk.com/)的审批设计器中切换为关联审批单',
     );
     expect(relate).not.toContain('not available via API');
   });
@@ -89,5 +90,38 @@ describe('formatFormProblemLine', () => {
     ]);
     expect(content).toContain('明细表至少需要一列');
     expect(content).toContain('为明细表添加至少一个子控件');
+  });
+
+  it('puts a one-click link on every manual-action error', () => {
+    const admin = `[IM 连接器设置](${APP_LINK_PATHS.adminImConnectors})`;
+    const signIn = `[用钉钉登录](${APP_LINK_PATHS.dingtalkBinding})`;
+    const oa = '[钉钉管理后台](https://oa.dingtalk.com/)';
+    expect(dingtalkErrorGuidance('DINGTALK_NOT_CONFIGURED')).toContain(admin);
+    expect(dingtalkErrorGuidance('DINGTALK_FEATURE_DISABLED')).toContain(admin);
+    expect(dingtalkErrorGuidance('DINGTALK_AUTOMATION_OFF')).toContain(admin);
+    expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_UNBOUND')).toContain(signIn);
+    expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_UNVERIFIED')).toContain('请先用钉钉登录 AIHub');
+    expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_INACTIVE')).toContain(oa);
+    expect(dingtalkErrorGuidance('DINGTALK_NOT_APPROVAL_ADMIN')).toContain(
+      '当前用户不是钉钉审批管理员',
+    );
+    expect(dingtalkErrorGuidance('DINGTALK_NOT_APPROVAL_ADMIN')).toContain(oa);
+    expect(dingtalkErrorGuidance('DINGTALK_PREMIUM_REQUIRED')).toContain(oa);
+    expect(dingtalkErrorGuidance('DINGTALK_RULE_LIMIT')).toContain(
+      `[停用或删除现有规则](${APP_LINK_PATHS.approvalRules})`,
+    );
+    const dingtalk = dingtalkErrorGuidance(
+      'DINGTALK_IDENTITY_UNBOUND',
+      undefined,
+      undefined,
+      undefined,
+      {
+        platform: 'dingtalk',
+        resolveLink: (path) =>
+          `https://chat.example.com/dingtalk/sso?redirect=${encodeURIComponent(path)}`,
+      },
+    );
+    expect(dingtalk).toContain('[用钉钉登录](https://chat.example.com/dingtalk/sso?redirect=%2F)');
+    expect(dingtalk).not.toMatch(/\]\(<http/);
   });
 });

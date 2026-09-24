@@ -1,11 +1,13 @@
 'use client';
 
+import { APP_LINK_PATHS } from '@lobechat/utils/appLink';
 import { Flexbox, toast } from '@lobehub/ui';
 import { Button, Switch, Text, useModalContext } from '@lobehub/ui/base-ui';
 import { createStaticStyles, cssVar } from 'antd-style';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import ActionLink from '@/components/ActionLink';
 import { DEFAULT_NOTIFICATION_SETTINGS } from '@/const/settings';
 import { useUserStore } from '@/store/user';
 import { settingsSelectors } from '@/store/user/selectors';
@@ -85,6 +87,23 @@ const DINGTALK_HINT_KEY = {
   unlinked: 'task.reminder.channel.dingtalkUnlinked',
 } as const satisfies Record<DingTalkPushStatus, string>;
 
+const DINGTALK_LINK = {
+  adminImConnectors: {
+    href: APP_LINK_PATHS.adminImConnectors,
+    labelKey: 'task.reminder.channel.dingtalkLink.adminImConnectors',
+  },
+  binding: {
+    href: APP_LINK_PATHS.dingtalkBinding,
+    labelKey: 'task.reminder.channel.dingtalkLink.binding',
+  },
+} as const;
+
+/** Where each diagnosis is fixed: push is an admin switch; a missing identity the member can bind. */
+const DINGTALK_HINT_LINKS: Partial<Record<DingTalkPushStatus, (keyof typeof DINGTALK_LINK)[]>> = {
+  unavailable: ['adminImConnectors'],
+  unlinked: ['binding', 'adminImConnectors'],
+};
+
 interface ReminderSettingsContentProps {
   /** Injected in tests; production closes through the imperative modal context. */
   onClose?: () => void;
@@ -126,6 +145,7 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
     dingtalkStatus === 'available' && dingtalkUsername
       ? t('task.reminder.channel.dingtalkLinkedAs', { name: dingtalkUsername })
       : t(DINGTALK_HINT_KEY[dingtalkStatus]);
+  const dingtalkLinks = DINGTALK_HINT_LINKS[dingtalkStatus] ?? [];
 
   const channelLabel: Record<ReminderChannelId, string> = useMemo(
     () => ({
@@ -200,6 +220,18 @@ const ReminderSettingsContent = memo<ReminderSettingsContentProps>(({ onClose })
                       </Button>
                     )}
                   </Flexbox>
+                  {isDingTalk && dingtalkLinks.length > 0 && (
+                    <Flexbox horizontal gap={12} wrap={'wrap'}>
+                      {dingtalkLinks.map((kind) => (
+                        <Text fontSize={12} key={kind}>
+                          {/* The page opens under the modal, so the modal gets out of the way. */}
+                          <ActionLink href={DINGTALK_LINK[kind].href} onClick={() => close?.()}>
+                            {t(DINGTALK_LINK[kind].labelKey)}
+                          </ActionLink>
+                        </Text>
+                      ))}
+                    </Flexbox>
+                  )}
                 </Flexbox>
                 <Switch
                   aria-label={channelLabel[channel]}

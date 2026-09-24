@@ -1,3 +1,7 @@
+import { APP_LINK_PATHS, markdownLink } from '@lobechat/utils/appLink';
+
+import { serverAppLink } from '@/server/utils/appLinks';
+
 /**
  * Identity email convention: AIHub user email is
  * `<dingtalkStaffId>@<DINGTALK_IDENTITY_EMAIL_DOMAIN>`.
@@ -22,14 +26,24 @@ export const DINGTALK_INSTALLATION_KEY = 'dingtalk:singleton';
 /** Fallback robot / product label when branding is empty or built-in. */
 export const DINGTALK_BRANDING_FALLBACK = 'AI 助手';
 
-export const formatDingTalkUnknownUserReply = (displayName: string): string =>
-  `请先使用钉钉账号登录 ${displayName} 网页端一次，再回来对话。`;
+export const formatDingTalkUnknownUserReply = (displayName: string): string => {
+  const link = markdownLink('用钉钉登录', serverAppLink('/', 'dingtalk'));
+  return `请先使用钉钉账号登录 ${displayName}（${link}），再回来对话。`;
+};
 
 export const DINGTALK_UNKNOWN_USER_REPLY = formatDingTalkUnknownUserReply(
   DINGTALK_BRANDING_FALLBACK,
 );
 
-export const DINGTALK_CHAT_DISABLED_REPLY = '对话能力已由管理员关闭。';
+export const formatDingTalkChatDisabledReply = (): string => {
+  const link = markdownLink(
+    'IM 连接器设置',
+    serverAppLink(APP_LINK_PATHS.adminImConnectors, 'dingtalk'),
+  );
+  return `对话能力已由管理员关闭。请联系管理员开启（管理员入口：${link}）。`;
+};
+
+export const DINGTALK_CHAT_DISABLED_REPLY = formatDingTalkChatDisabledReply();
 
 export const DINGTALK_TOPIC_TITLE_PREFIX = '钉钉 · ';
 

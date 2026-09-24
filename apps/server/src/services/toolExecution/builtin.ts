@@ -183,6 +183,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
         context: {
           topicId: context.topicId,
         },
+        platform: context.botPlatform,
         provider: identifier,
         toolName: apiName,
       });
@@ -194,6 +195,7 @@ export class BuiltinToolsExecutor implements IToolExecutor {
       return composioService.executeComposioTool({
         args,
         identifier,
+        platform: context.botPlatform,
         toolSlug: apiName,
       });
     }

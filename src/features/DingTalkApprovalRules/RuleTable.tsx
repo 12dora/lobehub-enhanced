@@ -9,6 +9,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import AsyncBoundary from '@/components/AsyncBoundary';
+import DingtalkSettingLink from '@/features/DingtalkActionLink/DingtalkSettingLink';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useClientDataSWR } from '@/libs/swr';
 import { dingtalkApprovalRuleService } from '@/services/dingtalkApprovalRule';
@@ -274,9 +275,12 @@ const RuleTable = memo(() => {
 
   if (identityMissing)
     return (
-      <Text fontSize={13} type={'secondary'}>
-        {t('approvalRule.identityRequired')}
-      </Text>
+      <Flexbox gap={6}>
+        <Text fontSize={13} type={'secondary'}>
+          {t('approvalRule.identityRequired')}
+        </Text>
+        <DingtalkSettingLink kind={'binding'} />
+      </Flexbox>
     );
 
   return (

@@ -462,8 +462,7 @@ describe('tools marketRouter', () => {
       }),
     ).resolves.toMatchObject({
       error: {
-        message:
-          'This Skill couldn’t run. Start a new run and try again. If the problem continues, contact your administrator.',
+        message: expect.stringMatching(/请联系管理员[\s\S]*\/admin\/skills/),
       },
       success: false,
     });

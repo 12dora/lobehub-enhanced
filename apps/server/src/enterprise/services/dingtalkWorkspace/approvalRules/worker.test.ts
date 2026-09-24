@@ -324,6 +324,13 @@ describe('runApprovalRulesCycle', () => {
       resolveVerifiedDingtalkIdentity: async () => ({ error: 'DINGTALK_IDENTITY_UNVERIFIED' }),
     });
     expect(disable).toHaveBeenCalledWith(expect.anything(), 'rule_1', 'identity_invalid');
+    expect(notify).toHaveBeenCalledWith(
+      'staff_me',
+      expect.objectContaining({
+        lines: [expect.stringMatching(/\[用钉钉登录\]\([^)]*\/dingtalk\/sso\?redirect=%2F\)/)],
+        title: '自动审批规则已停用',
+      }),
+    );
     expect(executeTaskAs).not.toHaveBeenCalled();
     expect(recordRun).not.toHaveBeenCalled();
   });

@@ -319,6 +319,8 @@ describe('buildApprovalPreview', () => {
     const controls = preview.lines.find((line) => line.label === '控件');
     expect(controls?.value).toContain('项目名称');
     expect(controls?.value).toContain('交付物及移交清单（交付物、接收人）');
+    expect(preview.warnings?.[0]).toContain('https://oa.dingtalk.com/');
+    expect(preview.warnings?.[0]).not.toMatch(/\]\(/);
   });
 
   it('forbids comment preview when the caller cannot view the instance', async () => {

@@ -1,3 +1,5 @@
+import { buildDingTalkAppUrl, markdownLink } from '@lobechat/utils/appLink';
+
 /**
  * DingTalk messenger runs stay `approvalMode: 'headless'` so overridable tools
  * still auto-run. Tool-level `humanIntervention: 'always'` is parked instead
@@ -23,7 +25,7 @@ const topicPath = (metadata: Record<string, unknown> | undefined): string => {
   if (!agentId || !topicId) return '';
   const origin = (process.env.APP_URL || '').replace(/\/$/, '');
   const path = `/agent/${agentId}/${topicId}`;
-  return origin ? `${origin}${path}` : path;
+  return buildDingTalkAppUrl(origin, path);
 };
 
 /** Tool result text for a headless block that is not an approval-card park. */
@@ -31,6 +33,6 @@ export const formatDingTalkImHeadlessBlockedContent = (
   metadata: Record<string, unknown> | undefined,
 ): string => {
   const link = topicPath(metadata);
-  const where = link ? `请到网页端 ${link} 确认。` : '请到网页端确认。';
+  const where = link ? `请${markdownLink('在网页端确认', link)}。` : '请到网页端确认。';
   return `该操作需要本人确认，但当前钉钉会话不能代为批准（安全策略已拦截）。${where}`;
 };

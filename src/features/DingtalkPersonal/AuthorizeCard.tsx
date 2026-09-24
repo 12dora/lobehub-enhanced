@@ -6,10 +6,16 @@ import { UserRoundCheck } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import DingtalkSettingLink from '@/features/DingtalkActionLink/DingtalkSettingLink';
 import type { DingtalkPersonalStatus } from '@/services/dingtalkPersonal';
 
 import { AuthorizedPanel } from './AuthorizedPanel';
-import { resolveIdentityRequiredKey, resolveStartErrorKey } from './errors';
+import {
+  resolveDingtalkPersonalLinkKind,
+  resolveIdentityRequiredKey,
+  resolveIdentityRequiredLink,
+  resolveStartErrorKey,
+} from './errors';
 import { LoginPanel } from './LoginPanel';
 import { styles } from './styles';
 import { useDingtalkPersonalLogin } from './useDingtalkPersonalLogin';
@@ -159,7 +165,13 @@ export const AuthorizeCard = memo<AuthorizeCardProps>(({ autoStart, compact, onA
         <Text type={'secondary'}>{t('dingtalkPersonal.status.loading')}</Text>
       );
   } else if (status.state === 'identity_required') {
-    body = <Text type={'warning'}>{t(resolveIdentityRequiredKey(status.code) as never)}</Text>;
+    const link = resolveIdentityRequiredLink(status.code);
+    body = (
+      <Flexbox gap={6}>
+        <Text type={'warning'}>{t(resolveIdentityRequiredKey(status.code) as never)}</Text>
+        {link ? <DingtalkSettingLink kind={link} /> : null}
+      </Flexbox>
+    );
   } else if (status.state === 'authorized') {
     // Before any local login: once the member is authorized, a job this card still holds is stale.
     body = (
@@ -211,6 +223,7 @@ export const AuthorizeCard = memo<AuthorizeCardProps>(({ autoStart, compact, onA
   }
 
   const tag = resolveTag(status, awaitingConsent);
+  const startErrorLink = startError ? resolveDingtalkPersonalLinkKind(startError.code) : undefined;
 
   return (
     <Block
@@ -242,7 +255,10 @@ export const AuthorizeCard = memo<AuthorizeCardProps>(({ autoStart, compact, onA
         </Flexbox>
         {body}
         {startError && status?.state !== 'authorized' ? (
-          <Text type={'danger'}>{t(resolveStartErrorKey(startError.code) as never)}</Text>
+          <Flexbox gap={4}>
+            <Text type={'danger'}>{t(resolveStartErrorKey(startError.code) as never)}</Text>
+            {startErrorLink ? <DingtalkSettingLink kind={startErrorLink} /> : null}
+          </Flexbox>
         ) : null}
       </Flexbox>
     </Block>

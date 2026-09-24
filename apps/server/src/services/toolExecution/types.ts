@@ -158,6 +158,13 @@ export interface ToolExecutionContext {
    * `state.metadata.botContext.platform`. Unset for web chat.
    */
   botPlatform?: string;
+  /**
+   * Chat-sdk thread id of this turn, copied from
+   * `state.metadata.botContext.platformThreadId` only when `platform` is a
+   * string. DingTalk: `dingtalk:<conversationId>` (DM) or
+   * `dingtalk:<conversationId>:<senderStaffId>` (group).
+   */
+  botThreadId?: string;
   /** Server-signed receipt restored from the persisted pending tool row. */
   connectorApprovalReceipt?: Record<string, unknown>;
   /**

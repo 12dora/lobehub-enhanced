@@ -20,6 +20,7 @@ import {
 import { redisPolicyStateStore } from '@/server/services/agentSignal/store/adapters/redis/policyStateStore';
 import { MarketService } from '@/server/services/market';
 import { SkillImporter } from '@/server/services/skill/importer';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import { type ServerRuntimeRegistration } from './types';
 
@@ -324,7 +325,10 @@ export const skillStoreRuntime: ServerRuntimeRegistration = {
       ...(hasMarketToken ? { searchSkill: service.searchSkill } : {}),
     };
 
-    return new SkillStoreExecutionRuntime({ service: runtimeService });
+    return new SkillStoreExecutionRuntime({
+      resolveLink: serverAppLinkResolver(context.botPlatform),
+      service: runtimeService,
+    });
   },
   identifier: SkillStoreIdentifier,
 };

@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import type { BuiltinRenderProps } from '@lobechat/types';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,7 +47,12 @@ vi.mock('@lobehub/ui', () => ({
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
-  Alert: ({ title }: { title?: ReactNode }) => <div role="alert">{title}</div>,
+  Alert: ({ description, title }: { description?: ReactNode; title?: ReactNode }) => (
+    <div role="alert">
+      <span>{title}</span>
+      {description}
+    </div>
+  ),
   Button: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={onClick}>
       {children}
@@ -117,6 +122,90 @@ describe('ResultRender', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       zh('render.error.DINGTALK_PERSONAL_RATE_LIMITED'),
     );
+  });
+
+  it('links an unbound DingTalk identity to the binding page', () => {
+    render(
+      <ResultRender
+        {...props('listMyTodos', undefined, { message: 'DINGTALK_IDENTITY_UNBOUND' })}
+      />,
+    );
+
+    expect(screen.getByText(zh('render.error.DINGTALK_IDENTITY_UNBOUND'))).toBeTruthy();
+    expect(
+      screen
+        .getByRole('link', { name: dict['builtins.dingtalk.action.binding'] })
+        .getAttribute('href'),
+    ).toBe('/settings/messenger/dingtalk');
+  });
+
+  it('sends what only the admin can switch on to the IM connector tab', () => {
+    for (const code of [
+      'DINGTALK_PERSONAL_DISABLED',
+      'DINGTALK_PERSONAL_FEATURE_DISABLED',
+      'DINGTALK_PERSONAL_CORP_ID_MISSING',
+    ]) {
+      const view = render(<ResultRender {...props('listMyTodos', undefined, { message: code })} />);
+      const link = within(view.container).getByRole('link', {
+        name: dict['builtins.dingtalk.action.adminImConnectors'],
+      });
+      expect(link.getAttribute('href')).toBe('/admin/system/general?tab=im-connectors');
+      view.unmount();
+    }
+  });
+
+  it('points the org CLI policy at the DingTalk developer console in a new tab', () => {
+    render(
+      <ResultRender
+        {...props('listGroupMessages', undefined, {
+          message: 'DINGTALK_PERSONAL_ORG_POLICY_DENIED',
+        })}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: dict['builtins.dingtalk.action.cliSettings'] });
+    expect(link.getAttribute('href')).toBe(
+      'https://open-dev.dingtalk.com/fe/old#/developerSettings',
+    );
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('links DingTalk’s own permission page for PAT only when the tool returned one', () => {
+    const uri = 'https://login.dingtalk.com/oauth2/pat/confirm?code=abc';
+    const withUri = render(
+      <ResultRender
+        {...props('updateTodo', undefined, {
+          code: 'DINGTALK_PERSONAL_PAT_REQUIRED',
+          message: `该操作需要你在钉钉自己的权限页面上确认。这是钉钉自己的权限页面：${uri}（DINGTALK_PERSONAL_PAT_REQUIRED）`,
+        })}
+      />,
+    );
+    expect(
+      within(withUri.container)
+        .getByRole('link', { name: dict['builtins.dingtalk.action.patConfirm'] })
+        .getAttribute('href'),
+    ).toBe(uri);
+    withUri.unmount();
+
+    render(
+      <ResultRender
+        {...props('updateTodo', undefined, { message: 'DINGTALK_PERSONAL_PAT_REQUIRED' })}
+      />,
+    );
+    expect(screen.getByText(zh('render.error.DINGTALK_PERSONAL_PAT_REQUIRED'))).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('offers no link where no page can help', () => {
+    render(
+      <ResultRender
+        {...props('listMyTodos', undefined, { message: 'DINGTALK_IDENTITY_INACTIVE' })}
+      />,
+    );
+
+    expect(screen.getByText(zh('render.error.DINGTALK_IDENTITY_INACTIVE'))).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 
   it('renders nothing without a state', () => {

@@ -18,6 +18,9 @@ describe('patchBuiltinManifestWithGovernance', () => {
     expect(out.api[0].humanIntervention).toBe('required');
     expect(out.api[0].description).toContain('[TOOL DISABLED]');
     expect(out.api[0].description).toContain('organization');
+    // Only an admin can switch it back on: the link goes to the admin connectors page.
+    expect(out.api[0].description).toContain('[管理后台 → 连接器](/admin/ai/connectors)');
+    expect(out.api[0].description).not.toContain('/settings/connector');
   });
 
   it('sets humanIntervention required for needs_approval', () => {

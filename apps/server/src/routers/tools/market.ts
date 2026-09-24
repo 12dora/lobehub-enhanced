@@ -38,7 +38,7 @@ import {
 } from '@/server/enterprise/services/skillCatalog';
 import { DiscoverService } from '@/server/services/discover';
 import { FileService } from '@/server/services/file';
-import { MarketService } from '@/server/services/market';
+import { lobehubSkillAuthHint, MarketService } from '@/server/services/market';
 import { listSkillToolsWithLiveFallback } from '@/server/services/market/listSkillToolsWithLiveFallback';
 import {
   contentBlocksToString,
@@ -47,6 +47,10 @@ import {
 import type { SandboxProviderKind } from '@/server/services/sandbox';
 import { createSandboxService } from '@/server/services/sandbox';
 import { preprocessLhCommand } from '@/server/services/toolExecution/preprocessLhCommand';
+import {
+  managedSkillRunFailedMessage,
+  managedSkillUnavailableMessage,
+} from '@/server/utils/appLinks';
 
 import { scheduleToolCallReport } from './_helpers';
 import {
@@ -578,9 +582,7 @@ const execInSandboxHandler = async ({
         throw new TRPCError({
           cause: error,
           code: error.code,
-          message: unavailable
-            ? 'This Skill is no longer available. Start a new run or ask your administrator to republish it.'
-            : 'This Skill couldn’t run. Start a new run and try again. If the problem continues, contact your administrator.',
+          message: unavailable ? managedSkillUnavailableMessage() : managedSkillRunFailedMessage(),
         });
       }
       throw error;
@@ -588,7 +590,7 @@ const execInSandboxHandler = async ({
 
     const rawErrorMessage = error instanceof Error ? error.message : String(error);
     const errorMessage = managedRequest
-      ? 'This Skill couldn’t run. Start a new run and try again. If the problem continues, contact your administrator.'
+      ? managedSkillRunFailedMessage()
       : String(redactForLog(rawErrorMessage)).slice(0, 1000);
 
     // Check for authentication errors thrown as exceptions — Market only.
@@ -752,17 +754,15 @@ export const marketRouter = router({
         const errorMessage = (error as Error).message;
         log('connectCallTool error: %s', errorMessage);
 
-        if (errorMessage.includes('NOT_CONNECTED')) {
+        if (errorMessage.includes('NOT_CONNECTED') || errorMessage.includes('TOKEN_EXPIRED')) {
+          const hint = await lobehubSkillAuthHint(() =>
+            ctx.marketSDK.connect.authorize(provider, {}),
+          );
           throw new TRPCError({
             code: 'UNAUTHORIZED',
-            message: 'Provider not connected. Please authorize first.',
-          });
-        }
-
-        if (errorMessage.includes('TOKEN_EXPIRED')) {
-          throw new TRPCError({
-            code: 'UNAUTHORIZED',
-            message: 'Token expired. Please re-authorize.',
+            message: errorMessage.includes('TOKEN_EXPIRED')
+              ? `授权已过期（TOKEN_EXPIRED）。请重新授权：${hint}`
+              : `尚未连接该服务（NOT_CONNECTED）。请先授权：${hint}`,
           });
         }
 

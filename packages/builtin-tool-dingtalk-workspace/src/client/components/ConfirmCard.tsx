@@ -9,6 +9,8 @@ import { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
 
+import { resolveDingtalkAction } from '@/features/DingtalkActionLink';
+import DingtalkErrorAction from '@/features/DingtalkActionLink/DingtalkErrorAction';
 import { dingtalkWorkspaceService } from '@/services/dingtalkWorkspace';
 
 import type { DingtalkWorkspaceApiNameType } from '../apiNames';
@@ -137,6 +139,7 @@ const ConfirmCard = memo<ConfirmCardProps>(({ apiName, args, registerBeforeAppro
 
   if (error) {
     const code = resolveDingtalkErrorCode(error);
+    const action = resolveDingtalkAction(code);
 
     return (
       <Flexbox gap={8}>
@@ -152,6 +155,11 @@ const ConfirmCard = memo<ConfirmCardProps>(({ apiName, args, registerBeforeAppro
                   ? t(`builtins.lobe-dingtalk-workspace.ui.error.${code}` as const)
                   : t('builtins.lobe-dingtalk-workspace.ui.error.unknown')}
               </div>
+              {action && (
+                <div>
+                  <DingtalkErrorAction action={action} />
+                </div>
+              )}
               <div>{t('builtins.lobe-dingtalk-workspace.ui.confirm.blockedHint')}</div>
             </Flexbox>
           }

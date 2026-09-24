@@ -49,6 +49,7 @@ import {
   formatDingTalkConfirmSummary,
   formatDingTalkPreviewCard,
   formatDingTalkPreviewUnavailable,
+  formatDingTalkWebConfirmMarkdown,
 } from './confirmSummary';
 import {
   DINGTALK_ASKER_ONLY_REPLY,
@@ -460,7 +461,7 @@ export const applyDingTalkConfirmClick = async (params: {
   if (params.decision === 'approve' && loaded.approveOnCard === false) {
     if (await claimDingTalkApprovalNotice('web-only', params.outTrackId, params.userId)) {
       const link = loaded.webLink || buildDingTalkTopicDeepLink(loaded.agentId, loaded.topicId);
-      await sendDingTalkMarkdown(loaded.threadId, formatDingTalkConfirmOverflowLine(link), {
+      await sendDingTalkMarkdown(loaded.threadId, formatDingTalkWebConfirmMarkdown(link), {
         staffId: params.userId,
       });
     }

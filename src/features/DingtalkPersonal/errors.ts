@@ -1,3 +1,4 @@
+import { resolveDingtalkActionKind } from '@/features/DingtalkActionLink';
 import type {
   DingtalkPersonalIdentityCode,
   DingtalkPersonalLoginView,
@@ -41,6 +42,29 @@ export const resolveIdentityRequiredKey = (code: string | undefined): string => 
   return `dingtalkPersonal.identity.${known}`;
 };
 
+/**
+ * Where the settings card can send the member to clear a code. Authorizing again is the card's own
+ * button, so that one is never a link here.
+ */
+export type DingtalkPersonalLinkKind = 'adminImConnectors' | 'binding' | 'cliSettings';
+
+export const resolveDingtalkPersonalLinkKind = (
+  code: string | undefined,
+): DingtalkPersonalLinkKind | undefined => {
+  const kind = resolveDingtalkActionKind(code);
+  return kind === 'adminImConnectors' || kind === 'binding' || kind === 'cliSettings'
+    ? kind
+    : undefined;
+};
+
+/** Link for the identity_required state, read the way its copy is (unknown → not bound yet). */
+export const resolveIdentityRequiredLink = (
+  code: string | undefined,
+): DingtalkPersonalLinkKind | undefined =>
+  resolveDingtalkPersonalLinkKind(
+    code && IDENTITY_CODES.has(code) ? code : 'DINGTALK_IDENTITY_UNBOUND',
+  );
+
 /** `setting` key for a `startLogin` that threw. */
 export const resolveStartErrorKey = (code: string | undefined): string => {
   if (code && IDENTITY_CODES.has(code)) return resolveIdentityRequiredKey(code);
@@ -83,6 +107,8 @@ export const resolveRevokeErrorKey = (code: string | undefined): string => {
 
 export interface LoginFailureMessage {
   key: string;
+  /** Where the fix is, when someone other than the member has to make it. */
+  link?: DingtalkPersonalLinkKind;
   values?: Record<string, string>;
 }
 
@@ -103,7 +129,7 @@ export const resolveLoginFailure = (
       : { key: 'dingtalkPersonal.login.error.identityMismatchUnknown' };
   }
   if (login.errorCode === 'ORG_CLI_DISABLED')
-    return { key: 'dingtalkPersonal.login.error.orgCliDisabled' };
+    return { key: 'dingtalkPersonal.login.error.orgCliDisabled', link: 'cliSettings' };
   if (login.status === 'expired' || login.errorCode === 'LOGIN_TIMEOUT')
     return { key: 'dingtalkPersonal.login.error.expired' };
   if (login.status === 'cancelled') return { key: 'dingtalkPersonal.login.error.cancelled' };

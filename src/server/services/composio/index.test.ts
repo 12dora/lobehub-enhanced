@@ -37,6 +37,14 @@ vi.mock('@/libs/composio', () => ({
   isComposioClientAvailable: mocks.isClientAvailable,
 }));
 
+// The real resolver reads APP_URL from the server env; pin an origin so the link is checkable.
+vi.mock('@/server/utils/appLinks', () => ({
+  serverAppLink: (path: string, platform?: string | null) =>
+    platform === 'dingtalk'
+      ? `https://aihub.example.com/dingtalk/sso?redirect=${encodeURIComponent(path)}`
+      : `https://aihub.example.com${path}`,
+}));
+
 const service = () => new ComposioService({ db: {} as any, userId: 'user-1' });
 
 const activeConnectorRow = (overrides: Record<string, any> = {}) => ({
@@ -203,5 +211,25 @@ describe('ComposioService.executeComposioTool', () => {
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('COMPOSIO_CONFIG_NOT_FOUND');
     expect(mocks.toolsExecute).not.toHaveBeenCalled();
+    // The user connects the account themselves: one click to the skills page.
+    expect(result.content).toContain('Gmail account is not connected');
+    expect(result.content).toContain('[设置 → 技能](https://aihub.example.com/settings/skill)');
+  });
+
+  it('wraps the connect link in the DingTalk sign-in on a DingTalk turn', async () => {
+    const result = await service().executeComposioTool({ ...params, platform: 'dingtalk' });
+
+    expect(result.content).toContain(
+      '[设置 → 技能](https://aihub.example.com/dingtalk/sso?redirect=%2Fsettings%2Fskill)',
+    );
+  });
+
+  it('keeps the server-side "not configured" message free of a link nobody can act on', async () => {
+    mocks.isClientAvailable.mockReturnValue(false);
+
+    const result = await service().executeComposioTool(params);
+
+    expect(result.content).toBe('Composio service is not configured on server');
+    expect(result.content).not.toContain('](');
   });
 });

@@ -1,4 +1,7 @@
-import { appEnv } from '@/envs/app';
+import { formatDingTalkConfirmOverflowLine } from '@lobechat/chat-adapter-dingtalk';
+import { markdownLink } from '@lobechat/utils/appLink';
+
+import { serverAppLink } from '@/server/utils/appLinks';
 
 const API_LABELS: Record<string, string> = {
   addApprover: '加签',
@@ -295,19 +298,29 @@ export const formatDingTalkPreviewCard = (
 export const formatDingTalkPreviewUnavailable = (code: string, link: string): string => {
   const target = link.trim() || '当前话题';
   const safe = code.trim() || 'UNKNOWN';
+  // Card `note` is plain text. A bare https URL stays clickable; markdown would show the brackets.
   return `无法解析操作对象（${safe}），请到网页端确认：${target}`;
 };
 
 export const buildDingTalkTopicDeepLink = (agentId: string, topicId: string): string => {
   if (!agentId || !topicId) return '';
-  const path = `/agent/${agentId}/${topicId}`;
-  const base = (appEnv.APP_URL || '').replace(/\/$/, '');
-  const wrapped = `/dingtalk/sso?redirect=${encodeURIComponent(path)}`;
-  return base ? `${base}${wrapped}` : wrapped;
+  return serverAppLink(`/agent/${agentId}/${topicId}`, 'dingtalk');
 };
 
 /** Tool text the model sees when the confirm card cannot be sent. */
 export const formatDingTalkCardSendFailedContent = (link: string): string => {
-  const target = link.trim() || '当前话题';
-  return `该操作需要本人确认，钉钉内确认卡片发送失败；请到网页端 ${target} 确认`;
+  const target = link.trim();
+  if (!target) return '该操作需要本人确认，钉钉内确认卡片发送失败；请到网页端确认';
+  return `该操作需要本人确认，钉钉内确认卡片发送失败；请到${markdownLink('网页端', target)}确认`;
+};
+
+/**
+ * Markdown form of the overflow line, for a DingTalk markdown reply.
+ * The card `note` keeps {@link formatDingTalkConfirmOverflowLine}'s bare URL.
+ */
+export const formatDingTalkWebConfirmMarkdown = (link: string): string => {
+  const target = link.trim();
+  const line = formatDingTalkConfirmOverflowLine(target);
+  if (!target || !line.includes(target)) return line;
+  return line.replace(target, markdownLink('网页端', target));
 };

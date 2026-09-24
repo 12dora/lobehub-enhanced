@@ -1,10 +1,12 @@
 import { type LobeToolManifest } from '@lobechat/context-engine';
+import { APP_LINK_PATHS, linkedPath } from '@lobechat/utils/appLink';
 import { MarketSDK, type OrgRef, orgRefToPathSegment } from '@lobehub/market-sdk';
 import debug from 'debug';
 import { type NextRequest } from 'next/server';
 
 import { type TrustedClientUserInfo } from '@/libs/trusted-client';
 import { generateTrustedClientToken, getTrustedClientTokenForSession } from '@/libs/trusted-client';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 import { rethrowIfNetworkProxyUnavailable } from '@/server/utils/networkProxyUnavailable';
 
 import { listSkillToolsWithLiveFallback } from './listSkillToolsWithLiveFallback';
@@ -109,6 +111,48 @@ const wrapMarketServiceMethods = (service: MarketService): void => {
 const MARKET_BASE_URL = process.env.MARKET_BASE_URL || 'https://market.lobehub.com';
 export const LOBEHUB_SKILL_DISCOVERY_TIMEOUT_MS = 3_000;
 
+const SKILL_AUTH_HINT_TIMEOUT_MS = 3_000;
+
+const isSkillAuthSignal = (value: string): boolean =>
+  value.includes('NOT_CONNECTED') || value.includes('TOKEN_EXPIRED');
+
+/**
+ * One authorize call on the failure path. A missing or slow URL falls back to
+ * the skills page, which is where the OAuth card lives.
+ */
+export const lobehubSkillAuthHint = async (
+  authorize: () => Promise<{ authorize_url?: string | null } | null | undefined>,
+  platform?: string | null,
+): Promise<string> => {
+  try {
+    const response = await new Promise<{ authorize_url?: string | null } | null | undefined>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => resolve(undefined), SKILL_AUTH_HINT_TIMEOUT_MS);
+        authorize().then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        );
+      },
+    );
+    const url = response?.authorize_url?.trim();
+    if (url && /^https?:\/\//i.test(url)) return linkedPath(() => url, '点此授权', url);
+  } catch (error) {
+    log('lobehubSkillAuthHint: authorize url unavailable: %O', error);
+  }
+  return linkedPath(serverAppLinkResolver(platform), '技能页', APP_LINK_PATHS.skills);
+};
+
+const skillAuthSentence = (signal: string, hint: string): string =>
+  signal.includes('TOKEN_EXPIRED')
+    ? `授权已过期（TOKEN_EXPIRED）。请重新授权：${hint}`
+    : `尚未连接该服务（NOT_CONNECTED）。请先授权：${hint}`;
+
 // ============================== Helper Functions ==============================
 
 /**
@@ -127,6 +171,8 @@ export interface LobehubSkillExecuteParams {
   context?: {
     topicId?: string;
   };
+  /** IM surface. `'dingtalk'` wraps the skills-page fallback through SSO. */
+  platform?: string | null;
   provider: string;
   toolName: string;
 }
@@ -589,7 +635,23 @@ export class MarketService {
    * @returns Execution result with content and success status
    */
   async executeLobehubSkill(params: LobehubSkillExecuteParams): Promise<LobehubSkillExecuteResult> {
-    const { provider, toolName, args, context } = params;
+    const { provider, toolName, args, context, platform } = params;
+
+    const authFailure = async (
+      signal: string,
+      code?: string,
+    ): Promise<LobehubSkillExecuteResult> => {
+      const hint = await lobehubSkillAuthHint(
+        () => this.market.connect.authorize(provider, {}),
+        platform,
+      );
+      const message = skillAuthSentence(signal, hint);
+      return {
+        content: message,
+        error: { code: code || 'LOBEHUB_SKILL_ERROR', message },
+        success: false,
+      };
+    };
 
     log('executeLobehubSkill: %s/%s with args: %O, context: %O', provider, toolName, args, context);
 
@@ -614,6 +676,10 @@ export class MarketService {
         }
 
         const message = responseError?.message || dataMessage || 'LobeHub Skill call failed';
+        const authSignal = `${responseError?.code ?? ''} ${message}`;
+        if (isSkillAuthSignal(authSignal)) {
+          return authFailure(authSignal, responseError?.code);
+        }
 
         return {
           content: message,
@@ -640,6 +706,10 @@ export class MarketService {
       const errorBody = (err as any).errorBody;
       const skillError = errorBody?.error;
       const content = skillError ? JSON.stringify(skillError) : err.message;
+      const authSignal = `${skillError?.code ?? ''} ${skillError?.message ?? ''} ${err.message ?? ''} ${content}`;
+      if (isSkillAuthSignal(authSignal)) {
+        return authFailure(authSignal, skillError?.code);
+      }
 
       return {
         content,

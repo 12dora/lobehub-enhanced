@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
+  // The personal-data description links its console path through <Trans>; the key stands in.
+  Trans: ({ i18nKey }: { i18nKey: string }) => <>{i18nKey}</>,
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options ? `${key}:${Object.values(options).join(',')}` : key,

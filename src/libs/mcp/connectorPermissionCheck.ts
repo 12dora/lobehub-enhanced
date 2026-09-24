@@ -1,8 +1,11 @@
 import type { LobeChatDatabase } from '@lobechat/database';
+import type { AppLinkResolver } from '@lobechat/utils/appLink';
 
 import { ConnectorModel } from '@/database/models/connector';
 import { ConnectorToolModel } from '@/database/models/connectorTool';
 import type { ConnectorToolPermission } from '@/database/schemas';
+
+import { blockedToolMessage } from './disabledToolText';
 
 // Re-exported from a pure module so the same patch logic is usable client-side.
 export { patchManifestWithPermissions } from './patchManifestPermissions';
@@ -40,15 +43,19 @@ export async function getConnectorToolPermission(
   }
 }
 
-/** Standardised blocked-tool response returned to the AI. */
-export function buildBlockedToolResponse(toolName: string): {
+/**
+ * Standardised blocked-tool response returned to the AI. `byOrgPolicy` points at the admin
+ * connectors page instead of the user's own settings; `resolveLink` makes the link absolute for IM.
+ */
+export function buildBlockedToolResponse(
+  toolName: string,
+  options: { byOrgPolicy?: boolean; resolveLink?: AppLinkResolver } = {},
+): {
   content: string;
   state: { content: [{ text: string; type: 'text' }]; isError: boolean };
   success: boolean;
 } {
-  const message =
-    `The tool "${toolName}" has been disabled by the user and cannot be executed. ` +
-    `Please inform the user that this tool is currently disabled and can be re-enabled in Settings > Connectors.`;
+  const message = blockedToolMessage(toolName, options);
   return {
     content: message,
     state: { content: [{ text: message, type: 'text' }], isError: false },

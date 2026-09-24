@@ -44,6 +44,7 @@ const {
   DINGTALK_WORKSPACE_RATE_MAX_WAIT_MS,
   DINGTALK_WORKSPACE_RATE_MAX_WAITERS,
   dingtalkWorkspaceRequest,
+  parseDingtalkApplyUrl,
   parseDingtalkMissingScopes,
   resetDingtalkWorkspaceRequestRateForTest,
   setDingtalkWorkspaceFetchForTest,
@@ -174,6 +175,7 @@ describe('dingtalkWorkspaceRequest', () => {
       expect(error.code).toBe('DINGTALK_FORBIDDEN');
       expect(error.upstreamCode).toBe('Forbidden.AccessDenied.AccessTokenPermissionDenied');
       expect(error.missingScopes).toEqual(['Calendar.Event.Write']);
+      expect(error.applyUrl).toBe('https://open-dev.dingtalk.com/appscope/apply?content=abc');
       expect(error.message).toBe('DINGTALK_FORBIDDEN');
       expect(JSON.stringify(error.missingScopes)).not.toContain('https://');
       expect(JSON.stringify(error.missingScopes)).not.toContain('权限');
@@ -232,6 +234,13 @@ describe('dingtalkWorkspaceRequest', () => {
     ).toEqual(['Calendar.Event.Write', 'Calendar.EventSchedule.Read']);
     expect(parseDingtalkMissingScopes('权限：［Todo.Todo.Write］')).toEqual(['Todo.Todo.Write']);
     expect(parseDingtalkMissingScopes('no permission')).toBeUndefined();
+    expect(
+      parseDingtalkApplyUrl(
+        '应用尚未开通所需的权限：[Calendar.Event.Write]，点击链接申请并开通即可：https://open-dev.dingtalk.com/appscope/apply?content=abc',
+      ),
+    ).toBe('https://open-dev.dingtalk.com/appscope/apply?content=abc');
+    expect(parseDingtalkApplyUrl('https://evil.example/appscope/apply')).toBeUndefined();
+    expect(parseDingtalkApplyUrl('javascript:alert(1)')).toBeUndefined();
     expect(
       parseDingtalkMissingScopes(
         'https://open-dev.dingtalk.com/appscope/apply?content=Calendar.Event.Write',

@@ -72,7 +72,9 @@ describe('DingtalkWorkspaceManifest', () => {
     expect(listTodos?.description).toContain('personalTodos');
     expect(listTodos?.description).toContain('lobe-dingtalk-personal');
     expect(listTodos?.description).toContain('updateTodo/completeTodo');
-    expect(listTodos?.description).toContain('请原样转告');
+    expect(listTodos?.description).toContain(
+      'notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
+    );
     expect(listTodos?.parameters.properties.refresh.description).toContain('personalTodos');
   });
 

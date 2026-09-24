@@ -1,4 +1,11 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import {
+  adminEntrySuffix,
+  type AppLinkResolver,
+  dingtalkIdentityGuidance,
+  markdownLink,
+  oaAdminMarkdownLink,
+} from '@lobechat/utils/appLink';
 
 import type {
   AmbiguousCandidate,
@@ -51,6 +58,27 @@ interface DingtalkToolFailure {
   code: string;
   message: string;
 }
+
+/** How manual-action links are resolved. Default keeps the path app-relative. */
+export interface DingtalkWorkspaceRuntimeOptions {
+  /** `'dingtalk'` selects the SSO sign-in target for identity errors. */
+  platform?: string | null;
+  resolveLink?: AppLinkResolver;
+}
+
+interface ManualLinks {
+  platform?: string | null;
+  resolveLink: AppLinkResolver;
+}
+
+const identityResolveLink: AppLinkResolver = (path) => path;
+
+const manualLinks = (options?: DingtalkWorkspaceRuntimeOptions): ManualLinks => ({
+  platform: options?.platform,
+  resolveLink: options?.resolveLink ?? identityResolveLink,
+});
+
+const DEFAULT_LINKS = manualLinks();
 
 /** LLM-visible copy for unexpected failures. Never include raw error text. */
 export const DINGTALK_WORKSPACE_INTERNAL_TOOL_CONTENT =
@@ -498,22 +526,44 @@ const failResult = (content: string, error?: DingtalkToolFailure): BuiltinServer
   };
 };
 
-const friendlyDingtalkErrorContent = (code: string, error: unknown): string => {
+/** Only the apply URL DingTalk itself returned, and only on open-dev. */
+const readOpenDevApplyUrl = (error: unknown): string | undefined => {
+  for (const record of nestedErrorRecords(error)) {
+    const value = record.applyUrl;
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 2000) continue;
+    if (/^https:\/\/open-dev\.dingtalk\.com\//i.test(trimmed)) return trimmed;
+  }
+  return undefined;
+};
+
+const friendlyDingtalkErrorContent = (code: string, error: unknown, links: ManualLinks): string => {
   const hint = safeHint(errorMessage(error));
+  const admin = adminEntrySuffix(links.resolveLink);
+  const identity = dingtalkIdentityGuidance(links.resolveLink, links.platform);
+  const oaAdmin = oaAdminMarkdownLink();
   switch (code) {
     case 'DINGTALK_NOT_CONFIGURED': {
-      return '钉钉服务号未配置（DINGTALK_NOT_CONFIGURED），无法使用待办或日程。请联系管理员在即时通讯连接器中配置钉钉服务号。';
+      return `钉钉服务号未配置（DINGTALK_NOT_CONFIGURED），无法使用待办或日程。请联系管理员在即时通讯连接器中配置钉钉服务号${admin}。`;
     }
     case 'DINGTALK_FEATURE_DISABLED': {
-      return '该能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在钉钉连接器的「工作台能力」中开启待办或日程。';
+      return `该能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在钉钉连接器的「工作台能力」中开启待办或日程${admin}。`;
     }
     case 'DINGTALK_FORBIDDEN': {
-      return hint
-        ? `没有权限执行该操作（DINGTALK_FORBIDDEN）：${hint}`
+      const applyUrl = readOpenDevApplyUrl(error);
+      const apply = applyUrl ? `请联系管理员申请权限：${markdownLink('申请权限', applyUrl)}。` : '';
+      if (hint) {
+        return apply
+          ? `没有权限执行该操作（DINGTALK_FORBIDDEN）：${hint} ${apply}`
+          : `没有权限执行该操作（DINGTALK_FORBIDDEN）：${hint}`;
+      }
+      return apply
+        ? `没有权限执行该操作（DINGTALK_FORBIDDEN）。请确认您是待办创建者或日程组织者，或${apply}`
         : '没有权限执行该操作（DINGTALK_FORBIDDEN）。请确认您是待办创建者或日程组织者，或联系管理员检查应用权限范围。';
     }
     case 'DINGTALK_PREMIUM_REQUIRED': {
-      return '该操作需要钉钉 OA 审批高级版（DINGTALK_PREMIUM_REQUIRED），当前企业未开通。请改用其他操作。';
+      return `该操作需要钉钉 OA 审批高级版（DINGTALK_PREMIUM_REQUIRED），当前企业未开通。请改用其他操作，或请钉钉组织管理员在${oaAdmin}开通高级版。`;
     }
     case 'DINGTALK_NOT_FOUND': {
       return hint
@@ -544,13 +594,13 @@ const friendlyDingtalkErrorContent = (code: string, error: unknown): string => {
       return '钉钉服务暂时不可用（DINGTALK_UNAVAILABLE），请稍后重试。';
     }
     case 'DINGTALK_IDENTITY_UNBOUND': {
-      return '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。请使用钉钉登录或通过钉钉机器人完成绑定；管理员不能代为绑定。';
+      return `当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。${identity}`;
     }
     case 'DINGTALK_IDENTITY_UNVERIFIED': {
-      return '钉钉身份未经验证（DINGTALK_IDENTITY_UNVERIFIED）。请使用钉钉登录或通过钉钉机器人完成绑定；管理员不能代为绑定。';
+      return `钉钉身份未经验证（DINGTALK_IDENTITY_UNVERIFIED）。${identity}`;
     }
     case 'DINGTALK_IDENTITY_INACTIVE': {
-      return '钉钉账号已停用或已离职（DINGTALK_IDENTITY_INACTIVE），无法操作待办或日程。';
+      return `钉钉账号已停用或已离职（DINGTALK_IDENTITY_INACTIVE），无法操作待办或日程。请联系钉钉组织管理员在${oaAdmin}处理。`;
     }
     case 'DINGTALK_NOT_TASK_OWNER': {
       return '您不是该任务的当前处理人（DINGTALK_NOT_TASK_OWNER）。';
@@ -559,7 +609,7 @@ const friendlyDingtalkErrorContent = (code: string, error: unknown): string => {
       return '仅发起人可执行该操作（DINGTALK_NOT_ORIGINATOR）。';
     }
     case 'DINGTALK_NOT_APPROVAL_ADMIN': {
-      return '需要钉钉审批管理员权限（DINGTALK_NOT_APPROVAL_ADMIN）。';
+      return `需要钉钉审批管理员权限（DINGTALK_NOT_APPROVAL_ADMIN）。请联系钉钉组织管理员在${oaAdmin}授予审批管理员。`;
     }
     case 'DINGTALK_AUTOMATION_OFF': {
       return '自动审批已关闭（DINGTALK_AUTOMATION_OFF）。';
@@ -587,11 +637,12 @@ const friendlyDingtalkErrorContent = (code: string, error: unknown): string => {
  */
 const sanitizeDingtalkFailure = (
   error: unknown,
+  links: ManualLinks,
 ): { content: string; error: DingtalkToolFailure } => {
   const code = extractErrorCode(error);
 
   if (code && KNOWN_DINGTALK_ERROR_CODES.has(code)) {
-    const content = friendlyDingtalkErrorContent(code, error);
+    const content = friendlyDingtalkErrorContent(code, error, links);
     const candidates = code === 'DINGTALK_AMBIGUOUS' ? extractCandidates(error) : [];
     return {
       content,
@@ -610,8 +661,11 @@ const sanitizeDingtalkFailure = (
   };
 };
 
-const dingtalkFailureResult = (error: unknown): BuiltinServerRuntimeOutput => {
-  const sanitized = sanitizeDingtalkFailure(error);
+const dingtalkFailureResult = (
+  error: unknown,
+  links: ManualLinks = DEFAULT_LINKS,
+): BuiltinServerRuntimeOutput => {
+  const sanitized = sanitizeDingtalkFailure(error, links);
   return failResult(sanitized.content, sanitized.error);
 };
 
@@ -657,7 +711,18 @@ const pickResultString = (data: unknown, keys: string[]): string | undefined => 
  * no React, no Zustand, no `@/services` imports.
  */
 export class DingtalkWorkspaceExecutionRuntime {
-  constructor(private service: IDingtalkWorkspaceService) {}
+  private readonly links: ManualLinks;
+
+  constructor(
+    private service: IDingtalkWorkspaceService,
+    options?: DingtalkWorkspaceRuntimeOptions,
+  ) {
+    this.links = manualLinks(options);
+  }
+
+  private fail(error: unknown): BuiltinServerRuntimeOutput {
+    return dingtalkFailureResult(error, this.links);
+  }
 
   async searchDirectory(args: SearchDirectoryParams): Promise<BuiltinServerRuntimeOutput> {
     try {
@@ -700,7 +765,7 @@ export class DingtalkWorkspaceExecutionRuntime {
         success: true,
       };
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -708,7 +773,7 @@ export class DingtalkWorkspaceExecutionRuntime {
     try {
       return okResult(await this.service.listTodos(args));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -718,7 +783,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const subject = pickResultString(data, ['subject']) ?? args.subject;
       return okResult(data, namedWriteLine('已创建待办', subject, '已创建待办'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -728,7 +793,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const subject = pickResultString(data, ['subject']) ?? args.subject;
       return okResult(data, namedWriteLine('已更新待办', subject, '已更新待办'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -738,7 +803,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const subject = pickResultString(data, ['subject']);
       return okResult(data, namedWriteLine('已完成待办', subject, '已完成待办'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -748,7 +813,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const subject = pickResultString(data, ['subject']);
       return okResult(data, namedWriteLine('已删除待办', subject, '已删除待办'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -756,7 +821,7 @@ export class DingtalkWorkspaceExecutionRuntime {
     try {
       return okResult(await this.service.listEvents(args));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -765,7 +830,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const event = flattenEvent(await this.service.getEvent(args));
       return okResult({ event });
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -776,7 +841,7 @@ export class DingtalkWorkspaceExecutionRuntime {
         '仅返回忙闲时段，不含他人日程标题或详情。',
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -784,7 +849,7 @@ export class DingtalkWorkspaceExecutionRuntime {
     try {
       return okResult(await this.service.listMeetingRooms());
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -794,7 +859,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const summary = pickResultString(data, ['summary']) ?? args.summary;
       return okResult(data, namedWriteLine('已创建日程', summary, '已创建日程'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -804,7 +869,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const summary = pickResultString(data, ['summary']) ?? args.summary;
       return okResult(data, namedWriteLine('已更新日程', summary, '已更新日程'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -814,7 +879,7 @@ export class DingtalkWorkspaceExecutionRuntime {
       const summary = pickResultString(data, ['summary']);
       return okResult(data, namedWriteLine('已删除日程', summary, '已删除日程'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -824,10 +889,12 @@ export class DingtalkWorkspaceExecutionRuntime {
       const summary = pickResultString(data, ['summary']);
       return okResult(data, namedWriteLine('已回复日程', summary, '已回复日程'));
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 }
 
-export const createDingtalkWorkspaceRuntime = (service: IDingtalkWorkspaceService) =>
-  new DingtalkWorkspaceExecutionRuntime(service);
+export const createDingtalkWorkspaceRuntime = (
+  service: IDingtalkWorkspaceService,
+  options?: DingtalkWorkspaceRuntimeOptions,
+) => new DingtalkWorkspaceExecutionRuntime(service, options);

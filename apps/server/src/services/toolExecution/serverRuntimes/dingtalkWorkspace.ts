@@ -5,6 +5,8 @@ import {
 } from '@lobechat/builtin-tool-dingtalk-workspace/executionRuntime';
 import { DingtalkWorkspaceIdentifier } from '@lobechat/builtin-tool-dingtalk-workspace/manifest';
 
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
+
 import type { ServerRuntimeRegistration } from './types';
 
 export { createDingtalkWorkspaceRuntime, DingtalkWorkspaceExecutionRuntime };
@@ -26,7 +28,7 @@ export const dingtalkWorkspaceRuntime: ServerRuntimeRegistration = {
         import('@/server/enterprise/services/reminder'),
       ]);
 
-    const todo = new DingtalkTodoService(serverDB, userId);
+    const todo = new DingtalkTodoService(serverDB, userId, context.botPlatform);
     const calendar = new DingtalkCalendarService(serverDB, userId);
     const directory = new ReminderService(serverDB, userId);
 
@@ -41,22 +43,28 @@ export const dingtalkWorkspaceRuntime: ServerRuntimeRegistration = {
       args: T,
     ) => (args.reminders ? { ...args, reminders: args.reminders.map(normalizeReminder) } : args);
 
-    return createDingtalkWorkspaceRuntime({
-      completeTodo: (args) => todo.completeTodo(args),
-      createEvent: (args) => calendar.createEvent(withReminders(args)),
-      createTodo: (args) => todo.createTodo(args),
-      deleteEvent: (args) => calendar.deleteEvent(args),
-      deleteTodo: (args) => todo.deleteTodo(args),
-      getEvent: (args) => calendar.getEvent(args),
-      listEvents: (args) => calendar.listEvents(args),
-      listMeetingRooms: () => calendar.listMeetingRooms(),
-      listTodos: (args) => todo.listTodos(args),
-      queryFreeBusy: (args) => calendar.queryFreeBusy(args),
-      respondEvent: (args) => calendar.respondEvent(args),
-      searchDirectory: (q, kind) => directory.searchDirectory(q, kind),
-      updateEvent: (args) => calendar.updateEvent(withReminders(args)),
-      updateTodo: (args) => todo.updateTodo(args),
-    });
+    return createDingtalkWorkspaceRuntime(
+      {
+        completeTodo: (args) => todo.completeTodo(args),
+        createEvent: (args) => calendar.createEvent(withReminders(args)),
+        createTodo: (args) => todo.createTodo(args),
+        deleteEvent: (args) => calendar.deleteEvent(args),
+        deleteTodo: (args) => todo.deleteTodo(args),
+        getEvent: (args) => calendar.getEvent(args),
+        listEvents: (args) => calendar.listEvents(args),
+        listMeetingRooms: () => calendar.listMeetingRooms(),
+        listTodos: (args) => todo.listTodos(args),
+        queryFreeBusy: (args) => calendar.queryFreeBusy(args),
+        respondEvent: (args) => calendar.respondEvent(args),
+        searchDirectory: (q, kind) => directory.searchDirectory(q, kind),
+        updateEvent: (args) => calendar.updateEvent(withReminders(args)),
+        updateTodo: (args) => todo.updateTodo(args),
+      },
+      {
+        platform: context.botPlatform,
+        resolveLink: serverAppLinkResolver(context.botPlatform),
+      },
+    );
   },
   identifier: DingtalkWorkspaceIdentifier,
 };

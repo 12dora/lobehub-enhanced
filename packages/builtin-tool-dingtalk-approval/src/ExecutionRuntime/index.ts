@@ -1,4 +1,5 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import { DINGTALK_CONSOLE_LINKS, markdownLink } from '@lobechat/utils/appLink';
 
 import type {
   AddApproverParams,
@@ -51,7 +52,11 @@ import type {
   WithdrawApplicationParams,
   WithdrawApplicationState,
 } from '../types';
-import { dingtalkFailureResult, formatCandidateLabel } from './errors';
+import {
+  type DingtalkApprovalLinkContext,
+  dingtalkFailureResult,
+  formatCandidateLabel,
+} from './errors';
 
 export {
   DINGTALK_ERROR_CODES,
@@ -145,7 +150,7 @@ const incompleteListNote = (incomplete: ApprovalScanIncomplete): string =>
 const PENDING_TRUNCATED_NOTE =
   '列表可能不完整（truncated=true）。标准版无待办列表接口，结果来自有界扫描。\n';
 
-const DEFAULT_TEMPLATE_ADMIN_URL = 'https://oa.dingtalk.com/';
+const DEFAULT_TEMPLATE_ADMIN_URL = DINGTALK_CONSOLE_LINKS.oaAdmin;
 
 const DEFAULT_TEMPLATE_NEXT_STEPS = [
   '打开该模板的【流程设计】，配置审批节点（例如由发起人自选审批人）',
@@ -723,7 +728,18 @@ const readOk = (payload: unknown, state: object, prefix = ''): BuiltinServerRunt
  * no `@/services` imports.
  */
 export class DingtalkApprovalExecutionRuntime {
-  constructor(private service: IDingtalkApprovalService) {}
+  private readonly links: DingtalkApprovalLinkContext;
+
+  constructor(
+    private service: IDingtalkApprovalService,
+    options?: DingtalkApprovalLinkContext,
+  ) {
+    this.links = options ?? {};
+  }
+
+  private fail(error: unknown): BuiltinServerRuntimeOutput {
+    return dingtalkFailureResult(error, this.links);
+  }
 
   async listTemplates(args: ListTemplatesParams = {}): Promise<BuiltinServerRuntimeOutput> {
     try {
@@ -739,7 +755,7 @@ export class DingtalkApprovalExecutionRuntime {
       };
       return readOk({ count: mapped.length, items: capped.items, truncated }, state);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -767,7 +783,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -791,7 +807,7 @@ export class DingtalkApprovalExecutionRuntime {
           : '';
       return readOk(approvalListPayload(listed), state, note);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -810,7 +826,7 @@ export class DingtalkApprovalExecutionRuntime {
       const note = listed.incomplete ? incompleteListNote(listed.incomplete) : '';
       return readOk(approvalListPayload(listed), state, note);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -833,7 +849,7 @@ export class DingtalkApprovalExecutionRuntime {
       };
       return readOk({ ...presented, processInstanceId }, state);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -884,7 +900,7 @@ export class DingtalkApprovalExecutionRuntime {
       };
       return readOk(payload, state, `${instruction}\n`);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -904,7 +920,7 @@ export class DingtalkApprovalExecutionRuntime {
       };
       return readOk({ count: mapped.length, items: capped.items, truncated }, state);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -920,7 +936,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -935,7 +951,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -950,7 +966,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -965,7 +981,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -983,7 +999,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1001,7 +1017,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1016,7 +1032,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1031,7 +1047,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1070,14 +1086,14 @@ export class DingtalkApprovalExecutionRuntime {
         fieldLines ? `表单字段：\n${fieldLines}` : undefined,
         `审批流、可见范围、抄送无法通过接口配置，请提醒用户完成以下步骤：\n${stepLines}`,
         extraNotes,
-        `[前往钉钉后台配置审批流程](${adminUrl})`,
+        markdownLink('前往钉钉后台配置审批流程', adminUrl),
         compactJson({ adminUrl, created, fields, name, notes, processCode }),
       ]
         .filter(Boolean)
         .join('\n');
       return ok(content, state);
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1092,7 +1108,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1110,7 +1126,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1125,7 +1141,7 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 
@@ -1140,10 +1156,12 @@ export class DingtalkApprovalExecutionRuntime {
         state,
       );
     } catch (error) {
-      return dingtalkFailureResult(error);
+      return this.fail(error);
     }
   }
 }
 
-export const createDingtalkApprovalRuntime = (service: IDingtalkApprovalService) =>
-  new DingtalkApprovalExecutionRuntime(service);
+export const createDingtalkApprovalRuntime = (
+  service: IDingtalkApprovalService,
+  options?: DingtalkApprovalLinkContext,
+) => new DingtalkApprovalExecutionRuntime(service, options);

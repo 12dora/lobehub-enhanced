@@ -49,7 +49,7 @@ export const DingtalkWorkspaceManifest: BuiltinToolManifest = {
     },
     {
       description:
-        '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 若提示授权，请原样转告',
+        '我的钉钉待办：待我审批 + 本助手创建的待办。已授权钉钉个人数据时另含 personalTodos（含客户端自建待办，此处只读，写入走 lobe-dingtalk-personal 的 updateTodo/completeTodo）；notes 里的 markdown 链接必须原样转告，不要改写或编造 URL',
       humanIntervention: 'never',
       name: DingtalkWorkspaceApiName.listTodos,
       parameters: {

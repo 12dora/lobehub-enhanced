@@ -52,6 +52,8 @@ describe('dingtalk approval systemRole', () => {
     expect(systemPrompt).toContain('sign in with DingTalk');
     expect(systemPrompt).toContain('DingTalk robot');
     expect(systemPrompt).toContain('Admins cannot bind on their behalf');
+    expect(systemPrompt).toContain('Relay every markdown link from a tool result verbatim');
+    expect(systemPrompt).toContain('Do not invent a URL');
   });
 
   it('uses staff tokens copied verbatim', () => {

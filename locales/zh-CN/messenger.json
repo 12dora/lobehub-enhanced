@@ -14,6 +14,7 @@
   "messenger.detail.disconnect": "断开",
   "messenger.dingtalk.agent.hint": "来自钉钉的消息将由该助手回复，也可在对话中发送 /助手 随时切换。",
   "messenger.dingtalk.agent.label": "默认助手",
+  "messenger.dingtalk.capabilities.adminLink": "管理员入口：IM 连接器设置",
   "messenger.dingtalk.capabilities.chatDisabled": "管理员已关闭对话能力",
   "messenger.dingtalk.capabilities.pushDisabled": "管理员已关闭提醒推送",
   "messenger.dingtalk.commands.agents": "列出并切换助手",

@@ -1,5 +1,6 @@
 'use client';
 
+import { APP_LINK_PATHS } from '@lobechat/utils/appLink';
 import { Block, Flexbox, Icon } from '@lobehub/ui';
 import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
@@ -8,6 +9,7 @@ import { UserIcon } from 'lucide-react';
 import { Fragment, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import ActionLink from '@/components/ActionLink';
 import AsyncError from '@/components/AsyncError';
 import { usePermission } from '@/hooks/usePermission';
 
@@ -97,6 +99,7 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
   // off, telling the user to message the robot would be advice that cannot
   // work, so the unlinked card carries the notice instead of the instruction.
   const chatDisabled = capabilities?.chat === false;
+  const pushDisabled = capabilities?.push === false;
 
   return (
     <Flexbox gap={20}>
@@ -160,9 +163,17 @@ const DingTalkDetail = memo<DingTalkDetailProps>(({ botUsername, capabilities, n
             {t('messenger.dingtalk.capabilities.chatDisabled')}
           </Text>
         )}
-        {capabilities?.push === false && (
+        {pushDisabled && (
           <Text fontSize={12} type="secondary">
             {t('messenger.dingtalk.capabilities.pushDisabled')}
+          </Text>
+        )}
+        {/* Either half off is an admin switch: one link to where it is turned back on. */}
+        {(chatDisabled || pushDisabled) && (
+          <Text fontSize={12}>
+            <ActionLink href={APP_LINK_PATHS.adminImConnectors}>
+              {t('messenger.dingtalk.capabilities.adminLink')}
+            </ActionLink>
           </Text>
         )}
       </Flexbox>

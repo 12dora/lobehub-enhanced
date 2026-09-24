@@ -1,5 +1,6 @@
 import type { ApprovalAutomationTier, ApprovalRuleAction } from '@lobechat/types';
 import { APPROVAL_AUTOMATION_TIERS } from '@lobechat/types';
+import { dingtalkIdentityGuidance } from '@lobechat/utils/appLink';
 import debug from 'debug';
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 
@@ -19,6 +20,7 @@ import {
   markWorkerStarted,
   markWorkerTick,
 } from '@/server/enterprise/services/platformSystem/workerHeartbeat';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import { AUDIT_ACTION, AUDIT_TARGET_TYPE } from '../../audit/auditActionCatalog';
 import { PlatformAuditService } from '../../platformAudit';
@@ -55,6 +57,11 @@ export {
 } from './workerMemory';
 
 const log = debug('lobe-server:dingtalk-workspace:approval-rules');
+
+const identityInvalidLine = (name: string): string => {
+  const guidance = dingtalkIdentityGuidance(serverAppLinkResolver('dingtalk'), 'dingtalk');
+  return `规则「${name}」已停用：钉钉身份已失效。${guidance}`;
+};
 
 export const APPROVAL_RULE_SWEEP_INTERVAL_MS = 180_000;
 export const APPROVAL_RULE_SWEEP_JITTER_MS = 30_000;
@@ -661,7 +668,7 @@ export const runApprovalRulesCycle = async (
             ) {
               await disable(db, rule.id, 'identity_invalid');
               await notifyBestEffort(notify, rule.staffId, {
-                lines: [`规则「${rule.name}」已停用：钉钉身份已失效，请重新用钉钉登录。`],
+                lines: [identityInvalidLine(rule.name)],
                 title: '自动审批规则已停用',
               });
               counts.skipped += 1;

@@ -46,6 +46,7 @@ describe('MessageExecutionRuntime empty discovery', () => {
     const result = await runtime(false).listMessengers({});
 
     expect(result.content).toContain('Settings → Messenger');
+    expect(result.content).toContain('[Messenger 设置](/settings/messenger)');
   });
 });
 

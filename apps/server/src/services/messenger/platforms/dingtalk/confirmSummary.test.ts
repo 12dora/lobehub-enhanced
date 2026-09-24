@@ -252,7 +252,8 @@ describe('formatDingTalkCardSendFailedContent', () => {
   it('tells the model to confirm on the web topic', () => {
     const link = buildDingTalkTopicDeepLink('agt_1', 'topic_1');
     const text = formatDingTalkCardSendFailedContent(link);
-    expect(text).toBe(`该操作需要本人确认，钉钉内确认卡片发送失败；请到网页端 ${link} 确认`);
+    expect(text).toBe(`该操作需要本人确认，钉钉内确认卡片发送失败；请到[网页端](${link})确认`);
+    expect(text).not.toMatch(/\]\(<http/);
     expect(link).toBe(
       'https://chat.example.com/dingtalk/sso?redirect=' +
         encodeURIComponent('/agent/agt_1/topic_1'),

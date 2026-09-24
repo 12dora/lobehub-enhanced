@@ -1,4 +1,8 @@
+import type { AppLinkResolver } from '@lobechat/utils/appLink';
+
 import { ConnectorToolPermission } from '@/database/schemas';
+
+import { userDisabledToolDescription } from './disabledToolText';
 
 /**
  * Patch a tool manifest's `api[]` with connector tool permissions.
@@ -10,6 +14,8 @@ import { ConnectorToolPermission } from '@/database/schemas';
  *
  * - needs_approval → humanIntervention: 'required'  (approval prompt)
  * - disabled       → blocking description + humanIntervention: 'required'
+ *
+ * `resolveLink` turns the settings path in that description into an absolute link for IM turns.
  */
 export function patchManifestWithPermissions<
   M extends {
@@ -20,16 +26,17 @@ export function patchManifestWithPermissions<
       [k: string]: unknown;
     }>;
   },
->(manifest: M, toolPermissions: Map<string, ConnectorToolPermission>): M {
+>(
+  manifest: M,
+  toolPermissions: Map<string, ConnectorToolPermission>,
+  resolveLink?: AppLinkResolver,
+): M {
   const patchedApi = manifest.api.map((api) => {
     const permission = toolPermissions.get(api.name);
     if (permission === ConnectorToolPermission.disabled) {
       return {
         ...api,
-        description:
-          `[TOOL DISABLED] The user has disabled this tool and it cannot be executed. ` +
-          `Do NOT call this tool. If the user asks to perform this action, inform them ` +
-          `that they have manually disabled "${api.name}" and can re-enable it in Settings > Connectors.`,
+        description: userDisabledToolDescription(api.name, resolveLink),
         humanIntervention: 'required' as const,
       };
     }

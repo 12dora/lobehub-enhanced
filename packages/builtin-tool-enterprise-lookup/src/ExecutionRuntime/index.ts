@@ -1,4 +1,5 @@
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import { APP_LINK_PATHS, type AppLinkResolver, linkedPath } from '@lobechat/utils/appLink';
 
 import type {
   CompanyProfileCandidate,
@@ -204,16 +205,20 @@ const withTruncationNote = (text: string, truncated: boolean): string =>
 const withKvLayoutReminder = (text: string): string =>
   `${text}\n${ENTERPRISE_LOOKUP_KV_LAYOUT_REMINDER}`;
 
+const adminSettingsLink = (resolveLink?: AppLinkResolver): string =>
+  linkedPath(resolveLink, '系统设置', APP_LINK_PATHS.adminSystemGeneral);
+
 const friendlyErrorContent = (
   code: string,
   fallbackProvider?: EnterpriseLookupProvider,
+  resolveLink?: AppLinkResolver,
 ): string => {
   switch (code) {
     case 'ENTERPRISE_LOOKUP_NOT_CONFIGURED': {
-      return '企业查询未配置（ENTERPRISE_LOOKUP_NOT_CONFIGURED）。请联系管理员在系统设置中启用数据源。不要向用户展示技术细节。';
+      return `企业查询未配置（ENTERPRISE_LOOKUP_NOT_CONFIGURED）。请联系管理员开启（管理员入口：${adminSettingsLink(resolveLink)}）。`;
     }
     case 'ENTERPRISE_LOOKUP_DAILY_LIMIT': {
-      return '今日查询次数已达上限（ENTERPRISE_LOOKUP_DAILY_LIMIT）。请明日再试，或请管理员调整每人每日上限。不要向用户展示技术细节。';
+      return `今日查询次数已达上限（ENTERPRISE_LOOKUP_DAILY_LIMIT）。请明日再试，或请联系管理员调整每人每日上限（管理员入口：${adminSettingsLink(resolveLink)}）。`;
     }
     case 'ENTERPRISE_LOOKUP_PROVIDER_UNAVAILABLE': {
       if (fallbackProvider) {
@@ -234,12 +239,15 @@ const friendlyErrorContent = (
   }
 };
 
-const sanitizeFailure = (error: unknown): { content: string; error: LookupToolFailure } => {
+const sanitizeFailure = (
+  error: unknown,
+  resolveLink?: AppLinkResolver,
+): { content: string; error: LookupToolFailure } => {
   const code = extractErrorCode(error);
   const fallbackProvider = extractFallbackProvider(error);
 
   if (code && KNOWN_ERROR_CODES.has(code) && code !== 'ENTERPRISE_LOOKUP_INTERNAL') {
-    const content = friendlyErrorContent(code, fallbackProvider);
+    const content = friendlyErrorContent(code, fallbackProvider, resolveLink);
     return {
       content,
       error: fallbackProvider
@@ -255,8 +263,11 @@ const sanitizeFailure = (error: unknown): { content: string; error: LookupToolFa
   };
 };
 
-const failureResult = (error: unknown): BuiltinServerRuntimeOutput => {
-  const sanitized = sanitizeFailure(error);
+const failureResult = (
+  error: unknown,
+  resolveLink?: AppLinkResolver,
+): BuiltinServerRuntimeOutput => {
+  const sanitized = sanitizeFailure(error, resolveLink);
   return {
     content: sanitized.content,
     error: sanitized.error,
@@ -269,7 +280,10 @@ const failureResult = (error: unknown): BuiltinServerRuntimeOutput => {
  * test double) via constructor injection — no React, no Zustand, no `@/services`.
  */
 export class EnterpriseLookupExecutionRuntime {
-  constructor(private service: IEnterpriseLookupService) {}
+  constructor(
+    private service: IEnterpriseLookupService,
+    private resolveLink?: AppLinkResolver,
+  ) {}
 
   async listCapabilities(args: ListCapabilitiesParams = {}): Promise<BuiltinServerRuntimeOutput> {
     try {
@@ -309,7 +323,7 @@ export class EnterpriseLookupExecutionRuntime {
       };
       return { content, state, success: true };
     } catch (error) {
-      return failureResult(error);
+      return failureResult(error, this.resolveLink);
     }
   }
 
@@ -390,7 +404,7 @@ export class EnterpriseLookupExecutionRuntime {
       };
       return { content, state, success: true };
     } catch (error) {
-      return failureResult(error);
+      return failureResult(error, this.resolveLink);
     }
   }
 
@@ -420,10 +434,12 @@ export class EnterpriseLookupExecutionRuntime {
       };
       return { content, state, success: true };
     } catch (error) {
-      return failureResult(error);
+      return failureResult(error, this.resolveLink);
     }
   }
 }
 
-export const createEnterpriseLookupRuntime = (service: IEnterpriseLookupService) =>
-  new EnterpriseLookupExecutionRuntime(service);
+export const createEnterpriseLookupRuntime = (
+  service: IEnterpriseLookupService,
+  options?: { resolveLink?: AppLinkResolver },
+) => new EnterpriseLookupExecutionRuntime(service, options?.resolveLink);

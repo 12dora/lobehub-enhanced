@@ -4,6 +4,8 @@ import {
 } from '@lobechat/builtin-tool-dingtalk-personal/executionRuntime';
 import { DingtalkPersonalIdentifier } from '@lobechat/builtin-tool-dingtalk-personal/manifest';
 
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
+
 import type { ServerRuntimeRegistration } from './types';
 
 export { createDingtalkPersonalRuntime, DingtalkPersonalExecutionRuntime };
@@ -20,14 +22,20 @@ export const dingtalkPersonalRuntime: ServerRuntimeRegistration = {
     const { runDingtalkPersonalTool } =
       await import('@/server/enterprise/services/dingtalkPersonal/tool');
 
-    return createDingtalkPersonalRuntime({
-      call: (apiName, args) =>
-        runDingtalkPersonalTool(serverDB, userId, apiName, args, {
-          botPlatform: context.botPlatform,
-          topicId: context.topicId,
-          workspaceId: context.workspaceId,
-        }),
-    });
+    const resolveLink = serverAppLinkResolver(context.botPlatform);
+    return createDingtalkPersonalRuntime(
+      {
+        call: (apiName, args) =>
+          runDingtalkPersonalTool(serverDB, userId, apiName, args, {
+            botPlatform: context.botPlatform,
+            botThreadId: context.botThreadId,
+            resolveLink,
+            topicId: context.topicId,
+            workspaceId: context.workspaceId,
+          }),
+      },
+      { resolveLink },
+    );
   },
   identifier: DingtalkPersonalIdentifier,
 };

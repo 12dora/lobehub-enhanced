@@ -108,6 +108,7 @@ export default {
   'messenger.dingtalk.agent.hint':
     'DingTalk messages are answered by this agent. You can switch at any time by sending /助手 in the chat.',
   'messenger.dingtalk.agent.label': 'Default agent',
+  'messenger.dingtalk.capabilities.adminLink': 'Admin: IM connector settings',
   'messenger.dingtalk.capabilities.chatDisabled': 'Chat has been turned off by your administrator.',
   'messenger.dingtalk.capabilities.pushDisabled':
     'Notification delivery has been turned off by your administrator.',

@@ -4027,7 +4027,10 @@ describe('GeneralChatAgent', () => {
       ]);
       const payload = (result as Array<{ payload?: { blockedContent?: string } }>)[0]?.payload;
       expect(payload?.blockedContent).not.toContain('Blocked by security/privacy');
-      expect(payload?.blockedContent).toContain('/agent/agt_1/topic_1');
+      // The topic link goes through the DingTalk SSO bridge as a markdown link.
+      expect(payload?.blockedContent).toContain(
+        `[在网页端确认](/dingtalk/sso?redirect=${encodeURIComponent('/agent/agt_1/topic_1')})`,
+      );
     });
   });
 });

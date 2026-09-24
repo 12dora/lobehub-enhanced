@@ -8,6 +8,8 @@ import type { PipelineContext, ProcessorOptions } from '../types';
 const log = debug('context-engine:provider:BotPlatformContextInjector');
 
 export interface BotPlatformContext {
+  /** Absolute AIHub origin. When set, markdown platforms are told to link pages with it. */
+  appUrl?: string;
   platformName: string;
   supportsMarkdown: boolean;
   warnings?: string[];

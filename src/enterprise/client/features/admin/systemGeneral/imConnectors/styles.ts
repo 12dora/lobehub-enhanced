@@ -79,6 +79,13 @@ export const imConnectorStyles = createStaticStyles(({ css }) => ({
     font-size: ${cssVar.fontSizeSM};
     line-height: 20px;
   `,
+  /** One reading, with DingTalk's apply-for-permission link beside it when there is one. */
+  probeRow: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+  `,
   section: css`
     display: flex;
     flex-direction: column;

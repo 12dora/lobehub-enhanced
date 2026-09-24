@@ -9,20 +9,31 @@ import {
   type WriteState,
 } from '@lobechat/builtin-tool-dingtalk-personal';
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
+import {
+  adminEntrySuffix,
+  APP_LINK_PATHS,
+  type AppLinkResolver,
+  buildAppUrl,
+  cliSettingsMarkdownLink,
+  dingtalkIdentityGuidance,
+  markdownLink,
+  oaAdminMarkdownLink,
+} from '@lobechat/utils/appLink';
 import debug from 'debug';
 import { inArray } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { dingtalkDirectoryUsers } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
-import { appEnv } from '@/envs/app';
 import {
   appendDingtalkPersonalAudit,
   DingtalkPersonalError,
   DingtalkPersonalService,
 } from '@/server/enterprise/services/dingtalkPersonal';
 import { sendDingtalkPersonalAuthCard } from '@/server/services/messenger/platforms/dingtalk/personalAuthCard';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
+import { isDingtalkVerificationUrl } from './brokerClient';
 import type { IngestedDingtalkFile } from './fileIngest';
 import { ingestDingtalkPersonalFile } from './fileIngest';
 import {
@@ -72,8 +83,6 @@ const logFailure = (event: string, error: unknown): void => {
 };
 
 const INTERNAL_CONTENT = '钉钉个人数据暂时不可用（DINGTALK_PERSONAL_INTERNAL），请稍后重试。';
-const SETTINGS_PATH = '/settings/connector' as const;
-const AUTHORIZE_QUERY_PATH = '/settings/connector?dingtalkPersonal=authorize';
 
 const PRIORITY_LABEL: Record<number, string> = {
   10: '较低',
@@ -89,14 +98,8 @@ const FEATURE_LABEL: Record<string, string> = {
   write: '写操作',
 };
 
-const IDENTITY_CONTENT: Record<string, string> = {
-  DINGTALK_IDENTITY_INACTIVE:
-    '钉钉账号已停用或已离职（DINGTALK_IDENTITY_INACTIVE），无法操作待办或日程。',
-  DINGTALK_IDENTITY_UNBOUND:
-    '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。请使用钉钉登录或通过钉钉机器人完成绑定；管理员不能代为绑定。',
-  DINGTALK_IDENTITY_UNVERIFIED:
-    '钉钉身份未经验证（DINGTALK_IDENTITY_UNVERIFIED）。请使用钉钉登录或通过钉钉机器人完成绑定；管理员不能代为绑定。',
-};
+const identityLine = (prefix: string, links: AppLinkResolver, platform?: string | null): string =>
+  `${prefix}${dingtalkIdentityGuidance(links, platform)}`;
 
 /** Same strings as {@link DingtalkPersonalApi}, in the order the tool router publishes. */
 export const DINGTALK_PERSONAL_API_NAMES = [
@@ -120,6 +123,10 @@ export type { DingtalkPersonalApiName };
 
 export interface DingtalkPersonalToolContext {
   botPlatform?: string;
+  /** Chat-sdk thread id (`dingtalk:<conversationId>[:<senderStaffId>]`). */
+  botThreadId?: string;
+  /** Manual-action links for this surface. Defaults to `serverAppLinkResolver(botPlatform)`. */
+  resolveLink?: AppLinkResolver;
   topicId?: string;
   workspaceId?: string;
 }
@@ -425,10 +432,16 @@ const upstreamDetail = (details?: Record<string, unknown>): string | undefined =
   return text;
 };
 
+/** DingTalk-returned permission page. https only; http and script URLs are dropped. */
 const httpUri = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const uri = value.trim();
-  if (!/^https?:\/\//i.test(uri) || uri.length > 2000) return undefined;
+  if (!/^https:\/\//i.test(uri) || uri.length > 2000) return undefined;
+  try {
+    if (new URL(uri).protocol !== 'https:') return undefined;
+  } catch {
+    return undefined;
+  }
   return uri;
 };
 
@@ -446,11 +459,18 @@ const failure = (
 const isPersonalWriteApi = (apiName?: DingtalkPersonalApiName): boolean =>
   apiName === 'updateTodo' || apiName === 'completeTodo' || apiName === 'submitReport';
 
+const linksOf = (ctx?: DingtalkPersonalToolContext): AppLinkResolver =>
+  ctx?.resolveLink ?? serverAppLinkResolver(ctx?.botPlatform);
+
 const contentFor = (
   code: string,
-  details?: Record<string, unknown>,
-  apiName?: DingtalkPersonalApiName,
+  details: Record<string, unknown> | undefined,
+  apiName: DingtalkPersonalApiName | undefined,
+  ctx?: DingtalkPersonalToolContext,
 ): string | undefined => {
+  const resolveLink = linksOf(ctx);
+  const platform = ctx?.botPlatform;
+  const admin = adminEntrySuffix(resolveLink);
   if (
     (code === 'DINGTALK_PERSONAL_TIMEOUT' || code === 'DINGTALK_PERSONAL_BROKER_UNAVAILABLE') &&
     isPersonalWriteApi(apiName)
@@ -458,25 +478,37 @@ const contentFor = (
     return WRITE_UNKNOWN_CONTENT;
   }
   switch (code) {
-    case 'DINGTALK_IDENTITY_INACTIVE':
-    case 'DINGTALK_IDENTITY_UNBOUND':
+    case 'DINGTALK_IDENTITY_INACTIVE': {
+      return `钉钉账号已停用或已离职（DINGTALK_IDENTITY_INACTIVE），无法操作待办或日程。请联系钉钉组织管理员在${oaAdminMarkdownLink()}处理。`;
+    }
+    case 'DINGTALK_IDENTITY_UNBOUND': {
+      return identityLine(
+        '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。',
+        resolveLink,
+        platform,
+      );
+    }
     case 'DINGTALK_IDENTITY_UNVERIFIED': {
-      return IDENTITY_CONTENT[code];
+      return identityLine(
+        '钉钉身份未经验证（DINGTALK_IDENTITY_UNVERIFIED）。',
+        resolveLink,
+        platform,
+      );
     }
     case 'DINGTALK_PERSONAL_BROKER_UNAVAILABLE': {
       return '钉钉个人数据服务暂时不可用（DINGTALK_PERSONAL_BROKER_UNAVAILABLE），请稍后重试。';
     }
     case 'DINGTALK_PERSONAL_CORP_ID_MISSING': {
-      return '当前钉钉连接器未配置企业 ID（DINGTALK_PERSONAL_CORP_ID_MISSING）。请联系管理员检查钉钉连接器配置。';
+      return `当前钉钉连接器未配置企业 ID（DINGTALK_PERSONAL_CORP_ID_MISSING）。请联系管理员检查钉钉连接器配置${admin}。`;
     }
     case 'DINGTALK_PERSONAL_DISABLED': {
-      return '管理员未开启钉钉个人数据（DINGTALK_PERSONAL_DISABLED）。请联系管理员在即时通讯连接器中开启。';
+      return `管理员未开启钉钉个人数据（DINGTALK_PERSONAL_DISABLED）。请联系管理员在即时通讯连接器中开启${admin}。`;
     }
     case 'DINGTALK_PERSONAL_FEATURE_DISABLED': {
       const feature =
         typeof details?.feature === 'string' ? FEATURE_LABEL[details.feature] : undefined;
       const what = feature ? `「${feature}」` : '该能力';
-      return `管理员未开启${what}（DINGTALK_PERSONAL_FEATURE_DISABLED）。请联系管理员在钉钉连接器中开启。`;
+      return `管理员未开启${what}（DINGTALK_PERSONAL_FEATURE_DISABLED）。请联系管理员在钉钉连接器中开启${admin}。`;
     }
     case 'DINGTALK_PERSONAL_FILE_TOO_LARGE': {
       return '文件超过 20 MB，无法下载（DINGTALK_PERSONAL_FILE_TOO_LARGE）。';
@@ -491,7 +523,7 @@ const contentFor = (
       return '授权会话不存在或已结束（DINGTALK_PERSONAL_LOGIN_NOT_FOUND）。请重新发起授权。';
     }
     case 'DINGTALK_PERSONAL_ORG_POLICY_DENIED': {
-      return '贵司钉钉管理员未开放该功能给 CLI（开发者后台 → CLI 设置），请联系管理员（DINGTALK_PERSONAL_ORG_POLICY_DENIED）';
+      return `贵司钉钉管理员未开放该功能给 CLI（开发者后台 → ${cliSettingsMarkdownLink()}），请联系管理员（DINGTALK_PERSONAL_ORG_POLICY_DENIED）`;
     }
     case 'DINGTALK_PERSONAL_OUTPUT_TOO_LARGE': {
       return '返回内容过大（DINGTALK_PERSONAL_OUTPUT_TOO_LARGE）。请缩小时间范围或减少条数后重试。';
@@ -499,7 +531,7 @@ const contentFor = (
     case 'DINGTALK_PERSONAL_PAT_REQUIRED': {
       const uri = httpUri(details?.uri);
       return uri
-        ? `该操作需要你在钉钉自己的权限页面上确认。这是钉钉自己的权限页面：${uri}（DINGTALK_PERSONAL_PAT_REQUIRED）`
+        ? `该操作需要你在钉钉自己的权限页面上确认。这是钉钉自己的权限页面：${markdownLink('打开权限页面', uri)}（DINGTALK_PERSONAL_PAT_REQUIRED）`
         : '该操作需要你在钉钉自己的权限页面上确认（DINGTALK_PERSONAL_PAT_REQUIRED）。请稍后重试或联系管理员。';
     }
     case 'DINGTALK_PERSONAL_RATE_LIMITED': {
@@ -523,10 +555,11 @@ const contentFor = (
 const mapFailure = (
   error: unknown,
   apiName?: DingtalkPersonalApiName,
+  ctx?: DingtalkPersonalToolContext,
 ): BuiltinServerRuntimeOutput => {
   const personal = readPersonalError(error);
-  if (personal && isAuthCode(personal.code)) return webAuthResult(personal.code);
-  const content = personal ? contentFor(personal.code, personal.details, apiName) : undefined;
+  if (personal && isAuthCode(personal.code)) return webAuthResult(personal.code, ctx);
+  const content = personal ? contentFor(personal.code, personal.details, apiName, ctx) : undefined;
   if (!personal || !content) {
     logFailure('tool failed', error);
     return failure(INTERNAL_CONTENT, 'DINGTALK_PERSONAL_INTERNAL');
@@ -655,14 +688,11 @@ const priorityLabel = (priority: number | null | undefined): string => {
 };
 
 /** Settings deep link. A missing or blank APP_URL stays a relative path. */
-export const dingtalkPersonalWebAuthorizeUrl = (appUrl?: string | null): string => {
-  const base = typeof appUrl === 'string' ? appUrl.trim().replace(/\/+$/, '') : '';
-  return base ? `${base}${AUTHORIZE_QUERY_PATH}` : AUTHORIZE_QUERY_PATH;
-};
+export const dingtalkPersonalWebAuthorizeUrl = (appUrl?: string | null): string =>
+  buildAppUrl(appUrl, APP_LINK_PATHS.dingtalkPersonalAuthorize);
 
-const webAuthorizeUrl = (): string => dingtalkPersonalWebAuthorizeUrl(appEnv.APP_URL);
-
-const markdownLink = (label: string, url: string): string => `[${label}](${url})`;
+const authorizeUrlFor = (ctx?: DingtalkPersonalToolContext): string =>
+  linksOf(ctx)(APP_LINK_PATHS.dingtalkPersonalAuthorize);
 
 const authState = (
   code: string,
@@ -673,7 +703,7 @@ const authState = (
   code,
   kind: 'authorizationRequired',
   ...(login ? { login } : {}),
-  settingsPath: SETTINGS_PATH,
+  settingsPath: APP_LINK_PATHS.connectors,
 });
 
 const authResult = (
@@ -694,18 +724,39 @@ const webAuthContent = (authUrl: string): string =>
     '授权后再问我一次即可。',
   ].join('\n');
 
-const webAuthResult = (code: string): BuiltinServerRuntimeOutput => {
-  const authUrl = webAuthorizeUrl();
+const webAuthResult = (
+  code: string,
+  ctx?: DingtalkPersonalToolContext,
+): BuiltinServerRuntimeOutput => {
+  const authUrl = authorizeUrlFor(ctx);
   return authResult(webAuthContent(authUrl), code, authUrl);
 };
 
-const dingtalkAuthContent = (login: DingtalkPersonalLoginView): string =>
-  [
+/**
+ * Link the device-login URL only when it is https on a DingTalk host.
+ * Otherwise the settings authorize page (already resolved for this surface).
+ */
+const safeVerificationTarget = (
+  login: DingtalkPersonalLoginView,
+  ctx?: DingtalkPersonalToolContext,
+): { login: DingtalkPersonalLoginView; url: string } => {
+  const raw = login.verificationUrl?.trim() ?? '';
+  if (isDingtalkVerificationUrl(raw)) return { login, url: raw };
+  const url = authorizeUrlFor(ctx);
+  return { login: { ...login, verificationUrl: url }, url };
+};
+
+const dingtalkAuthContent = (login: DingtalkPersonalLoginView, via?: 'oto' | 'session'): string => {
+  const lines = [
     '你还没有授权 AI 助手读取你的钉钉个人数据。',
     markdownLink('点此授权钉钉个人数据', login.verificationUrl),
-    `验证码 ${login.userCode}，有效期约 15 分钟，至 ${login.expiresAt}。若钉钉单聊里收到授权卡片，点卡片里的「去授权」也可以。`,
-    '授权后再问我一次即可。',
-  ].join('\n');
+    `验证码 ${login.userCode}，有效期约 15 分钟，至 ${login.expiresAt}。`,
+  ];
+  if (via === 'session') lines.push('同时在当前会话发了一张授权卡片');
+  if (via === 'oto') lines.push('同时在机器人单聊里发了一张授权卡片');
+  lines.push('授权后再问我一次即可。');
+  return lines.join('\n');
+};
 
 const isAuthCode = (code: string): boolean =>
   code === 'DINGTALK_PERSONAL_EXPIRED' || code === 'DINGTALK_PERSONAL_UNAUTHORIZED';
@@ -717,7 +768,7 @@ const handleAuth = async (
   ctx: DingtalkPersonalToolContext,
   code: string,
 ): Promise<BuiltinServerRuntimeOutput> => {
-  if (ctx.botPlatform !== 'dingtalk') return webAuthResult(code);
+  if (ctx.botPlatform !== 'dingtalk') return webAuthResult(code, ctx);
 
   let login: DingtalkPersonalLoginView;
   try {
@@ -725,23 +776,33 @@ const handleAuth = async (
   } catch (error) {
     logFailure('startLogin failed', error);
     const nested = readPersonalError(error);
-    if (nested && isAuthCode(nested.code)) return webAuthResult(code);
-    return mapFailure(error);
+    if (nested && isAuthCode(nested.code)) return webAuthResult(code, ctx);
+    return mapFailure(error, undefined, ctx);
   }
 
-  if (!login?.verificationUrl) {
+  if (!login?.verificationUrl?.trim()) {
     log('startLogin returned no verification url');
-    return webAuthResult(code);
+    return webAuthResult(code, ctx);
   }
 
+  const linked = safeVerificationTarget(login, ctx);
+  let via: 'oto' | 'session' | undefined;
   try {
     const staffId = await service.getStaffId();
-    await sendDingtalkPersonalAuthCard({ db, login, staffId, userId });
+    const threadId = ctx.botThreadId?.trim();
+    const card = await sendDingtalkPersonalAuthCard({
+      db,
+      login: linked.login,
+      staffId,
+      userId,
+      ...(threadId ? { threadId } : {}),
+    });
+    if (card?.sent && card.via) via = card.via;
   } catch (error) {
     logFailure('auth card failed', error);
   }
 
-  return authResult(dingtalkAuthContent(login), code, login.verificationUrl, login);
+  return authResult(dingtalkAuthContent(linked.login, via), code, linked.url, linked.login);
 };
 
 const writeState = (
@@ -1074,7 +1135,7 @@ export const runDingtalkPersonalTool = async (
   try {
     service = new DingtalkPersonalService(db, userId);
   } catch (error) {
-    return mapFailure(error);
+    return mapFailure(error, undefined, ctx);
   }
 
   try {
@@ -1100,7 +1161,7 @@ export const runDingtalkPersonalTool = async (
     if (personal && isAuthCode(personal.code)) {
       return handleAuth(service, db, userId, ctx, personal.code);
     }
-    return mapFailure(error, apiName);
+    return mapFailure(error, apiName, ctx);
   }
 };
 

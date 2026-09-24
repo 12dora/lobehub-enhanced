@@ -23,7 +23,13 @@
  * built. The permission strings are structurally identical to
  * `ConnectorGovernancePermission` in the enterprise connector governance
  * service; they are re-declared here to keep this module dependency-free.
+ *
+ * `resolveLink` turns the admin path in the blocking description into an
+ * absolute link for IM turns.
  */
+import type { AppLinkResolver } from '@lobechat/utils/appLink';
+
+import { orgDisabledToolDescription } from './disabledToolText';
 
 export type BuiltinGovernancePermission = 'auto' | 'disabled' | 'needs_approval';
 
@@ -40,7 +46,7 @@ export function patchBuiltinManifestWithGovernance<
     }>;
     identifier: string;
   },
->(manifest: M, matrix: BuiltinGovernanceMatrix): M {
+>(manifest: M, matrix: BuiltinGovernanceMatrix, resolveLink?: AppLinkResolver): M {
   const policies = matrix[manifest.identifier];
   if (!policies || !Array.isArray(manifest.api)) return manifest;
 
@@ -49,11 +55,7 @@ export function patchBuiltinManifestWithGovernance<
     if (permission === 'disabled') {
       return {
         ...api,
-        description:
-          `[TOOL DISABLED] This tool has been disabled by your organization's connector policy ` +
-          `and cannot be executed. Do NOT call this tool. If the user asks to perform this action, ` +
-          `inform them that "${api.name}" is disabled by organization policy and only an ` +
-          `administrator can re-enable it.`,
+        description: orgDisabledToolDescription(api.name, resolveLink),
         humanIntervention: 'required' as const,
       };
     }

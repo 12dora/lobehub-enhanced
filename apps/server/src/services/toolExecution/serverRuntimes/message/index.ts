@@ -6,6 +6,7 @@ import { LarkApiClient } from '@lobechat/chat-adapter-feishu';
 import { QQApiClient } from '@lobechat/chat-adapter-qq';
 import { WechatApiClient } from '@lobechat/chat-adapter-wechat';
 import type { ChatTopicMetadata } from '@lobechat/types';
+import { linkedPath } from '@lobechat/utils/appLink';
 import { TRPCError } from '@trpc/server';
 import { and, eq } from 'drizzle-orm';
 
@@ -45,6 +46,7 @@ import { GatewayService } from '@/server/services/gateway';
 import { getBotRuntimeStatus } from '@/server/services/gateway/runtimeStatus';
 import { messengerPlatformRegistry } from '@/server/services/messenger';
 import { TELEGRAM_INSTALLATION_KEY } from '@/server/services/messenger/installations/telegram';
+import { serverAppLinkResolver } from '@/server/utils/appLinks';
 
 import type { ServerRuntimeRegistration } from '../types';
 import { MessageDispatcherService } from './MessageDispatcherService';
@@ -151,18 +153,35 @@ const maybeSynthesizeTelegramInstall = async (
  * the channel must not keep sending through the Message tool while the
  * inbound/gateway paths are already denied.
  */
+/** Shown when a send has no per-agent bot. Includes the channel page when the agent is known. */
+export const missingBotProviderMessage = (
+  platform: string,
+  agentId?: string,
+  botPlatform?: string | null,
+): string => {
+  const base =
+    `No enabled ${platform} bot provider found. ` +
+    `Please configure a ${platform} integration in your bot settings.`;
+  if (!agentId) return base;
+  const channel = linkedPath(
+    serverAppLinkResolver(botPlatform),
+    '机器人渠道',
+    `/agent/${agentId}/channel`,
+  );
+  return `${base} ${channel}`;
+};
+
 const resolveCredentials = async (
   providerModel: AgentBotProviderModel,
   platform: string,
   userId: string,
+  agentId?: string,
+  botPlatform?: string | null,
 ): Promise<{ applicationId: string; credentials: Record<string, string> }> => {
   const providers = await providerModel.query({ platform });
   const enabled = providers.find((p) => p.enabled);
   if (!enabled?.credentials) {
-    throw new Error(
-      `No enabled ${platform} bot provider found. ` +
-        `Please configure a ${platform} integration in your bot settings.`,
-    );
+    throw new Error(missingBotProviderMessage(platform, agentId, botPlatform));
   }
   await assertBotFeatureAccess({
     action: 'runtime',
@@ -201,6 +220,8 @@ export const messageRuntime: ServerRuntimeRegistration = {
           providerModel,
           'dingtalk',
           context.userId!,
+          context.agentId,
+          context.botPlatform,
         );
         return new DingTalkMessageService(
           new DingTalkApiClient(applicationId, String(credentials.clientSecret ?? '')),
@@ -208,7 +229,13 @@ export const messageRuntime: ServerRuntimeRegistration = {
         );
       },
       discord: async () => {
-        const { credentials } = await resolveCredentials(providerModel, 'discord', context.userId!);
+        const { credentials } = await resolveCredentials(
+          providerModel,
+          'discord',
+          context.userId!,
+          context.agentId,
+          context.botPlatform,
+        );
         return new DiscordMessageService(new DiscordApi(credentials.botToken));
       },
       feishu: async () => {
@@ -216,6 +243,8 @@ export const messageRuntime: ServerRuntimeRegistration = {
           providerModel,
           'feishu',
           context.userId!,
+          context.agentId,
+          context.botPlatform,
         );
         return new FeishuMessageService(
           new LarkApiClient(applicationId, credentials.appSecret, 'feishu'),
@@ -227,6 +256,8 @@ export const messageRuntime: ServerRuntimeRegistration = {
           providerModel,
           'imessage',
           context.userId!,
+          context.agentId,
+          context.botPlatform,
         );
         return new ImessageMessageService(
           new ImessageDesktopBridgeApi({
@@ -241,6 +272,8 @@ export const messageRuntime: ServerRuntimeRegistration = {
           providerModel,
           'lark',
           context.userId!,
+          context.agentId,
+          context.botPlatform,
         );
         return new FeishuMessageService(
           new LarkApiClient(applicationId, credentials.appSecret, 'lark'),
@@ -252,11 +285,19 @@ export const messageRuntime: ServerRuntimeRegistration = {
           providerModel,
           'qq',
           context.userId!,
+          context.agentId,
+          context.botPlatform,
         );
         return new QQMessageService(new QQApiClient(applicationId, credentials.appSecret));
       },
       slack: async () => {
-        const { credentials } = await resolveCredentials(providerModel, 'slack', context.userId!);
+        const { credentials } = await resolveCredentials(
+          providerModel,
+          'slack',
+          context.userId!,
+          context.agentId,
+          context.botPlatform,
+        );
         return new SlackMessageService(new SlackApi(credentials.botToken));
       },
       telegram: async () => {
@@ -267,6 +308,8 @@ export const messageRuntime: ServerRuntimeRegistration = {
             providerModel,
             'telegram',
             context.userId!,
+            context.agentId,
+            context.botPlatform,
           );
           return new TelegramMessageService(new TelegramApi(credentials.botToken));
         } catch (error) {
@@ -275,9 +318,16 @@ export const messageRuntime: ServerRuntimeRegistration = {
           if (error instanceof BotFeatureAccessError) throw error;
           const envConfig = await getMessengerTelegramConfig();
           if (!envConfig) {
+            const channelLink = context.agentId
+              ? ` ${linkedPath(
+                  serverAppLinkResolver(context.botPlatform),
+                  '机器人渠道',
+                  `/agent/${context.agentId}/channel`,
+                )}`
+              : '';
             throw new Error(
               'No enabled telegram bot provider found and no env-backed Telegram config available. ' +
-                'Please configure a telegram integration in your bot settings.',
+                `Please configure a telegram integration in your bot settings.${channelLink}`,
               { cause: error },
             );
           }
@@ -289,6 +339,8 @@ export const messageRuntime: ServerRuntimeRegistration = {
           providerModel,
           'wechat',
           context.userId!,
+          context.agentId,
+          context.botPlatform,
         );
         return new WechatMessageService(
           new WechatApiClient(credentials.botToken, credentials.botId),
@@ -663,7 +715,12 @@ export const messageRuntime: ServerRuntimeRegistration = {
 
     const dingtalkChannel = await resolveDingtalkConnectorTurn(context);
 
-    return new MessageExecutionRuntime({ botProvider, dingtalkChannel, service });
+    return new MessageExecutionRuntime({
+      botProvider,
+      dingtalkChannel,
+      resolveLink: serverAppLinkResolver(context.botPlatform),
+      service,
+    });
   },
   identifier: MessageToolIdentifier,
 };

@@ -59,7 +59,7 @@ const ResultRender = memo<BuiltinRenderProps<Record<string, unknown>, DingtalkPe
     // Checked before the error: an unauthorized call fails, and its state carries
     // the way out.
     if (state?.kind === 'authorizationRequired') return <AuthorizationRequired />;
-    if (pluginError) return <ErrorNotice error={pluginError} />;
+    if (pluginError) return <ErrorNotice error={pluginError} state={state} />;
     if (!state) return null;
 
     const title = isDingtalkPersonalApiName(apiName)
