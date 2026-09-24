@@ -139,7 +139,7 @@ export const dingtalkIdentityGuidance = (
   resolveLink: AppLinkResolver | undefined,
   platform?: string | null,
 ): string =>
-  `请先用钉钉登录 AIHub（${linkedPath(resolveLink, '用钉钉登录', identitySignInPath(platform))}），或在钉钉里给机器人发一条消息完成绑定`;
+  `请先用钉钉登录本平台（${linkedPath(resolveLink, '用钉钉登录', identitySignInPath(platform))}），或在钉钉里给机器人发一条消息完成绑定`;
 
 export const imConnectorAdminLink = (resolveLink?: AppLinkResolver): string =>
   linkedPath(resolveLink, 'IM 连接器设置', APP_LINK_PATHS.adminImConnectors);

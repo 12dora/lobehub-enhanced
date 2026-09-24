@@ -188,7 +188,7 @@ const featureDisabledResult = (
   const feature = typeof error.details?.feature === 'string' ? error.details.feature : '';
   const label = FEATURE_LABEL[feature];
   if (!label) return undefined;
-  const content = `管理员未开启「${label}」（DINGTALK_PERSONAL_FEATURE_DISABLED）。请联系管理员在钉钉连接器中开启${adminEntrySuffix(linksOf(ctx))}。`;
+  const content = `管理员未开启「${label}」（DINGTALK_PERSONAL_FEATURE_DISABLED）。请联系管理员在 IM 连接器中开启${adminEntrySuffix(linksOf(ctx))}。`;
   return failure(content, error.code);
 };
 

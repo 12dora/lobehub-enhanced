@@ -1112,6 +1112,8 @@ export const forwardDingTalkWaitingHuman = async (
         title: summary.title,
         webLink: link,
       },
+      // Setting wins. Null / blank keeps the env fallback inside the sender.
+      cardTemplateId: config.confirmCardTemplateId?.trim() || undefined,
       outTrackId,
       target: {
         openConversationId: isGroup ? decoded.conversationId : undefined,

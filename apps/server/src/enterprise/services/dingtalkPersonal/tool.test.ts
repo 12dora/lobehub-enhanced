@@ -841,7 +841,7 @@ describe('runDingtalkPersonalTool', () => {
 
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_IDENTITY_UNBOUND'));
     expect((await run('listMyTodos', {})).content).toBe(
-      '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。请先用钉钉登录 AIHub（[用钉钉登录](https://aihub.example.com/settings/messenger/dingtalk)），或在钉钉里给机器人发一条消息完成绑定',
+      '当前账号未绑定钉钉身份（DINGTALK_IDENTITY_UNBOUND）。请先用钉钉登录本平台（[用钉钉登录](https://aihub.example.com/settings/messenger/dingtalk)），或在钉钉里给机器人发一条消息完成绑定',
     );
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_IDENTITY_UNVERIFIED'));
     expect((await run('listMyTodos', {})).content).toContain('DINGTALK_IDENTITY_UNVERIFIED');
@@ -851,11 +851,19 @@ describe('runDingtalkPersonalTool', () => {
     mocks.exec.mockRejectedValueOnce(
       new DingtalkPersonalError('DINGTALK_PERSONAL_FEATURE_DISABLED', { feature: 'todo' }),
     );
-    expect((await run('listMyTodos', {})).content).toContain('管理员未开启「待办」');
+    const featureOff = await run('listMyTodos', {});
+    expect(featureOff.content).toContain('管理员未开启「待办」');
+    expect(featureOff.content).toContain('在 IM 连接器中开启');
+
+    mocks.exec.mockRejectedValueOnce(
+      new DingtalkPersonalError('DINGTALK_PERSONAL_CORP_ID_MISSING'),
+    );
+    expect((await run('listMyTodos', {})).content).toContain('请联系管理员检查 IM 连接器配置');
 
     mocks.exec.mockRejectedValueOnce(new DingtalkPersonalError('DINGTALK_PERSONAL_DISABLED'));
     const disabled = await run('listMyTodos', {});
     expect(disabled.content).toContain('管理员未开启钉钉个人数据');
+    expect(disabled.content).toContain('在 IM 连接器中开启');
     expect(disabled.content).toContain(
       '[IM 连接器设置](https://aihub.example.com/admin/system/general?tab=im-connectors)',
     );

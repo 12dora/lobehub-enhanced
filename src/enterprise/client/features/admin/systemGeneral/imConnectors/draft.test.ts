@@ -4,9 +4,13 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 
 import {
   fingerprintDingTalkDraft,
+  isDingTalkFieldPrefilled,
   isDingTalkNotifyAppConfigured,
+  keepHiddenDingTalkGroups,
+  readDingTalkFallbacks,
   readDingTalkPersonalSettings,
   readDingTalkPersonalSummary,
+  readDingTalkUntouchedFallbacks,
   resolveApprovalTierTightening,
   settleDingTalkDraft,
   toDingTalkDraft,
@@ -25,7 +29,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
   configured: true,
+  confirmCardTemplateId: null,
   enabled: true,
+  fallbacks: { confirmCardTemplateId: null, corpId: null, robotDisplayName: 'AI 助手' },
   hasClientSecret: true,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
@@ -365,6 +371,298 @@ describe('DingTalk connector draft', () => {
     const rotated = toDingTalkDraft(view({ clientSecretFingerprint: 'sha256:deadbeef' }));
 
     expect(fingerprintDingTalkDraft(rotated)).not.toBe(fingerprintDingTalkDraft(seed));
+  });
+
+  // Contract §1.2: an input shows the stored value; when that is empty and the server has a
+  // fallback, it is pre-filled (and tagged) and is part of the baseline. It is display only: left
+  // untouched it is never sent, so the row keeps storing nothing and the fallback stays in force.
+  describe('pre-filled fallbacks', () => {
+    const withFallbacks = (overrides: Partial<AdminImConnectorView> = {}) =>
+      view({
+        fallbacks: {
+          confirmCardTemplateId: 'env-confirm.schema',
+          corpId: 'ding-captured-corp',
+          robotDisplayName: 'AI 助手',
+        },
+        ...overrides,
+      });
+
+    it('lets a stored value win over the fallback', () => {
+      const stored = withFallbacks({ confirmCardTemplateId: 'tpl-stored', corpId: 'ding-stored' });
+      const draft = toDingTalkDraft(stored);
+
+      expect(draft.corpId).toBe('ding-stored');
+      expect(draft.confirmCardTemplateId).toBe('tpl-stored');
+      expect(isDingTalkFieldPrefilled(stored, draft, 'corpId')).toBe(false);
+      expect(isDingTalkFieldPrefilled(stored, draft, 'confirmCardTemplateId')).toBe(false);
+    });
+
+    it('pre-fills an empty input from the fallback and marks it as such', () => {
+      const source = withFallbacks();
+      const draft = toDingTalkDraft(source);
+
+      expect(draft.corpId).toBe('ding-captured-corp');
+      expect(draft.confirmCardTemplateId).toBe('env-confirm.schema');
+      expect(isDingTalkFieldPrefilled(source, draft, 'corpId')).toBe(true);
+      expect(isDingTalkFieldPrefilled(source, draft, 'confirmCardTemplateId')).toBe(true);
+    });
+
+    it('treats a blank stored value as empty', () => {
+      const source = withFallbacks({ corpId: '   ' });
+
+      expect(toDingTalkDraft(source).corpId).toBe('ding-captured-corp');
+    });
+
+    it('stops calling it pre-filled once the admin edits it', () => {
+      const source = withFallbacks();
+      const draft = { ...toDingTalkDraft(source), corpId: 'ding-typed' };
+
+      expect(isDingTalkFieldPrefilled(source, draft, 'corpId')).toBe(false);
+    });
+
+    it('makes the pre-filled value the baseline, so only an edit of it is a change', () => {
+      const seed = toDingTalkDraft(withFallbacks());
+
+      // The seed is what the card compares against, so the fallback is part of it: clearing the
+      // pre-filled input is the edit, showing it is not.
+      expect(fingerprintDingTalkDraft({ ...seed, corpId: '' })).not.toBe(
+        fingerprintDingTalkDraft(seed),
+      );
+    });
+
+    /** What the editor sends: the draft, less the inputs still showing an untouched fallback. */
+    const upsert = (draft: ReturnType<typeof toDingTalkDraft>, ...views: AdminImConnectorView[]) =>
+      toDingTalkUpsertInput(draft, readDingTalkUntouchedFallbacks(draft, ...views));
+
+    it('leaves an untouched fallback out of the save, so it stays a fallback', () => {
+      const source = withFallbacks();
+      const seed = toDingTalkDraft(source);
+      const input = upsert(seed, source);
+
+      // Omitted — not null, not the fallback: the row keeps storing nothing, and the runtime keeps
+      // following the environment id / the captured CorpId when either changes later.
+      expect('corpId' in input).toBe(false);
+      expect('confirmCardTemplateId' in input).toBe(false);
+      expect(readDingTalkUntouchedFallbacks(seed, source)).toEqual(
+        new Set(['confirmCardTemplateId', 'corpId']),
+      );
+    });
+
+    it('sends a pre-filled input once the admin edits it', () => {
+      const source = withFallbacks();
+      const input = upsert(
+        {
+          ...toDingTalkDraft(source),
+          confirmCardTemplateId: '  tpl-typed  ',
+          corpId: 'ding-typed',
+        },
+        source,
+      );
+
+      expect(input.corpId).toBe('ding-typed');
+      expect(input.confirmCardTemplateId).toBe('tpl-typed');
+    });
+
+    it('sends a clear when the admin empties a pre-filled input', () => {
+      const source = withFallbacks();
+      const input = upsert(
+        { ...toDingTalkDraft(source), confirmCardTemplateId: '', corpId: '   ' },
+        source,
+      );
+
+      expect('corpId' in input).toBe(true);
+      expect(input.corpId).toBeNull();
+      expect('confirmCardTemplateId' in input).toBe(true);
+      expect(input.confirmCardTemplateId).toBeNull();
+    });
+
+    it('always sends a stored value, pre-fill or not', () => {
+      const source = withFallbacks({ confirmCardTemplateId: 'tpl-stored', corpId: 'ding-stored' });
+      const input = upsert(toDingTalkDraft(source), source);
+
+      expect(input.corpId).toBe('ding-stored');
+      expect(input.confirmCardTemplateId).toBe('tpl-stored');
+    });
+
+    it('never lets an untouched fallback fail validation', () => {
+      // An over-long environment id is shown as it is, but it is not the admin's input to fix.
+      const source = withFallbacks({
+        fallbacks: {
+          confirmCardTemplateId: 'x'.repeat(201),
+          corpId: null,
+          robotDisplayName: 'AI 助手',
+        },
+      });
+      const seed = toDingTalkDraft(source);
+
+      expect(seed.confirmCardTemplateId).toBe('x'.repeat(201));
+      expect(validateDingTalkDraft(seed, readDingTalkUntouchedFallbacks(seed, source))).toEqual({});
+      expect('confirmCardTemplateId' in upsert(seed, source)).toBe(false);
+      // Once the admin edits it, it is their input and the contract bound applies.
+      const edited = { ...seed, confirmCardTemplateId: 'y'.repeat(201) };
+      expect(
+        validateDingTalkDraft(edited, readDingTalkUntouchedFallbacks(edited, source))
+          .confirmCardTemplateId,
+      ).toBe('tooLong');
+    });
+
+    // N3: the fallback moved on the server while the card had unrelated edits. The value the input
+    // was pre-filled with is still untouched — it must not be pinned as if the admin typed it.
+    it('judges untouched against the reading the draft was pre-filled from', () => {
+      const seededFrom = withFallbacks();
+      const newest = withFallbacks({
+        fallbacks: {
+          confirmCardTemplateId: 'env-next.schema',
+          corpId: 'ding-captured-corp',
+          robotDisplayName: 'AI 助手',
+        },
+      });
+      const draft = { ...toDingTalkDraft(seededFrom), chatEnabled: false };
+
+      // Against the newest reading alone the old env id looks typed…
+      expect(readDingTalkUntouchedFallbacks(draft, newest).has('confirmCardTemplateId')).toBe(
+        false,
+      );
+      // …but it is exactly what this draft was pre-filled with.
+      expect('confirmCardTemplateId' in upsert(draft, newest, seededFrom)).toBe(false);
+    });
+
+    // N2: clearing a pre-filled input means「use the fallback」; after the save it shows it again.
+    it('shows the fallback again once a cleared pre-filled input is saved', () => {
+      const source = withFallbacks();
+      const cleared = { ...toDingTalkDraft(source), confirmCardTemplateId: '', corpId: '' };
+      const settled = settleDingTalkDraft(cleared, source);
+
+      expect(settled.corpId).toBe('ding-captured-corp');
+      expect(settled.confirmCardTemplateId).toBe('env-confirm.schema');
+      expect(isDingTalkFieldPrefilled(source, settled, 'corpId')).toBe(true);
+      // A value the row now stores is kept as typed.
+      expect(
+        settleDingTalkDraft(
+          { ...cleared, corpId: 'ding-typed' },
+          withFallbacks({ corpId: 'ding-typed' }),
+        ).corpId,
+      ).toBe('ding-typed');
+    });
+
+    it('leaves the inputs empty when there is neither a stored value nor a fallback', () => {
+      const draft = toDingTalkDraft(view());
+
+      expect(draft.corpId).toBe('');
+      expect(draft.confirmCardTemplateId).toBe('');
+      expect(isDingTalkFieldPrefilled(view(), draft, 'corpId')).toBe(false);
+      expect(toDingTalkUpsertInput(draft).confirmCardTemplateId).toBeNull();
+    });
+
+    it('never pre-fills the robot name: its fallback is a placeholder only', () => {
+      const draft = toDingTalkDraft(withFallbacks());
+
+      expect(draft.robotDisplayName).toBe('');
+      expect(upsert(draft, withFallbacks()).robotDisplayName).toBeNull();
+      expect(readDingTalkFallbacks(withFallbacks()).robotDisplayName).toBe('AI 助手');
+    });
+
+    it('reads a view without fallbacks as having none', () => {
+      const legacy = view();
+      delete (legacy as Partial<AdminImConnectorView>).fallbacks;
+
+      expect(readDingTalkFallbacks(legacy)).toEqual({
+        confirmCardTemplateId: null,
+        corpId: null,
+        robotDisplayName: '',
+      });
+      expect(toDingTalkDraft(legacy).corpId).toBe('');
+    });
+  });
+
+  // N8: a group the card does not render (module off) is neither validated nor edited: the save
+  // sends its fields exactly as the server holds them.
+  describe('hidden groups', () => {
+    const allShown = {
+      approval: true,
+      chat: true,
+      docs: true,
+      notify: true,
+      personal: true,
+      workspace: true,
+    };
+
+    it('changes nothing while every group is shown', () => {
+      const seed = toDingTalkDraft(view());
+      const draft = { ...seed, idleNewTopicHours: 0 };
+
+      expect(keepHiddenDingTalkGroups(draft, seed, allShown)).toBe(draft);
+    });
+
+    it('puts a hidden group back to the server values, so its edits neither block nor leak', () => {
+      const seed = toDingTalkDraft(view({ notifyAppKey: 'notify-key' }));
+      const draft = {
+        ...seed,
+        clientId: 'ding-next-key',
+        idleNewTopicHours: 0,
+        notifyAppKey: 'x'.repeat(201),
+        personalDataEnabled: true,
+      };
+      const savable = keepHiddenDingTalkGroups(draft, seed, {
+        ...allShown,
+        chat: false,
+        notify: false,
+      });
+
+      // The invalid hours and AppKey were typed into groups that are now hidden: back to stored.
+      expect(savable.idleNewTopicHours).toBe(24);
+      expect(savable.notifyAppKey).toBe('notify-key');
+      expect(validateDingTalkDraft(savable)).toEqual({});
+      // Visible groups keep the admin's edits.
+      expect(savable.clientId).toBe('ding-next-key');
+      expect(savable.personalDataEnabled).toBe(true);
+      expect(toDingTalkUpsertInput(savable)).toMatchObject({
+        clientId: 'ding-next-key',
+        idleNewTopicHours: 24,
+        notifyAppKey: 'notify-key',
+      });
+    });
+
+    it('keeps the docs scopes as stored when only the docs module is off', () => {
+      const seed = toDingTalkDraft(view({ personalDataEnabled: true, personalDocsEnabled: true }));
+      const savable = keepHiddenDingTalkGroups(
+        { ...seed, personalDocsEnabled: false, personalTodoEnabled: true },
+        seed,
+        { ...allShown, docs: false },
+      );
+
+      expect(savable.personalDocsEnabled).toBe(true);
+      expect(savable.personalTodoEnabled).toBe(true);
+    });
+  });
+
+  describe('确认卡片模板 ID', () => {
+    it('round-trips the stored id through the upsert payload', () => {
+      const seed = toDingTalkDraft(view({ confirmCardTemplateId: 'tpl-confirm.schema' }));
+
+      expect(seed.confirmCardTemplateId).toBe('tpl-confirm.schema');
+      expect(toDingTalkUpsertInput(seed).confirmCardTemplateId).toBe('tpl-confirm.schema');
+      expect(
+        toDingTalkUpsertInput({ ...seed, confirmCardTemplateId: '  tpl-next  ' })
+          .confirmCardTemplateId,
+      ).toBe('tpl-next');
+      // Cleared: sent as null, so the environment's id is in force again.
+      expect(
+        toDingTalkUpsertInput({ ...seed, confirmCardTemplateId: '   ' }).confirmCardTemplateId,
+      ).toBeNull();
+    });
+
+    it('caps the id at 200 characters and counts it in the draft identity', () => {
+      const seed = toDingTalkDraft(view());
+
+      expect(
+        validateDingTalkDraft({ ...seed, confirmCardTemplateId: 'x'.repeat(201) })
+          .confirmCardTemplateId,
+      ).toBe('tooLong');
+      expect(fingerprintDingTalkDraft({ ...seed, confirmCardTemplateId: 'tpl' })).not.toBe(
+        fingerprintDingTalkDraft(seed),
+      );
+    });
   });
 
   describe('工作台能力', () => {

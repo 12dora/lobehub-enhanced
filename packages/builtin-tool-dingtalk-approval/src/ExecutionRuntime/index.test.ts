@@ -147,7 +147,7 @@ describe('DingtalkApprovalExecutionRuntime', () => {
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('DINGTALK_IDENTITY_UNVERIFIED');
-    expect(result.content).toContain('请先用钉钉登录 AIHub');
+    expect(result.content).toContain('请先用钉钉登录本平台');
     expect(result.content).toContain(`[用钉钉登录](${APP_LINK_PATHS.dingtalkBinding})`);
     expect(result.content).toContain('给机器人发一条消息完成绑定');
     expect(result.content).not.toContain('upstream boom');

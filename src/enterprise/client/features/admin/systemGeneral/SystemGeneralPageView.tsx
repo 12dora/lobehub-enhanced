@@ -30,6 +30,8 @@ export interface SystemGeneralPageViewProps {
   data?: AdminSystemInfraSettings;
   documentRenderData?: AdminSystemDocumentRenderSettings;
   documentRenderModuleEnabled?: boolean;
+  /** Module `enterpriseLookup`; `false` removes the 企业查询 card (and its request) entirely. */
+  enterpriseLookupModuleEnabled?: boolean;
   error: unknown;
   isLoading: boolean;
   onProfileRegenerate?: () => Promise<void>;
@@ -64,6 +66,7 @@ export const SystemGeneralPageView = memo<SystemGeneralPageViewProps>(
     data,
     documentRenderData,
     documentRenderModuleEnabled,
+    enterpriseLookupModuleEnabled,
     error,
     isLoading,
     onProfileRegenerate = async () => undefined,
@@ -142,7 +145,9 @@ export const SystemGeneralPageView = memo<SystemGeneralPageViewProps>(
                 />
                 {/* Owns its own request — see EnterpriseLookupCard; it is not part of the shared
                     infrastructure snapshot the two cards above render. */}
-                <EnterpriseLookupCard canOperate={canOperate} />
+                {enterpriseLookupModuleEnabled === false ? null : (
+                  <EnterpriseLookupCard canOperate={canOperate} />
+                )}
                 {sandboxModuleEnabled === undefined ? null : (
                   <SandboxCard
                     canOperate={canOperate}

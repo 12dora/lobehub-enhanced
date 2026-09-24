@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 
+import { readDingTalkConfirmCardTemplateId } from '@lobechat/chat-adapter-dingtalk';
+import debug from 'debug';
+
 import { invalidateMessengerConfigCache } from '@/config/messenger';
 import { DingtalkPersonalAuthorizationModel } from '@/database/models/dingtalkPersonalAuthorization';
 import type { DecryptedSystemBotProvider } from '@/database/models/systemBotProvider';
@@ -19,6 +22,8 @@ import {
 } from '@/server/enterprise/services/dingtalkWorkspace/capabilities';
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
+import { resolveDingTalkRobotDisplayName } from '@/server/services/messenger/platforms/dingtalk/branding';
+import { DINGTALK_CORP_ID_KEY } from '@/server/services/messenger/platforms/dingtalk/const';
 import {
   invalidateNotifyAppToken,
   probeNotifyAppToken,
@@ -69,6 +74,8 @@ import { readImConnectorStatus } from './status';
 /** Shown when the admin sync cannot take the Redis lock. Not a running walk. */
 export const DIRECTORY_SYNC_LOCK_FAILED_ERROR = '同步未启动：缓存服务暂时不可用，请稍后重试';
 
+const log = debug('lobe-server:im-connectors');
+
 export const IM_CONNECTOR_PLATFORMS = imConnectorPlatformSchema.options;
 export const IM_CONNECTOR_CONNECTION_MODE = 'websocket';
 export const IM_CONNECTOR_AUDIT_TARGET_TYPE = 'im_connector' as const;
@@ -78,6 +85,7 @@ const DEFAULT_SETTINGS: DingTalkConnectorSettings = {
   agentId: null,
   aiCardTemplateId: null,
   chatEnabled: true,
+  confirmCardTemplateId: null,
   corpId: null,
   idleNewTopicEnabled: true,
   idleNewTopicHours: IM_CONNECTOR_IDLE_HOURS_DEFAULT,
@@ -156,6 +164,9 @@ const parseDingTalkSettings = (
     ),
     chatEnabled:
       typeof raw?.chatEnabled === 'boolean' ? raw.chatEnabled : DEFAULT_SETTINGS.chatEnabled,
+    confirmCardTemplateId: emptyToNull(
+      typeof raw?.confirmCardTemplateId === 'string' ? raw.confirmCardTemplateId : null,
+    ),
     corpId: emptyToNull(typeof raw?.corpId === 'string' ? raw.corpId : null),
     idleNewTopicEnabled:
       typeof raw?.idleNewTopicEnabled === 'boolean'
@@ -237,7 +248,14 @@ const settingsFromUpsert = (
     agentId: emptyToNull(input.agentId ?? null),
     aiCardTemplateId: emptyToNull(input.aiCardTemplateId),
     chatEnabled: input.chatEnabled,
-    corpId: emptyToNull(input.corpId ?? null),
+    // Omit keeps the stored id. `null` / `''` clears it so sends use the env template.
+    confirmCardTemplateId:
+      input.confirmCardTemplateId === undefined
+        ? (previous?.confirmCardTemplateId ?? null)
+        : emptyToNull(input.confirmCardTemplateId),
+    // Omit keeps the stored CorpId (an untouched pre-fill is not sent).
+    // `null` / `''` clears it so runtime falls back to the captured id.
+    corpId: input.corpId === undefined ? (previous?.corpId ?? null) : emptyToNull(input.corpId),
     idleNewTopicEnabled: input.idleNewTopicEnabled,
     idleNewTopicHours: input.idleNewTopicHours,
     notifyAgentId: emptyToNull(input.notifyAgentId ?? null),
@@ -267,6 +285,29 @@ const settingsFromUpsert = (
 
 const redisClient = () => getAgentRuntimeRedisClient();
 
+/**
+ * CorpId the stream worker stored at `messenger:dingtalk:corp-id`.
+ * Same read as SSO / push (`readRedisCorpId` there is private): missing client
+ * or a Redis error becomes null so the admin view still loads.
+ */
+const readCapturedDingTalkCorpId = async (): Promise<string | null> => {
+  try {
+    const redis = redisClient();
+    if (!redis) return null;
+    const value = await redis.get(DINGTALK_CORP_ID_KEY);
+    return emptyToNull(typeof value === 'string' ? value : null);
+  } catch (error) {
+    log('readCapturedDingTalkCorpId failed: %O', error);
+    return null;
+  }
+};
+
+const loadConnectorFallbacks = async (): Promise<AdminImConnectorView['fallbacks']> => ({
+  confirmCardTemplateId: readDingTalkConfirmCardTemplateId() ?? null,
+  corpId: await readCapturedDingTalkCorpId(),
+  robotDisplayName: resolveDingTalkRobotDisplayName(null),
+});
+
 /** Fail closed: a missing broker module or authorization table must not blank the connector page. */
 const loadDingtalkPersonalSummary = async (
   db: LobeChatDatabase | Transaction,
@@ -286,21 +327,24 @@ const unconfiguredView = async (
   db: LobeChatDatabase | Transaction,
   platform: ImConnectorPlatform,
 ): Promise<AdminImConnectorView> => {
-  const [stats, status, personal] = await Promise.all([
+  const [stats, status, personal, fallbacks] = await Promise.all([
     getImConnectorStats({ db, platform, redis: redisClient() }),
     readImConnectorStatus({ platform, redis: redisClient(), rowDisabled: false }),
     loadDingtalkPersonalSummary(db),
+    loadConnectorFallbacks(),
   ]);
   return {
     approvalAutomationTier: DEFAULT_SETTINGS.approvalAutomationTier,
     agentId: DEFAULT_SETTINGS.agentId,
     aiCardTemplateId: DEFAULT_SETTINGS.aiCardTemplateId,
     chatEnabled: DEFAULT_SETTINGS.chatEnabled,
+    confirmCardTemplateId: DEFAULT_SETTINGS.confirmCardTemplateId,
     clientId: null,
     clientSecretFingerprint: null,
     configured: false,
     corpId: DEFAULT_SETTINGS.corpId,
     enabled: false,
+    fallbacks,
     hasClientSecret: false,
     idleNewTopicEnabled: DEFAULT_SETTINGS.idleNewTopicEnabled,
     idleNewTopicHours: DEFAULT_SETTINGS.idleNewTopicHours,
@@ -341,10 +385,11 @@ const toView = async (
   const settings = parseDingTalkSettings(row.settings);
   const secret = pickClientSecret(row.credentials);
   const rowDisabled = !row.enabled;
-  const [stats, status, personal] = await Promise.all([
+  const [stats, status, personal, fallbacks] = await Promise.all([
     getImConnectorStats({ db, platform, redis: redisClient() }),
     readImConnectorStatus({ platform, redis: redisClient(), rowDisabled }),
     loadDingtalkPersonalSummary(db),
+    loadConnectorFallbacks(),
   ]);
 
   return {
@@ -352,11 +397,13 @@ const toView = async (
     agentId: emptyToNull(settings.agentId),
     aiCardTemplateId: emptyToNull(settings.aiCardTemplateId),
     chatEnabled: settings.chatEnabled,
+    confirmCardTemplateId: emptyToNull(settings.confirmCardTemplateId),
     clientId: row.applicationId ?? null,
     clientSecretFingerprint: secret ? fingerprintClientSecret(secret) : null,
     configured: true,
     corpId: emptyToNull(settings.corpId),
     enabled: row.enabled,
+    fallbacks,
     hasClientSecret: Boolean(secret),
     idleNewTopicEnabled: settings.idleNewTopicEnabled,
     idleNewTopicHours: settings.idleNewTopicHours,
@@ -485,6 +532,7 @@ export class ImConnectorsAdminService {
           agentId: settings.agentId,
           aiCardTemplateId: settings.aiCardTemplateId,
           chatEnabled: settings.chatEnabled,
+          confirmCardTemplateId: settings.confirmCardTemplateId,
           clientId: input.clientId,
           corpId: settings.corpId,
           enabled: input.enabled,

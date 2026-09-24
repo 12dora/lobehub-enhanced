@@ -1,7 +1,7 @@
 'use client';
 
-import { Flexbox, Icon } from '@lobehub/ui';
-import { Button, Input, InputNumber, Switch, Tag, Text, Tooltip } from '@lobehub/ui/base-ui';
+import { Icon } from '@lobehub/ui';
+import { Button, Switch, Tag, Text, Tooltip } from '@lobehub/ui/base-ui';
 import type { LucideIcon } from 'lucide-react';
 import { CheckCircle2, CircleDashed, Loader, MessageSquare, XCircle } from 'lucide-react';
 import { memo, useId } from 'react';
@@ -9,16 +9,16 @@ import { useTranslation } from 'react-i18next';
 
 import type { AdminImConnectorView } from '@/enterprise/client/services/adminImConnectors';
 
-import { InfraField, InfraSwitchRow } from '../infra/InfraField';
 import { infraFormStyles as formStyles } from '../infra/styles';
 import { infraSettingsStyles as cardStyles } from '../styles';
 import { ApiCallStatsSection, type ImConnectorApiStatsService } from './ApiCallStatsSection';
 import { BindingsSection } from './BindingsSection';
-import { ConnectorSecretField } from './ConnectorSecretField';
+import { ChatSection } from './ChatSection';
+import { CollapsibleConnectorSection } from './ConnectorSection';
+import { CredentialsSection } from './CredentialsSection';
 import {
   formatConnectorTime,
-  IM_CONNECTOR_IDLE_HOURS_MAX,
-  IM_CONNECTOR_IDLE_HOURS_MIN,
+  readDingTalkFallbacks,
   readDingTalkPersonalSummary,
   resolveImConnectorTestErrorKey,
 } from './draft';
@@ -30,6 +30,7 @@ import type {
   ImConnectorNotifyAppService,
 } from './service';
 import { imConnectorStyles as styles } from './styles';
+import { useDingTalkConnectorModules } from './useDingTalkConnectorModules';
 import { useImConnectorEditor } from './useImConnectorEditor';
 import {
   type ImConnectorWorkspaceService,
@@ -68,9 +69,12 @@ export interface DingTalkConnectorCardProps {
 /**
  * 钉钉 connector card.
  *
- * One card per IM platform, edited in place rather than behind a modal: the credentials, the two
- * capability switches and the session policy are one decision, and an admin provisioning the robot
- * for the first time fills them in together.
+ * One card per IM platform, edited in place rather than behind a modal. The groups follow the
+ * order they depend on each other — 连接凭据 → 机器人对话 → 通知应用 → 工作台能力 (runs on the
+ * notification app) → 个人数据授权 → 已绑定用户, then the folded 接口调用量 reading — and a group
+ * whose module is not installed is neither rendered nor validated (its stored values are sent back
+ * unchanged). One 保存 writes the whole row; it appears in a bar pinned to the bottom of the
+ * viewport as soon as anything is changed.
  */
 export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
   ({
@@ -84,7 +88,10 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
     workspaceService,
   }) => {
     const { t } = useTranslation('admin');
-    const editor = useImConnectorEditor({ canOperate, onSaved, service, view });
+    const modules = useDingTalkConnectorModules();
+    // A group this deployment has not installed is neither rendered nor validated; the save sends
+    // its fields exactly as the server holds them.
+    const editor = useImConnectorEditor({ canOperate, groups: modules, onSaved, service, view });
     const { draft, errors } = editor;
     const enableSwitchId = `im-connector-enable-${useId()}`;
 
@@ -92,6 +99,29 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
     const statusLabel = t(`systemGeneral.imConnectors.status.${view.status.state}` as never);
     const locked = !canOperate || editor.saving;
     const testResult = editor.testResult;
+    // Which inputs show the server's untouched fallback rather than a stored value (contract
+    // §1.2). Decided by the editor against the newest reading and the one the draft was seeded
+    // from, so a tag never outlives the save that ended it.
+    const fallbacks = readDingTalkFallbacks(editor.serverView);
+    const corpIdPrefilled = editor.untouchedFallbacks.has('corpId');
+    const confirmCardTemplatePrefilled = editor.untouchedFallbacks.has('confirmCardTemplateId');
+
+    // The status tag carries its own details: the provider's last error, then when the worker last
+    // saw a message and — its own liveness — a frame (heartbeat/ack), so an idle-but-healthy stream
+    // reads differently from a stalled one.
+    const statusDetails = [
+      view.status.lastError,
+      view.status.lastEventAt
+        ? t('systemGeneral.imConnectors.status.lastEventAt', {
+            time: formatConnectorTime(view.status.lastEventAt),
+          })
+        : null,
+      view.status.lastFrameAt
+        ? t('systemGeneral.imConnectors.status.lastFrameAt', {
+            time: formatConnectorTime(view.status.lastFrameAt),
+          })
+        : null,
+    ].filter((line): line is string => Boolean(line));
 
     const statusTag = (
       <Tag color={status.tone} icon={<Icon icon={status.icon} size={12} />} size="small">
@@ -99,34 +129,46 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
       </Tag>
     );
 
+    const showWorkspaceSection = modules.approval || modules.workspace;
+
     return (
       <section className={cardStyles.card}>
-        <div className={cardStyles.header}>
-          <div className={cardStyles.title}>
-            <Icon icon={MessageSquare} size={16} />
-            <Text strong>{t('systemGeneral.imConnectors.platform.dingtalk')}</Text>
+        <div className={styles.header}>
+          <div className={styles.headerMain}>
+            <div className={styles.headerTitle}>
+              <Icon icon={MessageSquare} size={16} />
+              <Text strong>{t('systemGeneral.imConnectors.platform.dingtalk')}</Text>
+              {statusDetails.length > 0 ? (
+                <Tooltip
+                  title={
+                    <div>
+                      {statusDetails.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </div>
+                  }
+                >
+                  {statusTag}
+                </Tooltip>
+              ) : (
+                statusTag
+              )}
+            </div>
+            <span className={styles.stats}>
+              {[
+                t('systemGeneral.imConnectors.stats.linkedUsers', {
+                  value: view.stats.linkedUsers,
+                }),
+                t('systemGeneral.imConnectors.stats.messages7d', { value: view.stats.messages7d }),
+                t('systemGeneral.imConnectors.stats.pushes7d', { value: view.stats.pushes7d }),
+              ].join(' · ')}
+            </span>
           </div>
           <div className={styles.headerControls}>
-            {view.status.lastError ? (
-              <Tooltip title={view.status.lastError}>{statusTag}</Tooltip>
-            ) : (
-              statusTag
-            )}
-            {view.status.lastEventAt ? (
-              <Text className={styles.code} type="secondary">
-                {t('systemGeneral.imConnectors.status.lastEventAt', {
-                  time: formatConnectorTime(view.status.lastEventAt),
-                })}
-              </Text>
-            ) : null}
-            {/* The worker's own liveness: a frame can arrive (heartbeat, ack) long after the last
-                message did, so an idle-but-healthy stream is distinguishable from a stalled one. */}
-            {view.status.lastFrameAt ? (
-              <Text className={styles.code} type="secondary">
-                {t('systemGeneral.imConnectors.status.lastFrameAt', {
-                  time: formatConnectorTime(view.status.lastFrameAt),
-                })}
-              </Text>
+            {canOperate ? (
+              <Button loading={editor.testing} size="small" onClick={() => void editor.test()}>
+                {t('systemGeneral.testConnection')}
+              </Button>
             ) : null}
             <div className={styles.switchRow}>
               <label className={formStyles.label} htmlFor={enableSwitchId}>
@@ -142,106 +184,61 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
           </div>
         </div>
 
-        <div className={cardStyles.cardBody}>
-          {canOperate ? null : (
-            <Text type="secondary">{t('systemGeneral.imConnectors.readOnly')}</Text>
-          )}
-
-          <div className={styles.section}>
-            <span className={styles.sectionTitle}>
-              {t('systemGeneral.imConnectors.sections.credentials')}
-            </span>
-            <span className={formStyles.hint}>
-              {t('systemGeneral.imConnectors.hints.credentials')}
-            </span>
-            <div className={formStyles.fieldGrid}>
-              <InfraField
-                error={errors.clientId}
-                label={t('systemGeneral.imConnectors.fields.clientId')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    autoComplete="off"
-                    disabled={locked}
-                    value={draft.clientId}
-                    onChange={(event) => editor.patch({ clientId: event.target.value })}
-                  />
-                )}
-              </InfraField>
-              <ConnectorSecretField
-                disabled={locked}
-                error={errors.clientSecret}
-                label={t('systemGeneral.imConnectors.fields.clientSecret')}
-                value={draft.clientSecret}
-                onChange={(next) => editor.patch({ clientSecret: next })}
-              />
-              <InfraField
-                error={errors.robotCode}
-                hint={t('systemGeneral.imConnectors.hints.robotCode')}
-                label={t('systemGeneral.imConnectors.fields.robotCode')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    autoComplete="off"
-                    disabled={locked}
-                    value={draft.robotCode}
-                    onChange={(event) => editor.patch({ robotCode: event.target.value })}
-                  />
-                )}
-              </InfraField>
-              <InfraField
-                error={errors.robotDisplayName}
-                hint={t('systemGeneral.imConnectors.hints.robotDisplayName')}
-                label={t('systemGeneral.imConnectors.fields.robotDisplayName')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    autoComplete="off"
-                    disabled={locked}
-                    maxLength={32}
-                    value={draft.robotDisplayName}
-                    onChange={(event) => editor.patch({ robotDisplayName: event.target.value })}
-                  />
-                )}
-              </InfraField>
-              <InfraField
-                error={errors.corpId}
-                hint={t('systemGeneral.imConnectors.hints.corpId')}
-                label={t('systemGeneral.imConnectors.fields.corpId')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    autoComplete="off"
-                    disabled={locked}
-                    value={draft.corpId}
-                    onChange={(event) => editor.patch({ corpId: event.target.value })}
-                  />
-                )}
-              </InfraField>
-              <InfraField
-                error={errors.agentId}
-                hint={t('systemGeneral.imConnectors.hints.agentId')}
-                label={t('systemGeneral.imConnectors.fields.agentId')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    autoComplete="off"
-                    disabled={locked}
-                    value={draft.agentId}
-                    onChange={(event) => editor.patch({ agentId: event.target.value })}
-                  />
-                )}
-              </InfraField>
-            </div>
+        {testResult ? (
+          <div className={styles.inlineRow}>
+            <Text type={testResult.ok ? 'success' : 'danger'}>
+              {testResult.ok
+                ? t('systemGeneral.test.success')
+                : t(resolveImConnectorTestErrorKey(testResult.errorCode) as never)}
+              {testResult.ok && testResult.robotName
+                ? ` · ${t('systemGeneral.imConnectors.test.robotName', {
+                    name: testResult.robotName,
+                  })}`
+                : ''}
+            </Text>
+            {testResult.latencyMs === null ? null : (
+              <Text className={styles.code} type="secondary">
+                {t('systemGeneral.test.latency', { ms: testResult.latencyMs })}
+              </Text>
+            )}
+            {/* The mapped code says what to do about it; the provider's own words say which of the
+                several things behind that code actually happened. */}
+            {testResult.errorMessage ? (
+              <Text className={styles.code} type="secondary">
+                {testResult.errorMessage}
+              </Text>
+            ) : null}
           </div>
+        ) : null}
 
-          {/* Under the robot's own credentials: the second app is what reaches employees who never
-              opened the robot, and what the reminder recipients are read from. */}
+        {canOperate ? null : (
+          <Text type="secondary">{t('systemGeneral.imConnectors.readOnly')}</Text>
+        )}
+
+        <CredentialsSection
+          corpIdFallback={fallbacks.corpId}
+          corpIdPrefilled={corpIdPrefilled}
+          disabled={locked}
+          draft={draft}
+          errors={errors}
+          robotNameFallback={fallbacks.robotDisplayName}
+          onPatch={editor.patch}
+        />
+
+        {modules.chat ? (
+          <ChatSection
+            confirmCardTemplateFallback={fallbacks.confirmCardTemplateId}
+            confirmCardTemplatePrefilled={confirmCardTemplatePrefilled}
+            disabled={locked}
+            draft={draft}
+            errors={errors}
+            onPatch={editor.patch}
+          />
+        ) : null}
+
+        {/* The second app: it reaches employees who never opened the robot, and the reminder
+            recipients are read from its contacts directory. */}
+        {modules.notify ? (
           <NotifyAppSection
             canOperate={canOperate}
             disabled={locked}
@@ -250,197 +247,72 @@ export const DingTalkConnectorCard = memo<DingTalkConnectorCardProps>(
             service={notifyAppService}
             onPatch={editor.patch}
           />
+        ) : null}
 
-          {/* Right after the app they run on: every workspace call is made with the 服务号 token. */}
+        {/* Right after the app they run on: every workspace call is made with its token. */}
+        {showWorkspaceSection ? (
           <WorkspaceCapabilitiesSection
             canOperate={canOperate}
             disabled={locked}
             draft={draft}
             service={workspaceService}
+            showApproval={modules.approval}
+            showWorkspace={modules.workspace}
             onPatch={editor.patch}
           />
+        ) : null}
 
-          {/* Beside 工作台能力: both act as the member's own DingTalk identity — this one through
-              the member's own authorization of the aihub-dws sidecar rather than the 服务号. */}
+        {/* Both act as the member's own DingTalk identity — this one through the member's own
+            authorization rather than the notification app. */}
+        {modules.personal ? (
           <PersonalDataSection
             disabled={locked}
             draft={draft}
+            showDocs={modules.docs}
             summary={readDingTalkPersonalSummary(view)}
             onPatch={editor.patch}
           />
+        ) : null}
 
-          {/* Directly under the capabilities it measures: the numbers are what an admin decides
-              from when weighing a capability against the vendor's per-app quota. */}
+        {/* Last: 已绑定员工 in the header is the length of this list. */}
+        <BindingsSection
+          canOperate={canOperate}
+          platform={view.platform}
+          service={bindingsService}
+          onChanged={onSaved}
+        />
+
+        {/* Every DingTalk call this deployment makes (robot, SSO, notification app, directory,
+            workbench) is billed per app, so the reading belongs to the connector as a whole. It is
+            a reading, not a setting: folded, and not requested until opened. */}
+        <CollapsibleConnectorSection
+          help={t('systemGeneral.imConnectors.apiStats.description')}
+          title={t('systemGeneral.imConnectors.apiStats.title')}
+        >
           <ApiCallStatsSection service={apiStatsService} />
+        </CollapsibleConnectorSection>
 
-          <div className={styles.section}>
-            <span className={styles.sectionTitle}>
-              {t('systemGeneral.imConnectors.sections.cardTemplates')}
-            </span>
-            <span className={formStyles.hint}>
-              {t('systemGeneral.imConnectors.hints.cardTemplates')}
-            </span>
-            <div className={formStyles.fieldGrid}>
-              <InfraField
-                error={errors.aiCardTemplateId}
-                label={t('systemGeneral.imConnectors.fields.aiCardTemplateId')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    disabled={locked}
-                    value={draft.aiCardTemplateId}
-                    onChange={(event) => editor.patch({ aiCardTemplateId: event.target.value })}
-                  />
-                )}
-              </InfraField>
-              <InfraField
-                error={errors.selectCardTemplateId}
-                label={t('systemGeneral.imConnectors.fields.selectCardTemplateId')}
-              >
-                {(field) => (
-                  <Input
-                    {...field.control}
-                    disabled={locked}
-                    value={draft.selectCardTemplateId}
-                    onChange={(event) => editor.patch({ selectCardTemplateId: event.target.value })}
-                  />
-                )}
-              </InfraField>
-            </div>
+        {canOperate && (editor.dirty || editor.saving) ? (
+          <div
+            aria-label={t('systemGeneral.imConnectors.unsaved')}
+            className={styles.saveBar}
+            role="region"
+          >
+            <span className={styles.saveBarText}>{t('systemGeneral.imConnectors.unsaved')}</span>
+            <Button disabled={editor.saving} size="small" onClick={editor.cancel}>
+              {t('systemGeneral.edit.cancel')}
+            </Button>
+            <Button
+              disabled={!editor.dirty}
+              loading={editor.saving}
+              size="small"
+              type="primary"
+              onClick={() => void editor.save()}
+            >
+              {t('systemGeneral.edit.save')}
+            </Button>
           </div>
-
-          <div className={styles.section}>
-            <span className={styles.sectionTitle}>
-              {t('systemGeneral.imConnectors.sections.capabilities')}
-            </span>
-            <div className={formStyles.fieldGrid}>
-              <InfraSwitchRow
-                checked={draft.chatEnabled}
-                disabled={locked}
-                hint={t('systemGeneral.imConnectors.hints.chatEnabled')}
-                label={t('systemGeneral.imConnectors.fields.chatEnabled')}
-                onChange={(checked) => editor.patch({ chatEnabled: checked })}
-              />
-              <InfraSwitchRow
-                checked={draft.pushEnabled}
-                disabled={locked}
-                hint={t('systemGeneral.imConnectors.hints.pushEnabled')}
-                label={t('systemGeneral.imConnectors.fields.pushEnabled')}
-                onChange={(checked) => editor.patch({ pushEnabled: checked })}
-              />
-            </div>
-          </div>
-
-          <div className={styles.section}>
-            <span className={styles.sectionTitle}>
-              {t('systemGeneral.imConnectors.sections.session')}
-            </span>
-            <div className={formStyles.fieldGrid}>
-              <InfraSwitchRow
-                checked={draft.idleNewTopicEnabled}
-                disabled={locked}
-                hint={t('systemGeneral.imConnectors.hints.idleNewTopic')}
-                label={t('systemGeneral.imConnectors.fields.idleNewTopic')}
-                onChange={(checked) => editor.patch({ idleNewTopicEnabled: checked })}
-              />
-              <InfraField
-                error={errors.idleNewTopicHours}
-                label={t('systemGeneral.imConnectors.fields.idleNewTopicHours')}
-              >
-                {(field) => (
-                  <InputNumber
-                    {...field.control}
-                    // The hours only mean something while the rule is on; a disabled control says
-                    // so more plainly than a number that changes nothing.
-                    disabled={locked || !draft.idleNewTopicEnabled}
-                    max={IM_CONNECTOR_IDLE_HOURS_MAX}
-                    min={IM_CONNECTOR_IDLE_HOURS_MIN}
-                    step={1}
-                    style={{ width: '100%' }}
-                    value={draft.idleNewTopicHours}
-                    onChange={(next) =>
-                      editor.patch({
-                        idleNewTopicHours: typeof next === 'number' ? next : null,
-                      })
-                    }
-                  />
-                )}
-              </InfraField>
-            </div>
-          </div>
-
-          <div className={cardStyles.footer}>
-            <span className={styles.stats}>
-              {[
-                t('systemGeneral.imConnectors.stats.linkedUsers', {
-                  value: view.stats.linkedUsers,
-                }),
-                t('systemGeneral.imConnectors.stats.messages7d', { value: view.stats.messages7d }),
-                t('systemGeneral.imConnectors.stats.pushes7d', { value: view.stats.pushes7d }),
-              ].join(' · ')}
-            </span>
-
-            {testResult ? (
-              <Flexbox gap={4}>
-                <Text type={testResult.ok ? 'success' : 'danger'}>
-                  {testResult.ok
-                    ? t('systemGeneral.test.success')
-                    : t(resolveImConnectorTestErrorKey(testResult.errorCode) as never)}
-                  {testResult.ok && testResult.robotName
-                    ? ` · ${t('systemGeneral.imConnectors.test.robotName', {
-                        name: testResult.robotName,
-                      })}`
-                    : ''}
-                </Text>
-                {testResult.latencyMs === null ? null : (
-                  <Text className={styles.code} type="secondary">
-                    {t('systemGeneral.test.latency', { ms: testResult.latencyMs })}
-                  </Text>
-                )}
-                {/* The mapped code says what to do about it; the provider's own words say which
-                    of the several things behind that code actually happened. */}
-                {testResult.errorMessage ? (
-                  <Text className={styles.code} type="secondary">
-                    {testResult.errorMessage}
-                  </Text>
-                ) : null}
-              </Flexbox>
-            ) : null}
-
-            {canOperate ? (
-              <div className={cardStyles.actionsRow}>
-                <Button loading={editor.testing} size="small" onClick={() => void editor.test()}>
-                  {t('systemGeneral.testConnection')}
-                </Button>
-                <Button
-                  disabled={!editor.dirty}
-                  loading={editor.saving}
-                  size="small"
-                  type="primary"
-                  onClick={() => void editor.save()}
-                >
-                  {t('systemGeneral.edit.save')}
-                </Button>
-                <Button
-                  disabled={!editor.dirty || editor.saving}
-                  size="small"
-                  onClick={editor.cancel}
-                >
-                  {t('systemGeneral.edit.cancel')}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-
-          {/* Last, under the counter it explains: 已绑定员工 is the length of this list. */}
-          <BindingsSection
-            canOperate={canOperate}
-            platform={view.platform}
-            service={bindingsService}
-            onChanged={onSaved}
-          />
-        </div>
+        ) : null}
       </section>
     );
   },

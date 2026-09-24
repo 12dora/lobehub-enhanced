@@ -52,6 +52,11 @@ const SystemGeneralPage = memo(() => {
   const networkProxyModule = useModuleEnabled('networkProxy');
   const sandboxModule = useModuleEnabled('sandbox');
   const documentRenderModule = useModuleEnabled(DOCUMENT_RENDER_MODULE_ID);
+  // The DingTalk integration and 企业查询 are optional modules too: switched off, their tab / card
+  // is not offered at all rather than shown as a form the server would refuse.
+  const dingtalkModule = useModuleEnabled('dingtalk');
+  const enterpriseLookupModule = useModuleEnabled('enterpriseLookup');
+  const canReadImConnectors = canRead && dingtalkModule;
   const proxy = {
     ...rawProxy,
     canManage: rawProxy.canManage && networkProxyModule,
@@ -63,7 +68,7 @@ const SystemGeneralPage = memo(() => {
   const requested: SystemGeneralTab = isSystemGeneralTab(raw) ? raw : 'infrastructure';
   // Never strand an admin on a tab they cannot read.
   const readable: Record<SystemGeneralTab, boolean> = {
-    'im-connectors': canRead,
+    'im-connectors': canReadImConnectors,
     'infrastructure': canRead,
     'network-proxy': proxy.canRead,
   };
@@ -108,16 +113,16 @@ const SystemGeneralPage = memo(() => {
     () =>
       [
         ...(canRead
-          ? [
-              { key: 'infrastructure', label: t('systemGeneral.tabs.infrastructure') },
-              { key: 'im-connectors', label: t('systemGeneral.tabs.imConnectors') },
-            ]
+          ? [{ key: 'infrastructure', label: t('systemGeneral.tabs.infrastructure') }]
+          : []),
+        ...(canReadImConnectors
+          ? [{ key: 'im-connectors', label: t('systemGeneral.tabs.imConnectors') }]
           : []),
         ...(proxy.canRead
           ? [{ key: 'network-proxy', label: t('systemGeneral.tabs.networkProxy') }]
           : []),
       ] as { key: string; label: string }[],
-    [canRead, proxy.canRead, t],
+    [canRead, canReadImConnectors, proxy.canRead, t],
   );
 
   const goToTab = useCallback(
@@ -153,6 +158,7 @@ const SystemGeneralPage = memo(() => {
           data={settings.data}
           documentRenderData={documentRenderSettings.data}
           documentRenderModuleEnabled={documentRenderModule}
+          enterpriseLookupModuleEnabled={enterpriseLookupModule}
           error={settings.error}
           isLoading={settings.isLoading}
           probeBusy={probe.busy}
@@ -171,7 +177,7 @@ const SystemGeneralPage = memo(() => {
         />
       ) : null}
       {tab === 'im-connectors' ? (
-        <ImConnectorsTab canOperate={canOperate} enabled={allowed && canRead} />
+        <ImConnectorsTab canOperate={canOperate} enabled={allowed && canReadImConnectors} />
       ) : null}
       {tab === 'network-proxy' ? (
         <NetworkProxyTab canManage={proxy.canManage} enabled={allowed && proxy.canRead} />

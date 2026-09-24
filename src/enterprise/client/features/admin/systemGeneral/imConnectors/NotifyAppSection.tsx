@@ -10,8 +10,8 @@ import type { AdminImConnectorTestOutput } from '@/enterprise/client/services/ad
 import { runAdminMutation } from '../../primitives/runAdminMutation';
 import { useAdminImConnectorDirectoryStatus } from '../hooks';
 import { InfraField, InfraSwitchRow } from '../infra/InfraField';
-import { infraFormStyles as formStyles } from '../infra/styles';
 import { ConnectorSecretField } from './ConnectorSecretField';
+import { ConnectorSection } from './ConnectorSection';
 import type { DingTalkConnectorDraft } from './draft';
 import {
   formatConnectorTime,
@@ -42,13 +42,13 @@ export interface NotifyAppSectionProps {
 const SYNC_NOT_STARTED_PREFIX = '同步未启动';
 
 /**
- * 通知应用（服务号） — the second DingTalk app beside the chat robot.
+ * 通知应用 — the second DingTalk app beside the chat robot.
  *
  * It exists for two jobs the robot cannot do: sending 工作通知 (task notices and scheduled
  * reminders reach every employee, not only the ones who ever talked to the robot) and reading the
- * contacts directory that reminder recipients are picked from. Its three fields are part of the
- * connector row, so they are saved through the card's own 保存 — only the probe and the manual
- * sync act on their own, because both are about the credentials as they are stored right now.
+ * contacts directory that reminder recipients are picked from. Its fields and delivery switches
+ * are part of the connector row, so they are saved through the card's own 保存 — only the probe and
+ * the manual sync act on their own, because both are about the credentials as they are stored.
  */
 export const NotifyAppSection = memo<NotifyAppSectionProps>(
   ({ canOperate, disabled, draft, errors, onPatch, service = imConnectorNotifyAppService }) => {
@@ -129,12 +129,34 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
       : t('systemGeneral.imConnectors.notifyApp.directory.never');
 
     return (
-      <div className={styles.section}>
-        <span className={styles.sectionTitle}>
-          {t('systemGeneral.imConnectors.sections.notifyApp')}
-        </span>
-        <span className={formStyles.hint}>{t('systemGeneral.imConnectors.hints.notifyApp')}</span>
-        <div className={formStyles.fieldGrid}>
+      <ConnectorSection
+        help={t('systemGeneral.imConnectors.hints.notifyApp')}
+        title={t('systemGeneral.imConnectors.sections.notifyApp')}
+        extra={
+          canOperate ? (
+            <Button loading={testing} size="small" onClick={() => void runProbe()}>
+              {t('systemGeneral.imConnectors.notifyApp.test')}
+            </Button>
+          ) : undefined
+        }
+      >
+        {testResult ? (
+          <div className={styles.inlineRow}>
+            <Text type={testResult.ok ? 'success' : 'danger'}>
+              {testResult.ok
+                ? t('systemGeneral.test.success')
+                : t(resolveImConnectorTestErrorKey(testResult.errorCode) as never)}
+            </Text>
+            {/* The provider's own words say which of the things behind that code happened. */}
+            {!testResult.ok && testResult.errorMessage ? (
+              <Text className={styles.code} type="secondary">
+                {testResult.errorMessage}
+              </Text>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className={styles.fieldGrid}>
           <InfraField
             error={errors.notifyAppKey}
             label={t('systemGeneral.imConnectors.fields.notifyAppKey')}
@@ -153,7 +175,6 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
             disabled={disabled}
             error={errors.notifyAppSecret}
             label={t('systemGeneral.imConnectors.fields.notifyAppSecret')}
-            storedPlaceholder={t('systemGeneral.imConnectors.notifyApp.secretPlaceholder')}
             value={draft.notifyAppSecret}
             onChange={(next) => onPatch({ notifyAppSecret: next })}
           />
@@ -172,44 +193,37 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
               />
             )}
           </InfraField>
+        </div>
+
+        {/* 提醒推送 decides whether reminders go out at all; the two channels decide how. */}
+        <div className={styles.tileGrid}>
+          <InfraSwitchRow
+            checked={draft.pushEnabled}
+            className={styles.tile}
+            disabled={disabled}
+            help={t('systemGeneral.imConnectors.hints.pushEnabled')}
+            label={t('systemGeneral.imConnectors.fields.pushEnabled')}
+            onChange={(checked) => onPatch({ pushEnabled: checked })}
+          />
           <InfraSwitchRow
             checked={draft.notifyWorkNoticeEnabled}
+            className={styles.tile}
             disabled={disabled}
-            hint={t('systemGeneral.imConnectors.hints.notifyWorkNoticeEnabled')}
+            help={t('systemGeneral.imConnectors.hints.notifyWorkNoticeEnabled')}
             label={t('systemGeneral.imConnectors.fields.notifyWorkNoticeEnabled')}
             onChange={(checked) => onPatch({ notifyWorkNoticeEnabled: checked })}
           />
           <InfraSwitchRow
             checked={draft.notifyRobotEnabled}
+            className={styles.tile}
             disabled={disabled}
-            hint={t('systemGeneral.imConnectors.hints.notifyRobotEnabled')}
+            help={t('systemGeneral.imConnectors.hints.notifyRobotEnabled')}
             label={t('systemGeneral.imConnectors.fields.notifyRobotEnabled')}
             onChange={(checked) => onPatch({ notifyRobotEnabled: checked })}
           />
         </div>
 
-        {canOperate ? (
-          <div className={styles.notifyRow}>
-            <Button loading={testing} size="small" onClick={() => void runProbe()}>
-              {t('systemGeneral.imConnectors.notifyApp.test')}
-            </Button>
-            {testResult ? (
-              <Text type={testResult.ok ? 'success' : 'danger'}>
-                {testResult.ok
-                  ? t('systemGeneral.test.success')
-                  : t(resolveImConnectorTestErrorKey(testResult.errorCode) as never)}
-              </Text>
-            ) : null}
-            {/* The provider's own words say which of the several things behind that code happened. */}
-            {testResult && !testResult.ok && testResult.errorMessage ? (
-              <Text className={styles.code} type="secondary">
-                {testResult.errorMessage}
-              </Text>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className={styles.notifyRow}>
+        <div className={styles.inlineRow}>
           {directoryError && !status ? (
             <>
               <Text type="danger">
@@ -242,7 +256,7 @@ export const NotifyAppSection = memo<NotifyAppSectionProps>(
             </Button>
           ) : null}
         </div>
-      </div>
+      </ConnectorSection>
     );
   },
 );

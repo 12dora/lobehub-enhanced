@@ -752,7 +752,7 @@ const APPROVAL_USER_ERROR: Record<string, string> = {
   DINGTALK_INTERNAL: '操作失败，请稍后重试',
   DINGTALK_INVALID: '参数无效',
   DINGTALK_NOT_APPROVAL_ADMIN: '需要钉钉审批管理员权限',
-  DINGTALK_NOT_CONFIGURED: '钉钉服务号未配置',
+  DINGTALK_NOT_CONFIGURED: '钉钉通知应用未配置',
   DINGTALK_NOT_FOUND: '没有找到该审批',
   DINGTALK_NOT_ORIGINATOR: '你不是该审批的发起人',
   DINGTALK_NOT_TASK_OWNER: '你不是该审批的处理人',

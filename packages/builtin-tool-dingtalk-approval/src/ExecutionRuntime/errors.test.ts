@@ -96,11 +96,13 @@ describe('formatFormProblemLine', () => {
     const admin = `[IM 连接器设置](${APP_LINK_PATHS.adminImConnectors})`;
     const signIn = `[用钉钉登录](${APP_LINK_PATHS.dingtalkBinding})`;
     const oa = '[钉钉管理后台](https://oa.dingtalk.com/)';
+    expect(dingtalkErrorGuidance('DINGTALK_NOT_CONFIGURED')).toContain('钉钉通知应用未配置');
+    expect(dingtalkErrorGuidance('DINGTALK_NOT_CONFIGURED')).toContain('DINGTALK_NOT_CONFIGURED');
     expect(dingtalkErrorGuidance('DINGTALK_NOT_CONFIGURED')).toContain(admin);
     expect(dingtalkErrorGuidance('DINGTALK_FEATURE_DISABLED')).toContain(admin);
     expect(dingtalkErrorGuidance('DINGTALK_AUTOMATION_OFF')).toContain(admin);
     expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_UNBOUND')).toContain(signIn);
-    expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_UNVERIFIED')).toContain('请先用钉钉登录 AIHub');
+    expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_UNVERIFIED')).toContain('请先用钉钉登录本平台');
     expect(dingtalkErrorGuidance('DINGTALK_IDENTITY_INACTIVE')).toContain(oa);
     expect(dingtalkErrorGuidance('DINGTALK_NOT_APPROVAL_ADMIN')).toContain(
       '当前用户不是钉钉审批管理员',

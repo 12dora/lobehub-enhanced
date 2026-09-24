@@ -347,7 +347,7 @@ export const dingtalkErrorGuidance = (
   );
   switch (code) {
     case 'DINGTALK_NOT_CONFIGURED': {
-      return `钉钉服务号未配置，无法使用审批（DINGTALK_NOT_CONFIGURED）。请联系管理员完成钉钉连接配置${admin}。`;
+      return `钉钉通知应用未配置，无法使用审批（DINGTALK_NOT_CONFIGURED）。请联系管理员完成钉钉连接配置${admin}。`;
     }
     case 'DINGTALK_FEATURE_DISABLED': {
       return `钉钉审批能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在连接器中启用审批${admin}。`;

@@ -4,7 +4,7 @@
 
 ## 架构
 
-- **管理端 → 通用设置 → IM 连接器**：每种 IM 一张卡片。钉钉卡片保存 Client ID / Client Secret / RobotCode、可选的 AI 卡片模板 ID 与选择卡片模板 ID、能力开关（对话 / 提醒推送）、会话策略（空闲自动新建会话及时长）。凭据以 `KEY_VAULTS_SECRET` 加密写入 `system_bot_providers`（platform = `dingtalk`）。该表同时是「设置 → 聊天平台」可用平台列表的来源。
+- **管理端 → 通用设置 → IM 连接器**：每种 IM 一张卡片。钉钉卡片自上而下为「连接凭据」「机器人对话」「通知应用」「工作台能力」「个人数据授权」「已绑定用户」。连接凭据保存 Client ID / Client Secret / RobotCode 等；「启用对话」、卡片模板和空闲自动新建会话在「机器人对话」；「提醒推送」在「通知应用」。凭据以 `KEY_VAULTS_SECRET` 加密写入 `system_bot_providers`（platform = `dingtalk`）。该表同时是「设置 → 聊天平台」可用平台列表的来源。
 - **Stream 长连接**：服务进程内的 `dingtalkStreamWorker` 在连接器启用且「对话」开启时维持一条钉钉 Stream 连接（无需公网回调），收到的机器人消息与卡片回调带 HMAC 转发头在进程内交给聊天平台路由。状态每 30 s 写入 Redis `messenger:dingtalk:stream-status`，管理端卡片轮询显示。
 - **身份映射**：员工在钉钉的 staffId 与 AIHub 账号邮箱 `<staffId>@dingtalk.jiefakj.com`（Authentik 生成）一一对应，首次发消息即自动绑定，默认路由到默认助理。未登录过 AIHub 的员工会被提示先登录网页端一次。域名可用环境变量 `DINGTALK_IDENTITY_EMAIL_DOMAIN` 覆盖。
 - **会话**：单聊按会话保持当前话题；群聊按「群 + 提问人」隔离，机器人只能看到 @ 它的消息及其引用内容。话题在网页端可见。新建话题时标题写成「钉钉・」加首条用户消息（最多 30 字）；首轮助手回复完成后，服务端走与网页相同的 `generateTopicTitle` 摘要，把占位标题换成「钉钉・」加摘要。空闲超过连接器设定时长自动新建会话。
@@ -26,7 +26,7 @@
 
 ### 确认卡片模板（管理员）
 
-生产使用的是已导入并发布的模板，由钉钉官方「审批模板」示例改来。模板 ID 只放在环境变量 `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`（当前发布的 ID 是 `335db3e9-304f-40de-b9e9-79a94be7368b.schema`），不要写进代码。改过模板并重新发布后，更新该环境变量并重启服务。权限仍需「互动卡片实例写权限」。Stream 连接已经订阅 `/v1.0/card/instances/callback`，创建卡片时带 `callbackType=STREAM`，按钮点击进这条连接。不要为这张卡再配 HTTP 回调地址。
+生产使用的是已导入并发布的模板，由钉钉官方「审批模板」示例改来。确认卡片模板 ID 可在管理端「通用设置 → IM 连接器 → 机器人对话」的「确认卡片模板 ID」中设置。留空时使用环境变量 `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`（当前发布的 ID 是 `335db3e9-304f-40de-b9e9-79a94be7368b.schema`）。页面用该环境变量预填输入框，并标「来自环境变量」；管理员没有改过这个字段时不会写入数据库，运行时仍读环境变量。改过并保存后，以保存值为准。不要把模板 ID 写进代码。改过模板并重新发布后，在管理端更新该 ID（约 30 秒内生效）。权限仍需「互动卡片实例写权限」。Stream 连接已经订阅 `/v1.0/card/instances/callback`，创建卡片时带 `callbackType=STREAM`，按钮点击进这条连接。不要为这张卡再配 HTTP 回调地址。
 
 公有变量（`cardParamMap`，全部字符串）：
 
@@ -62,19 +62,20 @@
 
 ## 管理端配置
 
-1. 管理端 → 通用设置 → IM 连接器 → 钉钉：填入凭据，点击「测试连接」（调用钉钉 accessToken 接口）。
-2. 打开「启用」，按需开启「对话」「提醒推送」，设置会话策略，保存。保存动作进入操作日志（`system.im_connector.update`）。
-3. 30 s 内 Stream worker 建立连接，卡片状态显示「已连接」；「已绑定员工」与「近 7 日消息 / 推送」随使用增长。
+1. 管理端 → 通用设置 → IM 连接器 → 钉钉。卡片分组为「连接凭据」「机器人对话」「通知应用」「工作台能力」「个人数据授权」「已绑定用户」。
+2. 在「连接凭据」填入 Client ID、Client Secret、RobotCode，点击「测试连接」（调用钉钉 accessToken 接口），并打开「启用」。
+3. 在「机器人对话」按需打开「启用对话」，并设置卡片模板与空闲自动新建会话。在「通知应用」按需打开「提醒推送」。修改后底部出现保存栏，保存。保存动作进入操作日志（`system.im_connector.update`）。
+4. 30 s 内 Stream worker 建立连接，卡片状态显示「已连接」；「已绑定用户」与「近 7 日消息 / 推送」随使用增长。
 
-## 通知应用（服务号）
+## 通知应用
 
-定时提醒（提醒他人 / 整部门）与任务生命周期推送，在配置了「通知应用」后走**双通道**：钉钉**工作通知**（`topapi/message/corpconversation/asyncsend_v2`，`msgtype: oa`）以及服务号机器人的 1:1 消息（`POST /v1.0/robot/oToMessages/batchSend`，`robotCode` = 通知应用 AppKey）。两条通道独立发送、互不影响：工作通知失败不会阻止机器人，反之亦然。聊天机器人（Stream 对话）不受影响。未配置通知应用时，任务推送仍走对话机器人路径。
+定时提醒（提醒他人 / 整部门）与任务生命周期推送，在配置了「通知应用」后走**双通道**：钉钉**工作通知**（`topapi/message/corpconversation/asyncsend_v2`，`msgtype: oa`）以及通知应用机器人的 1:1 消息（`POST /v1.0/robot/oToMessages/batchSend`，`robotCode` = 通知应用 AppKey）。两条通道独立发送、互不影响：工作通知失败不会阻止机器人，反之亦然。聊天机器人（Stream 对话）不受影响。未配置通知应用时，任务推送仍走对话机器人路径。
 
-服务号机器人是**只发不收**：AIHub 不订阅它的 Stream，也不回复发到该机器人的消息。`robotCode` 使用通知应用的 AppKey；新 API 令牌来自 `/v1.0/oauth2/accessToken`（与工作通知用的 oapi `/gettoken` 分开缓存）。每批最多 20 个 `userIds`。Markdown 正文与 OA 一致：`### <应用名> · <种类>` 标题、正文、`HH:mm · 来自 <设置人>`。有深链时用单按钮 `sampleActionCard`（`singleTitle` / `singleURL`）。
+通知应用机器人是**只发不收**：AIHub 不订阅它的 Stream，也不回复发到该机器人的消息。`robotCode` 使用通知应用的 AppKey；新 API 令牌来自 `/v1.0/oauth2/accessToken`（与工作通知用的 oapi `/gettoken` 分开缓存）。每批最多 20 个 `userIds`。Markdown 正文与 OA 一致：`### <应用名> · <种类>` 标题、正文、`HH:mm · 来自 <设置人>`。有深链时用单按钮 `sampleActionCard`（`singleTitle` / `singleURL`）。
 
-通知应用是**另一套企业内部应用**（服务号），与对话机器人分开。管理端钉钉卡片的「通知应用（服务号）」填写该应用的 AppKey / AppSecret / AgentId。保存后可用「测试」：先调 `oapi/gettoken`（工作通知），再调 `/v1.0/oauth2/accessToken`（机器人发送权限所需的新 API 令牌）。不会真实调用 `oToMessages/batchSend`（那会发出一条 1:1 消息）。
+通知应用是**另一套企业内部应用**，与对话机器人分开。管理端钉钉卡片的「通知应用」填写该应用的 AppKey / AppSecret / AgentId。保存后可用「测试」：先调 `oapi/gettoken`（工作通知），再调 `/v1.0/oauth2/accessToken`（机器人发送权限所需的新 API 令牌）。不会真实调用 `oToMessages/batchSend`（那会发出一条 1:1 消息）。
 
-### 权限（钉钉开放平台 → 该服务号应用 → 权限管理）
+### 权限（钉钉开放平台 → 该通知应用 → 权限管理）
 
 须开通通讯录只读能力（授予在该应用上，而不是对话机器人上）：
 
@@ -82,7 +83,7 @@
 - `qyapi_get_member` — 成员详情
 - `qyapi_get_department_member` — 部门成员
 
-工作通知还需该应用具备「企业工作通知」发送权限，可见范围覆盖要提醒的员工与部门。服务号机器人 1:1 发送还需 `qyapi_robot_sendmsg`（该应用上的机器人能力；消息接收模式无需开 Stream）。
+工作通知还需该应用具备「企业工作通知」发送权限，可见范围覆盖要提醒的员工与部门。通知应用机器人 1:1 发送还需 `qyapi_robot_sendmsg`（该应用上的机器人能力；消息接收模式无需开 Stream）。
 
 ### 通讯录同步
 
@@ -98,13 +99,13 @@
 | `reminders`                                   | 提醒档案：正文（不含 mention 行）、`repeat_rule`、下次 `fire_at`、投递计数。新行 `source='task'` 且 `task_id` 指向任务（`ON DELETE CASCADE`，`task_id` 非空唯一）。`status` 与任务对齐：`scheduled` / `sent`（任务 completed）/ `canceled`。        |
 | `reminder_recipients` / `reminder_deliveries` | 不变，仍按 `reminder_id`。`listReceived`（我收到的）继续读投递行。                                                                                                                                                                                  |
 
-Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTaskService.fireForTick`：走与原先相同的工作通知 + 服务号机器人 + 站内 `reminder.received`，**不** `execAgent`。遗留 `task_id IS NULL` 行仍由 `reminderWorker` 每 60s 扫描 `fire_at <= now`。
+Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTaskService.fireForTick`：走与原先相同的工作通知 + 通知应用机器人 + 站内 `reminder.received`，**不** `execAgent`。遗留 `task_id IS NULL` 行仍由 `reminderWorker` 每 60s 扫描 `fire_at <= now`。
 
 一次提醒的 cron 是 `mm HH D M *`（当天当时分）。任务扫描间隔 60s、`isExecutionTime` 容差 5 分钟；发出后写 `tasks.last_heartbeat_at` 以免同一窗口连发。重复提醒的 `until`（YYYY-MM-DD，Asia/Shanghai，含当日）在 tick 时判断，过期则完成任务且不投递。
 
 ### 工作通知格式（OA）
 
-钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`。`head.bgcolor` 固定 `FF2E7CF6`（色带标识应用）；`head.text` 仍发送管理端通用设置的站点标题（未设置时为「AI 助手」），但钉钉工作通知会把 `oa.head.text` **改写成服务号在开放平台登记的应用名**，因此调用方身份写在 `body.title`。定时提醒的 `body.title`（以及服务号机器人 markdown 标题、站内 `reminder.received` 通知标题）为 `<站点标题> · <创建者姓名>提醒你：<摘要>`，摘要不超过 12 字（例：`AI平台 · 胡玉琴A提醒你：每日例会`）。任务生命周期推送的 `body.title` 仍为 `<站点标题> ·` 加短事件名（运行完成 / 运行失败 / 等待处理 / 任务完成，各不超过 12 字；原先较长的推送标题与说明放在 `content`，任务名在 form「任务」）。载荷形如 `{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<站点标题> · <创建者>提醒你：<摘要>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」。任务生命周期推送 form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录工作通知的 `task_id`。`reminder_deliveries` 另有 `robot_message_id` / `robot_status` / `robot_failed_reason` 记录服务号机器人投递；任务推送的机器人结果只记日志，不改 `notification_deliveries`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径。未配置通知应用时，任务推送回退到对话机器人 `oToMessages/batchSend`。
+钉钉对同一用户、同一自然日的**相同工作通知正文**会去重。AIHub 发出的工作通知一律用 `msgtype: oa`。`head.bgcolor` 固定 `FF2E7CF6`（色带标识应用）；`head.text` 仍发送管理端通用设置的站点标题（未设置时为「AI 助手」），但钉钉工作通知会把 `oa.head.text` **改写成通知应用在开放平台登记的应用名**，因此调用方身份写在 `body.title`。定时提醒的 `body.title`（以及通知应用机器人 markdown 标题、站内 `reminder.received` 通知标题）为 `<站点标题> · <创建者姓名>提醒你：<摘要>`，摘要不超过 12 字（例：`AI平台 · 胡玉琴A提醒你：每日例会`）。任务生命周期推送的 `body.title` 仍为 `<站点标题> ·` 加短事件名（运行完成 / 运行失败 / 等待处理 / 任务完成，各不超过 12 字；原先较长的推送标题与说明放在 `content`，任务名在 form「任务」）。载荷形如 `{"msgtype":"oa","oa":{"message_url":"<仅任务推送的绝对深链>","head":{"bgcolor":"FF2E7CF6","text":"<站点标题>"},"body":{"title":"<站点标题> · <创建者>提醒你：<摘要>","form":[{"key":"时间","value":"HH:mm"},{"key":"来自","value":"<设置人>"}],"content":"<正文>","author":"<设置人>"}}}`。定时提醒无 `message_url`，form 为「时间」（周期提醒写成 `09:00 · 每周三`）与「来自」。任务生命周期推送 form 为「任务」与「时间」，`message_url` 为任务深链。`reminder_deliveries.provider_task_id` 与 `notification_deliveries.provider_message_id` 记录工作通知的 `task_id`。`reminder_deliveries` 另有 `robot_message_id` / `robot_status` / `robot_failed_reason` 记录通知应用机器人投递；任务推送的机器人结果只记日志，不改 `notification_deliveries`。markdown / `action_card` 仍可走 `sendWorkNotice` 兼容路径。未配置通知应用时，任务推送回退到对话机器人 `oToMessages/batchSend`。
 
 ## 手工绑定
 
@@ -114,7 +115,7 @@ Tick 到期时 `runScheduleTick` 识别 `config.reminder` 后调用 `ReminderTas
 2. 否则邮箱符合 `<staffId>@dingtalk.jiefakj.com` 约定
 3. 都没有则投递 `skipped`（`failed_reason=user_not_mapped`）
 
-本地账号（例如破窗管理员 `admin@jiefakj.com`）没有钉钉身份邮箱，也不会在机器人会话里自动建链。管理员可在 **管理端 → 通用设置 → IM 连接器 → 钉钉 → 已绑定员工** 为任意 AIHub 账号手工绑定（或解绑）钉钉企业用户。
+本地账号（例如破窗管理员 `admin@jiefakj.com`）没有钉钉身份邮箱，也不会在机器人会话里自动建链。管理员可在 **管理端 → 通用设置 → IM 连接器 → 钉钉 → 已绑定用户** 为任意 AIHub 账号手工绑定（或解绑）钉钉企业用户。
 
 若该钉钉用户已经映射到另一个 AIHub 账号 —— 无论是 `messenger_account_links` 行（`boundVia: 'link'`）还是身份邮箱 local-part 等于该 staffId（`boundVia: 'identity_email'`）—— 默认拒绝并返回 `PLATFORM_USER_ALREADY_BOUND`（详情含对方 `boundUserId` / Email / Name / `boundVia`）。`force: true` 在同一事务里删掉对方的链接行（若有）并写入当前绑定，避免「先解绑再绑定」半提交。身份邮箱冲突没有链接行可删；`force: true` 仍允许写入手工行（运维可能故意把某钉钉用户指到本地管理员）。
 

@@ -12,9 +12,9 @@ import type {
 import { adminImConnectorsService } from '@/enterprise/client/services/adminImConnectors';
 
 import { useAdminImConnectors } from '../hooks';
-import { infraSettingsStyles as cardStyles } from '../styles';
 import { DingTalkConnectorCard } from './DingTalkConnectorCard';
 import type { ImConnectorBindingsService, ImConnectorMutationService } from './service';
+import { imConnectorStyles as styles } from './styles';
 
 export interface ImConnectorsTabProps {
   /** Injectable for tests. */
@@ -58,7 +58,8 @@ const renderCard = (
  * IM 连接器 tab body — one card per supported platform.
  *
  * The list always answers with every platform the deployment knows about, configured or not, so an
- * admin provisioning the robot for the first time finds the same card an operator later edits.
+ * admin provisioning the robot for the first time finds the same card an operator later edits. The
+ * page only offers this tab while the `dingtalk` module is installed.
  */
 export const ImConnectorsTab = memo<ImConnectorsTabProps>(
   ({
@@ -101,7 +102,7 @@ export const ImConnectorsTab = memo<ImConnectorsTabProps>(
       return <Text type="secondary">{t('systemGeneral.imConnectors.empty')}</Text>;
 
     return (
-      <div className={cardStyles.grid} style={{ gridTemplateColumns: '1fr' }}>
+      <div className={styles.tab}>
         {items.map((item) =>
           renderCard(item, canOperate, onSaved, mutationService, bindingsService),
         )}

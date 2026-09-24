@@ -577,10 +577,10 @@ const contentFor = (
       return '钉钉个人数据服务暂时不可用（DINGTALK_PERSONAL_BROKER_UNAVAILABLE），请稍后重试。';
     }
     case 'DINGTALK_PERSONAL_CORP_ID_MISSING': {
-      return `当前钉钉连接器未配置企业 ID（DINGTALK_PERSONAL_CORP_ID_MISSING）。请联系管理员检查钉钉连接器配置${admin}。`;
+      return `当前 IM 连接器未配置企业 ID（DINGTALK_PERSONAL_CORP_ID_MISSING）。请联系管理员检查 IM 连接器配置${admin}。`;
     }
     case 'DINGTALK_PERSONAL_DISABLED': {
-      return `管理员未开启钉钉个人数据（DINGTALK_PERSONAL_DISABLED）。请联系管理员在即时通讯连接器中开启${admin}。`;
+      return `管理员未开启钉钉个人数据（DINGTALK_PERSONAL_DISABLED）。请联系管理员在 IM 连接器中开启${admin}。`;
     }
     case 'DINGTALK_PERSONAL_EXPIRED':
     case 'DINGTALK_PERSONAL_UNAUTHORIZED': {
@@ -590,7 +590,7 @@ const contentFor = (
       const feature =
         typeof details?.feature === 'string' ? FEATURE_LABEL[details.feature] : undefined;
       const what = feature ? `「${feature}」` : '该能力';
-      return `管理员未开启${what}（DINGTALK_PERSONAL_FEATURE_DISABLED）。请联系管理员在钉钉连接器中开启${admin}。`;
+      return `管理员未开启${what}（DINGTALK_PERSONAL_FEATURE_DISABLED）。请联系管理员在 IM 连接器中开启${admin}。`;
     }
     case 'DINGTALK_PERSONAL_FILE_TOO_LARGE': {
       return '文件超过 20 MB，无法下载（DINGTALK_PERSONAL_FILE_TOO_LARGE）。';

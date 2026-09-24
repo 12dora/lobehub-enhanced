@@ -466,7 +466,8 @@ export default {
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_INVALID': 'Invalid parameters',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_APPROVAL_ADMIN':
     'Approval admin permission required',
-  'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_CONFIGURED': 'DingTalk is not configured',
+  'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_CONFIGURED':
+    'DingTalk notification app is not configured',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_FOUND':
     'That to-do or event was not found. It may have been deleted, or you may not have access.',
   'builtins.lobe-dingtalk-workspace.ui.error.DINGTALK_NOT_ORIGINATOR':
@@ -759,7 +760,8 @@ export default {
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_INVALID': 'Invalid parameters',
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_APPROVAL_ADMIN':
     'Approval admin permission required',
-  'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_CONFIGURED': 'DingTalk is not configured',
+  'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_CONFIGURED':
+    'DingTalk notification app is not configured',
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_FOUND':
     'Nothing found to act on. It may have been deleted, or you may not have access.',
   'builtins.lobe-dingtalk-approval.ui.error.DINGTALK_NOT_ORIGINATOR':

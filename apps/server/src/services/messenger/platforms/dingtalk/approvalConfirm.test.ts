@@ -885,6 +885,43 @@ describe('forwardDingTalkWaitingHuman preview', () => {
     expect(sendCard).not.toHaveBeenCalled();
     expect(rejectPlugin).toHaveBeenCalled();
   });
+
+  it('passes the stored confirm-card template and omits it when the setting is empty', async () => {
+    approvalPreview.mockResolvedValue({
+      actingAs: { deptPath: '财务部', name: '陈柠' },
+      danger: false,
+      lines: [{ label: '审批单', value: '付款审批单' }],
+      title: '同意「付款审批单」',
+      warnings: [],
+    });
+
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...CONFIRM_CONFIG,
+      confirmCardTemplateId: '  tpl-from-settings  ',
+    } as never);
+    await sendWaiting({
+      apiName: 'approveTask',
+      args: approveArgs,
+      identifier: 'lobe-dingtalk-approval',
+    });
+    expect(sendCard).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ cardTemplateId: 'tpl-from-settings' }),
+    );
+
+    sendCard.mockClear();
+    vi.mocked(getMessengerDingTalkConfig).mockResolvedValue({
+      ...CONFIRM_CONFIG,
+      confirmCardTemplateId: null,
+    } as never);
+    await sendWaiting({
+      apiName: 'approveTask',
+      args: approveArgs,
+      identifier: 'lobe-dingtalk-approval',
+    });
+    const params = sendCard.mock.calls[0]?.[1] as { cardTemplateId?: string };
+    expect(params.cardTemplateId).toBeUndefined();
+  });
 });
 
 describe('aggregated DingTalk confirm card', () => {

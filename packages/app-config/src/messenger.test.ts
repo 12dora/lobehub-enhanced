@@ -78,6 +78,7 @@ describe('getMessengerDingTalkConfig', () => {
       chatEnabled: true,
       clientId: 'app_key',
       clientSecret: 'app_secret',
+      confirmCardTemplateId: null,
       corpId: null,
       idleNewTopicEnabled: true,
       idleNewTopicHours: 24,
@@ -87,6 +88,33 @@ describe('getMessengerDingTalkConfig', () => {
       robotDisplayName: '',
       selectCardTemplateId: null,
     });
+  });
+
+  it('exposes the stored confirm-card template and does not substitute the env id', async () => {
+    const previous = process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+    process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = 'env-tpl';
+    try {
+      findEnabledByPlatform.mockResolvedValueOnce({
+        ...COMPLETE_ROW,
+        settings: { ...COMPLETE_ROW.settings, confirmCardTemplateId: '  setting-tpl  ' },
+      });
+      await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+        confirmCardTemplateId: 'setting-tpl',
+      });
+
+      invalidateMessengerConfigCache('dingtalk');
+      findEnabledByPlatform.mockResolvedValueOnce({
+        ...COMPLETE_ROW,
+        settings: { ...COMPLETE_ROW.settings, confirmCardTemplateId: '   ' },
+      });
+      await expect(getMessengerDingTalkConfig()).resolves.toMatchObject({
+        confirmCardTemplateId: null,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+      else process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = previous;
+      invalidateMessengerConfigCache('dingtalk');
+    }
   });
 
   it('carries robotDisplayName from settings', async () => {

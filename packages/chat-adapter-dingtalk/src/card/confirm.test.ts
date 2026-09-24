@@ -214,6 +214,55 @@ describe('sendDingTalkStreamConfirmCard', () => {
     expect(api.getAccessToken).not.toHaveBeenCalled();
   });
 
+  it('uses the env template when cardTemplateId is omitted or blank', async () => {
+    process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = '  env-tpl  ';
+    // A shared Response is consumed by the first call; the second send needs a fresh body.
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ success: true }), { status: 200 }),
+      );
+    const { api } = countingClient();
+    const card = { content: '正文', status: '待确认', title: '标题' };
+    const target = { robotCode: 'robot', staffId: 'staff_1' };
+
+    await sendDingTalkStreamConfirmCard(api, {
+      card,
+      outTrackId: 'confirm-env',
+      target,
+    });
+    await sendDingTalkStreamConfirmCard(api, {
+      card,
+      cardTemplateId: '   ',
+      outTrackId: 'confirm-blank',
+      target,
+    });
+
+    const ids = fetchMock.mock.calls.map((call) => {
+      const init = call[1];
+      return (JSON.parse(String(init?.body)) as { cardTemplateId: string }).cardTemplateId;
+    });
+    expect(ids).toEqual(['env-tpl', 'env-tpl']);
+  });
+
+  it('prefers cardTemplateId over the env template', async () => {
+    process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = 'env-tpl';
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    const { api } = countingClient();
+    await sendDingTalkStreamConfirmCard(api, {
+      card: { content: '正文', status: '待确认', title: '标题' },
+      cardTemplateId: ' setting-tpl ',
+      outTrackId: 'confirm-1',
+      target: { robotCode: 'robot', staffId: 'staff_1' },
+    });
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect((JSON.parse(String(init?.body)) as { cardTemplateId: string }).cardTemplateId).toBe(
+      'setting-tpl',
+    );
+  });
+
   it('posts one createAndDeliver with callbackType STREAM', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')

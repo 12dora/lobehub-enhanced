@@ -28,11 +28,48 @@ export interface InfraFieldProps {
   /** Static guidance — lives in a tooltip so neighbouring rows stay aligned. */
   hint?: string;
   label: string;
+  /** Small marker after the label (e.g. a tag saying where a pre-filled value came from). */
+  labelExtra?: ReactNode;
   /** Extra line under the control (e.g. "will be cleared on save"), also described to the control. */
   note?: string;
   /** Span the whole field grid. */
   wide?: boolean;
 }
+
+export interface InfraHelpButtonProps {
+  /** Static guidance shown in the tooltip. */
+  hint: ReactNode;
+  /** What the guidance is about — becomes the button's accessible name (「{{field}} 说明」). */
+  label: string;
+}
+
+/**
+ * The "?" beside a label, a section title or a switch.
+ *
+ * A real button rather than a hover-only icon: Tab reaches it, focus opens the tooltip and blur
+ * closes it, so the guidance is not pointer-only. It sits beside the `<label>`, never inside it, so
+ * its accessible name does not leak into the control's own name.
+ */
+export const InfraHelpButton = memo<InfraHelpButtonProps>(({ hint, label }) => {
+  const { t } = useTranslation('admin');
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Tooltip open={open} title={hint} onOpenChange={setOpen}>
+      <button
+        aria-label={t('systemGeneral.helpFor', { field: label })}
+        className={styles.helpButton}
+        type="button"
+        onBlur={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+      >
+        <Icon icon={CircleHelp} size={14} />
+      </button>
+    </Tooltip>
+  );
+});
+
+InfraHelpButton.displayName = 'AdminInfraHelpButton';
 
 /**
  * Label + optional help icon + control, with room for one validation line underneath.
@@ -43,65 +80,63 @@ export interface InfraFieldProps {
  * The label is a real `<label htmlFor>` and the error/note ids are handed back through the render
  * prop, so screen readers get the same association the sighted layout implies.
  */
-export const InfraField = memo<InfraFieldProps>(({ children, error, hint, label, note, wide }) => {
-  const { t } = useTranslation('admin');
-  const [open, setOpen] = useState(false);
-  const reactId = useId();
-  const controlId = `infra-${reactId}`;
-  const labelId = `${controlId}-label`;
-  const errorId = `${controlId}-error`;
-  const noteId = `${controlId}-note`;
+export const InfraField = memo<InfraFieldProps>(
+  ({ children, error, hint, label, labelExtra, note, wide }) => {
+    const reactId = useId();
+    const controlId = `infra-${reactId}`;
+    const labelId = `${controlId}-label`;
+    const errorId = `${controlId}-error`;
+    const noteId = `${controlId}-note`;
 
-  const describedBy = [error ? errorId : null, note ? noteId : null].filter(Boolean).join(' ');
-  const render: InfraFieldRenderProps = {
-    control: {
-      id: controlId,
-      ...(error ? { 'aria-invalid': true } : {}),
-      ...(describedBy ? { 'aria-describedby': describedBy } : {}),
-    },
-    labelId,
-  };
+    const describedBy = [error ? errorId : null, note ? noteId : null].filter(Boolean).join(' ');
+    const render: InfraFieldRenderProps = {
+      control: {
+        id: controlId,
+        ...(error ? { 'aria-invalid': true } : {}),
+        ...(describedBy ? { 'aria-describedby': describedBy } : {}),
+      },
+      labelId,
+    };
 
-  return (
-    <div className={wide ? `${styles.field} ${styles.fieldWide}` : styles.field}>
-      <div className={styles.labelRow}>
-        <label className={styles.label} htmlFor={controlId} id={labelId}>
-          {label}
-        </label>
-        {hint ? (
-          <Tooltip open={open} title={hint} onOpenChange={setOpen}>
-            <button
-              aria-label={t('systemGeneral.helpFor', { field: label })}
-              className={styles.helpButton}
-              type="button"
-              onBlur={() => setOpen(false)}
-              onFocus={() => setOpen(true)}
-            >
-              <Icon icon={CircleHelp} size={14} />
-            </button>
-          </Tooltip>
+    return (
+      <div className={wide ? `${styles.field} ${styles.fieldWide}` : styles.field}>
+        <div className={styles.labelRow}>
+          <label className={styles.label} htmlFor={controlId} id={labelId}>
+            {label}
+          </label>
+          {hint ? <InfraHelpButton hint={hint} label={label} /> : null}
+          {labelExtra}
+        </div>
+        {typeof children === 'function' ? children(render) : children}
+        {note ? (
+          <span className={styles.hint} id={noteId}>
+            {note}
+          </span>
+        ) : null}
+        {error ? (
+          <span className={styles.error} id={errorId}>
+            {error}
+          </span>
         ) : null}
       </div>
-      {typeof children === 'function' ? children(render) : children}
-      {note ? (
-        <span className={styles.hint} id={noteId}>
-          {note}
-        </span>
-      ) : null}
-      {error ? (
-        <span className={styles.error} id={errorId}>
-          {error}
-        </span>
-      ) : null}
-    </div>
-  );
-});
+    );
+  },
+);
 
 InfraField.displayName = 'AdminInfraField';
 
 export interface InfraSwitchRowProps {
+  /** Inline control between the label and the switch — e.g. the hours an idle rule waits. */
+  addon?: ReactNode;
   checked: boolean;
+  /** Extra class on the wrapper, e.g. the bordered tile a grid of switches uses. */
+  className?: string;
   disabled?: boolean;
+  /**
+   * Static guidance behind a "?" beside the label. Preferred over `hint`: a row of switches stays
+   * one line tall and neighbouring tiles stay aligned.
+   */
+  help?: string;
   /** One line under the row explaining what turning it on changes. */
   hint?: string;
   label: string;
@@ -113,17 +148,23 @@ export interface InfraSwitchRowProps {
  * labelable element, so `<label htmlFor>` gives it its accessible name.
  */
 export const InfraSwitchRow = memo<InfraSwitchRowProps>(
-  ({ checked, disabled, hint, label, onChange }) => {
+  ({ addon, checked, className, disabled, help, hint, label, onChange }) => {
     const reactId = useId();
     const controlId = `infra-switch-${reactId}`;
 
     return (
-      <div className={styles.switchField}>
+      <div className={className ? `${styles.switchField} ${className}` : styles.switchField}>
         <div className={styles.switchRow}>
-          <label className={styles.label} htmlFor={controlId}>
-            {label}
-          </label>
-          <Switch checked={checked} disabled={disabled} id={controlId} onChange={onChange} />
+          <div className={styles.labelRow}>
+            <label className={styles.label} htmlFor={controlId}>
+              {label}
+            </label>
+            {help ? <InfraHelpButton hint={help} label={label} /> : null}
+          </div>
+          <div className={styles.switchControls}>
+            {addon}
+            <Switch checked={checked} disabled={disabled} id={controlId} onChange={onChange} />
+          </div>
         </div>
         {hint ? <span className={styles.hint}>{hint}</span> : null}
       </div>

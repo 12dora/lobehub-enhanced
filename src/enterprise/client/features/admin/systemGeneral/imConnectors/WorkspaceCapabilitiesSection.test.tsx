@@ -27,10 +27,13 @@ vi.mock('antd-style', () => ({
   cssVar: new Proxy({}, { get: () => '' }),
 }));
 
-// InfraField takes Icon and Tooltip from the root package.
+// The "?" help takes Icon and Tooltip from the root package; the guidance is exposed as an
+// attribute so a test can tell it lives in a tooltip rather than an inline paragraph.
 vi.mock('@lobehub/ui', () => ({
   Icon: () => <span />,
-  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Tooltip: ({ children, title }: { children?: ReactNode; title?: string }) => (
+    <span data-help={title}>{children}</span>
+  ),
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -111,7 +114,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
   configured: true,
+  confirmCardTemplateId: null,
   enabled: true,
+  fallbacks: { confirmCardTemplateId: null, corpId: null, robotDisplayName: 'AI 助手' },
   hasClientSecret: true,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
@@ -173,11 +178,15 @@ const renderSection = ({
   disabled = false,
   draft = toDingTalkDraft(view()),
   service = workspaceService(),
+  showApproval,
+  showWorkspace,
 }: Partial<{
   canOperate: boolean;
   disabled: boolean;
   draft: ReturnType<typeof toDingTalkDraft>;
   service: ImConnectorWorkspaceService;
+  showApproval: boolean;
+  showWorkspace: boolean;
 }> = {}) =>
   render(
     <WorkspaceCapabilitiesSection
@@ -185,6 +194,8 @@ const renderSection = ({
       disabled={disabled}
       draft={draft}
       service={service}
+      showApproval={showApproval}
+      showWorkspace={showWorkspace}
       onPatch={onPatch}
     />,
   );
@@ -194,11 +205,22 @@ beforeEach(() => {
 });
 
 describe('WorkspaceCapabilitiesSection', () => {
-  it('says what the section grants before offering the switches', () => {
-    renderSection();
+  it('says what the section grants behind a "?" beside its title, not inline', () => {
+    const { container } = renderSection();
 
     expect(screen.getByText('systemGeneral.imConnectors.workspace.title')).toBeTruthy();
-    expect(screen.getByText('systemGeneral.imConnectors.workspace.description')).toBeTruthy();
+    expect(
+      screen.getByLabelText('systemGeneral.helpFor:systemGeneral.imConnectors.workspace.title'),
+    ).toBeTruthy();
+    expect(
+      container.querySelector('[data-help="systemGeneral.imConnectors.workspace.description"]'),
+    ).toBeTruthy();
+    expect(screen.queryByText('systemGeneral.imConnectors.workspace.description')).toBeNull();
+    // Each capability explains itself the same way.
+    expect(
+      container.querySelector('[data-help="systemGeneral.imConnectors.workspace.hints.approval"]'),
+    ).toBeTruthy();
+    expect(screen.queryByText('systemGeneral.imConnectors.workspace.hints.approval')).toBeNull();
   });
 
   it('carries each capability switch into the draft', () => {
@@ -214,16 +236,15 @@ describe('WorkspaceCapabilitiesSection', () => {
     expect(onPatch).toHaveBeenLastCalledWith({ workspaceCalendarEnabled: true });
   });
 
-  it('holds the tier back until 审批 is on, and says why', () => {
+  it('holds the tier back until 审批 is on, without a note that repeats it', () => {
     renderSection();
 
     const tier = screen.getByLabelText(
       'systemGeneral.imConnectors.workspace.fields.tier',
     ) as HTMLSelectElement;
     expect(tier.disabled).toBe(true);
-    expect(
-      screen.getByText('systemGeneral.imConnectors.workspace.tier.requiresApproval'),
-    ).toBeTruthy();
+    // The disabled select says it; a line under it restating that was noise.
+    expect(screen.queryByText(/systemGeneral.imConnectors.workspace.tier.hints/)).toBeNull();
   });
 
   it('explains what the chosen tier allows, and offers the four tiers', () => {
@@ -271,7 +292,7 @@ describe('WorkspaceCapabilitiesSection', () => {
         ) as HTMLSelectElement
       ).disabled,
     ).toBe(true);
-    // The probe would only answer three times 未配置服务号, which the notice already says.
+    // The probe would only answer three times 未配置通知应用, which the notice already says.
     expect(
       (screen.getByText('systemGeneral.imConnectors.workspace.probe.run') as HTMLButtonElement)
         .disabled,
@@ -435,6 +456,90 @@ describe('WorkspaceCapabilitiesSection', () => {
     renderSection({ canOperate: false });
 
     expect(screen.queryByText('systemGeneral.imConnectors.workspace.probe.run')).toBeNull();
+    expect(screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.tier')).toBeTruthy();
+  });
+
+  // The server skips a capability whose module is off; a stale client still shows its row.
+  it('reads a skipped capability as 未安装, not as a failure', async () => {
+    const service = workspaceService({
+      probeWorkspacePermissions: vi.fn().mockResolvedValue(
+        probeResult({
+          calendar: { ok: false, reason: 'disabled' } as unknown as DingtalkPermissionProbe,
+          todo: { ok: false, status: 'skipped' } as unknown as DingtalkPermissionProbe,
+        }),
+      ),
+    });
+    renderSection({ service });
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.workspace.probe.run'));
+
+    const calendar = await screen.findByText(
+      'systemGeneral.imConnectors.workspace.probe.row:systemGeneral.imConnectors.workspace.fields.calendar,systemGeneral.imConnectors.workspace.probe.skipped',
+    );
+    expect(calendar.getAttribute('data-type')).toBe('secondary');
+    expect(
+      screen.getByText(
+        'systemGeneral.imConnectors.workspace.probe.row:systemGeneral.imConnectors.workspace.fields.todo,systemGeneral.imConnectors.workspace.probe.skipped',
+      ),
+    ).toBeTruthy();
+    // Nothing to apply for.
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+
+  it('reads a reason it has no copy for as 无法检查', async () => {
+    const service = workspaceService({
+      probeWorkspacePermissions: vi.fn().mockResolvedValue(
+        probeResult({
+          approval: { ok: false, reason: 'rate_limited' } as unknown as DingtalkPermissionProbe,
+        }),
+      ),
+    });
+    renderSection({ service });
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.workspace.probe.run'));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'systemGeneral.imConnectors.workspace.probe.row:systemGeneral.imConnectors.workspace.fields.approval,systemGeneral.imConnectors.workspace.probe.reason.unknown',
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  // Module `dingtalkApproval` off: 审批 and its tier are not offered, nor probed.
+  it('leaves out 审批 and the tier when the approval module is off', async () => {
+    const service = workspaceService();
+    renderSection({ service, showApproval: false });
+
+    expect(
+      screen.queryByLabelText('systemGeneral.imConnectors.workspace.fields.approval'),
+    ).toBeNull();
+    expect(screen.queryByLabelText('systemGeneral.imConnectors.workspace.fields.tier')).toBeNull();
+    expect(screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.todo')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('systemGeneral.imConnectors.workspace.probe.run'));
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'systemGeneral.imConnectors.workspace.probe.row:systemGeneral.imConnectors.workspace.fields.todo,systemGeneral.imConnectors.workspace.probe.ok',
+        ),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText(/workspace\.fields\.approval,/)).toBeNull();
+  });
+
+  // Module `dingtalkWorkspace` off: 待办 and 日程 are not offered; 审批 stays.
+  it('leaves out 待办 and 日程 when the workspace module is off', () => {
+    renderSection({ showWorkspace: false });
+
+    expect(screen.queryByLabelText('systemGeneral.imConnectors.workspace.fields.todo')).toBeNull();
+    expect(
+      screen.queryByLabelText('systemGeneral.imConnectors.workspace.fields.calendar'),
+    ).toBeNull();
+    expect(
+      screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.approval'),
+    ).toBeTruthy();
     expect(screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.tier')).toBeTruthy();
   });
 });

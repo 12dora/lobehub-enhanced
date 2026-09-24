@@ -169,8 +169,8 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
   });
 
   it.each([
-    ['DINGTALK_NOT_CONFIGURED', '钉钉服务号未配置'],
-    ['DINGTALK_FEATURE_DISABLED', '该能力未开启'],
+    ['DINGTALK_NOT_CONFIGURED', '在 IM 连接器中配置钉钉通知应用'],
+    ['DINGTALK_FEATURE_DISABLED', '在 IM 连接器的「工作台能力」中'],
     ['DINGTALK_FORBIDDEN', '没有权限执行该操作'],
     ['DINGTALK_PREMIUM_REQUIRED', 'OA 审批高级版'],
     ['DINGTALK_NOT_FOUND', '未找到该待办或日程'],
@@ -575,7 +575,7 @@ describe('DingtalkWorkspaceExecutionRuntime', () => {
     );
     const web = await unbound.createTodo({ subject: 'x' });
     expect(web.content).toContain(`[用钉钉登录](/settings/messenger/dingtalk)`);
-    expect(web.content).toContain('请先用钉钉登录 AIHub');
+    expect(web.content).toContain('请先用钉钉登录本平台');
 
     const dingtalkRuntime = createDingtalkWorkspaceRuntime(
       makeService({

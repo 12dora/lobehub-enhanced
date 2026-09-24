@@ -10,12 +10,15 @@ import SystemGeneralPage from './SystemGeneralPage';
 
 const mocks = vi.hoisted(() => ({
   admin: { authMethod: 'better-auth', permissions: [] as string[], status: 'allowed' },
+  /** Module states by id; a missing id reads as installed (every module defaults on). */
+  modules: {} as Record<string, boolean>,
   profileMutate: vi.fn(),
   regenerateBrowserProfile: vi.fn(),
   updateBrowserProfile: vi.fn(),
   view: undefined as
     | undefined
     | {
+        enterpriseLookupModuleEnabled?: boolean;
         onProfileRegenerate: () => Promise<void>;
         onProfileSave: (input: unknown) => Promise<void>;
       },
@@ -63,6 +66,10 @@ vi.mock('@lobehub/ui/base-ui', () => ({
 
 vi.mock('@/enterprise/client/providers/AdminAccessProvider', () => ({
   useAdminAccess: () => mocks.admin,
+}));
+
+vi.mock('@/enterprise/client/hooks/useModuleEnabled', () => ({
+  useModuleEnabled: (id: string) => mocks.modules[id] ?? true,
 }));
 
 vi.mock('@/enterprise/client/services/adminSystem', () => ({
@@ -126,6 +133,7 @@ vi.mock('./hooks', () => ({
 
 vi.mock('./SystemGeneralPageView', () => ({
   SystemGeneralPageView: (props: {
+    enterpriseLookupModuleEnabled?: boolean;
     onProfileRegenerate: () => Promise<void>;
     onProfileSave: (input: unknown) => Promise<void>;
   }) => {
@@ -169,6 +177,7 @@ beforeEach(() => {
     PLATFORM_PERMISSIONS.SYSTEM_READ,
     PLATFORM_PERMISSIONS.NETWORK_PROXY_READ,
   ];
+  mocks.modules = {};
   mocks.view = undefined;
   mocks.profileMutate.mockReset();
   mocks.regenerateBrowserProfile.mockReset();
@@ -268,6 +277,29 @@ describe('SystemGeneralPage', () => {
     await mocks.view!.onProfileRegenerate();
 
     expect(mocks.profileMutate).toHaveBeenCalledWith(regenerated, { revalidate: false });
+  });
+
+  // Contract §2.2: with the DingTalk integration uninstalled there is no IM 连接器 tab to open.
+  it('drops the IM 连接器 tab while the dingtalk module is off', () => {
+    mocks.modules = { dingtalk: false };
+    renderAt('/admin/system/general?tab=im-connectors');
+
+    expect(screen.queryByTestId('tab-im-connectors')).toBeNull();
+    expect(screen.queryByTestId('tab-body-im-connectors')).toBeNull();
+    // A link to it lands on the first tab that can be read instead of a dead one.
+    expect(screen.getByTestId('tab-body-infrastructure')).toBeTruthy();
+    expect(screen.getByTestId('tab-infrastructure')).toBeTruthy();
+  });
+
+  it('tells the 基础设施 tab that 企业查询 is installed', () => {
+    renderAt('/admin/system/general');
+    expect(mocks.view!.enterpriseLookupModuleEnabled).toBe(true);
+  });
+
+  it('tells the 基础设施 tab when the enterpriseLookup module is off', () => {
+    mocks.modules = { enterpriseLookup: false };
+    renderAt('/admin/system/general');
+    expect(mocks.view!.enterpriseLookupModuleEnabled).toBe(false);
   });
 
   it('refuses the page when the admin can read neither domain', () => {

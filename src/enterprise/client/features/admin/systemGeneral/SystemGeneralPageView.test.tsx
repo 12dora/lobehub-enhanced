@@ -316,6 +316,26 @@ describe('SystemGeneralPageView', () => {
     expect(screen.getByTestId('enterprise-lookup-card')).toBeTruthy();
   });
 
+  // Contract §2.2: an uninstalled module's card is not offered (nor its request made).
+  it('leaves the 企业查询 card out while the enterpriseLookup module is off', () => {
+    render(
+      <SystemGeneralPageView
+        canOperate
+        data={settings()}
+        enterpriseLookupModuleEnabled={false}
+        error={undefined}
+        isLoading={false}
+        probeBusy={{}}
+        probeResults={{}}
+        onRetry={vi.fn()}
+        onTest={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('systemGeneral.mail.title')).toBeTruthy();
+    expect(screen.queryByTestId('enterprise-lookup-card')).toBeNull();
+  });
+
   it('runs a live probe from the object-storage card', () => {
     const onTest = vi.fn();
     render(

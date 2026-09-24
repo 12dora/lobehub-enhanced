@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ReactElement, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdminImConnectorView } from '@/enterprise/client/services/adminImConnectors';
@@ -8,41 +8,25 @@ import type { AdminImConnectorView } from '@/enterprise/client/services/adminImC
 import { type DingTalkPersonalSummary, toDingTalkDraft } from './draft';
 import { PersonalDataSection } from './PersonalDataSection';
 
-vi.mock('react-i18next', async () => {
-  const { cloneElement } = await import('react');
-
-  return {
-    // The key stands in for the copy; each named component renders once, labelled by its name.
-    Trans: ({
-      components,
-      i18nKey,
-    }: {
-      components?: Record<string, ReactElement>;
-      i18nKey: string;
-    }) => (
-      <span>
-        {i18nKey}
-        {Object.entries(components ?? {}).map(([name, element]) =>
-          cloneElement(element, { key: name }, name),
-        )}
-      </span>
-    ),
-    useTranslation: () => ({
-      t: (key: string, options?: Record<string, unknown>) =>
-        options ? `${key}:${Object.values(options).join(',')}` : key,
-    }),
-  };
-});
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, options?: Record<string, unknown>) =>
+      options ? `${key}:${Object.values(options).join(',')}` : key,
+  }),
+}));
 
 vi.mock('antd-style', () => ({
   createStaticStyles: () => new Proxy({}, { get: () => '' }),
   cssVar: new Proxy({}, { get: () => '' }),
 }));
 
-// InfraField takes Icon and Tooltip from the root package.
+// The "?" help takes Icon and Tooltip from the root package; the guidance is exposed as an
+// attribute so a test can tell it lives in a tooltip rather than an inline paragraph.
 vi.mock('@lobehub/ui', () => ({
   Icon: () => <span />,
-  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Tooltip: ({ children, title }: { children?: ReactNode; title?: string }) => (
+    <span data-help={title}>{children}</span>
+  ),
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -79,7 +63,9 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
   configured: true,
+  confirmCardTemplateId: null,
   enabled: true,
+  fallbacks: { confirmCardTemplateId: null, corpId: null, robotDisplayName: 'AI 助手' },
   hasClientSecret: true,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
@@ -120,14 +106,22 @@ const onPatch = vi.fn();
 const renderSection = ({
   disabled = false,
   draft = toDingTalkDraft(view()),
+  showDocs,
   summary = null,
 }: Partial<{
   disabled: boolean;
   draft: ReturnType<typeof toDingTalkDraft>;
+  showDocs: boolean;
   summary: DingTalkPersonalSummary | null;
 }> = {}) =>
   render(
-    <PersonalDataSection disabled={disabled} draft={draft} summary={summary} onPatch={onPatch} />,
+    <PersonalDataSection
+      disabled={disabled}
+      draft={draft}
+      showDocs={showDocs}
+      summary={summary}
+      onPatch={onPatch}
+    />,
   );
 
 const switchOf = (field: string) =>
@@ -140,18 +134,24 @@ beforeEach(() => {
 });
 
 describe('PersonalDataSection', () => {
-  it('says what the section grants and what it needs before offering the switches', () => {
-    renderSection();
+  it('says what the section grants and what it needs behind "?", not inline', () => {
+    const { container } = renderSection();
 
     expect(screen.getByText('systemGeneral.imConnectors.personal.title')).toBeTruthy();
-    expect(screen.getByText('systemGeneral.imConnectors.personal.description')).toBeTruthy();
-    expect(screen.getByText('systemGeneral.imConnectors.personal.hints.write')).toBeTruthy();
+    expect(
+      container.querySelector('[data-help="systemGeneral.imConnectors.personal.description"]'),
+    ).toBeTruthy();
+    expect(
+      container.querySelector('[data-help="systemGeneral.imConnectors.personal.hints.write"]'),
+    ).toBeTruthy();
+    expect(screen.queryByText('systemGeneral.imConnectors.personal.description')).toBeNull();
+    expect(screen.queryByText('systemGeneral.imConnectors.personal.hints.write')).toBeNull();
   });
 
-  it('links the DingTalk CLI setting it names straight to the developer console', () => {
+  it('links the DingTalk CLI setting it needs straight to the developer console', () => {
     renderSection();
 
-    const link = screen.getByRole('link', { name: 'cli' });
+    const link = screen.getByRole('link', { name: 'systemGeneral.imConnectors.personal.cliLink' });
     expect(link.getAttribute('href')).toBe(
       'https://open-dev.dingtalk.com/fe/old#/developerSettings',
     );
@@ -214,9 +214,17 @@ describe('PersonalDataSection', () => {
   });
 
   it('warns when the sidecar is missing and shows how many members authorized', () => {
-    renderSection({ summary: { authorizedCount: 2, brokerConfigured: false } });
+    const { container } = renderSection({
+      summary: { authorizedCount: 2, brokerConfigured: false },
+    });
 
     expect(screen.getByText('systemGeneral.imConnectors.personal.brokerMissing')).toBeTruthy();
+    // The technical names (env variables) only in the tooltip, never in the warning itself.
+    expect(
+      container.querySelector(
+        '[data-help="systemGeneral.imConnectors.personal.brokerMissingHelp"]',
+      ),
+    ).toBeTruthy();
     expect(screen.getByText('systemGeneral.imConnectors.personal.authorizedCount:2')).toBeTruthy();
   });
 
@@ -231,5 +239,17 @@ describe('PersonalDataSection', () => {
     renderSection({ summary: null });
     expect(screen.queryByText('systemGeneral.imConnectors.personal.brokerMissing')).toBeNull();
     expect(screen.queryByText(/systemGeneral\.imConnectors\.personal\.authorizedCount/)).toBeNull();
+  });
+
+  // Module `dingtalkDocs` off: the two scopes it serves are not offered; the rest stay.
+  it('leaves out the docs and sheets scopes when the docs module is off', () => {
+    renderSection({
+      draft: toDingTalkDraft(view({ personalDataEnabled: true })),
+      showDocs: false,
+    });
+
+    expect(screen.queryByLabelText('systemGeneral.imConnectors.personal.fields.docs')).toBeNull();
+    expect(screen.queryByLabelText('systemGeneral.imConnectors.personal.fields.sheets')).toBeNull();
+    for (const scope of ['todo', 'chat', 'report', 'write']) expect(switchOf(scope)).toBeTruthy();
   });
 });

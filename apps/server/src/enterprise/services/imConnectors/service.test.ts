@@ -51,13 +51,16 @@ const initWithEnvKey = vi.hoisted(() =>
     encrypt: async (plaintext: string) => plaintext,
   })),
 );
+const getAgentRuntimeRedisClient = vi.hoisted(() =>
+  vi.fn((): { get: (key: string) => Promise<string | null> } | null => null),
+);
 
 vi.mock('@/config/messenger', () => ({
   invalidateMessengerConfigCache,
 }));
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
-  getAgentRuntimeRedisClient: () => null,
+  getAgentRuntimeRedisClient,
 }));
 
 vi.mock('@/server/modules/KeyVaultsEncrypt', () => ({
@@ -171,6 +174,7 @@ const createDb = () => {
 describe('ImConnectorsAdminService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getAgentRuntimeRedisClient.mockReset().mockReturnValue(null);
     appendAudit.mockResolvedValue({ id: 'audit-1' });
     probeDingTalkCredentials.mockResolvedValue({
       errorCode: null,
@@ -503,6 +507,112 @@ describe('ImConnectorsAdminService', () => {
     expect(view.robotDisplayName).toBe('');
   });
 
+  it('includes fallbacks on an unconfigured connector, including the env template', async () => {
+    const previous = process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+    process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = '  env-tpl  ';
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue(null);
+    try {
+      const view = await new ImConnectorsAdminService(createDb()).get('dingtalk');
+      expect(view.confirmCardTemplateId).toBeNull();
+      expect(view.fallbacks).toEqual({
+        confirmCardTemplateId: 'env-tpl',
+        corpId: null,
+        robotDisplayName: 'AI 助手',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+      else process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = previous;
+    }
+  });
+
+  it('reads the captured CorpId and keeps a Redis failure as a null fallback', async () => {
+    const previous = process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+    delete process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: {
+        ...existingRow.settings,
+        confirmCardTemplateId: 'stored-tpl',
+        robotDisplayName: '审批机器人',
+      },
+    } as never);
+    const redisGet = vi.fn(async (key: string) =>
+      key === 'messenger:dingtalk:corp-id' ? 'ding-captured' : null,
+    );
+    getAgentRuntimeRedisClient.mockReturnValue({ get: redisGet });
+    try {
+      const view = await new ImConnectorsAdminService(createDb()).get('dingtalk');
+      expect(view.corpId).toBeNull();
+      expect(view.confirmCardTemplateId).toBe('stored-tpl');
+      expect(view.robotDisplayName).toBe('审批机器人');
+      expect(redisGet).toHaveBeenCalledWith('messenger:dingtalk:corp-id');
+      expect(view.fallbacks).toEqual({
+        confirmCardTemplateId: null,
+        corpId: 'ding-captured',
+        robotDisplayName: 'AI 助手',
+      });
+
+      getAgentRuntimeRedisClient.mockReturnValue({
+        get: vi.fn(async () => {
+          throw new Error('redis down');
+        }),
+      });
+      const failed = await new ImConnectorsAdminService(createDb()).get('dingtalk');
+      expect(failed.fallbacks.corpId).toBeNull();
+      expect(failed.fallbacks.robotDisplayName).toBe('AI 助手');
+    } finally {
+      if (previous === undefined) delete process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID;
+      else process.env.DINGTALK_CONFIRM_CARD_TEMPLATE_ID = previous;
+    }
+  });
+
+  it('persists confirmCardTemplateId, clears a blank value, and keeps an omitted one', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, confirmCardTemplateId: 'stored-tpl' },
+    } as never);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, confirmCardTemplateId: '  ' },
+    });
+    expect(SystemBotProviderModel.update).toHaveBeenCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ confirmCardTemplateId: null }),
+      }),
+      expect.anything(),
+    );
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: upsertInput,
+    });
+    expect(
+      (
+        vi.mocked(SystemBotProviderModel.update).mock.calls[1]?.[2] as {
+          settings: { confirmCardTemplateId: string | null };
+        }
+      ).settings.confirmCardTemplateId,
+    ).toBe('stored-tpl');
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, confirmCardTemplateId: '  next-tpl  ' },
+    });
+    expect(SystemBotProviderModel.update).toHaveBeenLastCalledWith(
+      db,
+      'row-1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ confirmCardTemplateId: 'next-tpl' }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('passes corpId through upsert settings and the view', async () => {
     const db = createDb();
     const service = new ImConnectorsAdminService(db);
@@ -530,6 +640,51 @@ describe('ImConnectorsAdminService', () => {
         afterDiff: expect.objectContaining({ corpId: 'ding42' }),
       }),
     );
+  });
+
+  it('keeps an omitted corpId and clears null or blank', async () => {
+    const db = createDb();
+    const service = new ImConnectorsAdminService(db);
+    vi.spyOn(SystemBotProviderModel, 'findByPlatform').mockResolvedValue({
+      ...existingRow,
+      settings: { ...existingRow.settings, corpId: 'ding-stored' },
+    } as never);
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: upsertInput,
+    });
+    expect(
+      (
+        vi.mocked(SystemBotProviderModel.update).mock.calls[0]?.[2] as {
+          settings: { corpId: string | null };
+        }
+      ).settings.corpId,
+    ).toBe('ding-stored');
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, corpId: null },
+    });
+    expect(
+      (
+        vi.mocked(SystemBotProviderModel.update).mock.calls[1]?.[2] as {
+          settings: { corpId: string | null };
+        }
+      ).settings.corpId,
+    ).toBeNull();
+
+    await service.upsert({
+      actorUserId: 'operator-1',
+      input: { ...upsertInput, corpId: '' },
+    });
+    expect(
+      (
+        vi.mocked(SystemBotProviderModel.update).mock.calls[2]?.[2] as {
+          settings: { corpId: string | null };
+        }
+      ).settings.corpId,
+    ).toBeNull();
   });
 
   it('passes agentId through upsert settings and the view', async () => {

@@ -97,6 +97,11 @@ export interface MessengerDingTalkConfig {
   chatEnabled: boolean;
   clientId: string;
   clientSecret: string;
+  /**
+   * Stored confirm-card template id. Null when unset; the send path then uses
+   * env `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`.
+   */
+  confirmCardTemplateId: string | null;
   /** Optional CorpId for DingTalk 免登; empty/missing → null (SSO falls back to Redis). */
   corpId: string | null;
   idleNewTopicEnabled: boolean;
@@ -125,6 +130,7 @@ const dingTalkConnectorSettingsSchema = z
     agentId: z.string().trim().max(64).nullable().optional(),
     aiCardTemplateId: z.string().trim().max(200).nullable().optional(),
     chatEnabled: z.boolean().optional(),
+    confirmCardTemplateId: z.string().trim().max(200).nullable().optional(),
     corpId: z.string().trim().max(200).nullable().optional(),
     idleNewTopicEnabled: z.boolean().optional(),
     idleNewTopicHours: z
@@ -271,6 +277,7 @@ export const getMessengerDingTalkConfig = async (): Promise<MessengerDingTalkCon
       chatEnabled: settings.chatEnabled ?? true,
       clientId,
       clientSecret,
+      confirmCardTemplateId: emptyToNull(settings.confirmCardTemplateId ?? null),
       corpId: emptyToNull(settings.corpId ?? null),
       idleNewTopicEnabled: settings.idleNewTopicEnabled ?? true,
       idleNewTopicHours: settings.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,

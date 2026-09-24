@@ -5,9 +5,25 @@ import { getTestDB } from '@/database/core/getTestDB';
 import type { LobeChatDatabase } from '@/database/type';
 import { createCallerFactory } from '@/libs/trpc/lambda';
 
+import { getEnterpriseErrorBody } from '../../guards/enterpriseErrors';
 import { ImConnectorPlatformUserAlreadyBoundError } from '../../services/imConnectors/bindings';
+import type * as ModuleSettingsModule from '../../services/moduleSettings';
 import { createAdminAuthorizationFixture } from '../../testing/adminAuthorizationFixture';
 import { adminRouter } from '../admin';
+
+const disabledModules = vi.hoisted(() => ({ ids: new Set<string>() }));
+
+vi.mock('../../services/moduleSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof ModuleSettingsModule>();
+  return {
+    ...actual,
+    assertModuleEnabled: async (id: Parameters<typeof actual.assertModuleEnabled>[0]) => {
+      if (!disabledModules.ids.has(id)) return;
+      const { throwEnterpriseError } = await import('../../guards/enterpriseErrors');
+      throwEnterpriseError(actual.moduleDisabledError(id));
+    },
+  };
+});
 
 const db: LobeChatDatabase = await getTestDB();
 const createCaller = createCallerFactory(adminRouter);
@@ -57,7 +73,13 @@ const sampleView = {
   clientId: null,
   clientSecretFingerprint: null,
   configured: false,
+  confirmCardTemplateId: null,
   enabled: false,
+  fallbacks: {
+    confirmCardTemplateId: null,
+    corpId: null,
+    robotDisplayName: 'AI 助手',
+  },
   hasClientSecret: false,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
@@ -113,6 +135,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  disabledModules.ids.clear();
   serviceMocks.get.mockReset().mockResolvedValue(sampleView);
   serviceMocks.list.mockReset().mockResolvedValue({ items: [sampleView] });
   serviceMocks.test.mockReset().mockResolvedValue({
@@ -419,5 +442,25 @@ describe('admin.imConnectors permission gating', () => {
       code: 'CONFLICT',
       message: 'PLATFORM_USER_ALREADY_BOUND',
     });
+  });
+
+  it('rejects syncDirectory with PLATFORM_MODULE_DISABLED when dingtalkNotify is off', async () => {
+    disabledModules.ids.add('dingtalkNotify');
+    const operator = await callerFor('superAdmin');
+
+    const error = await operator.syncDirectory().then(
+      () => {
+        throw new Error('expected PLATFORM_MODULE_DISABLED');
+      },
+      (caught: unknown) => caught,
+    );
+    expect(getEnterpriseErrorBody(error)).toMatchObject({
+      code: 'PLATFORM_MODULE_DISABLED',
+      details: { moduleId: 'dingtalkNotify' },
+    });
+    expect(serviceMocks.syncDirectory).not.toHaveBeenCalled();
+
+    await expect(operator.directoryStatus()).resolves.toMatchObject({ state: 'ok', users: 12 });
+    await expect(operator.list()).resolves.toEqual({ items: [sampleView] });
   });
 });

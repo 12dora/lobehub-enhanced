@@ -49,12 +49,15 @@ export interface ApiCallStatsSectionProps {
 }
 
 /**
- * 接口调用量 — how much the 工作台能力 above are actually being used.
+ * 接口调用量 — how much the 工作台能力 are actually being used.
  *
  * Read-only by design: DingTalk meters these calls per app, so an administrator comes here to find
  * out whether a capability is worth leaving on and which API is spending the quota. Today's top
  * APIs answer that at a glance; the 30-day breakdown sits behind a disclosure because it is only
  * read when one day looks wrong.
+ *
+ * Only the readings: the title and its "?" belong to the folded panel the card mounts this in, so
+ * nothing is requested until an administrator opens it.
  */
 export const ApiCallStatsSection = memo<ApiCallStatsSectionProps>(
   ({ service = defaultApiStatsService }) => {
@@ -71,14 +74,7 @@ export const ApiCallStatsSection = memo<ApiCallStatsSectionProps>(
     const topApis = (today?.byApi ?? []).slice(0, IM_CONNECTOR_API_STATS_TOP);
 
     return (
-      <div className={styles.section}>
-        <span className={styles.sectionTitle}>
-          {t('systemGeneral.imConnectors.apiStats.title')}
-        </span>
-        <span className={formStyles.hint}>
-          {t('systemGeneral.imConnectors.apiStats.description')}
-        </span>
-
+      <div className={formStyles.stack}>
         {/* A failed read must never read as zero calls: the quota decision would then be made on a
             number the server never gave. A reading that HAS settled survives a failed refresh, the
             same precedence `AsyncBoundary` applies elsewhere. */}

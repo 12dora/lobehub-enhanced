@@ -5,7 +5,8 @@ import { DingTalkApiError, DingTalkCardUnavailableError } from '../types';
  * Built-in StandardCard (`/v1.0/im/v1.0/robot/interactiveCards/send`) does not
  * deliver button clicks on the Stream topic `/v1.0/card/instances/callback`.
  * Confirm cards use create-and-deliver with `callbackType: STREAM`, which
- * requires a card-platform template. The admin sets
+ * requires a card-platform template. Callers pass the connector setting as
+ * `cardTemplateId`; a missing or blank id falls back to
  * `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`.
  */
 export const DINGTALK_CONFIRM_CARD_TEMPLATE_ENV = 'DINGTALK_CONFIRM_CARD_TEMPLATE_ID';

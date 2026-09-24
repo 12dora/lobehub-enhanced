@@ -23,7 +23,7 @@ export type ImConnectorBindingsService = AdminImConnectorsBindingsService;
 export const imConnectorBindingsService: ImConnectorBindingsService = adminImConnectorsService;
 
 /**
- * 通知应用（服务号）: the probe, the directory read and the manual sync. Kept apart from the
+ * 通知应用: the probe, the directory read and the manual sync. Kept apart from the
  * connector's own writes because the block below the robot credentials is the only caller.
  */
 export type ImConnectorNotifyAppService = AdminImConnectorsNotifyAppService;

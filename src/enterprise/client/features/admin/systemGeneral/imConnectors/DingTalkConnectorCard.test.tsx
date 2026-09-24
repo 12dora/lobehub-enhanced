@@ -13,14 +13,14 @@ import type { ImConnectorMutationService, ImConnectorNotifyAppService } from './
 
 const mocks = vi.hoisted(() => ({
   confirmModal: vi.fn(),
+  /** Module states by id; a missing id reads as installed (every module defaults on). */
+  modules: {} as Record<string, boolean>,
   runAdminMutation: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
-  // The personal-data description links its console path through <Trans>; the key stands in.
-  Trans: ({ i18nKey }: { i18nKey: string }) => <>{i18nKey}</>,
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options ? `${key}:${Object.values(options).join(',')}` : key,
@@ -32,11 +32,18 @@ vi.mock('antd-style', () => ({
   cssVar: new Proxy({}, { get: () => '' }),
 }));
 
-// InfraField / InfraSwitchRow still take Icon and Tooltip from the root package.
+// The "?" help buttons take Icon and Tooltip from the root package; the guidance is exposed as an
+// attribute so a test can tell it moved into a tooltip rather than an inline paragraph.
 vi.mock('@lobehub/ui', () => ({
   Flexbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Icon: () => <span />,
-  Tooltip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  Tooltip: ({ children, title }: { children?: ReactNode; title?: string }) => (
+    <span data-help={title}>{children}</span>
+  ),
+}));
+
+vi.mock('@/enterprise/client/hooks/useModuleEnabled', () => ({
+  useModuleEnabled: (id: string) => mocks.modules[id] ?? true,
 }));
 
 vi.mock('@lobehub/ui/base-ui', () => ({
@@ -57,17 +64,20 @@ vi.mock('@lobehub/ui/base-ui', () => ({
   confirmModal: mocks.confirmModal,
   Input: (props: Record<string, unknown>) => <input {...props} />,
   InputNumber: ({
+    'aria-describedby': describedBy,
     disabled,
     id,
     onChange,
     value,
   }: {
-    disabled?: boolean;
-    id?: string;
-    onChange?: (next: number | null) => void;
-    value?: number | null;
+    'aria-describedby'?: string;
+    'disabled'?: boolean;
+    'id'?: string;
+    'onChange'?: (next: number | null) => void;
+    'value'?: number | null;
   }) => (
     <input
+      aria-describedby={describedBy}
       disabled={disabled}
       id={id}
       value={value ?? ''}
@@ -126,8 +136,12 @@ vi.mock('@lobehub/ui/base-ui', () => ({
   Tag: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   toast: { error: mocks.toastError, success: mocks.toastSuccess },
-  Tooltip: ({ children, title }: { children?: ReactNode; title?: string }) => (
-    <span data-tooltip={title}>{children}</span>
+  // The status tag's details: rendered beside the tag so their lines can be read back.
+  Tooltip: ({ children, title }: { children?: ReactNode; title?: ReactNode }) => (
+    <span>
+      {children}
+      <span data-testid="status-details">{title}</span>
+    </span>
   ),
 }));
 
@@ -196,8 +210,10 @@ const view = (overrides: Partial<AdminImConnectorView> = {}): AdminImConnectorVi
   clientId: 'ding-app-key',
   clientSecretFingerprint: 'a1b2c3',
   configured: true,
+  confirmCardTemplateId: null,
   corpId: null,
   enabled: true,
+  fallbacks: { confirmCardTemplateId: null, corpId: null, robotDisplayName: 'AI 助手' },
   hasClientSecret: true,
   idleNewTopicEnabled: true,
   idleNewTopicHours: 24,
@@ -273,6 +289,7 @@ const notifyService = (overrides: Partial<ImConnectorNotifyAppService> = {}) =>
   };
 
 beforeEach(() => {
+  mocks.modules = {};
   mocks.confirmModal.mockReset();
   mocks.toastError.mockReset();
   mocks.toastSuccess.mockReset();
@@ -322,7 +339,10 @@ describe('DingTalkConnectorCard', () => {
     );
 
     expect(screen.getByText('systemGeneral.imConnectors.status.error')).toBeTruthy();
-    expect(container.querySelector('[data-tooltip="invalid client secret"]')).toBeTruthy();
+    // In the tag's own tooltip, not as another line in the header.
+    expect(container.querySelector('[data-testid="status-details"]')?.textContent).toContain(
+      'invalid client secret',
+    );
   });
 
   it('never echoes the stored secret, only its fingerprint', () => {
@@ -659,19 +679,28 @@ describe('DingTalkConnectorCard', () => {
     expect(stub.upsert.mock.calls[0]![0].robotDisplayName).toBeNull();
   });
 
-  it('reports the API call volume under the capabilities it measures', () => {
+  it('folds the API call volume into its own block at the bottom of the card', () => {
     render(<DingTalkConnectorCard canOperate view={view()} />);
+
+    // A reading, not a setting: nothing is mounted (or requested) until the block is opened.
+    expect(screen.queryByTestId('api-stats')).toBeNull();
+    const toggle = screen.getByRole('button', {
+      name: 'systemGeneral.imConnectors.apiStats.title',
+    });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
 
     const stats = screen.getByTestId('api-stats');
     const bindings = screen.getByTestId('bindings');
-    expect(stats).toBeTruthy();
-    // Above the 绑定用户 list: the reading belongs with the capabilities, not with the roster.
-    expect(stats.compareDocumentPosition(bindings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // It counts every DingTalk call, not only the workbench's: last, under the bound users.
+    expect(bindings.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   // A frame (heartbeat/ack) is the worker's own liveness, so it is reported next to the last
-  // event: an idle-but-healthy stream reads differently from a stalled one.
-  it('reports the last stream frame beside the last event', () => {
+  // event: an idle-but-healthy stream reads differently from a stalled one. Both live in the status
+  // tag's tooltip rather than as lines of their own in the header.
+  it('reports the last stream frame beside the last event, in the status tooltip', () => {
     render(
       <DingTalkConnectorCard
         canOperate
@@ -688,8 +717,9 @@ describe('DingTalkConnectorCard', () => {
       />,
     );
 
-    expect(screen.getByText(/systemGeneral.imConnectors.status.lastEventAt/)).toBeTruthy();
-    expect(screen.getByText(/systemGeneral.imConnectors.status.lastFrameAt/)).toBeTruthy();
+    const details = screen.getByTestId('status-details');
+    expect(details.textContent).toMatch(/systemGeneral.imConnectors.status.lastEventAt/);
+    expect(details.textContent).toMatch(/systemGeneral.imConnectors.status.lastFrameAt/);
   });
 
   it('says nothing about frames when the worker never reported one', () => {
@@ -729,14 +759,13 @@ describe('DingTalkConnectorCard', () => {
         ).value,
       ).toBe('4617854000');
 
-      // The secret is never echoed; a stored one only says so through its placeholder.
+      // The secret is never echoed; a stored one only says so through its placeholder — the same
+      // wording as the robot's own secret.
       const secret = screen.getByLabelText(
         'systemGeneral.imConnectors.fields.notifyAppSecret',
       ) as HTMLInputElement;
       expect(secret.value).toBe('');
-      expect(secret.getAttribute('placeholder')).toBe(
-        'systemGeneral.imConnectors.notifyApp.secretPlaceholder',
-      );
+      expect(secret.getAttribute('placeholder')).toBe('systemGeneral.secret.storedPlaceholder');
 
       await waitFor(() =>
         expect(
@@ -1120,5 +1149,544 @@ describe('DingTalkConnectorCard', () => {
       (screen.getByLabelText('systemGeneral.imConnectors.fields.clientId') as HTMLInputElement)
         .value,
     ).toBe('ding-app-key');
+  });
+
+  // 保存 / 取消 live in a bar pinned to the bottom of the viewport, shown only while there is
+  // something to save — the card is long, and the old footer sat far from the edited field.
+  describe('save bar', () => {
+    it('stays out of the way while nothing has changed', () => {
+      render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull();
+      expect(screen.queryByText('systemGeneral.edit.save')).toBeNull();
+      expect(screen.queryByText('systemGeneral.edit.cancel')).toBeNull();
+    });
+
+    it('appears with the first edit and leaves once it is undone', () => {
+      render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+      expect(screen.getByText('systemGeneral.imConnectors.unsaved')).toBeTruthy();
+      expect(
+        screen.getByRole('region', { name: 'systemGeneral.imConnectors.unsaved' }),
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByText('systemGeneral.edit.cancel'));
+      expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull();
+    });
+
+    it('leaves once the save has landed', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull(),
+      );
+    });
+  });
+
+  // N1: 取消 returns to the newest server truth — a save's own answer while the list has not caught
+  // up — never to an older list reading.
+  describe('newest server reading', () => {
+    it('cancels back to what the last save stored when the refresh failed', async () => {
+      const answer = view({ robotCode: 'ding-robot-next', updatedAt: '2026-09-16T00:00:00.000Z' });
+      const stub = service({ upsert: vi.fn().mockResolvedValue(answer) });
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          service={stub}
+          view={view()}
+          onSaved={() => Promise.reject(new Error('refresh failed'))}
+        />,
+      );
+
+      const robotCode = () =>
+        screen.getByLabelText('systemGeneral.imConnectors.fields.robotCode') as HTMLInputElement;
+      fireEvent.change(robotCode(), { target: { value: 'ding-robot-next' } });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull(),
+      );
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.clientId'), {
+        target: { value: 'typo' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.cancel'));
+
+      // Not the pre-save list reading: that would silently revert the save on the next write.
+      expect(robotCode().value).toBe('ding-robot-next');
+      expect(
+        (screen.getByLabelText('systemGeneral.imConnectors.fields.clientId') as HTMLInputElement)
+          .value,
+      ).toBe('ding-app-key');
+    });
+
+    it('keeps the save’s answer over a list reading older than it', async () => {
+      const answer = view({ robotCode: 'ding-robot-next', updatedAt: '2026-09-16T00:00:00.000Z' });
+      const stub = service({ upsert: vi.fn().mockResolvedValue(answer) });
+      const { rerender } = render(
+        <DingTalkConnectorCard canOperate service={stub} view={view()} />,
+      );
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.robotCode'), {
+        target: { value: 'ding-robot-next' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalledTimes(1));
+
+      // A poll that was already in flight lands after the save, carrying the older row.
+      rerender(
+        <DingTalkConnectorCard
+          canOperate
+          service={stub}
+          view={view({ updatedAt: '2026-09-15T00:00:00.000Z' })}
+        />,
+      );
+      expect(
+        (screen.getByLabelText('systemGeneral.imConnectors.fields.robotCode') as HTMLInputElement)
+          .value,
+      ).toBe('ding-robot-next');
+
+      // A reading at least as new as the save wins again.
+      rerender(
+        <DingTalkConnectorCard
+          canOperate
+          service={stub}
+          view={view({ robotCode: 'ding-robot-other', updatedAt: '2026-09-17T00:00:00.000Z' })}
+        />,
+      );
+      await waitFor(() =>
+        expect(
+          (screen.getByLabelText('systemGeneral.imConnectors.fields.robotCode') as HTMLInputElement)
+            .value,
+        ).toBe('ding-robot-other'),
+      );
+    });
+  });
+
+  // Help lives behind a "?" beside the title or label, never as a paragraph inside the group.
+  describe('help placement', () => {
+    it('puts the section and switch explanations into tooltips', () => {
+      const { container } = render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      for (const key of [
+        'systemGeneral.imConnectors.hints.credentials',
+        'systemGeneral.imConnectors.hints.chatEnabled',
+        'systemGeneral.imConnectors.hints.idleNewTopic',
+        'systemGeneral.imConnectors.hints.notifyApp',
+        'systemGeneral.imConnectors.hints.pushEnabled',
+        'systemGeneral.imConnectors.hints.notifyWorkNoticeEnabled',
+        'systemGeneral.imConnectors.hints.notifyRobotEnabled',
+        'systemGeneral.imConnectors.hints.confirmCardTemplateId',
+        'systemGeneral.imConnectors.workspace.description',
+        'systemGeneral.imConnectors.personal.description',
+      ]) {
+        expect(container.querySelector(`[data-help="${key}"]`), key).toBeTruthy();
+        expect(screen.queryByText(key), key).toBeNull();
+      }
+      expect(
+        screen.getByLabelText(
+          'systemGeneral.helpFor:systemGeneral.imConnectors.sections.credentials',
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  // Contract §1.2 — an input shows the stored value; an empty one is pre-filled from the server's
+  // fallback and tagged. The pre-fill is display only: untouched, it is never sent. The robot
+  // name's fallback is a placeholder only.
+  describe('pre-filled fallbacks', () => {
+    const withFallbacks = (overrides: Partial<AdminImConnectorView> = {}) =>
+      view({
+        fallbacks: {
+          confirmCardTemplateId: 'env-confirm.schema',
+          corpId: 'ding-captured-corp',
+          robotDisplayName: 'AI 助手',
+        },
+        ...overrides,
+      });
+
+    it('pre-fills the captured CorpId and says where it came from', () => {
+      render(<DingTalkConnectorCard canOperate view={withFallbacks()} />);
+
+      expect(
+        (screen.getByLabelText('systemGeneral.imConnectors.fields.corpId') as HTMLInputElement)
+          .value,
+      ).toBe('ding-captured-corp');
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.auto')).toBeTruthy();
+      // Showing the fallback is the baseline, not an unsaved edit.
+      expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull();
+    });
+
+    it('pre-fills the confirm-card template from the environment and tags it', () => {
+      render(<DingTalkConnectorCard canOperate view={withFallbacks()} />);
+
+      expect(
+        (
+          screen.getByLabelText(
+            'systemGeneral.imConnectors.fields.confirmCardTemplateId',
+          ) as HTMLInputElement
+        ).value,
+      ).toBe('env-confirm.schema');
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.env')).toBeTruthy();
+    });
+
+    it('shows the stored value, untagged, when there is one', () => {
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          view={withFallbacks({ confirmCardTemplateId: 'tpl-stored', corpId: 'ding-stored' })}
+        />,
+      );
+
+      expect(
+        (screen.getByLabelText('systemGeneral.imConnectors.fields.corpId') as HTMLInputElement)
+          .value,
+      ).toBe('ding-stored');
+      expect(
+        (
+          screen.getByLabelText(
+            'systemGeneral.imConnectors.fields.confirmCardTemplateId',
+          ) as HTMLInputElement
+        ).value,
+      ).toBe('tpl-stored');
+      expect(screen.queryByText('systemGeneral.imConnectors.prefill.auto')).toBeNull();
+      expect(screen.queryByText('systemGeneral.imConnectors.prefill.env')).toBeNull();
+    });
+
+    it('drops the tag once the admin edits the pre-filled value', () => {
+      render(<DingTalkConnectorCard canOperate view={withFallbacks()} />);
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.corpId'), {
+        target: { value: 'ding-typed' },
+      });
+      expect(screen.queryByText('systemGeneral.imConnectors.prefill.auto')).toBeNull();
+    });
+
+    it('leaves untouched pre-filled values out of an unrelated save', async () => {
+      const stub = service({ upsert: vi.fn().mockResolvedValue(withFallbacks()) });
+      render(<DingTalkConnectorCard canOperate service={stub} view={withFallbacks()} />);
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      const payload = stub.upsert.mock.calls[0]![0];
+      // Omitted, so the row keeps storing nothing and the environment / captured id stay in force.
+      expect('corpId' in payload).toBe(false);
+      expect('confirmCardTemplateId' in payload).toBe(false);
+      // …and the inputs still say they show a fallback.
+      await waitFor(() =>
+        expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull(),
+      );
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.auto')).toBeTruthy();
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.env')).toBeTruthy();
+    });
+
+    it('sends a pre-filled value once the admin edits it', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={withFallbacks()} />);
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.corpId'), {
+        target: { value: 'ding-typed' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      const payload = stub.upsert.mock.calls[0]![0];
+      expect(payload.corpId).toBe('ding-typed');
+      // The field that was not touched is still left out.
+      expect('confirmCardTemplateId' in payload).toBe(false);
+    });
+
+    it('sends a clear when the admin empties a pre-filled input', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={withFallbacks()} />);
+
+      fireEvent.change(
+        screen.getByLabelText('systemGeneral.imConnectors.fields.confirmCardTemplateId'),
+        { target: { value: '' } },
+      );
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      const payload = stub.upsert.mock.calls[0]![0];
+      expect('confirmCardTemplateId' in payload).toBe(true);
+      expect(payload.confirmCardTemplateId).toBeNull();
+    });
+
+    it('restores the pre-filled value and its tag on 取消', () => {
+      render(<DingTalkConnectorCard canOperate view={withFallbacks()} />);
+
+      const corpId = screen.getByLabelText(
+        'systemGeneral.imConnectors.fields.corpId',
+      ) as HTMLInputElement;
+      fireEvent.change(corpId, { target: { value: '' } });
+      expect(screen.queryByText('systemGeneral.imConnectors.prefill.auto')).toBeNull();
+
+      fireEvent.click(screen.getByText('systemGeneral.edit.cancel'));
+
+      expect(
+        (screen.getByLabelText('systemGeneral.imConnectors.fields.corpId') as HTMLInputElement)
+          .value,
+      ).toBe('ding-captured-corp');
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.auto')).toBeTruthy();
+      expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull();
+    });
+
+    it('keeps saying what is in force once a pre-filled input is emptied', () => {
+      render(<DingTalkConnectorCard canOperate view={withFallbacks()} />);
+
+      const corpId = screen.getByLabelText(
+        'systemGeneral.imConnectors.fields.corpId',
+      ) as HTMLInputElement;
+      const template = screen.getByLabelText(
+        'systemGeneral.imConnectors.fields.confirmCardTemplateId',
+      ) as HTMLInputElement;
+      fireEvent.change(corpId, { target: { value: '' } });
+      fireEvent.change(template, { target: { value: '' } });
+
+      expect(corpId.getAttribute('placeholder')).toBe('ding-captured-corp');
+      expect(template.getAttribute('placeholder')).toBe('env-confirm.schema');
+    });
+
+    it('shows the fallback again, tagged, after an emptied pre-filled input is saved', async () => {
+      const stub = service({ upsert: vi.fn().mockResolvedValue(withFallbacks()) });
+      render(<DingTalkConnectorCard canOperate service={stub} view={withFallbacks()} />);
+
+      fireEvent.change(
+        screen.getByLabelText('systemGeneral.imConnectors.fields.confirmCardTemplateId'),
+        { target: { value: '' } },
+      );
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      // The row stores nothing, so the environment's template is what is in force — and shown.
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByLabelText(
+              'systemGeneral.imConnectors.fields.confirmCardTemplateId',
+            ) as HTMLInputElement
+          ).value,
+        ).toBe('env-confirm.schema'),
+      );
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.env')).toBeTruthy();
+      expect(screen.queryByText('systemGeneral.imConnectors.unsaved')).toBeNull();
+    });
+
+    it('drops the tag as soon as a save reports the value stored, even if the refresh fails', async () => {
+      // The row now stores the id (e.g. another admin saved it meanwhile); the list read that
+      // would say so fails, so only the save's own answer knows.
+      const stub = service({
+        upsert: vi.fn().mockResolvedValue(withFallbacks({ corpId: 'ding-captured-corp' })),
+      });
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          service={stub}
+          view={withFallbacks()}
+          onSaved={() => Promise.reject(new Error('refresh failed'))}
+        />,
+      );
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.auto')).toBeTruthy();
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() =>
+        expect(screen.queryByText('systemGeneral.imConnectors.prefill.auto')).toBeNull(),
+      );
+      // The environment id is still only a fallback, so its tag stays.
+      expect(screen.getByText('systemGeneral.imConnectors.prefill.env')).toBeTruthy();
+    });
+
+    it('does not let an over-long environment id block a save', async () => {
+      const stub = service();
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          service={stub}
+          view={withFallbacks({
+            fallbacks: {
+              confirmCardTemplateId: 'x'.repeat(201),
+              corpId: null,
+              robotDisplayName: 'AI 助手',
+            },
+          })}
+        />,
+      );
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(mocks.toastError).not.toHaveBeenCalled();
+      expect('confirmCardTemplateId' in stub.upsert.mock.calls[0]![0]).toBe(false);
+    });
+
+    it('shows the fallback robot name as a placeholder, never as a value', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={withFallbacks()} />);
+
+      const name = screen.getByLabelText(
+        'systemGeneral.imConnectors.fields.robotDisplayName',
+      ) as HTMLInputElement;
+      expect(name.value).toBe('');
+      expect(name.getAttribute('placeholder')).toBe('AI 助手');
+
+      fireEvent.click(screen.getByLabelText('systemGeneral.imConnectors.fields.chatEnabled'));
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0].robotDisplayName).toBeNull();
+    });
+
+    it('round-trips a typed confirm-card template id', async () => {
+      const stub = service();
+      render(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+
+      fireEvent.change(
+        screen.getByLabelText('systemGeneral.imConnectors.fields.confirmCardTemplateId'),
+        { target: { value: '  tpl-confirm.schema  ' } },
+      );
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0].confirmCardTemplateId).toBe('tpl-confirm.schema');
+    });
+  });
+
+  // Contract §2.2 — a group whose module is not installed is not rendered at all.
+  describe('module visibility', () => {
+    it('shows every group while every module is on', () => {
+      render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      expect(screen.getByText('systemGeneral.imConnectors.sections.credentials')).toBeTruthy();
+      expect(screen.getByText('systemGeneral.imConnectors.sections.chat')).toBeTruthy();
+      expect(screen.getByText('systemGeneral.imConnectors.sections.notifyApp')).toBeTruthy();
+      expect(screen.getByText('systemGeneral.imConnectors.workspace.title')).toBeTruthy();
+      expect(screen.getByText('systemGeneral.imConnectors.personal.title')).toBeTruthy();
+      expect(screen.getByTestId('bindings')).toBeTruthy();
+    });
+
+    it('hides 机器人对话 without dingtalkChat', () => {
+      mocks.modules = { dingtalkChat: false };
+      render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      expect(screen.queryByText('systemGeneral.imConnectors.sections.chat')).toBeNull();
+      expect(screen.queryByLabelText('systemGeneral.imConnectors.fields.chatEnabled')).toBeNull();
+      expect(
+        screen.queryByLabelText('systemGeneral.imConnectors.fields.confirmCardTemplateId'),
+      ).toBeNull();
+      // The credentials the rest depends on stay.
+      expect(screen.getByLabelText('systemGeneral.imConnectors.fields.clientId')).toBeTruthy();
+    });
+
+    it('hides 通知应用 without dingtalkNotify', () => {
+      mocks.modules = { dingtalkNotify: false };
+      render(<DingTalkConnectorCard canOperate notifyAppService={notifyService()} view={view()} />);
+
+      expect(screen.queryByText('systemGeneral.imConnectors.sections.notifyApp')).toBeNull();
+      expect(screen.queryByLabelText('systemGeneral.imConnectors.fields.notifyAppKey')).toBeNull();
+    });
+
+    it('offers only the installed workbench capabilities', () => {
+      mocks.modules = { dingtalkApproval: false };
+      const { unmount } = render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      expect(
+        screen.queryByLabelText('systemGeneral.imConnectors.workspace.fields.approval'),
+      ).toBeNull();
+      expect(
+        screen.queryByLabelText('systemGeneral.imConnectors.workspace.fields.tier'),
+      ).toBeNull();
+      expect(
+        screen.getByLabelText('systemGeneral.imConnectors.workspace.fields.todo'),
+      ).toBeTruthy();
+      unmount();
+
+      mocks.modules = { dingtalkApproval: false, dingtalkWorkspace: false };
+      render(<DingTalkConnectorCard canOperate view={view()} />);
+      expect(screen.queryByText('systemGeneral.imConnectors.workspace.title')).toBeNull();
+      // The call volume covers every DingTalk call, so it stays with the card.
+      expect(screen.getByText('systemGeneral.imConnectors.apiStats.title')).toBeTruthy();
+    });
+
+    // N8: a group hidden while the card holds an edit in it neither blocks the save nor writes
+    // that edit — its fields go back exactly as the server holds them.
+    it('neither validates nor writes an edit left in a group that became hidden', async () => {
+      const stub = service();
+      const { rerender } = render(
+        <DingTalkConnectorCard canOperate service={stub} view={view()} />,
+      );
+
+      fireEvent.change(
+        screen.getByLabelText('systemGeneral.imConnectors.fields.idleNewTopicHours'),
+        { target: { value: '0' } },
+      );
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.clientId'), {
+        target: { value: 'ding-next-key' },
+      });
+
+      // 机器人对话 is switched off elsewhere; the capabilities poll hides it.
+      mocks.modules = { dingtalkChat: false };
+      rerender(<DingTalkConnectorCard canOperate service={stub} view={view()} />);
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(mocks.toastError).not.toHaveBeenCalled();
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        clientId: 'ding-next-key',
+        idleNewTopicHours: 24,
+      });
+    });
+
+    it('hides 个人数据授权 without dingtalkPersonal, and its docs scopes without dingtalkDocs', () => {
+      mocks.modules = { dingtalkDocs: false };
+      const { unmount } = render(<DingTalkConnectorCard canOperate view={view()} />);
+
+      expect(screen.getByText('systemGeneral.imConnectors.personal.title')).toBeTruthy();
+      expect(screen.queryByLabelText('systemGeneral.imConnectors.personal.fields.docs')).toBeNull();
+      expect(
+        screen.queryByLabelText('systemGeneral.imConnectors.personal.fields.sheets'),
+      ).toBeNull();
+      expect(screen.getByLabelText('systemGeneral.imConnectors.personal.fields.todo')).toBeTruthy();
+      unmount();
+
+      mocks.modules = { dingtalkPersonal: false };
+      render(<DingTalkConnectorCard canOperate view={view()} />);
+      expect(screen.queryByText('systemGeneral.imConnectors.personal.title')).toBeNull();
+    });
+
+    it('still writes the stored settings of a hidden group back unchanged', async () => {
+      mocks.modules = { dingtalkChat: false, dingtalkPersonal: false };
+      const stub = service();
+      render(
+        <DingTalkConnectorCard
+          canOperate
+          service={stub}
+          view={view({ aiCardTemplateId: 'card-1', chatEnabled: false, personalDataEnabled: true })}
+        />,
+      );
+
+      fireEvent.change(screen.getByLabelText('systemGeneral.imConnectors.fields.clientId'), {
+        target: { value: 'ding-next-key' },
+      });
+      fireEvent.click(screen.getByText('systemGeneral.edit.save'));
+
+      await waitFor(() => expect(stub.upsert).toHaveBeenCalled());
+      expect(stub.upsert.mock.calls[0]![0]).toMatchObject({
+        aiCardTemplateId: 'card-1',
+        chatEnabled: false,
+        clientId: 'ding-next-key',
+        personalDataEnabled: true,
+      });
+    });
   });
 });

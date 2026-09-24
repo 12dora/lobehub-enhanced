@@ -192,8 +192,8 @@ export const BindUserModal = memo<BindUserModalProps>(
 
           <InfraField
             error={errors.userId}
+            hint={t('systemGeneral.imConnectors.bindings.hints.user')}
             label={t('systemGeneral.imConnectors.bindings.fields.user')}
-            note={t('systemGeneral.imConnectors.bindings.hints.user')}
           >
             {(field) => (
               <UserSearchSelect
@@ -210,8 +210,8 @@ export const BindUserModal = memo<BindUserModalProps>(
 
           <InfraField
             error={errors.platformUserId}
+            hint={t('systemGeneral.imConnectors.bindings.hints.platformUserId')}
             label={t('systemGeneral.imConnectors.bindings.fields.platformUserId')}
-            note={t('systemGeneral.imConnectors.bindings.hints.platformUserId')}
           >
             {(field) => (
               <Input
@@ -226,8 +226,8 @@ export const BindUserModal = memo<BindUserModalProps>(
 
           <InfraField
             error={errors.platformUsername}
+            hint={t('systemGeneral.imConnectors.bindings.hints.platformUsername')}
             label={t('systemGeneral.imConnectors.bindings.fields.platformUsername')}
-            note={t('systemGeneral.imConnectors.bindings.hints.platformUsername')}
           >
             {(field) => (
               <Input

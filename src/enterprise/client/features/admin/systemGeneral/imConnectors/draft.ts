@@ -55,7 +55,7 @@ export type DingTalkWorkspaceSettingsInput = Required<
 >;
 
 /**
- * The seven 钉钉个人数据 switches as the upsert carries them. Like the workspace four, the contract
+ * The seven 个人数据授权 switches as the upsert carries them. Like the workspace four, the contract
  * defaults them (all off) and the card always sends every one.
  */
 export type DingTalkPersonalSettingsInput = Required<
@@ -72,13 +72,28 @@ export type DingTalkPersonalSettingsInput = Required<
 >;
 
 /**
- * What the 钉钉个人数据 block reads about the deployment rather than the row: whether the `aihub-dws`
- * sidecar is configured, and how many members have authorized. Optional on the view.
+ * What the 个人数据授权 block reads about the deployment rather than the row: whether the personal
+ * data sidecar is configured, and how many members have authorized. Optional on the view.
  */
 export interface DingTalkPersonalSummary {
   authorizedCount: number;
   brokerConfigured: boolean;
 }
+
+/**
+ * What the server uses for an input left empty (contract §1.2 `fallbacks`): the CorpId the stream
+ * worker captured from an inbound message, the confirm-card template id from the environment, and
+ * the robot name used when none is set. Display only: a fallback is never written back unless the
+ * admin actually edits the input.
+ */
+export interface DingTalkConnectorFallbacks {
+  confirmCardTemplateId: string | null;
+  corpId: string | null;
+  robotDisplayName: string;
+}
+
+/** The inputs that are pre-filled from a fallback while their stored value is empty. */
+export type DingTalkPrefillField = 'confirmCardTemplateId' | 'corpId';
 
 /**
  * Draft state for a secret the server never returns.
@@ -102,22 +117,30 @@ export interface DingTalkConnectorDraft {
   chatEnabled: boolean;
   clientId: string;
   clientSecret: ImConnectorSecretDraft;
-  /** Optional: when empty the stream worker captures the CorpId from the first inbound message. */
+  /**
+   * Template id of the write-confirmation card. Pre-filled from the environment's id while the row
+   * has none, so what is in force is what the input shows.
+   */
+  confirmCardTemplateId: string;
+  /**
+   * Optional: when empty the stream worker captures the CorpId from the first inbound message.
+   * Pre-filled with that captured id while the row has none.
+   */
   corpId: string;
   enabled: boolean;
   idleNewTopicEnabled: boolean;
   /** `null` while the field is empty, so "unset" stays distinguishable from a typed 0. */
   idleNewTopicHours: number | null;
-  /** 通知应用（服务号）AgentId — the numeric app id `asyncsend_v2` sends under. */
+  /** 通知应用 AgentId — the numeric app id `asyncsend_v2` sends under. */
   notifyAgentId: string;
-  /** 通知应用（服务号）AppKey. The whole block is optional: without it nothing is sent by it. */
+  /** 通知应用 AppKey. The whole block is optional: without it nothing is sent by it. */
   notifyAppKey: string;
   notifyAppSecret: ImConnectorSecretDraft;
-  /** Notify-app 服务号 robot 1:1 channel. */
+  /** The notification app's own robot, 1:1 messages (机器人消息). */
   notifyRobotEnabled: boolean;
   /** Notify-app work-notification (工作通知) channel. */
   notifyWorkNoticeEnabled: boolean;
-  /** 钉钉个人数据: the member's own authorization via the `aihub-dws` sidecar — all off by default. */
+  /** 个人数据授权: the member's own authorization via the sidecar — all off by default. */
   personalChatEnabled: boolean;
   personalDataEnabled: boolean;
   /** 文档 / 钉盘 / 知识库 reads of `lobe-dingtalk-docs`. */
@@ -151,6 +174,7 @@ export type DingTalkConnectorFieldErrors = Partial<
     | 'notifyAppSecret'
     | 'idleNewTopicHours'
     | 'aiCardTemplateId'
+    | 'confirmCardTemplateId'
     | 'selectCardTemplateId',
     string
   >
@@ -172,7 +196,7 @@ export const readDingTalkWorkspaceSettings = (
   workspaceTodoEnabled: view.workspaceTodoEnabled,
 });
 
-/** The 钉钉个人数据 half of a connector row; a row that predates the feature reads as all off. */
+/** The 个人数据授权 half of a connector row; a row that predates the feature reads as all off. */
 export const readDingTalkPersonalSettings = (
   view: AdminImConnectorView,
 ): DingTalkPersonalSettingsInput => ({
@@ -208,9 +232,162 @@ export const readDingTalkPersonalSummary = (
   };
 };
 
+const readOptionalString = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+type RawFallbacks = Partial<Record<keyof DingTalkConnectorFallbacks, unknown>>;
+
+/**
+ * The view's `fallbacks`, shape-checked rather than trusted: a card can still hold a view read
+ * before the field existed, and a missing fallback simply means there is nothing to pre-fill.
+ */
+export const readDingTalkFallbacks = (view: AdminImConnectorView): DingTalkConnectorFallbacks => {
+  const raw = (view as { fallbacks?: unknown }).fallbacks;
+  const fallbacks: RawFallbacks = raw && typeof raw === 'object' ? (raw as RawFallbacks) : {};
+
+  return {
+    confirmCardTemplateId: readOptionalString(fallbacks.confirmCardTemplateId),
+    corpId: readOptionalString(fallbacks.corpId),
+    robotDisplayName: readOptionalString(fallbacks.robotDisplayName) ?? '',
+  };
+};
+
+/** The value the row stores for a pre-fillable input; `null` when it stores none. */
+const readStoredPrefillValue = (
+  view: AdminImConnectorView,
+  field: DingTalkPrefillField,
+): string | null =>
+  readOptionalString((view as Partial<Record<DingTalkPrefillField, unknown>>)[field]);
+
+/**
+ * Whether an input currently shows the server's fallback, untouched, rather than a stored value —
+ * what the 自动获取 / 来自环境变量 tag is decided from. It stops being one the moment the admin
+ * edits it, and never is while the row stores a value.
+ */
+export const isDingTalkFieldPrefilled = (
+  view: AdminImConnectorView,
+  draft: DingTalkConnectorDraft,
+  field: DingTalkPrefillField,
+): boolean => {
+  if (readStoredPrefillValue(view, field) !== null) return false;
+  const fallback = readDingTalkFallbacks(view)[field];
+  return fallback !== null && draft[field].trim() === fallback;
+};
+
+const PREFILL_FIELDS: readonly DingTalkPrefillField[] = ['confirmCardTemplateId', 'corpId'];
+
+const NO_UNTOUCHED_FALLBACKS: ReadonlySet<DingTalkPrefillField> = new Set();
+
+/**
+ * The inputs that still show an untouched fallback. They are display only: the save leaves them
+ * out, so the row keeps storing what it stores and the runtime keeps following the fallback (a new
+ * environment id, a re-captured CorpId); and validation skips them, so a fallback the admin never
+ * typed can never block a save.
+ *
+ * Pass every reading the draft may have been pre-filled from — above all the one it was seeded
+ * from: when the server's fallback changes while the card has unrelated edits, the value the
+ * input was pre-filled with is still untouched, not an edit. Without a reading there are none.
+ */
+export const readDingTalkUntouchedFallbacks = (
+  draft: DingTalkConnectorDraft,
+  ...views: (AdminImConnectorView | undefined)[]
+): ReadonlySet<DingTalkPrefillField> =>
+  new Set(
+    PREFILL_FIELDS.filter((field) =>
+      views.some((view) => view !== undefined && isDingTalkFieldPrefilled(view, draft, field)),
+    ),
+  );
+
+/**
+ * The groups of the card the deployment has installed (contract §2.2). A hidden group's fields are
+ * neither validated nor edited: the save sends them exactly as the server holds them.
+ */
+export interface DingTalkConnectorGroups {
+  /** 审批 switch and the 自动审批档位 (`dingtalkApproval`). */
+  approval: boolean;
+  /** 机器人对话 (`dingtalkChat`). */
+  chat: boolean;
+  /** 文档 / 表格 scopes of 个人数据授权 (`dingtalkDocs`). */
+  docs: boolean;
+  /** 通知应用 (`dingtalkNotify`). */
+  notify: boolean;
+  /** 个人数据授权 (`dingtalkPersonal`). */
+  personal: boolean;
+  /** 待办 / 日程 switches of 工作台能力 (`dingtalkWorkspace`). */
+  workspace: boolean;
+}
+
+type DingTalkDraftField = keyof DingTalkConnectorDraft;
+
+/** The draft fields each hideable group renders. */
+const GROUP_FIELDS: Record<keyof DingTalkConnectorGroups, readonly DingTalkDraftField[]> = {
+  approval: ['approvalAutomationTier', 'workspaceApprovalEnabled'],
+  chat: [
+    'aiCardTemplateId',
+    'chatEnabled',
+    'confirmCardTemplateId',
+    'idleNewTopicEnabled',
+    'idleNewTopicHours',
+    'selectCardTemplateId',
+  ],
+  docs: ['personalDocsEnabled', 'personalSheetsEnabled'],
+  notify: [
+    'notifyAgentId',
+    'notifyAppKey',
+    'notifyAppSecret',
+    'notifyRobotEnabled',
+    'notifyWorkNoticeEnabled',
+    'pushEnabled',
+  ],
+  personal: [
+    'personalChatEnabled',
+    'personalDataEnabled',
+    'personalDocsEnabled',
+    'personalReportEnabled',
+    'personalSheetsEnabled',
+    'personalTodoEnabled',
+    'personalWriteEnabled',
+  ],
+  workspace: ['workspaceCalendarEnabled', 'workspaceTodoEnabled'],
+};
+
+/**
+ * The draft as it can be saved: every field of a group the card does not render is put back to
+ * the server's value (`baseline`). An edit made before a module was switched off elsewhere can then
+ * neither block the save through validation nor be written behind the admin's back.
+ */
+export const keepHiddenDingTalkGroups = (
+  draft: DingTalkConnectorDraft,
+  baseline: DingTalkConnectorDraft,
+  groups: DingTalkConnectorGroups,
+): DingTalkConnectorDraft => {
+  const hidden = (Object.keys(GROUP_FIELDS) as (keyof DingTalkConnectorGroups)[]).filter(
+    (group) => !groups[group],
+  );
+  if (hidden.length === 0) return draft;
+
+  const restored: Record<string, unknown> = { ...draft };
+  for (const group of hidden)
+    for (const field of GROUP_FIELDS[group]) restored[field] = baseline[field];
+  return restored as unknown as DingTalkConnectorDraft;
+};
+
+/**
+ * Seed of the card's draft.
+ *
+ * An input shows the stored value; when that is empty and the server has a fallback (the captured
+ * CorpId, the environment's confirm-card template), the fallback is pre-filled instead (contract
+ * §1.2). It is part of the seed, so it is the baseline the card compares against — not an unsaved
+ * edit — and, untouched, it is never sent (`readDingTalkUntouchedFallbacks`). The robot name is
+ * not pre-filled at all: its fallback is a placeholder only.
+ */
 export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDraft => {
   const workspace = readDingTalkWorkspaceSettings(view);
   const personal = readDingTalkPersonalSettings(view);
+  const fallbacks = readDingTalkFallbacks(view);
 
   return {
     agentId: view.agentId ?? '',
@@ -223,7 +400,11 @@ export const toDingTalkDraft = (view: AdminImConnectorView): DingTalkConnectorDr
       stored: view.hasClientSecret,
       value: '',
     },
-    corpId: view.corpId ?? '',
+    confirmCardTemplateId:
+      readStoredPrefillValue(view, 'confirmCardTemplateId') ??
+      fallbacks.confirmCardTemplateId ??
+      '',
+    corpId: readStoredPrefillValue(view, 'corpId') ?? fallbacks.corpId ?? '',
     enabled: view.enabled,
     idleNewTopicEnabled: view.idleNewTopicEnabled,
     idleNewTopicHours: view.idleNewTopicHours,
@@ -268,6 +449,7 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
     draft.clientSecret.fingerprint,
     draft.clientSecret.stored,
     draft.clientSecret.value,
+    draft.confirmCardTemplateId.trim(),
     draft.corpId.trim(),
     draft.enabled,
     draft.idleNewTopicEnabled,
@@ -299,21 +481,33 @@ export const fingerprintDingTalkDraft = (draft: DingTalkConnectorDraft): string 
  * secret's identity is taken from the row the server just wrote, so the next save sends `keep` and
  * the fingerprint note names the credential that is actually stored — a rotation shows its new
  * fingerprint immediately rather than waiting on (and being ignored by) the list revalidation.
- * The 钉钉个人数据 switches are taken from that row too, so the card shows what is in force.
+ * The 个人数据授权 switches are taken from that row too, so the card shows what is in force.
  */
 export const settleDingTalkDraft = (
   draft: DingTalkConnectorDraft,
   saved: AdminImConnectorView,
-): DingTalkConnectorDraft => ({
-  ...draft,
-  ...readDingTalkPersonalSettings(saved),
-  clientSecret: {
-    fingerprint: saved.clientSecretFingerprint,
-    stored: saved.hasClientSecret,
-    value: '',
-  },
-  notifyAppSecret: { fingerprint: null, stored: saved.notifyAppSecretSet, value: '' },
-});
+): DingTalkConnectorDraft => {
+  // An input the row now stores nothing for shows its fallback again, exactly as a fresh seed
+  // would: clearing a pre-filled input means「use the fallback」, and that is what it then says.
+  const fallbacks = readDingTalkFallbacks(saved);
+  const refill = (field: DingTalkPrefillField): string => {
+    if (readStoredPrefillValue(saved, field) !== null) return draft[field];
+    return draft[field].trim().length === 0 ? (fallbacks[field] ?? draft[field]) : draft[field];
+  };
+
+  return {
+    ...draft,
+    ...readDingTalkPersonalSettings(saved),
+    clientSecret: {
+      fingerprint: saved.clientSecretFingerprint,
+      stored: saved.hasClientSecret,
+      value: '',
+    },
+    confirmCardTemplateId: refill('confirmCardTemplateId'),
+    corpId: refill('corpId'),
+    notifyAppSecret: { fingerprint: null, stored: saved.notifyAppSecretSet, value: '' },
+  };
+};
 
 /**
  * Validation mirrors the upsert contract rather than only the enable path: `clientId`, `robotCode`
@@ -322,6 +516,8 @@ export const settleDingTalkDraft = (
  */
 export const validateDingTalkDraft = (
   draft: DingTalkConnectorDraft,
+  /** Inputs still showing their untouched fallback (`readDingTalkUntouchedFallbacks`): skipped. */
+  untouched: ReadonlySet<DingTalkPrefillField> = NO_UNTOUCHED_FALLBACKS,
 ): DingTalkConnectorFieldErrors => {
   const errors: DingTalkConnectorFieldErrors = {};
 
@@ -337,7 +533,7 @@ export const validateDingTalkDraft = (
   if (secret.length === 0 && !draft.clientSecret.stored) errors.clientSecret = 'required';
   else if (secret.length > SECRET_MAX) errors.clientSecret = 'tooLong';
 
-  if (draft.corpId.trim().length > TEXT_MAX) errors.corpId = 'tooLong';
+  if (!untouched.has('corpId') && draft.corpId.trim().length > TEXT_MAX) errors.corpId = 'tooLong';
   if (draft.agentId.trim().length > AGENT_ID_MAX) errors.agentId = 'tooLong';
   // Optional: a deployment that never set a robot name simply has none to show.
   if (draft.robotDisplayName.trim().length > ROBOT_DISPLAY_NAME_MAX)
@@ -351,6 +547,12 @@ export const validateDingTalkDraft = (
 
   if (draft.aiCardTemplateId.trim().length > TEXT_MAX) errors.aiCardTemplateId = 'tooLong';
   if (draft.selectCardTemplateId.trim().length > TEXT_MAX) errors.selectCardTemplateId = 'tooLong';
+  // An over-long environment id is shown as it is, but it is not the admin's input to correct.
+  if (
+    !untouched.has('confirmCardTemplateId') &&
+    draft.confirmCardTemplateId.trim().length > TEXT_MAX
+  )
+    errors.confirmCardTemplateId = 'tooLong';
 
   // The hours only have to be sane when they can actually start a topic, but an out-of-range value
   // left behind by a previous edit still blocks the write, so it is flagged either way.
@@ -372,11 +574,16 @@ const optionalText = (value: string): string | null => {
 };
 
 /**
- * The whole row, 工作台能力 and 钉钉个人数据 included: they live in the same `settings` jsonb as the
+ * The whole row, 工作台能力 and 个人数据授权 included: they live in the same `settings` jsonb as the
  * rest, so both sections are saved by the card's own 保存 rather than by a call of their own.
+ *
+ * An input that still shows its untouched fallback (`untouched`, from
+ * `readDingTalkUntouchedFallbacks`) is left out of the payload, so the row keeps what it stores and
+ * the fallback stays in force. An edit — clearing the input included — is always sent.
  */
 export const toDingTalkUpsertInput = (
   draft: DingTalkConnectorDraft,
+  untouched: ReadonlySet<DingTalkPrefillField> = NO_UNTOUCHED_FALLBACKS,
 ): AdminImConnectorUpsertInput &
   DingTalkPersonalSettingsInput &
   DingTalkWorkspaceSettingsInput => ({
@@ -389,7 +596,10 @@ export const toDingTalkUpsertInput = (
     draft.clientSecret.value.trim().length > 0
       ? { action: 'replace', value: draft.clientSecret.value.trim() }
       : { action: 'keep' },
-  corpId: optionalText(draft.corpId),
+  ...(untouched.has('confirmCardTemplateId')
+    ? {}
+    : { confirmCardTemplateId: optionalText(draft.confirmCardTemplateId) }),
+  ...(untouched.has('corpId') ? {} : { corpId: optionalText(draft.corpId) }),
   enabled: draft.enabled,
   idleNewTopicEnabled: draft.idleNewTopicEnabled,
   idleNewTopicHours: draft.idleNewTopicHours ?? IM_CONNECTOR_IDLE_HOURS_DEFAULT,
@@ -443,7 +653,7 @@ export const toDingTalkTestInput = (draft: DingTalkConnectorDraft): AdminImConne
 };
 
 /**
- * Probe payload for the 通知应用（服务号）. Same rule as the robot's probe: only what the admin
+ * Probe payload for the 通知应用. Same rule as the robot's probe: only what the admin
  * actually typed is sent, so a saved notification app can be re-tested without re-entering it.
  */
 export const toDingTalkNotifyTestInput = (
@@ -459,7 +669,7 @@ export const toDingTalkNotifyTestInput = (
 };
 
 /**
- * Whether the 通知应用（服务号）is usable as it stands.
+ * Whether the 通知应用 is usable as it stands.
  *
  * The workspace capabilities run on that app's token, so this is the section's precondition: an
  * AppKey with a secret either stored or just typed. The AgentId only matters to 工作通知, which is

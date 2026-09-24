@@ -26,6 +26,7 @@ import {
 import { withActiveUser } from '../../guards/activeUser';
 import { withAdminMutationRateLimit } from '../../guards/adminMutationRateLimit';
 import { throwEnterpriseError } from '../../guards/enterpriseErrors';
+import { withModule } from '../../guards/moduleGuard';
 import { withPlatformPermission } from '../../guards/platformPermission';
 import { getDingtalkApiCallStats } from '../../services/dingtalkWorkspace/apiCallStats';
 import {
@@ -169,6 +170,7 @@ export const adminImConnectorsRouter = router({
 
   syncDirectory: platformSystemBase
     .use(withPlatformPermission(PLATFORM_PERMISSIONS.SYSTEM_OPERATE))
+    .use(withModule('dingtalkNotify'))
     .output(adminImConnectorDirectoryStatusSchema)
     .mutation(({ ctx }) =>
       executeImConnectors(() => new ImConnectorsAdminService(ctx.serverDB).syncDirectory()),

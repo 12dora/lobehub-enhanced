@@ -45,6 +45,17 @@ export const dingTalkConnectorSettingsSchema = z
     /** Inbound chat (Clawbot) capability. */
     chatEnabled: z.boolean().default(true),
     /**
+     * Confirm-card template id. Empty / omitted on a stored row = null.
+     * Runtime uses this value when set, otherwise env `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`.
+     */
+    confirmCardTemplateId: z
+      .string()
+      .trim()
+      .max(200)
+      .nullable()
+      .optional()
+      .transform((value) => (value ? value : null)),
+    /**
      * Optional DingTalk CorpId for in-client 免登 (`dd.runtime.permission.requestAuthCode`).
      * Empty = the stream worker captures it from inbound robot messages into Redis.
      */
@@ -158,6 +169,11 @@ export const adminImConnectorViewSchema = z
     chatEnabled: z.boolean(),
     /** Client ID (AppKey). Null when never configured. */
     clientId: z.string().nullable(),
+    /**
+     * Stored confirm-card template id only. Null when unset.
+     * The env value is `fallbacks.confirmCardTemplateId`, not this field.
+     */
+    confirmCardTemplateId: z.string().nullable(),
     /** Short fingerprint of the stored secret for display; never the secret itself. */
     clientSecretFingerprint: z.string().nullable(),
     /** True once a row exists (even if disabled). */
@@ -165,6 +181,20 @@ export const adminImConnectorViewSchema = z
     /** Optional CorpId used by the DingTalk 免登 SSO bridge. Null when unset. */
     corpId: z.string().nullable().optional(),
     enabled: z.boolean(),
+    /**
+     * Runtime fallbacks for empty inputs. Always present, including an unconfigured connector.
+     * Stored fields stay empty; the client decides whether to prefill.
+     */
+    fallbacks: z
+      .object({
+        /** CorpId captured from inbound messages (`messenger:dingtalk:corp-id`). Null if none. */
+        corpId: z.string().nullable(),
+        /** Env `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`, trimmed. Null when unset. */
+        confirmCardTemplateId: z.string().nullable(),
+        /** Name used when `robotDisplayName` is empty (`resolveDingTalkRobotDisplayName`). */
+        robotDisplayName: z.string(),
+      })
+      .strict(),
     hasClientSecret: z.boolean(),
     idleNewTopicEnabled: z.boolean(),
     idleNewTopicHours: z.number().int(),
@@ -257,7 +287,28 @@ export const adminImConnectorUpsertInputSchema = z
     chatEnabled: z.boolean(),
     clientId: z.string().trim().min(1).max(200),
     clientSecret: adminImConnectorSecretInputSchema,
-    corpId: z.string().trim().max(200).nullable().optional(),
+    /**
+     * Omit to leave the stored id unchanged. `null` or `''` clears it
+     * (the send path then uses `DINGTALK_CONFIRM_CARD_TEMPLATE_ID`).
+     */
+    confirmCardTemplateId: z
+      .string()
+      .trim()
+      .max(200)
+      .nullable()
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value ? value : null)),
+    /**
+     * Omit to leave the stored CorpId unchanged. `null` or `''` clears it
+     * (runtime then uses the id captured from inbound messages).
+     */
+    corpId: z
+      .string()
+      .trim()
+      .max(200)
+      .nullable()
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value ? value : null)),
     enabled: z.boolean(),
     idleNewTopicEnabled: z.boolean(),
     idleNewTopicHours: z
@@ -409,9 +460,15 @@ export type AdminImConnectorBindingsRemoveOutput = z.infer<
   typeof adminImConnectorBindingsRemoveOutputSchema
 >;
 
+/**
+ * `skipped`: the capability's module is effectively off (`dingtalkApproval` or
+ * `dingtalkWorkspace`). No DingTalk call was made. Clients should show it as
+ * not installed (neutral), not as a permission failure.
+ */
 export const dingtalkPermissionProbeReasonSchema = z.enum([
   'forbidden',
   'not_configured',
+  'skipped',
   'unreachable',
 ]);
 

@@ -80,6 +80,7 @@ describe('runDingtalkDocsTool', () => {
     expect(docs.success).toBe(false);
     expect(docs.content).toContain('管理员未开启「文档 / 钉盘 / 知识库」');
     expect(docs.content).toContain('DINGTALK_PERSONAL_FEATURE_DISABLED');
+    expect(docs.content).toContain('在 IM 连接器中开启');
     expect(docs.content).toContain('管理员入口');
 
     exec.mockRejectedValueOnce(

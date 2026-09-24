@@ -13,9 +13,9 @@ import type {
 import { openDangerConfirm } from '../../primitives/DangerConfirm';
 import { runAdminMutation } from '../../primitives/runAdminMutation';
 import { useAdminImConnectorBindings } from '../hooks';
-import { infraFormStyles as formStyles } from '../infra/styles';
 import { displayBindingUserLabel } from './bindings';
 import { BindUserModal } from './BindUserModal';
+import { ConnectorSection } from './ConnectorSection';
 import { formatConnectorTime } from './draft';
 import { invalidateAdminImConnectorBindings } from './invalidate';
 import { type ImConnectorBindingsService, imConnectorBindingsService } from './service';
@@ -40,11 +40,10 @@ const userCell = (item: AdminImConnectorBindingItem) => ({
 });
 
 /**
- * 绑定用户 — which AIHub account each DingTalk user pushes to.
+ * 已绑定用户 — which platform account each DingTalk user pushes to.
  *
- * Sits under the connector's counters because that is the number it explains: 已绑定员工 is this
- * list's length, and an admin who wonders why a reminder never arrived comes here to find out
- * whether the account is in it at all.
+ * The number it explains (已绑定员工) is in the card header: it is this list's length, and an admin
+ * who wonders why a reminder never arrived comes here to find out whether the account is in it.
  */
 export const BindingsSection = memo<BindingsSectionProps>(
   ({ canOperate, onChanged, platform, service = imConnectorBindingsService }) => {
@@ -106,12 +105,17 @@ export const BindingsSection = memo<BindingsSectionProps>(
     const hasMore = bindings.data?.hasMore ?? false;
 
     return (
-      <div className={styles.section}>
-        <span className={styles.sectionTitle}>
-          {t('systemGeneral.imConnectors.bindings.title')}
-        </span>
-        <span className={formStyles.hint}>{t('systemGeneral.imConnectors.bindings.hint')}</span>
-
+      <ConnectorSection
+        help={t('systemGeneral.imConnectors.bindings.hint')}
+        title={t('systemGeneral.imConnectors.bindings.title')}
+        extra={
+          canOperate ? (
+            <Button size="small" type="primary" onClick={() => setModalOpen(true)}>
+              {t('systemGeneral.imConnectors.bindings.bind')}
+            </Button>
+          ) : undefined
+        }
+      >
         <div className={styles.bindingsToolbar}>
           <Input
             aria-label={t('systemGeneral.imConnectors.bindings.search')}
@@ -120,11 +124,6 @@ export const BindingsSection = memo<BindingsSectionProps>(
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          {canOperate ? (
-            <Button size="small" type="primary" onClick={() => setModalOpen(true)}>
-              {t('systemGeneral.imConnectors.bindings.bind')}
-            </Button>
-          ) : null}
         </div>
 
         {/* Not gated on `!data`: with `keepPreviousData` a failed search still holds the previous
@@ -223,7 +222,7 @@ export const BindingsSection = memo<BindingsSectionProps>(
             onClose={() => setModalOpen(false)}
           />
         ) : null}
-      </div>
+      </ConnectorSection>
     );
   },
 );

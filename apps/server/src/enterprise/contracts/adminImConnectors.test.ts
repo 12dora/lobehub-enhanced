@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   adminImConnectorApiCallStatsOutputSchema,
+  adminImConnectorProbeWorkspacePermissionsOutputSchema,
   adminImConnectorUpsertInputSchema,
   adminImConnectorViewSchema,
   dingTalkConnectorSettingsSchema,
@@ -63,6 +64,30 @@ describe('dingTalkConnectorSettingsSchema', () => {
     expect(settings.personalWriteEnabled).toBe(false);
   });
 
+  it('defaults confirmCardTemplateId to null, trims it, and rejects ids longer than 200', () => {
+    expect(
+      dingTalkConnectorSettingsSchema.parse({ robotCode: 'ding-robot' }).confirmCardTemplateId,
+    ).toBeNull();
+    expect(
+      dingTalkConnectorSettingsSchema.parse({
+        confirmCardTemplateId: '  tpl-1  ',
+        robotCode: 'ding-robot',
+      }).confirmCardTemplateId,
+    ).toBe('tpl-1');
+    expect(
+      dingTalkConnectorSettingsSchema.parse({
+        confirmCardTemplateId: '',
+        robotCode: 'ding-robot',
+      }).confirmCardTemplateId,
+    ).toBeNull();
+    expect(
+      dingTalkConnectorSettingsSchema.safeParse({
+        confirmCardTemplateId: 'a'.repeat(201),
+        robotCode: 'ding-robot',
+      }).success,
+    ).toBe(false);
+  });
+
   it('trims robotDisplayName and rejects names longer than 32', () => {
     expect(
       dingTalkConnectorSettingsSchema.parse({
@@ -94,6 +119,46 @@ describe('adminImConnectorUpsertInputSchema', () => {
     const input = adminImConnectorUpsertInputSchema.parse(UPSERT_BASE);
     expect(input.notifyWorkNoticeEnabled).toBe(true);
     expect(input.notifyRobotEnabled).toBe(true);
+  });
+
+  it('maps a blank confirmCardTemplateId to null and leaves an omitted id unset', () => {
+    expect(
+      adminImConnectorUpsertInputSchema.parse({
+        ...UPSERT_BASE,
+        confirmCardTemplateId: '',
+      }).confirmCardTemplateId,
+    ).toBeNull();
+    expect(
+      adminImConnectorUpsertInputSchema.parse({
+        ...UPSERT_BASE,
+        confirmCardTemplateId: '   ',
+      }).confirmCardTemplateId,
+    ).toBeNull();
+    expect(
+      adminImConnectorUpsertInputSchema.parse({
+        ...UPSERT_BASE,
+        confirmCardTemplateId: '  tpl-1  ',
+      }).confirmCardTemplateId,
+    ).toBe('tpl-1');
+    expect(adminImConnectorUpsertInputSchema.parse(UPSERT_BASE).confirmCardTemplateId).toBe(
+      undefined,
+    );
+  });
+
+  it('leaves an omitted corpId unset and maps blank to null', () => {
+    expect(adminImConnectorUpsertInputSchema.parse(UPSERT_BASE).corpId).toBeUndefined();
+    expect(
+      adminImConnectorUpsertInputSchema.parse({ ...UPSERT_BASE, corpId: null }).corpId,
+    ).toBeNull();
+    expect(
+      adminImConnectorUpsertInputSchema.parse({ ...UPSERT_BASE, corpId: '' }).corpId,
+    ).toBeNull();
+    expect(
+      adminImConnectorUpsertInputSchema.parse({ ...UPSERT_BASE, corpId: '   ' }).corpId,
+    ).toBeNull();
+    expect(
+      adminImConnectorUpsertInputSchema.parse({ ...UPSERT_BASE, corpId: '  ding42  ' }).corpId,
+    ).toBe('ding42');
   });
 
   it('accepts null robotDisplayName as an explicit clear', () => {
@@ -214,6 +279,12 @@ describe('adminImConnectorViewSchema', () => {
       workspaceApprovalEnabled: false,
       workspaceCalendarEnabled: false,
       workspaceTodoEnabled: false,
+      confirmCardTemplateId: null,
+      fallbacks: {
+        confirmCardTemplateId: null,
+        corpId: null,
+        robotDisplayName: 'AI 助手',
+      },
     });
     expect(withFlags.notifyWorkNoticeEnabled).toBe(true);
     expect(withFlags.notifyRobotEnabled).toBe(true);
@@ -221,5 +292,94 @@ describe('adminImConnectorViewSchema', () => {
     expect(withFlags.approvalAutomationTier).toBe('moderate');
     expect(withFlags.personalDataEnabled).toBe(true);
     expect(withFlags.personal).toEqual({ authorizedCount: 2, brokerConfigured: true });
+    expect(withFlags.confirmCardTemplateId).toBeNull();
+    expect(withFlags.fallbacks).toEqual({
+      confirmCardTemplateId: null,
+      corpId: null,
+      robotDisplayName: 'AI 助手',
+    });
+  });
+
+  it('rejects a view that omits fallbacks or adds an unknown fallback', () => {
+    const base = {
+      approvalAutomationTier: 'moderate' as const,
+      aiCardTemplateId: null,
+      chatEnabled: true,
+      clientId: null,
+      clientSecretFingerprint: null,
+      configured: false,
+      confirmCardTemplateId: 'tpl-stored',
+      enabled: false,
+      hasClientSecret: false,
+      idleNewTopicEnabled: true,
+      idleNewTopicHours: 24,
+      notifyAgentId: null,
+      notifyAppKey: null,
+      notifyAppSecretSet: false,
+      notifyRobotEnabled: true,
+      notifyWorkNoticeEnabled: true,
+      platform: 'dingtalk' as const,
+      personal: { authorizedCount: 0, brokerConfigured: false },
+      personalChatEnabled: false,
+      personalDataEnabled: false,
+      personalDocsEnabled: false,
+      personalReportEnabled: false,
+      personalSheetsEnabled: false,
+      personalTodoEnabled: false,
+      personalWriteEnabled: false,
+      pushEnabled: true,
+      robotCode: null,
+      selectCardTemplateId: null,
+      stats: { linkedUsers: 0, messages7d: 0, pushes7d: 0 },
+      status: {
+        connectedAt: null,
+        lastError: null,
+        lastErrorAt: null,
+        lastEventAt: null,
+        state: 'unknown' as const,
+      },
+      updatedAt: null,
+      workspaceApprovalEnabled: false,
+      workspaceCalendarEnabled: false,
+      workspaceTodoEnabled: false,
+    };
+    expect(adminImConnectorViewSchema.safeParse(base).success).toBe(false);
+    expect(
+      adminImConnectorViewSchema.safeParse({
+        ...base,
+        fallbacks: {
+          confirmCardTemplateId: 'env-tpl',
+          corpId: 'ding42',
+          extra: true,
+          robotDisplayName: 'AI 助手',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      adminImConnectorViewSchema.parse({
+        ...base,
+        fallbacks: {
+          confirmCardTemplateId: 'env-tpl',
+          corpId: 'ding42',
+          robotDisplayName: 'AI 助手',
+        },
+      }).confirmCardTemplateId,
+    ).toBe('tpl-stored');
+  });
+});
+
+describe('adminImConnectorProbeWorkspacePermissionsOutputSchema', () => {
+  it('accepts a skipped capability without dropping the other probe fields', () => {
+    expect(
+      adminImConnectorProbeWorkspacePermissionsOutputSchema.parse({
+        approval: { ok: false, reason: 'skipped' },
+        calendar: { missingScopes: ['Calendar.Event.Read'], ok: false, reason: 'forbidden' },
+        todo: { ok: true },
+      }),
+    ).toEqual({
+      approval: { ok: false, reason: 'skipped' },
+      calendar: { missingScopes: ['Calendar.Event.Read'], ok: false, reason: 'forbidden' },
+      todo: { ok: true },
+    });
   });
 });

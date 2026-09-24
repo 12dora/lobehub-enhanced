@@ -70,6 +70,13 @@ export const infraFormStyles = createStaticStyles(({ css }) => ({
     gap: 12px;
     min-width: 0;
   `,
+  /** The switch plus whatever inline control it governs (`InfraSwitchRow` `addon`). */
+  switchControls: css`
+    display: flex;
+    flex-shrink: 0;
+    gap: 8px;
+    align-items: center;
+  `,
   switchField: css`
     display: flex;
     flex-direction: column;

@@ -77,14 +77,14 @@ describe('appLink', () => {
     expect(identitySignInPath(undefined)).toBe(APP_LINK_PATHS.dingtalkBinding);
     expect(identitySignInPath('dingtalk')).toBe('/');
     expect(dingtalkIdentityGuidance(undefined)).toBe(
-      `请先用钉钉登录 AIHub（[用钉钉登录](${APP_LINK_PATHS.dingtalkBinding})），或在钉钉里给机器人发一条消息完成绑定`,
+      `请先用钉钉登录本平台（[用钉钉登录](${APP_LINK_PATHS.dingtalkBinding})），或在钉钉里给机器人发一条消息完成绑定`,
     );
     const dingtalk = createAppLinkResolver({
       origin: 'https://chat.example.com',
       platform: 'dingtalk',
     });
     expect(dingtalkIdentityGuidance(dingtalk, 'dingtalk')).toBe(
-      '请先用钉钉登录 AIHub（[用钉钉登录](https://chat.example.com/dingtalk/sso?redirect=%2F)），或在钉钉里给机器人发一条消息完成绑定',
+      '请先用钉钉登录本平台（[用钉钉登录](https://chat.example.com/dingtalk/sso?redirect=%2F)），或在钉钉里给机器人发一条消息完成绑定',
     );
     expect(imConnectorAdminLink()).toBe(`[IM 连接器设置](${APP_LINK_PATHS.adminImConnectors})`);
     expect(adminEntrySuffix()).toBe(

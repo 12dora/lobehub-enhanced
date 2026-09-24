@@ -14,7 +14,11 @@ import { runAdminMutation } from '../../primitives/runAdminMutation';
 import { useUnsavedChangesGuard } from '../../primitives/useUnsavedChangesGuard';
 import {
   type DingTalkConnectorDraft,
+  type DingTalkConnectorGroups,
+  type DingTalkPrefillField,
   fingerprintDingTalkDraft,
+  keepHiddenDingTalkGroups,
+  readDingTalkUntouchedFallbacks,
   resolveApprovalTierTightening,
   settleDingTalkDraft,
   toDingTalkDraft,
@@ -27,6 +31,11 @@ import { type ImConnectorMutationService, imConnectorMutationService } from './s
 export interface UseImConnectorEditorParams {
   /** SYSTEM_OPERATE — without it the card is a read-only reading of the connector. */
   canOperate: boolean;
+  /**
+   * The groups the card renders. A hidden group's fields are neither validated nor edited: the
+   * save sends them as the server holds them. Defaults to every group shown.
+   */
+  groups?: DingTalkConnectorGroups;
   /** Refresh the list so the header, stats and fingerprint come from the server's own answer. */
   onSaved?: (view: AdminImConnectorView) => Promise<void> | void;
   /** Injectable for tests. */
@@ -43,10 +52,53 @@ export interface ImConnectorEditor {
   patch: (next: Partial<DingTalkConnectorDraft>) => void;
   save: () => Promise<void>;
   saving: boolean;
+  /**
+   * The newest server reading of the row: the one a save just answered with, until a newer list
+   * reading arrives (a failed or older one does not count). The draft is seeded from it, 取消
+   * returns to it, and the fallbacks shown come from it.
+   */
+  serverView: AdminImConnectorView;
   test: () => Promise<void>;
   testing: boolean;
   testResult?: AdminImConnectorTestOutput;
+  /** Pre-filled inputs still showing their untouched fallback — tagged, never sent or validated. */
+  untouchedFallbacks: ReadonlySet<DingTalkPrefillField>;
 }
+
+/** A save's answer, and the list reading that was current when it was written. */
+interface SavedReading {
+  after: AdminImConnectorView;
+  before: AdminImConnectorView;
+}
+
+const ALL_GROUPS: DingTalkConnectorGroups = {
+  approval: true,
+  chat: true,
+  docs: true,
+  notify: true,
+  personal: true,
+  workspace: true,
+};
+
+const timeOf = (iso: string | null): number => (iso ? Date.parse(iso) : Number.NaN);
+
+/**
+ * The newest reading of the row. A save's answer stands until the list hands the card a reading
+ * that is not older than it: a list read that failed leaves the prop as it was, and a poll that
+ * was already in flight when the save landed carries an older `updatedAt`.
+ */
+const newestReading = (
+  list: AdminImConnectorView,
+  saved: SavedReading | null,
+): AdminImConnectorView => {
+  if (!saved) return list;
+  if (saved.before === list) return saved.after;
+  const listAt = timeOf(list.updatedAt);
+  const savedAt = timeOf(saved.after.updatedAt);
+  return Number.isFinite(listAt) && Number.isFinite(savedAt) && listAt < savedAt
+    ? saved.after
+    : list;
+};
 
 const ERROR_KEYS: Record<string, string> = {
   idleHours: 'systemGeneral.imConnectors.errors.idleHours',
@@ -64,6 +116,7 @@ const ERROR_KEYS: Record<string, string> = {
  */
 export const useImConnectorEditor = ({
   canOperate,
+  groups = ALL_GROUPS,
   onSaved,
   service = imConnectorMutationService,
   view,
@@ -71,10 +124,26 @@ export const useImConnectorEditor = ({
   const { t } = useTranslation('admin');
   const { authMethod } = useAdminAccess();
 
-  const seed = useMemo(() => toDingTalkDraft(view), [view]);
+  /**
+   * The row a save answered with, pinned to the list reading it superseded, so the card never
+   * falls back to a reading older than its own save (取消 included).
+   */
+  const [saved, setSaved] = useState<SavedReading | null>(null);
+  const serverView = newestReading(view, saved);
+  const serverViewRef = useRef(serverView);
+  serverViewRef.current = serverView;
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  const seed = useMemo(() => toDingTalkDraft(serverView), [serverView]);
   const seedFp = fingerprintDingTalkDraft(seed);
   const seedRef = useRef(seed);
   seedRef.current = seed;
+  /**
+   * The reading the draft's baseline was seeded from. A pre-filled input stays「untouched」 while
+   * it holds the fallback it was pre-filled with, even if the server's fallback has moved on since.
+   */
+  const [seedView, setSeedView] = useState(serverView);
 
   const [draft, setDraft] = useState<DingTalkConnectorDraft>(seed);
   const [baselineFp, setBaselineFp] = useState(seedFp);
@@ -100,6 +169,7 @@ export const useImConnectorEditor = ({
   useEffect(() => {
     if (dirtyRef.current) return;
     setDraft(seedRef.current);
+    setSeedView(serverViewRef.current);
     setBaselineFp(seedFp);
     setShowErrors(false);
     savedTierRef.current = seedRef.current.approvalAutomationTier;
@@ -120,7 +190,19 @@ export const useImConnectorEditor = ({
     setDraft((current) => ({ ...current, ...next }));
   }, []);
 
-  const validationErrors = useMemo(() => validateDingTalkDraft(draft), [draft]);
+  // What a save would write: the groups the card does not render go back to the server's values.
+  const savable = useMemo(
+    () => keepHiddenDingTalkGroups(draft, seed, groups),
+    [draft, groups, seed],
+  );
+  const untouchedFallbacks = useMemo(
+    () => readDingTalkUntouchedFallbacks(savable, serverView, seedView),
+    [savable, seedView, serverView],
+  );
+  const validationErrors = useMemo(
+    () => validateDingTalkDraft(savable, untouchedFallbacks),
+    [savable, untouchedFallbacks],
+  );
 
   const errors = useMemo(() => {
     if (!showErrors) return {};
@@ -131,8 +213,10 @@ export const useImConnectorEditor = ({
     return resolved;
   }, [showErrors, t, validationErrors]);
 
+  // Back to the newest server reading — a save's own answer when the list has not caught up.
   const cancel = useCallback(() => {
     setDraft(seedRef.current);
+    setSeedView(serverViewRef.current);
     setBaselineFp(fingerprintDingTalkDraft(seedRef.current));
     setShowErrors(false);
     setTestResult(undefined);
@@ -146,10 +230,13 @@ export const useImConnectorEditor = ({
         authMethod,
         mapErrorKey: () => 'systemGeneral.edit.saveFailed',
         run: async () => {
-          const saved = await service.upsert(toDingTalkUpsertInput(draft));
+          // An input still showing its untouched fallback is left out, so it stays a fallback.
+          const answer = await service.upsert(toDingTalkUpsertInput(savable, untouchedFallbacks));
           // The plaintext leaves memory the moment the server has it, and the secret's identity
           // comes from the row that was just written rather than from the next list read.
-          const settled = settleDingTalkDraft(draft, saved);
+          const settled = settleDingTalkDraft(savable, answer);
+          setSaved({ after: answer, before: viewRef.current });
+          setSeedView(answer);
           setDraft(settled);
           setBaselineFp(fingerprintDingTalkDraft(settled));
           setShowErrors(false);
@@ -159,7 +246,7 @@ export const useImConnectorEditor = ({
           // The write has committed. A refresh that fails afterwards is a stale reading, not a
           // failed save, so it must not reach the mutation's error toast.
           try {
-            await onSaved?.(saved);
+            await onSaved?.(answer);
           } catch {
             /* keep the saved state; the next revalidation will catch the card up */
           }
@@ -170,7 +257,7 @@ export const useImConnectorEditor = ({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [authMethod, draft, onSaved, service, t]);
+  }, [authMethod, onSaved, savable, service, t, untouchedFallbacks]);
 
   const save = useCallback(async () => {
     if (!canOperate || savingRef.current) return;
@@ -182,7 +269,7 @@ export const useImConnectorEditor = ({
 
     const tightening = resolveApprovalTierTightening(
       savedTierRef.current,
-      draft.approvalAutomationTier,
+      savable.approvalAutomationTier,
     );
     if (!tightening) {
       await commit();
@@ -200,7 +287,7 @@ export const useImConnectorEditor = ({
       },
       title: t('systemGeneral.imConnectors.workspace.tierConfirm.title'),
     });
-  }, [canOperate, commit, draft.approvalAutomationTier, t, validationErrors]);
+  }, [canOperate, commit, savable.approvalAutomationTier, t, validationErrors]);
 
   /**
    * The probe runs against the draft, not the saved row: credentials are verified before they are
@@ -224,5 +311,18 @@ export const useImConnectorEditor = ({
     }
   }, [canOperate, draft, service, testing]);
 
-  return { cancel, dirty, draft, errors, patch, save, saving, test, testResult, testing };
+  return {
+    cancel,
+    dirty,
+    draft,
+    errors,
+    patch,
+    save,
+    saving,
+    serverView,
+    test,
+    testResult,
+    testing,
+    untouchedFallbacks,
+  };
 };

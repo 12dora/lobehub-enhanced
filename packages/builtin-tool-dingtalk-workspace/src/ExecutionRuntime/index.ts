@@ -557,10 +557,10 @@ const friendlyDingtalkErrorContent = (code: string, error: unknown, links: Manua
   const oaAdmin = oaAdminMarkdownLink();
   switch (code) {
     case 'DINGTALK_NOT_CONFIGURED': {
-      return `钉钉服务号未配置（DINGTALK_NOT_CONFIGURED），无法使用待办或日程。请联系管理员在即时通讯连接器中配置钉钉服务号${admin}。`;
+      return `钉钉通知应用未配置（DINGTALK_NOT_CONFIGURED），无法使用待办或日程。请联系管理员在 IM 连接器中配置钉钉通知应用${admin}。`;
     }
     case 'DINGTALK_FEATURE_DISABLED': {
-      return `该能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在钉钉连接器的「工作台能力」中开启待办或日程${admin}。`;
+      return `该能力未开启（DINGTALK_FEATURE_DISABLED）。请联系管理员在 IM 连接器的「工作台能力」中开启待办或日程${admin}。`;
     }
     case 'DINGTALK_FORBIDDEN': {
       const applyUrl = readOpenDevApplyUrl(error);
@@ -734,7 +734,7 @@ const TODO_USER_ERROR: Record<string, string> = {
   DINGTALK_INTERNAL: '操作失败，请稍后重试',
   DINGTALK_INVALID: '参数无效',
   DINGTALK_NOT_APPROVAL_ADMIN: '需要钉钉审批管理员权限',
-  DINGTALK_NOT_CONFIGURED: '钉钉服务号未配置',
+  DINGTALK_NOT_CONFIGURED: '钉钉通知应用未配置',
   DINGTALK_NOT_FOUND: '没有找到该待办',
   DINGTALK_NOT_ORIGINATOR: '你不是该审批的发起人',
   DINGTALK_NOT_TASK_OWNER: '你不是该待办的处理人',

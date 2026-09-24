@@ -142,7 +142,7 @@ export const useAdminImConnectorBindings = (
   );
 
 /**
- * Contacts directory sync state of the 通知应用（服务号）.
+ * Contacts directory sync state of the 通知应用.
  *
  * Polled only while a sync is actually running — the rest of the time the counters change once an
  * hour (the worker's own cadence), and an admin watching 立即同步 is the only reason to ask often.
