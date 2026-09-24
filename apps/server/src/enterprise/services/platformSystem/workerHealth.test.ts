@@ -75,6 +75,7 @@ describe('expectedWorkersFromEnv', () => {
       'task_watchdog',
       'dingtalk_stream',
       'document_render',
+      'global_file_orphan_gc',
     ]);
     expect(
       expectedWorkersFromEnv(
@@ -99,6 +100,21 @@ describe('expectedWorkersFromEnv', () => {
     expect(names).not.toContain('directory_sync');
     expect(names).toContain('reminder');
     expect(names).toContain('approval_worker');
+  });
+
+  it('expects orphan file cleanup on the persistent runtime unless the flag is off', () => {
+    const names = (extra: Partial<NodeJS.ProcessEnv> = {}) =>
+      expectedWorkersFromEnv(env(extra), flags()).map((item) => item.name);
+    expect(names()).toContain('global_file_orphan_gc');
+    expect(names({ GLOBAL_FILE_ORPHAN_GC: '0' })).not.toContain('global_file_orphan_gc');
+    expect(names({ GLOBAL_FILE_ORPHAN_GC: 'false' })).not.toContain('global_file_orphan_gc');
+    expect(names({ GLOBAL_FILE_ORPHAN_GC: 'OFF' })).not.toContain('global_file_orphan_gc');
+    expect(names({ GLOBAL_FILE_ORPHAN_GC: ' no ' })).not.toContain('global_file_orphan_gc');
+    expect(names({ NODE_ENV: 'development' })).not.toContain('global_file_orphan_gc');
+    expect(
+      expectedWorkersFromEnv(env(), flags()).find((item) => item.name === 'global_file_orphan_gc')
+        ?.intervalMs,
+    ).toBe(60 * 60 * 1000);
   });
 });
 

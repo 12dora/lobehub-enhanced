@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformJobItem } from '@/database/schemas/platform';
 import type { LobeChatDatabase } from '@/database/type';
 
+import { GLOBAL_FILE_ORPHAN_GC_JOB_TYPE } from '../services/globalFileOrphanGc/run';
 import { markWorkerTick } from '../services/platformSystem/workerHeartbeat';
 import { calculatePersistentWorkerRetryDelay } from './persistentWorkerScheduler';
 import {
@@ -57,6 +58,7 @@ describe('resolveEnabledPlatformJobTypes', () => {
       'connectorSecretCleanup',
       'documentRender',
       'documentRenderGc',
+      'globalFileOrphanGc',
     ]);
     expect(enabled.some((item) => item.jobType.startsWith('platform.audit.'))).toBe(false);
   });
@@ -66,7 +68,11 @@ describe('resolveEnabledPlatformJobTypes', () => {
       ...productionEnv,
       PLATFORM_KEY_PROVIDER: 'env',
     });
-    expect(off.map((item) => item.workerName)).toEqual(['documentRender', 'documentRenderGc']);
+    expect(off.map((item) => item.workerName)).toEqual([
+      'documentRender',
+      'documentRenderGc',
+      'globalFileOrphanGc',
+    ]);
 
     const on = resolveEnabledPlatformJobTypes(() => false, {
       ...productionEnv,
@@ -76,7 +82,19 @@ describe('resolveEnabledPlatformJobTypes', () => {
       'secretRewrap',
       'documentRender',
       'documentRenderGc',
+      'globalFileOrphanGc',
     ]);
+  });
+
+  it('keeps orphan global-file gc as a single-runner core lane', () => {
+    expect(spec('globalFileOrphanGc')).toMatchObject({
+      batchLimit: 1,
+      intervalMs: 60_000,
+      jobType: GLOBAL_FILE_ORPHAN_GC_JOB_TYPE,
+      leaseMs: 15 * 60_000,
+      workerName: 'globalFileOrphanGc',
+    });
+    expect(spec('globalFileOrphanGc')).not.toHaveProperty('moduleId');
   });
 });
 

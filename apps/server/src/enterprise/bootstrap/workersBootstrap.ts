@@ -171,6 +171,16 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     },
   },
   {
+    // Core: no moduleId. Daily orphan global_files sweep. Enqueue is gated to
+    // 03:30 Asia/Shanghai (later boots catch up the same day). The claim lease
+    // is the single-runner lock.
+    name: 'globalFileOrphanGc',
+    start: async () => {
+      const { ensureGlobalFileOrphanGcStarted } = await import('../jobs/globalFileOrphanGc');
+      ensureGlobalFileOrphanGcStarted();
+    },
+  },
+  {
     // Hot-kind: always register so T0/T1/PDF still run when the module is off.
     // Gotenberg conversion is gated inside the handler via isModuleEnabled.
     // moduleId is set so MODULE_BY_WORKER_NAME stays in sync with PLATFORM_MODULES.
@@ -340,7 +350,7 @@ export const ENTERPRISE_WORKER_SPECS: readonly WorkerSpec[] = [
     start: startDingTalkStreamWorker,
   },
   {
-    // Core: hourly DingTalk org directory sync via the notify app (服务号).
+    // Core: DingTalk org directory sync via the notify app (服务号), every 12 h.
     // Internal predicate skips serverless hosts; ticks skip when notify app
     // is not configured. First run is delayed 60 s after boot.
     name: 'dingtalkDirectorySyncWorker',

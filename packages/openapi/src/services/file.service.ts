@@ -24,6 +24,7 @@ import type { S3 } from '@/server/modules/S3';
 import { FileS3 } from '@/server/modules/S3';
 import { DocumentService } from '@/server/services/document';
 import { FileService as CoreFileService } from '@/server/services/file';
+import { lockGlobalFileHash } from '@/server/services/file/globalFileHashLock';
 import {
   assertClientObjectDirectory,
   DEFAULT_CLIENT_UPLOAD_PREFIX,
@@ -733,7 +734,14 @@ export class FileUploadService extends BaseService {
               userId: this.userId,
             };
 
-            const createResult = await this.fileModel.create(fileRecord, false); // Skip inserting into global table since it already exists
+            // Same bump-then-reinsert as FileService.createFileRecord. The hash
+            // lock is the one the orphan sweep holds across DeleteObject, so a
+            // row deleted after checkHash is reinserted before the object goes.
+            const createResult = await this.db.transaction(async (trx) => {
+              await lockGlobalFileHash(trx, hash);
+              const touched = await this.fileModel.touchGlobalFileAccessedAt(hash, trx);
+              return this.fileModel.create(fileRecord, !touched, trx);
+            });
 
             // If sessionId is provided (supports agentId resolution), create file-session association
             if (resolvedSessionId) {
@@ -1010,13 +1018,16 @@ export class FileUploadService extends BaseService {
 
       const file = await this.findFileByIdWithPermission(fileId, permissionResult);
 
-      // Delete S3 file
-      await this.coreFileService.deleteFile(file.url);
+      // Delete the files row first. fileModel.delete returns the row only when
+      // the global_files blob was removed (nothing else references it) — same
+      // contract as the lambda file router. A skill or another user's files
+      // row must keep the object.
+      const removed = await this.fileModel.delete(fileId);
+      if (removed?.url) {
+        await this.coreFileService.deleteFile(removed.url);
+      }
 
-      // Delete database record and associated chunks / global_files
-      await this.fileModel.delete(fileId);
-
-      this.log('info', 'File deleted successfully', { fileId, key: file.url });
+      this.log('info', 'File deleted successfully', { fileId, key: removed?.url ?? file.url });
 
       return;
     } catch (error) {

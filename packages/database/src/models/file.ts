@@ -1,10 +1,24 @@
 import type { QueryFileListParams } from '@lobechat/types';
 import { FilesTabs, SortType } from '@lobechat/types';
-import { and, asc, count, desc, eq, ilike, inArray, like, notExists, or, sum } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  like,
+  notExists,
+  or,
+  sql,
+  sum,
+} from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
 
 import type { FileItem, NewFile, NewGlobalFile } from '../schemas';
 import {
+  agentSkills,
   asyncTasks,
   chunks,
   documentChunks,
@@ -143,8 +157,26 @@ export class FileModel {
     hashId: string,
     data: Partial<Pick<NewGlobalFile, 'metadata' | 'url'>>,
     trx?: Transaction,
-  ) => {
-    return (trx ?? this.db).update(globalFiles).set(data).where(eq(globalFiles.hashId, hashId));
+  ): Promise<{ hashId: string }[]> => {
+    return (trx ?? this.db)
+      .update(globalFiles)
+      .set({ ...data, accessedAt: sql`now()` })
+      .where(eq(globalFiles.hashId, hashId))
+      .returning({ hashId: globalFiles.hashId });
+  };
+
+  /**
+   * Bump `accessed_at` on a reused `global_files` row so the orphan sweep's
+   * grace window restarts. Returns false when the row was deleted between the
+   * existence check and this update; the caller must insert it again.
+   */
+  touchGlobalFileAccessedAt = async (hashId: string, trx?: Transaction): Promise<boolean> => {
+    const rows = await (trx ?? this.db)
+      .update(globalFiles)
+      .set({ accessedAt: sql`now()` })
+      .where(eq(globalFiles.hashId, hashId))
+      .returning({ hashId: globalFiles.hashId });
+    return rows.length > 0;
   };
 
   checkHash = async (hash: string) => {
@@ -160,6 +192,48 @@ export class FileModel {
       size: item.size,
       url: item.url,
     };
+  };
+
+  /**
+   * Hashes still pointed at by an agent skill. `zip_file_hash` is a real FK
+   * (ON DELETE SET NULL — it does not block the blob delete). `resources`
+   * values' `fileHash` is not a FK at all. Either one must keep the blob.
+   */
+  private hashesReferencedByAgentSkills = async (
+    tx: Transaction,
+    hashes: string[],
+  ): Promise<Set<string>> => {
+    const unique = [...new Set(hashes)];
+    if (unique.length === 0) return new Set();
+
+    const hashIn = () =>
+      sql.join(
+        unique.map((hash) => sql`${hash}`),
+        sql`, `,
+      );
+    const result = await tx.execute(sql`
+      SELECT s.zip_file_hash AS hash
+      FROM ${agentSkills} s
+      WHERE s.zip_file_hash IN (${hashIn()})
+      UNION
+      SELECT e.value->>'fileHash' AS hash
+      FROM ${agentSkills} s
+      CROSS JOIN LATERAL jsonb_each(
+        CASE
+          WHEN jsonb_typeof(COALESCE(s.resources, '{}'::jsonb)) = 'object'
+            THEN COALESCE(s.resources, '{}'::jsonb)
+          ELSE '{}'::jsonb
+        END
+      ) AS e(key, value)
+      WHERE e.value->>'fileHash' IN (${hashIn()})
+    `);
+
+    const used = new Set<string>();
+    for (const row of result.rows ?? []) {
+      const hash = (row as { hash?: unknown }).hash;
+      if (typeof hash === 'string' && hash.length > 0) used.add(hash);
+    }
+    return used;
   };
 
   delete = async (id: string, removeGlobalFile: boolean = true, trx?: Transaction) => {
@@ -209,8 +283,12 @@ export class FileModel {
       const fileCount = result[0].count;
 
       // delete the file from global file if it is not used by other files
+      // or by an agent skill (zip hash or resources[].fileHash)
       // if `DISABLE_REMOVE_GLOBAL_FILE` is true, we will not remove the global file
       if (fileCount === 0 && removeGlobalFile) {
+        const skillUsed = await this.hashesReferencedByAgentSkills(tx, [fileHash]);
+        if (skillUsed.has(fileHash)) return;
+
         await tx.delete(globalFiles).where(eq(globalFiles.hashId, fileHash));
 
         return file;
@@ -290,8 +368,12 @@ export class FileModel {
       // Put still-in-use hashes into a Set for quick lookup
       const usedHashes = new Set(remainingFiles.map((file) => file.fileHash));
 
-      // Find hashes to delete (those no longer used by any file)
-      const hashesToDelete = hashList.filter((hash) => !usedHashes.has(hash));
+      // Find hashes to delete (those no longer used by any file or agent skill)
+      const unusedByFiles = hashList.filter((hash) => !usedHashes.has(hash));
+      if (unusedByFiles.length === 0) return [];
+
+      const skillUsed = await this.hashesReferencedByAgentSkills(trx, unusedByFiles);
+      const hashesToDelete = unusedByFiles.filter((hash) => !skillUsed.has(hash));
 
       if (hashesToDelete.length === 0) return [];
 

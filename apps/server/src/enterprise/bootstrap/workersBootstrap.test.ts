@@ -58,6 +58,12 @@ describe('ENTERPRISE_WORKER_SPECS', () => {
     expect(spec?.moduleId).toBeUndefined();
     expect(spec?.start).toEqual(expect.any(Function));
   });
+
+  it('registers globalFileOrphanGc as a core spec', () => {
+    const spec = ENTERPRISE_WORKER_SPECS.find((item) => item.name === 'globalFileOrphanGc');
+    expect(spec?.moduleId).toBeUndefined();
+    expect(spec?.start).toEqual(expect.any(Function));
+  });
 });
 
 describe('startEnterpriseWorkers', () => {

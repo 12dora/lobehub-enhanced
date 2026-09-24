@@ -1,4 +1,5 @@
 import { isPersistentEnterpriseWorkerRuntime } from '@/server/enterprise/jobs/persistentWorkerRuntime';
+import { isGlobalFileOrphanGcDisabled } from '@/server/enterprise/services/globalFileOrphanGc/switch';
 import { isBootModuleEnabled, isModuleEnabled } from '@/server/enterprise/services/moduleSettings';
 
 import { readWorkerBeats, type WorkerBeat } from './workerHeartbeat';
@@ -9,10 +10,11 @@ import { readWorkerBeats, type WorkerBeat } from './workerHeartbeat';
  * sync requires a complete notify app — an unconfigured connector is omitted.
  */
 export const WORKER_INTERVAL_MS = {
-  approval_worker: 180_000,
+  approval_worker: 600_000,
   directory_sync: 12 * 60 * 60 * 1000,
   dingtalk_stream: 30_000,
   document_render: 60_000,
+  global_file_orphan_gc: 60 * 60 * 1000,
   reminder: 60_000,
   task_scheduler: 60_000,
   task_sweep: 60_000,
@@ -107,6 +109,14 @@ export const expectedWorkersFromEnv = (
   }
   if (dingtalkStreamExpected(env) && modules.dingtalkStream) push('dingtalk_stream');
   if (modules.documentRender && isPersistentEnterpriseWorkerRuntime(env)) push('document_render');
+  // Same gate as the orphan-gc scheduler: persistent production runtime, unless
+  // GLOBAL_FILE_ORPHAN_GC is 0/false/no/off. The tick is the enqueue loop.
+  if (
+    isPersistentEnterpriseWorkerRuntime(env) &&
+    !isGlobalFileOrphanGcDisabled(env.GLOBAL_FILE_ORPHAN_GC)
+  ) {
+    push('global_file_orphan_gc');
+  }
   return expected;
 };
 

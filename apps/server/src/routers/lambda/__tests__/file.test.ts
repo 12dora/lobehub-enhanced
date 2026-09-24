@@ -9,7 +9,7 @@ import { TransferErrorCode } from '@/types/transferError';
 const buildMockFileAccessUrl = ({ id }: { id: string }) => `https://lobehub.com/f/${id}`;
 
 const routerMocks = vi.hoisted(() => {
-  const transactionClient = {};
+  const transactionClient = { execute: vi.fn(async () => undefined) };
 
   return {
     businessFileUploadCheck: vi.fn(),
@@ -157,6 +157,7 @@ const mockFileModelFindById = vi.fn();
 const mockFileModelFindByIds = vi.fn();
 const mockFileModelQuery = vi.fn();
 const mockFileModelUpdateGlobalFile = vi.fn();
+const mockFileModelTouchGlobalFileAccessedAt = vi.fn();
 const mockFileModelClear = vi.fn();
 const mockFileModelTransferTo = vi.fn();
 const mockFileModelCopyToWorkspace = vi.fn();
@@ -170,6 +171,7 @@ vi.mock('@/database/models/file', () => ({
     findById: mockFileModelFindById,
     findByIds: mockFileModelFindByIds,
     query: mockFileModelQuery,
+    touchGlobalFileAccessedAt: mockFileModelTouchGlobalFileAccessedAt,
     updateGlobalFile: mockFileModelUpdateGlobalFile,
     clear: mockFileModelClear,
     copyToWorkspace: mockFileModelCopyToWorkspace,
@@ -255,6 +257,8 @@ describe('fileRouter', () => {
     mockFileServiceGetFileAccessUrl.mockImplementation(async (file: { id: string }) =>
       buildMockFileAccessUrl(file),
     );
+    mockFileModelUpdateGlobalFile.mockResolvedValue([{ hashId: 'test-hash' }]);
+    mockFileModelTouchGlobalFileAccessedAt.mockResolvedValue(true);
 
     // Use actual context with default mocks
     ({ ctx, caller } = createCallerWithCtx());
@@ -401,6 +405,10 @@ describe('fileRouter', () => {
       expect(mockFileServiceGetFileMetadata).toHaveBeenCalledWith('old/path.txt');
       expect(mockFileServiceGetFileMetadata).not.toHaveBeenCalledWith('files/attacker/path.txt');
       expect(mockFileModelUpdateGlobalFile).not.toHaveBeenCalled();
+      expect(mockFileModelTouchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'test-hash',
+        routerMocks.transactionClient,
+      );
       expect(mockFileModelCreate).toHaveBeenCalledWith(
         expect.objectContaining({ fileHash: 'test-hash', url: 'old/path.txt' }),
         false,
@@ -427,6 +435,10 @@ describe('fileRouter', () => {
         size: 100,
       });
 
+      expect(mockFileModelTouchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'test-hash',
+        routerMocks.transactionClient,
+      );
       expect(mockFileModelCreate).toHaveBeenCalledWith(
         expect.objectContaining({ url: 'old/path.txt' }),
         false,
@@ -504,6 +516,7 @@ describe('fileRouter', () => {
         },
         routerMocks.transactionClient,
       );
+      expect(mockFileModelTouchGlobalFileAccessedAt).not.toHaveBeenCalled();
       expect(mockFileModelCreate).toHaveBeenCalledWith(
         expect.objectContaining({ fileHash: 'test-hash', url: 'new/path.txt' }),
         false,
@@ -535,11 +548,72 @@ describe('fileRouter', () => {
       });
 
       expect(mockFileModelUpdateGlobalFile).not.toHaveBeenCalled();
+      expect(mockFileModelTouchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'test-hash',
+        routerMocks.transactionClient,
+      );
       expect(mockFileModelCreate).toHaveBeenCalledWith(
         expect.objectContaining({ fileHash: 'test-hash', url: 'old/path.txt' }),
         false,
         routerMocks.transactionClient,
       );
+    });
+
+    it('reinserts the global file when the reuse bump matches no row', async () => {
+      mockFileModelCheckHash.mockResolvedValue({
+        isExist: true,
+        size: 100,
+        url: 'old/path.txt',
+      });
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+      mockFileModelTouchGlobalFileAccessedAt.mockResolvedValue(false);
+      mockFileServiceGetFileMetadata.mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
+
+      await caller.createFile({
+        hash: 'test-hash',
+        fileType: 'text',
+        name: 'test.txt',
+        size: 100,
+        url: 'old/path.txt',
+      });
+
+      expect(routerMocks.transactionClient.execute).toHaveBeenCalled();
+      expect(mockFileModelCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ fileHash: 'test-hash', url: 'old/path.txt' }),
+        true,
+        routerMocks.transactionClient,
+      );
+    });
+
+    it('reinserts the global file when a url refresh matches no row', async () => {
+      mockFileModelCheckHash.mockResolvedValue({
+        isExist: true,
+        url: 'old/path.txt',
+      });
+      mockFileModelCreate.mockResolvedValue({ id: 'new-file-id' });
+      mockFileModelUpdateGlobalFile.mockResolvedValue([]);
+      mockFileServiceGetFileMetadata.mockRejectedValue(new Error('NoSuchKey'));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await caller.createFile({
+        hash: 'test-hash',
+        fileType: 'text',
+        metadata: { path: 'new/path.txt' },
+        name: 'test.txt',
+        size: 100,
+        url: 'new/path.txt',
+      });
+
+      expect(routerMocks.transactionClient.execute).toHaveBeenCalled();
+      expect(mockFileModelCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ fileHash: 'test-hash', url: 'new/path.txt' }),
+        true,
+        routerMocks.transactionClient,
+      );
+      consoleSpy.mockRestore();
     });
 
     it('should run business upload check and file creation in the same transaction', async () => {

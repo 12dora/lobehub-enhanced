@@ -16,6 +16,7 @@ import { appEnv } from '@/envs/app';
 import { TempFileManager } from '@/server/utils/tempFileManager';
 import { isDev } from '@/utils/env';
 
+import { lockGlobalFileHash } from './globalFileHashLock';
 import { createFileServiceModule } from './impls';
 import type { FileServiceImpl, PreSignedUpload } from './impls/type';
 import { resolveOwnDeploymentOrigins } from './ownDeploymentOrigins';
@@ -257,29 +258,41 @@ export class FileService {
 
     const shouldRefreshGlobalFile = Boolean(isExist && storedKey && storedKey !== resolvedUrl);
 
-    if (shouldRefreshGlobalFile) {
-      // Keep global hash dedup usable when the same file is uploaded again to a
-      // fresh object key after the previous storage object has been removed.
-      await this.fileModel.updateGlobalFile(params.fileHash, {
-        metadata: params.metadata,
-        url: resolvedUrl,
-      });
-    }
+    const record = {
+      fileHash: params.fileHash,
+      fileType: params.fileType,
+      id: params.id, // Use custom ID if provided
+      metadata: params.metadata,
+      name: params.name,
+      size: params.size,
+      url: resolvedUrl,
+    };
 
-    // Create database record
-    // If hash doesn't exist, also create globalFiles record
-    const { id } = await this.fileModel.create(
-      {
-        fileHash: params.fileHash,
-        fileType: params.fileType,
-        id: params.id, // Use custom ID if provided
-        metadata: params.metadata,
-        name: params.name,
-        size: params.size,
-        url: resolvedUrl,
-      },
-      !isExist, // insertToGlobalFiles
-    );
+    // Reusing a hash must refresh accessed_at under the same advisory lock the
+    // orphan sweep holds across its re-check and DeleteObject. If the UPDATE
+    // matches nothing, the row was deleted and has to be inserted again before
+    // that lock is released.
+    const { id } = isExist
+      ? await this.db.transaction(async (trx) => {
+          await lockGlobalFileHash(trx, params.fileHash);
+          let insertToGlobalFiles = false;
+          if (shouldRefreshGlobalFile) {
+            const updated = await this.fileModel.updateGlobalFile(
+              params.fileHash,
+              {
+                metadata: params.metadata,
+                url: resolvedUrl,
+              },
+              trx,
+            );
+            if (updated.length === 0) insertToGlobalFiles = true;
+          } else {
+            const touched = await this.fileModel.touchGlobalFileAccessedAt(params.fileHash, trx);
+            if (!touched) insertToGlobalFiles = true;
+          }
+          return this.fileModel.create(record, insertToGlobalFiles, trx);
+        })
+      : await this.fileModel.create(record, true);
 
     void this.enqueueDocumentRenderBestEffort(id);
 
@@ -310,6 +323,21 @@ export class FileService {
   }
 
   /**
+   * Hold the orphan-sweep hash lock for the bump and, when the row is gone, the
+   * reinsert. `FileModel.createGlobalFile` has no transaction argument; the lock
+   * stays held until this callback returns, which is after that insert commits.
+   */
+  private async reuseGlobalFileUnderLock(
+    hashId: string,
+    reuse: () => Promise<void>,
+  ): Promise<void> {
+    await this.db.transaction(async (trx) => {
+      await lockGlobalFileHash(trx, hashId);
+      await reuse();
+    });
+  }
+
+  /**
    * Create global file record only (no user file record)
    * Used for skill resources that should not appear in user's file list
    *
@@ -325,22 +353,34 @@ export class FileService {
   }): Promise<{ fileHash: string }> {
     // Check if hash already exists
     const existing = await this.fileModel.checkHash(params.fileHash);
+    const values = {
+      creator: this.userId,
+      fileType: params.fileType,
+      hashId: params.fileHash,
+      metadata: params.metadata,
+      size: params.size,
+      url: params.url,
+    };
 
     if (!existing.isExist) {
-      // Create new record
-      await this.fileModel.createGlobalFile({
-        creator: this.userId,
-        fileType: params.fileType,
-        hashId: params.fileHash,
-        metadata: params.metadata,
-        size: params.size,
-        url: params.url,
-      });
+      await this.fileModel.createGlobalFile(values);
     } else if (existing.url !== params.url) {
-      // Hash exists but URL changed (file re-uploaded to different S3 path) — update URL
-      await this.fileModel.updateGlobalFile(params.fileHash, {
-        metadata: params.metadata,
-        url: params.url,
+      // Hash exists but URL changed (file re-uploaded to different S3 path) — update URL.
+      // updateGlobalFile also sets accessed_at = now(). Zero rows means the
+      // orphan sweep deleted the row after the existence check.
+      await this.reuseGlobalFileUnderLock(params.fileHash, async () => {
+        const updated = await this.fileModel.updateGlobalFile(params.fileHash, {
+          metadata: params.metadata,
+          url: params.url,
+        });
+        if (updated.length === 0) await this.fileModel.createGlobalFile(values);
+      });
+    } else {
+      // Same content-addressed key. Refresh accessed_at so a sweep in the
+      // window before the skill row is inserted does not delete the blob.
+      await this.reuseGlobalFileUnderLock(params.fileHash, async () => {
+        const touched = await this.fileModel.touchGlobalFileAccessedAt(params.fileHash);
+        if (!touched) await this.fileModel.createGlobalFile(values);
       });
     }
 

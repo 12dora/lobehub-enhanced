@@ -11,6 +11,7 @@ export const WORKER_HEARTBEAT_NAMES = [
   'directory_sync',
   'dingtalk_stream',
   'document_render',
+  'global_file_orphan_gc',
   'reminder',
   'task_scheduler',
   'task_sweep',

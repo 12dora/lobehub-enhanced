@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
 import {
+  agentSkills,
   asyncTasks,
   chunks,
   documents,
@@ -294,6 +295,122 @@ describe('FileModel', () => {
       });
       expect(remainingTasks).toHaveLength(0);
     });
+
+    it('should keep the global file when an agent skill zip still references the hash', async () => {
+      await fileModel.createGlobalFile({
+        creator: userId,
+        fileType: 'application/zip',
+        hashId: 'skill-zip-hash',
+        size: 100,
+        url: 'skills/zip/skill-zip-hash.zip',
+      });
+      const { id } = await fileModel.create({
+        fileHash: 'skill-zip-hash',
+        fileType: 'application/zip',
+        name: 'skill.zip',
+        size: 100,
+        url: 'skills/zip/skill-zip-hash.zip',
+      });
+      await serverDB.insert(agentSkills).values({
+        description: 'zip still needs the blob',
+        identifier: 'skill.zip.keep',
+        manifest: { description: 'zip still needs the blob', name: 'Zip' },
+        name: 'Zip',
+        source: 'user',
+        userId,
+        zipFileHash: 'skill-zip-hash',
+      });
+
+      const removed = await fileModel.delete(id);
+
+      expect(removed).toBeUndefined();
+      expect(await serverDB.query.files.findFirst({ where: eq(files.id, id) })).toBeUndefined();
+      expect(
+        await serverDB.query.globalFiles.findFirst({
+          where: eq(globalFiles.hashId, 'skill-zip-hash'),
+        }),
+      ).toBeDefined();
+    });
+
+    it('should keep the global file when a skill resource fileHash still references it', async () => {
+      await fileModel.createGlobalFile({
+        creator: userId,
+        fileType: 'text/plain',
+        hashId: 'skill-resource-hash',
+        size: 12,
+        url: 'skills/source_files/skill-resource-hash/notes.txt',
+      });
+      const { id } = await fileModel.create({
+        fileHash: 'skill-resource-hash',
+        fileType: 'text/plain',
+        name: 'notes.txt',
+        size: 12,
+        url: 'skills/source_files/skill-resource-hash/notes.txt',
+      });
+      await serverDB.insert(agentSkills).values({
+        description: 'resource still needs the blob',
+        identifier: 'skill.resource.keep',
+        manifest: { description: 'resource still needs the blob', name: 'Notes' },
+        name: 'Notes',
+        resources: { 'notes.txt': { fileHash: 'skill-resource-hash', size: 12 } },
+        source: 'user',
+        userId,
+      });
+
+      const removed = await fileModel.delete(id);
+
+      expect(removed).toBeUndefined();
+      expect(
+        await serverDB.query.globalFiles.findFirst({
+          where: eq(globalFiles.hashId, 'skill-resource-hash'),
+        }),
+      ).toBeDefined();
+    });
+
+    it('should still remove a global file when skills reference a different hash', async () => {
+      await fileModel.createGlobalFile({
+        creator: userId,
+        fileType: 'text/plain',
+        hashId: 'unrelated-skill-hash',
+        size: 10,
+        url: 'skills/zip/unrelated-skill-hash.zip',
+      });
+      await fileModel.createGlobalFile({
+        creator: userId,
+        fileType: 'text/plain',
+        hashId: 'free-hash',
+        size: 10,
+        url: 'files/free-hash.txt',
+      });
+      await serverDB.insert(agentSkills).values({
+        description: 'other blob',
+        identifier: 'skill.other',
+        manifest: { description: 'other blob', name: 'Other' },
+        name: 'Other',
+        source: 'user',
+        userId,
+        zipFileHash: 'unrelated-skill-hash',
+      });
+      const { id } = await fileModel.create({
+        fileHash: 'free-hash',
+        fileType: 'text/plain',
+        name: 'free.txt',
+        size: 10,
+        url: 'files/free-hash.txt',
+      });
+
+      const removed = await fileModel.delete(id);
+
+      expect(removed?.fileHash).toBe('free-hash');
+      expect(
+        await serverDB.query.globalFiles.findFirst({ where: eq(globalFiles.hashId, 'free-hash') }),
+      ).toBeUndefined();
+      expect(
+        await serverDB.query.globalFiles.findFirst({
+          where: eq(globalFiles.hashId, 'unrelated-skill-hash'),
+        }),
+      ).toBeDefined();
+    });
   });
 
   describe('deleteMany', () => {
@@ -507,6 +624,64 @@ describe('FileModel', () => {
       });
       expect(remainingDocs).toHaveLength(0);
       expect(remainingTasks).toHaveLength(0);
+    });
+
+    it('should not remove or return global files still referenced by a skill', async () => {
+      await fileModel.createGlobalFile({
+        creator: userId,
+        fileType: 'application/zip',
+        hashId: 'batch-zip-hash',
+        size: 100,
+        url: 'skills/zip/batch-zip-hash.zip',
+      });
+      await fileModel.createGlobalFile({
+        creator: userId,
+        fileType: 'text/plain',
+        hashId: 'batch-free-hash',
+        size: 20,
+        url: 'files/batch-free-hash.txt',
+      });
+      const skillFile = await fileModel.create({
+        fileHash: 'batch-zip-hash',
+        fileType: 'application/zip',
+        name: 'batch.zip',
+        size: 100,
+        url: 'skills/zip/batch-zip-hash.zip',
+      });
+      const freeFile = await fileModel.create({
+        fileHash: 'batch-free-hash',
+        fileType: 'text/plain',
+        name: 'free.txt',
+        size: 20,
+        url: 'files/batch-free-hash.txt',
+      });
+      await serverDB.insert(agentSkills).values({
+        description: 'keeps the zip',
+        identifier: 'skill.batch.zip',
+        manifest: { description: 'keeps the zip', name: 'Batch' },
+        name: 'Batch',
+        resources: { 'notes.txt': { fileHash: 'batch-zip-hash', size: 4 } },
+        source: 'user',
+        userId,
+        zipFileHash: 'batch-zip-hash',
+      });
+
+      const deletedFiles = await fileModel.deleteMany([skillFile.id, freeFile.id]);
+
+      expect(deletedFiles.map((file) => file.id)).toEqual([freeFile.id]);
+      expect(await serverDB.query.files.findMany({ where: eq(files.userId, userId) })).toHaveLength(
+        0,
+      );
+      expect(
+        await serverDB.query.globalFiles.findFirst({
+          where: eq(globalFiles.hashId, 'batch-zip-hash'),
+        }),
+      ).toBeDefined();
+      expect(
+        await serverDB.query.globalFiles.findFirst({
+          where: eq(globalFiles.hashId, 'batch-free-hash'),
+        }),
+      ).toBeUndefined();
     });
   });
 
@@ -1792,6 +1967,37 @@ describe('FileModel', () => {
       });
 
       expect(updated?.url).toBe('https://example.com/trx.txt');
+    });
+
+    it('returns no rows when the hash is already gone', async () => {
+      await expect(
+        fileModel.updateGlobalFile('missing-hash', { url: 'files/x.txt' }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  describe('touchGlobalFileAccessedAt', () => {
+    it('bumps accessed_at and reports when the row is already gone', async () => {
+      const old = new Date('2020-01-01T00:00:00.000Z');
+      await fileModel.createGlobalFile({
+        accessedAt: old,
+        creator: userId,
+        fileType: 'text/plain',
+        hashId: 'touch-hash',
+        size: 10,
+        url: 'files/touch.txt',
+      });
+
+      await expect(fileModel.touchGlobalFileAccessedAt('touch-hash')).resolves.toBe(true);
+      const row = await serverDB.query.globalFiles.findFirst({
+        where: eq(globalFiles.hashId, 'touch-hash'),
+      });
+      expect(row?.accessedAt?.getTime()).toBeGreaterThan(old.getTime());
+
+      await serverDB.transaction(async (trx) => {
+        await expect(fileModel.touchGlobalFileAccessedAt('touch-hash', trx)).resolves.toBe(true);
+      });
+      await expect(fileModel.touchGlobalFileAccessedAt('missing-hash')).resolves.toBe(false);
     });
   });
 

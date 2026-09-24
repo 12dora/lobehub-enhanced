@@ -8,6 +8,7 @@ import {
   readWorkerHeartbeatMemory,
   resetWorkerHeartbeatForTest,
   setWorkerHeartbeatStoreForTest,
+  WORKER_HEARTBEAT_NAMES,
   type WorkerHeartbeatStore,
 } from './workerHeartbeat';
 
@@ -41,6 +42,10 @@ class MemoryBeats implements WorkerHeartbeatStore {
 describe('worker heartbeat', () => {
   afterEach(() => {
     resetWorkerHeartbeatForTest();
+  });
+
+  it('names the orphan file cleanup loop', () => {
+    expect(WORKER_HEARTBEAT_NAMES).toContain('global_file_orphan_gc');
   });
 
   it('tracks start, tick, and failure in memory when Redis is disabled', async () => {

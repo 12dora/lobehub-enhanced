@@ -109,6 +109,14 @@ export const PLATFORM_JOB_DISPATCH_SPECS = [
     leaseMs: 15 * 60_000,
     workerName: 'documentRenderGc',
   },
+  {
+    // Core lane. The 15 min claim lease is the single-runner lock.
+    batchLimit: 1,
+    intervalMs: 60_000,
+    jobType: 'platform.global_file.orphan_gc.v1',
+    leaseMs: 15 * 60_000,
+    workerName: 'globalFileOrphanGc',
+  },
 ] as const satisfies readonly PlatformJobDispatchSpec[];
 
 const isSecretRewrapEnabled = (env: Record<string, string | undefined>): boolean => {
@@ -166,6 +174,10 @@ const defaultHandleClaimed: PlatformJobDispatchHandler = async (ctx) => {
     case 'documentRenderGc': {
       const { handleClaimedDocumentRenderGcJob } = await import('./documentRender');
       return handleClaimedDocumentRenderGcJob(ctx);
+    }
+    case 'globalFileOrphanGc': {
+      const { handleClaimedGlobalFileOrphanGcJob } = await import('./globalFileOrphanGc');
+      return handleClaimedGlobalFileOrphanGcJob(ctx);
     }
     default: {
       return;

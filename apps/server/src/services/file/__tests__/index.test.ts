@@ -63,9 +63,15 @@ vi.mock('@lobechat/utils', async (importOriginal) => {
   return { ...actual, uuid: () => 'test-uuid' };
 });
 
+const lockClient = { execute: vi.fn(async () => undefined) };
+
 describe('FileService', () => {
   let service: FileService;
-  const mockDb = {} as any;
+  const mockDb = {
+    transaction: vi.fn(async (callback: (trx: typeof lockClient) => Promise<unknown>) =>
+      callback(lockClient),
+    ),
+  } as any;
   const mockUserId = 'test-user';
   let mockFileModel: any;
   let mockTempManager: any;
@@ -75,7 +81,8 @@ describe('FileService', () => {
     mockFileModel = {
       findById: vi.fn(),
       delete: vi.fn(),
-      updateGlobalFile: vi.fn(),
+      touchGlobalFileAccessedAt: vi.fn().mockResolvedValue(true),
+      updateGlobalFile: vi.fn().mockResolvedValue([{ hashId: 'hash' }]),
     };
     mockTempManager = {
       writeTempFile: vi.fn(),
@@ -536,14 +543,45 @@ describe('FileService', () => {
         url: 'files/test.txt',
       });
 
+      expect(mockFileModel.touchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'existing-hash',
+        lockClient,
+      );
+      expect(lockClient.execute).toHaveBeenCalled();
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           fileHash: 'existing-hash',
           url: 'files/test.txt',
         }),
-        false, // insertToGlobalFiles = false when hash exists
+        false, // insertToGlobalFiles = false when the reuse bump matches
+        lockClient,
       );
       expect(mockFileModel.updateGlobalFile).not.toHaveBeenCalled();
+    });
+
+    it('reinserts the global file when the reuse bump matches no row', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'files/test.txt' });
+      mockFileModel.create.mockResolvedValue({ id: 'file-id' });
+      mockFileModel.touchGlobalFileAccessedAt.mockResolvedValue(false);
+      vi.mocked(service['impl'].getFileMetadata).mockResolvedValue({
+        contentLength: 100,
+        contentType: 'text/plain',
+      });
+
+      await service.createFileRecord({
+        fileHash: 'existing-hash',
+        fileType: 'text/plain',
+        name: 'test.txt',
+        size: 100,
+        url: 'files/test.txt',
+      });
+
+      expect(lockClient.execute).toHaveBeenCalled();
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ fileHash: 'existing-hash', url: 'files/test.txt' }),
+        true,
+        lockClient,
+      );
     });
 
     it('should persist the stored key and ignore a different client url on a hash hit', async () => {
@@ -563,6 +601,10 @@ describe('FileService', () => {
         url: 'new/path.txt',
       });
 
+      expect(mockFileModel.touchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'existing-hash',
+        lockClient,
+      );
       expect(mockFileModel.updateGlobalFile).not.toHaveBeenCalled();
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -570,6 +612,7 @@ describe('FileService', () => {
           url: 'old/path.txt',
         }),
         false,
+        lockClient,
       );
     });
 
@@ -588,12 +631,17 @@ describe('FileService', () => {
         size: 100,
       });
 
+      expect(mockFileModel.touchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'existing-hash',
+        lockClient,
+      );
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           fileHash: 'existing-hash',
           url: 'old/path.txt',
         }),
         false,
+        lockClient,
       );
     });
 
@@ -639,16 +687,47 @@ describe('FileService', () => {
         url: 'new/path.txt',
       });
 
-      expect(mockFileModel.updateGlobalFile).toHaveBeenCalledWith('existing-hash', {
-        metadata: { dirname: 'new', filename: 'test.txt', path: 'new/path.txt' },
-        url: 'new/path.txt',
-      });
+      expect(mockFileModel.updateGlobalFile).toHaveBeenCalledWith(
+        'existing-hash',
+        {
+          metadata: { dirname: 'new', filename: 'test.txt', path: 'new/path.txt' },
+          url: 'new/path.txt',
+        },
+        lockClient,
+      );
+      expect(mockFileModel.touchGlobalFileAccessedAt).not.toHaveBeenCalled();
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           fileHash: 'existing-hash',
           url: 'new/path.txt',
         }),
         false,
+        lockClient,
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it('reinserts the global file when a url refresh matches no row', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'old/path.txt' });
+      mockFileModel.create.mockResolvedValue({ id: 'file-id' });
+      mockFileModel.updateGlobalFile.mockResolvedValue([]);
+      vi.mocked(service['impl'].getFileMetadata).mockRejectedValue(new Error('NoSuchKey'));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await service.createFileRecord({
+        fileHash: 'existing-hash',
+        fileType: 'text/plain',
+        metadata: { dirname: 'new', filename: 'test.txt', path: 'new/path.txt' },
+        name: 'test.txt',
+        size: 100,
+        url: 'new/path.txt',
+      });
+
+      expect(lockClient.execute).toHaveBeenCalled();
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ fileHash: 'existing-hash', url: 'new/path.txt' }),
+        true,
+        lockClient,
       );
       consoleSpy.mockRestore();
     });
@@ -670,6 +749,10 @@ describe('FileService', () => {
         url: 'new/path.txt',
       });
 
+      expect(mockFileModel.touchGlobalFileAccessedAt).toHaveBeenCalledWith(
+        'existing-hash',
+        lockClient,
+      );
       expect(mockFileModel.updateGlobalFile).not.toHaveBeenCalled();
       expect(mockFileModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -677,6 +760,7 @@ describe('FileService', () => {
           url: 'old/path.txt',
         }),
         false,
+        lockClient,
       );
     });
   });
@@ -803,8 +887,33 @@ describe('FileService', () => {
       });
 
       expect(result).toEqual({ fileHash: 'existing-hash' });
+      expect(lockClient.execute).toHaveBeenCalled();
+      expect(mockFileModel.touchGlobalFileAccessedAt).toHaveBeenCalledWith('existing-hash');
       expect(mockFileModel.createGlobalFile).not.toHaveBeenCalled();
       expect(mockFileModel.updateGlobalFile).not.toHaveBeenCalled();
+    });
+
+    it('reinserts the global file when the same-url bump matches no row', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'some/path.txt' });
+      mockFileModel.touchGlobalFileAccessedAt.mockResolvedValue(false);
+      mockFileModel.createGlobalFile.mockResolvedValue([{ hashId: 'existing-hash' }]);
+
+      await service.createGlobalFile({
+        fileHash: 'existing-hash',
+        fileType: 'text/plain',
+        size: 100,
+        url: 'some/path.txt',
+      });
+
+      expect(lockClient.execute).toHaveBeenCalled();
+      expect(mockFileModel.createGlobalFile).toHaveBeenCalledWith({
+        creator: mockUserId,
+        fileType: 'text/plain',
+        hashId: 'existing-hash',
+        metadata: undefined,
+        size: 100,
+        url: 'some/path.txt',
+      });
     });
 
     it('should update url when hash exists but url changed', async () => {
@@ -819,11 +928,30 @@ describe('FileService', () => {
       });
 
       expect(result).toEqual({ fileHash: 'existing-hash' });
+      expect(lockClient.execute).toHaveBeenCalled();
       expect(mockFileModel.createGlobalFile).not.toHaveBeenCalled();
       expect(mockFileModel.updateGlobalFile).toHaveBeenCalledWith('existing-hash', {
         metadata: { dirname: 'new', filename: 'path.txt', path: 'new/path.txt' },
         url: 'new/path.txt',
       });
+    });
+
+    it('reinserts the global file when a url change matches no row', async () => {
+      mockFileModel.checkHash.mockResolvedValue({ isExist: true, url: 'old/path.txt' });
+      mockFileModel.updateGlobalFile.mockResolvedValue([]);
+      mockFileModel.createGlobalFile.mockResolvedValue([{ hashId: 'existing-hash' }]);
+
+      await service.createGlobalFile({
+        fileHash: 'existing-hash',
+        fileType: 'text/plain',
+        size: 100,
+        url: 'new/path.txt',
+      });
+
+      expect(lockClient.execute).toHaveBeenCalled();
+      expect(mockFileModel.createGlobalFile).toHaveBeenCalledWith(
+        expect.objectContaining({ hashId: 'existing-hash', url: 'new/path.txt' }),
+      );
     });
 
     it('should work without metadata', async () => {

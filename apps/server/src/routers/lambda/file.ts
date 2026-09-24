@@ -24,6 +24,7 @@ import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { DocumentService } from '@/server/services/document';
 import { FileService } from '@/server/services/file';
+import { lockGlobalFileHash } from '@/server/services/file/globalFileHashLock';
 import { hasWorkspaceScopedPermission } from '@/server/services/workspacePermission';
 import { AsyncTaskStatus, AsyncTaskType, type IAsyncTaskError } from '@/types/asyncTask';
 import type { CheckFileHashResult, FileListItem, KnowledgeItemStatus } from '@/types/files';
@@ -285,18 +286,30 @@ export const fileRouter = router({
           isExist && storedKey && storedKey !== resolvedUrl && input.hash,
         );
 
-        if (shouldRefreshGlobalFile) {
-          // A user may re-upload the same bytes after the old object key was
-          // removed. Keep the global hash pointer on the newly uploaded object so
-          // future dedup checks do not resolve back to the stale key.
-          await ctx.fileModel.updateGlobalFile(
-            input.hash!,
-            {
-              metadata: input.metadata,
-              url: resolvedUrl,
-            },
-            trx,
-          );
+        // Reuse bumps accessed_at inside this transaction, before the files
+        // row is inserted. The same advisory lock covers a reinsert and the
+        // sweep's re-check plus DeleteObject. If the UPDATE matches nothing,
+        // the insert below recreates the global row before the lock drops.
+        let insertToGlobalFiles = !isExist;
+        if (isExist && input.hash) {
+          await lockGlobalFileHash(trx, input.hash);
+          if (shouldRefreshGlobalFile) {
+            // A user may re-upload the same bytes after the old object key was
+            // removed. Keep the global hash pointer on the newly uploaded object so
+            // future dedup checks do not resolve back to the stale key.
+            const updated = await ctx.fileModel.updateGlobalFile(
+              input.hash,
+              {
+                metadata: input.metadata,
+                url: resolvedUrl,
+              },
+              trx,
+            );
+            if (updated.length === 0) insertToGlobalFiles = true;
+          } else {
+            const touched = await ctx.fileModel.touchGlobalFileAccessedAt(input.hash, trx);
+            if (!touched) insertToGlobalFiles = true;
+          }
         }
 
         return ctx.fileModel.create(
@@ -311,8 +324,7 @@ export const fileRouter = router({
             url: resolvedUrl,
             ...(resolvedVisibility ? { visibility: resolvedVisibility } : {}),
           },
-          // if the file is not exist in global file, create a new one
-          !isExist,
+          insertToGlobalFiles,
           trx,
         );
       });
